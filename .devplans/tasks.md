@@ -44,12 +44,12 @@ everything that follows, so this plan invests in a strong test bed
 - [x] `ft vault info` subcommand prints resolved vault path, config files in effect, and merged config
 
 ### Task model (library)
-- [ ] `Task` struct in `ft-core` with: `description`, `status` (enum: Open, Done, InProgress, Cancelled), `priority` (Highest..Lowest, optional), `tags`, `created`, `start`, `scheduled`, `due`, `done`, `cancelled` dates, `recurrence` (string form preserved verbatim for v1; semantic parsing deferred), `id`, `depends_on` (Vec<String>), `on_completion` field preserved verbatim, `block_link`, `source_file`, `source_line`, `indent_level`, `parent` (for subtask hierarchy)
-- [ ] Standard statuses only: `[ ]` Open, `[x]`/`[X]` Done, `[/]` InProgress, `[-]` Cancelled. Unknown markers parse as Open with a warning surfaced via `tracing`
-- [ ] Multi-level subtask support: indented `- [ ]` lines under a task become children; arbitrary depth
-- [ ] Format module is trait-based (`TaskFormat` trait with `parse_line` / `serialize_line`); emoji format is the v1 implementation; dataview format is a deferred impl that will plug into the same trait
-- [ ] Round-trip property: for any `Task` produced by parsing a real line, `serialize(parse(line)) == line` byte-for-byte (proptest covers generated tasks; snapshot tests cover real fixtures)
-- [ ] Parser preserves unknown emojis/fields in a `raw_trailing` field so we never lose data on rewrite
+- [x] `Task` struct in `ft-core` with: `description`, `status` (enum: Open, Done, InProgress, Cancelled), `priority` (Highest..Lowest, optional), `tags`, `created`, `start`, `scheduled`, `due`, `done`, `cancelled` dates, `recurrence` (string form preserved verbatim for v1; semantic parsing deferred), `id`, `depends_on` (Vec<String>), `on_completion` field preserved verbatim, `block_link`, `source_file`, `source_line`, `indent_level`, `parent` (for subtask hierarchy)
+- [x] Standard statuses only: `[ ]` Open, `[x]`/`[X]` Done, `[/]` InProgress, `[-]` Cancelled. Unknown markers parse as Open with a warning surfaced via `tracing`
+- [x] Multi-level subtask support: indented `- [ ]` lines under a task become children; arbitrary depth
+- [x] Format module is trait-based (`TaskFormat` trait with `parse_line` / `serialize_line`); emoji format is the v1 implementation; dataview format is a deferred impl that will plug into the same trait
+- [x] Round-trip property: for any `Task` produced by parsing a real line, `serialize(parse(line)) == line` byte-for-byte (proptest covers generated tasks; snapshot tests cover real fixtures)
+- [x] Parser preserves unknown emojis/fields in a `raw_trailing` field so we never lose data on rewrite
 
 ### Vault scanning
 - [ ] `Vault::scan()` walks markdown files using the `ignore` crate (respects `.gitignore` + configured `ignored_paths`)
@@ -268,7 +268,7 @@ unknown keys rejected with a clear error via `#[serde(deny_unknown_fields)]`.
 Works against the real `/Users/cmw/git/fortytwo` vault. Decision: unknown config keys
 are rejected (not preserved) for early typo detection.
 
-### Session 2 · 2026-05-09 · planned
+### Session 2 · 2026-05-09 · done
 **Goal:** Task model + emoji-format parser + serializer + round-trip property tests
 
 **Scope:**
@@ -311,7 +311,13 @@ are rejected (not preserved) for early typo detection.
 (future plan), recurrence semantic parsing (session 6 — we just preserve
 the string here).
 
-**Outcome:** 
+**Outcome:** `Task` struct with all planned fields; `Status`/`Priority` enums; `TaskFormat` trait
+with `ParseContext`; `EmojiFormat` implementing the full Obsidian Tasks emoji format. Parser
+detects field boundaries using date-validity checks (so `📅 today` stays in the description).
+Space-preserving raw_trailing accumulator retains post-field comment content byte-for-byte.
+`resolve_hierarchy` wires parent pointers by indent level. 73 unit + proptest tests green.
+Real-vault smoke test: 4,674 tasks parsed, 0 unexpected round-trip mismatches (11 trailing-space
+and 1 unknown-status artifacts are documented, expected behavior). Clippy clean, fmt clean.
 
 ### Session 3 · 2026-05-09 · planned
 **Goal:** Parallel vault scan + `ft tasks list` with flag filters + table/JSON output
@@ -582,13 +588,3 @@ once we hit a real case where the user wants it.
 model & UX"; "Testing" (real-vault test).
 
 **Outcome:** 
-### Session 9 · 2026-05-09 · done
-**Goal:** Task model + emoji-format parser + serializer + round-trip property tests
-
-**Outcome:** `Task` struct with all planned fields; `Status`/`Priority` enums; `TaskFormat` trait
-with `ParseContext`; `EmojiFormat` implementing the full Obsidian Tasks emoji format. Parser
-detects field boundaries using date-validity checks (so `📅 today` stays in the description).
-Space-preserving raw_trailing accumulator retains post-field comment content byte-for-byte.
-`resolve_hierarchy` wires parent pointers by indent level. 73 unit + proptest tests green.
-Real-vault smoke test: 4,674 tasks parsed, 0 unexpected round-trip mismatches (11 trailing-space
-and 1 unknown-status artifacts are documented, expected behavior). Clippy clean, fmt clean.
