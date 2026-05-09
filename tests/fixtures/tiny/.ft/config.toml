@@ -1,0 +1,4 @@
+default_task_location = "Tasks.md"
+daily_notes_path = "Journal"
+daily_notes_format = "YYYY-MM-DD"
+ignored_paths = ["attachments/"]

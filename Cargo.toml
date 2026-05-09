@@ -1,0 +1,28 @@
+[workspace]
+members = ["ft", "ft-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Shared
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+figment = { version = "0.10", features = ["toml"] }
+toml = "0.8"
+dirs = "5"
+
+# Binary
+clap = { version = "4", features = ["derive", "wrap_help"] }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Dev / test (shared)
+assert_cmd = "2"
+assert_fs = "1"
+insta = "1"
+predicates = "3"

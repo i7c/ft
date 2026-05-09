@@ -2,7 +2,7 @@
 id: 001
 name: tasks
 title: "Tasks: foundation library + ft tasks CLI"
-status: ready
+status: implementing
 created: 2026-05-09
 updated: 2026-05-09
 ---
@@ -30,18 +30,18 @@ everything that follows, so this plan invests in a strong test bed
 ## Acceptance Criteria
 
 ### Workspace & project skeleton
-- [ ] Cargo workspace with members `ft` (binary, thin), `ft-core` (library)
-- [ ] `cargo build --release` produces a single `ft` binary; `cargo test --workspace` passes
-- [ ] `ft --version` and `ft --help` work; subcommand structure uses clap derive
-- [ ] CI-ready: clippy clean with `-D warnings`, rustfmt clean, MSRV pinned in `rust-toolchain.toml` to a recent stable
+- [x] Cargo workspace with members `ft` (binary, thin), `ft-core` (library)
+- [x] `cargo build --release` produces a single `ft` binary; `cargo test --workspace` passes
+- [x] `ft --version` and `ft --help` work; subcommand structure uses clap derive
+- [x] CI-ready: clippy clean with `-D warnings`, rustfmt clean, MSRV pinned in `rust-toolchain.toml` to a recent stable
 - [ ] README with quick-start, install instructions (`cargo install --path ft`), and a one-page architecture overview
 
 ### Vault discovery & config
-- [ ] Discovery precedence: `--vault` flag > `FT_VAULT` env > walk up from CWD looking for `.obsidian/` > named vaults in `~/.config/ft/config.toml` (`default` key)
-- [ ] Per-vault config file at `<vault>/.ft/config.toml`, layered on top of user config (per-vault wins)
-- [ ] Config schema covers: `default_task_location`, `daily_notes_path`, `daily_notes_format`, `ignored_paths`, `presets` (named queries)
-- [ ] When no vault can be found, error message lists every location that was tried
-- [ ] `ft vault info` subcommand prints resolved vault path, config files in effect, and merged config
+- [x] Discovery precedence: `--vault` flag > `FT_VAULT` env > walk up from CWD looking for `.obsidian/` > named vaults in `~/.config/ft/config.toml` (`default` key)
+- [x] Per-vault config file at `<vault>/.ft/config.toml`, layered on top of user config (per-vault wins)
+- [x] Config schema covers: `default_task_location`, `daily_notes_path`, `daily_notes_format`, `ignored_paths`, `presets` (named queries)
+- [x] When no vault can be found, error message lists every location that was tried
+- [x] `ft vault info` subcommand prints resolved vault path, config files in effect, and merged config
 
 ### Task model (library)
 - [ ] `Task` struct in `ft-core` with: `description`, `status` (enum: Open, Done, InProgress, Cancelled), `priority` (Highest..Lowest, optional), `tags`, `created`, `start`, `scheduled`, `due`, `done`, `cancelled` dates, `recurrence` (string form preserved verbatim for v1; semantic parsing deferred), `id`, `depends_on` (Vec<String>), `on_completion` field preserved verbatim, `block_link`, `source_file`, `source_line`, `indent_level`, `parent` (for subtask hierarchy)
@@ -214,7 +214,7 @@ moment.js format uses tokens we don't support, with a pointer to the doc.
 - Anything UI beyond the CLI (TUI = plan 002)
 
 ## Sessions
-### Session 1 · 2026-05-09 · planned
+### Session 1 · 2026-05-09 · done
 **Goal:** Cargo workspace + vault discovery + layered config + `ft vault info`
 
 **Scope:**
@@ -258,7 +258,15 @@ anyhow split, `-v` flag, vault-relative paths in errors).
 **Deferred:** task parsing, scanning, any `tasks` subcommand. The README is
 deferred to session 8 (we'll have something concrete to document by then).
 
-**Outcome:** 
+**Outcome:** Cargo workspace scaffolded with `ft` (binary) and `ft-core` (library) crates.
+`Vault::discover()` implements the full four-rung precedence chain with `find_vault`
+owning its own `tried` list. Config layering via `figment` (user + vault, vault wins);
+unknown keys rejected with a clear error via `#[serde(deny_unknown_fields)]`.
+`thiserror`/`anyhow` split in place; `-v` verbosity flag wired to `tracing-subscriber`.
+`ft vault info` prints vault path, config file precedence, and merged config.
+18 tests green (`cargo test --workspace`), clippy clean with `-D warnings`, fmt clean.
+Works against the real `/Users/cmw/git/fortytwo` vault. Decision: unknown config keys
+are rejected (not preserved) for early typo detection.
 
 ### Session 2 · 2026-05-09 · planned
 **Goal:** Task model + emoji-format parser + serializer + round-trip property tests
@@ -574,4 +582,3 @@ once we hit a real case where the user wants it.
 model & UX"; "Testing" (real-vault test).
 
 **Outcome:** 
-
