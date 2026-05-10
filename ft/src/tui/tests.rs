@@ -699,3 +699,214 @@ fn question_mark_toggles_help_overlay() -> Result<()> {
     assert!(!frame_after.contains("Keybindings"));
     Ok(())
 }
+
+// --- session 6: snapshots ----------------------------------------------------
+
+#[test]
+fn help_overlay_over_tasks_tab_renders() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.enter_help();
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("help_overlay_over_tasks_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn edit_popup_error_state_renders() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Tab to due, clear, type garbage, submit — popup stays open with ⚠.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "not-a-date".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("edit_popup_error_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn tasks_tab_wide_terminal_snapshot() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let frame = render(&mut app, 120, 30);
+    assert_tui_snapshot!("tasks_tab_populated_120x30", frame);
+    Ok(())
+}
+
+// --- session 6: help-overlay audit ------------------------------------------
+
+/// The set of keystroke labels that MUST appear in the help overlay. Updating
+/// the help table requires updating this list so the doc never drifts from
+/// what the code actually binds.
+const EXPECTED_HELP_LABELS: &[&str] = &[
+    "q / Ctrl+C",
+    "?",
+    "Tab / Shift+Tab",
+    "1 / 2",
+    "/",
+    "↑ / ↓ · j / k",
+    "] / [",
+    "} / {",
+    "t",
+    "p / P",
+    "x / X",
+    "e",
+    "Enter",
+    "R",
+    "Esc",
+];
+
+#[test]
+fn help_overlay_documents_every_canonical_binding() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.enter_help();
+    let frame = render(&mut app, 80, 40); // tall enough to render every row
+    for label in EXPECTED_HELP_LABELS {
+        assert!(
+            frame.contains(label),
+            "help overlay is missing key binding `{label}`:\n{frame}"
+        );
+    }
+    Ok(())
+}
+
+// --- session 6: real-vault smoke check ---------------------------------------
+
+/// Gated smoke test: render the Tasks tab against the user's real vault.
+/// Activates only with `FT_REAL_VAULT_TESTS=1` so CI never depends on a local
+/// path. Mirrors the gating already used by `tests/real_vault_cli.rs`.
+#[test]
+fn real_vault_tasks_tab_renders_without_panic() -> Result<()> {
+    if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let path = std::path::PathBuf::from("/Users/cmw/git/fortytwo");
+    if !path.exists() {
+        return Ok(()); // gracefully skip if the real vault isn't on this host
+    }
+    let vault = Vault::discover(Some(path))?;
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // First render runs vault.scan() + filter + sort under the hood.
+    let frame = render(&mut app, 120, 40);
+    assert!(
+        frame.contains("Tasks") || frame.contains("tasks"),
+        "real-vault first render should still render the Tasks chrome:\n{frame}"
+    );
+    Ok(())
+}
+
+// --- session 6: performance budgets on a 5k-note vault -----------------------
+
+/// Build a synthetic 5k-note vault for the perf budget tests. Each note has
+/// one task with a varying due date and priority so the default query is
+/// non-trivial. ~5000 files written to a tempdir — setup is slow but only
+/// runs when `FT_PERF_TESTS=1` is set.
+fn synthetic_5k_vault(today: chrono::NaiveDate) -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+
+    for i in 0..5000u32 {
+        // Spread dates across a 60-day window, half before today and half after.
+        let offset = (i as i64 % 60) - 30;
+        let due = today + chrono::Duration::days(offset);
+        let priority = match i % 4 {
+            0 => "⏫ ",
+            1 => "🔼 ",
+            2 => "🔽 ",
+            _ => "",
+        };
+        let body = format!(
+            "# Note {i}\n\n- [ ] Synthetic task {i} {priority}📅 {}\n",
+            due.format("%Y-%m-%d")
+        );
+        std::fs::write(vault_path.join(format!("note_{i:05}.md")), body).unwrap();
+    }
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+fn perf_tests_enabled() -> bool {
+    std::env::var("FT_PERF_TESTS").as_deref() == Ok("1")
+}
+
+#[test]
+fn perf_first_render_5k_vault_under_budget() -> Result<()> {
+    if !perf_tests_enabled() {
+        return Ok(());
+    }
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+    let (_dir, vault) = synthetic_5k_vault(today);
+
+    let start = std::time::Instant::now();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let _ = render(&mut app, 80, 24);
+    let elapsed = start.elapsed();
+
+    // Plan budget is 500ms; allow 4x for debug builds & noisy CI. Run with
+    // --release for tight timing: `cargo test --release ... perf_first_render`.
+    let budget_ms: u128 = 2000;
+    assert!(
+        elapsed.as_millis() < budget_ms,
+        "first render took {:?}; budget {budget_ms}ms (4x of 500ms target). \
+         Run --release for tight timing.",
+        elapsed
+    );
+    Ok(())
+}
+
+#[test]
+fn perf_keystrokes_5k_vault_under_budget() -> Result<()> {
+    if !perf_tests_enabled() {
+        return Ok(());
+    }
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+    let (_dir, vault) = synthetic_5k_vault(today);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let _ = render(&mut app, 80, 24);
+
+    // Dispatch 100 down-arrows + redraw each time. In-memory navigation
+    // should never re-scan; the cost is purely filter+layout.
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let iterations = 100u32;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        app.dispatch(down.clone())?;
+        let _ = render(&mut app, 80, 24);
+    }
+    let elapsed = start.elapsed();
+    let per_key_ms = elapsed.as_millis() / u128::from(iterations);
+
+    // Plan budget is 50ms per keystroke; allow 2x for debug. Release builds
+    // typically come in well under 10ms.
+    let budget_ms: u128 = 100;
+    assert!(
+        per_key_ms < budget_ms,
+        "per-keystroke {per_key_ms}ms exceeded budget {budget_ms}ms \
+         (target 50ms). Total: {:?} across {iterations} iters.",
+        elapsed
+    );
+    Ok(())
+}

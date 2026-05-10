@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 739
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
+│                      ││not done and due before 2026-05-18 sort by due, priori│
+│ Sun 10 May           │└──────────────────────────────────────────────────────┘
+│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
+│                      ││ ── ove┌ edit task ───────────────────────────┐       │
+│ ── views ──          ││▶ !!  P│                                      │       │
+│ ▶ Search             ││  !   R│  description : Pay rent              │       │
+│                      ││ ── upc│          due : not-a-date│           │       │
+│                      ││      R│    scheduled :                       │       │
+│                      ││  !!  S│     priority : high                  │6-05-11│
+│                      ││  v   B│         tags :                       │       │
+│                      ││       │   recurrence :                       │       │
+│                      ││       │                                      │       │
+│                      ││       │  ⚠ due: could not parse `not-a-date` │       │
+│                      ││       │                                      │       │
+│                      ││       │                                      │       │
+│                      ││       │                                      │       │
+│                      ││       └──────────────────────────────────────┘       │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

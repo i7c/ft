@@ -12,10 +12,11 @@ use crossterm::event::{self, Event as CtEvent, KeyEvent, KeyEventKind, MouseEven
 /// `Mouse` and `Resize` payloads are routed but not consumed in session 1;
 /// later sessions will drive layout caches off `Resize`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum Event {
     Key(KeyEvent),
+    #[allow(dead_code)] // routed but not consumed yet; reserved for future sessions
     Mouse(MouseEvent),
+    #[allow(dead_code)] // routed but not consumed yet; reserved for future sessions
     Resize(u16, u16),
     Tick,
 }

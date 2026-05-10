@@ -9,7 +9,6 @@ use crate::tui::{
 /// A view inside the Tasks tab. Views are listed in the sidebar dropdown and
 /// the active one renders into the viewport. v1 ships only "Search"; "Board"
 /// and "Calendar" are explicitly out of scope.
-#[allow(dead_code)]
 pub trait View {
     fn title(&self) -> &str;
 

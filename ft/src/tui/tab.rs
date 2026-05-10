@@ -20,11 +20,14 @@ pub enum AppRequest {
 /// are part of the contract but unused in session 1; sessions 2+ surface them
 /// (e.g. a tab swallowing `q` while editing a query, or a tab signalling exit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum EventOutcome {
     Consumed,
     NotHandled,
     SwitchTab(usize),
+    /// Tab signals the app should exit. Currently unused — `q`/`Ctrl+C` are
+    /// handled by the global keymap — but kept so a future tab (e.g. a modal
+    /// confirm-quit dialog) can request exit without reaching for app state.
+    #[allow(dead_code)]
     Quit,
 }
 
@@ -38,7 +41,6 @@ pub enum EventOutcome {
 /// `last_refresh` is wrapped in a `Cell` so views can update it through
 /// the shared `&TabCtx` they receive in `render` and `handle_event` —
 /// the App reads it back when drawing the status bar.
-#[allow(dead_code)]
 pub struct TabCtx<'a> {
     pub vault: &'a Vault,
     pub today: NaiveDate,
@@ -49,9 +51,7 @@ pub struct TabCtx<'a> {
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
-/// the App's tab list — no surgery on the core loop. `refresh` is part of the
-/// contract; sessions 2+ wire it to the `R` keybinding in the Search view.
-#[allow(dead_code)]
+/// the App's tab list — no surgery on the core loop.
 pub trait Tab {
     fn title(&self) -> &str;
 
