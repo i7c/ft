@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{Local, NaiveDate};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
-    daily, dates,
+    dates,
     query::{dsl, expr::Expr, filter::Filter, preset, sort::sort_by_keys, SortKey, SortOrder},
     selector,
     task::{
@@ -522,18 +522,11 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 }
 
 /// Resolve `--file` against the vault root, or fall back to today's daily
-/// note. Returns an absolute path.
+/// note. Returns an absolute path. Thin wrapper over `Vault::resolve_target`
+/// so the CLI error type stays anyhow.
 fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
-    if let Some(file) = &args.file {
-        let p = if file.is_absolute() {
-            file.clone()
-        } else {
-            vault.path.join(file)
-        };
-        return Ok(p);
-    }
-
-    daily::resolve_daily_path(&vault.path, &vault.config.config.daily_notes, today)
+    vault
+        .resolve_target(today, args.file.as_deref())
         .map_err(|e| anyhow!("{e}"))
 }
 

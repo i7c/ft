@@ -118,6 +118,29 @@ impl Vault {
         }
         files
     }
+
+    /// Resolve the target file for a new task: an explicit override if
+    /// supplied (joined against the vault root when relative), otherwise
+    /// today's daily note. Returns an absolute path.
+    ///
+    /// Shared by the CLI (`ft tasks create --file`) and the TUI's
+    /// quickline `in:PATH` token so both surfaces agree on what "target
+    /// file" means for a given vault + day.
+    pub fn resolve_target(
+        &self,
+        today: chrono::NaiveDate,
+        file_override: Option<&Path>,
+    ) -> std::result::Result<PathBuf, crate::daily::DailyError> {
+        if let Some(file) = file_override {
+            let p = if file.is_absolute() {
+                file.to_path_buf()
+            } else {
+                self.path.join(file)
+            };
+            return Ok(p);
+        }
+        crate::daily::resolve_daily_path(&self.path, &self.config.config.daily_notes, today)
+    }
 }
 
 fn parse_file(vault_root: &Path, path: &Path) -> (Vec<Task>, Option<ScanError>) {

@@ -1,3 +1,4 @@
+mod quickline;
 mod search;
 mod view;
 

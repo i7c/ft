@@ -2,7 +2,7 @@
 id: 004
 name: tui-create
 title: Create tasks from the TUI
-status: ready
+status: implementing
 created: 2026-05-10
 updated: 2026-05-10
 ---
@@ -66,23 +66,23 @@ description (in original order). Tokens with invalid values surface as a
 parse error in the preview line and block Enter; the user can fix in place
 or fall through to the form.
 
-- [ ] `due:VALUE` — due date (ISO, `+Nd`/`-Nw`/etc., `today`/`tomorrow`,
+- [x] `due:VALUE` — due date (ISO, `+Nd`/`-Nw`/etc., `today`/`tomorrow`,
       natural language). Uses `ft_core::dates::parse`.
-- [ ] `sched:VALUE` — scheduled date. Same parser.
-- [ ] `start:VALUE` — start date. Same parser.
-- [ ] `pri:VALUE` — priority (`none`, `low`, `med`, `medium`, `high`,
+- [x] `sched:VALUE` — scheduled date. Same parser.
+- [x] `start:VALUE` — start date. Same parser.
+- [x] `pri:VALUE` — priority (`none`, `low`, `med`, `medium`, `high`,
       `highest`, `lowest`). Matches the popup's `parse_priority` helper.
-- [ ] `every WORDS...` — recurrence rule, consumes the rest of the line up
+- [x] `every WORDS...` — recurrence rule, consumes the rest of the line up
       to the next prefix token. Preserved verbatim (Obsidian Tasks plugin
       compatible).
-- [ ] `in:PATH` — target file path, relative to vault root (e.g.
+- [x] `in:PATH` — target file path, relative to vault root (e.g.
       `in:Inbox.md`, `in:Daily/2026-05-10.md`)
-- [ ] `#tag` (anywhere in the line) — adds a tag; the literal `#tag` stays
+- [x] `#tag` (anywhere in the line) — adds a tag; the literal `#tag` stays
       in the description (matches how the CLI's `--tag` flag merges)
-- [ ] `id:WORD` — stable identifier (the 🆔 field)
-- [ ] Tokens are case-insensitive on the prefix; values are passed through
+- [x] `id:WORD` — stable identifier (the 🆔 field)
+- [x] Tokens are case-insensitive on the prefix; values are passed through
       verbatim to the matching parser
-- [ ] Backslash-escaped tokens (`\due:foo`) are treated as literal
+- [x] Backslash-escaped tokens (`\due:foo`) are treated as literal
       description text — escape hatch for descriptions that legitimately
       contain `key:value` shapes
 
@@ -256,9 +256,64 @@ guard.
 
 ## Sessions
 
-### Session 1 · 2026-05-10 · planned
+### Session 1 · 2026-05-10 · done
 **Goal:** Pull resolve_target_path out of cmd/tasks.rs into ft_core::vault::daily_note. Write the quickline parser (every token, escapes, ordering, errors) with full unit-test coverage.
-**Outcome:** 
+**Outcome:** Two parallel pieces landed.
+
+1. **Shared target resolver.** Added `Vault::resolve_target(today,
+   file_override) -> Result<PathBuf, DailyError>` on `ft_core::vault`.
+   Logic: if the override is set, return it (joined against the vault
+   root when relative); otherwise resolve today's daily note via the
+   existing `daily::resolve_daily_path`. The CLI's
+   `cmd/tasks.rs::resolve_target_path` collapsed into a 3-line wrapper
+   that just delegates and maps `DailyError → anyhow::Error`. The CLI's
+   `daily` import dropped out as a side effect; the new wrapper goes
+   through the inherent method instead. All existing tests still pass —
+   `resolve_target` keeps the exact same semantics, just hoisted so the
+   TUI quickline (and any future surface) can share it.
+
+2. **Quickline parser.** New module
+   `ft/src/tui/tabs/tasks/quickline.rs` shipping
+   `QuicklineParse { description, due, scheduled, start, priority,
+   tags, recurrence, id, target, errors }` plus
+   `parse_quickline(input, today)`.
+
+   Token grammar implemented (case-insensitive on prefixes; values
+   verbatim):
+   - `due:VAL` / `sched:VAL` / `start:VAL` — date fields via
+     `ft_core::dates::parse`
+   - `pri:VAL` — priority with the same vocabulary as the edit popup
+     (`none`/`low`/`med`/`medium`/`high`/`highest`/`lowest`)
+   - `in:PATH` — vault-relative or absolute target path (caller does
+     the inside-vault validation)
+   - `id:WORD` — stable identifier
+   - `#tag` — alphanumeric + `_-/`; populates `tags` AND stays inline
+     in the description so the final markdown carries the hashtag
+   - `every WORDS...` — recurrence; greedily consumes tokens until end
+     of input or the next prefix-bearing token (so
+     `every weekday due:tomorrow` parses correctly)
+   - `\due:foo` / `\every-day` — backslash escape leaves the rest as
+     literal description text
+
+   Errors accumulate in `errors: Vec<String>` rather than short-
+   circuiting, so the UI can keep showing a live preview as the user
+   types. Double assignments (`due:X due:Y`) keep the first value and
+   record an error; unknown `key:value` tokens (e.g. `re:invoice`) stay
+   in the description untouched. Word order is preserved across the
+   parse — `send the budget review #finance to Alice` round-trips
+   intact even with mixed-in tokens.
+
+   30 unit tests cover: every token in isolation; mixed token + prose;
+   ordering preservation; unicode descriptions (the parser previously
+   panicked on Cyrillic tokens whose byte length aligned with `due:` —
+   fixed by switching `strip_prefix_ci` to `str::get`); escapes;
+   `every` consumption boundaries; double-assign error; empty-value
+   error; case-insensitive prefix matching; tag dedup; bare `#`
+   doesn't become a tag.
+
+Module-scope `#![allow(dead_code)]` keeps the parser warning-free
+until session 2 wires it into the UI. `cargo test --workspace` (456
+tests) passes; clippy `-D warnings` and fmt clean.
 
 ### Session 2 · 2026-05-10 · planned
 **Goal:** Quickline UI: open with c, 3-row panel (input + preview row + hint/error), EditBuffer reuse for input, live preview rendering with target path, Enter writes via ops::create_task, basic refresh on success, inline duplicate-detection error.
@@ -275,4 +330,3 @@ guard.
 ### Session 5 · 2026-05-10 · planned
 **Goal:** Polish & audit: help overlay rows (c / Shift+C / Ctrl+E), snapshot coverage (empty quickline, valid preview, parse error, expanded popup, toast in status bar), no-warnings cleanup, real-vault smoke run.
 **Outcome:** 
-
