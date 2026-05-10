@@ -1,0 +1,17 @@
+---
+source: ft/src/tui/widgets/picker.rs
+assertion_line: 711
+expression: frame
+---
+┌ find ──────────────────────────────────────────────────────────────┐
+│gen consid#Firs│                                                    │
+└────────────────────────────────────────────────────────────────────┘
+┌ results ───────────────────────────────────────────────────────────┐
+│▶ Areas/General Considerations.md · First Try                       │
+│  Projects/initial general considerations.md · First Try            │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘

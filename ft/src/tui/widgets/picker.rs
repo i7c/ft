@@ -99,7 +99,6 @@ impl<S: PickerSource> FuzzyPicker<S> {
     }
 
     /// Override the default per-query result cap.
-    #[allow(dead_code)]
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
@@ -687,5 +686,30 @@ mod tests {
         let (_dir, vault) = make_vault(&[("a.md", "# A\n")]);
         let mut src = VaultFilePickerSource::new(&vault);
         assert!(src.query("", 10).is_empty());
+    }
+
+    #[test]
+    fn picker_with_vault_source_renders_realistic_layout() {
+        // Three notes — two whose names match the file-part query `gen
+        // consid`, plus one that doesn't, so the snapshot exercises the
+        // file matcher dropping a non-match while keeping its sibling.
+        let (_dir, vault) = make_vault(&[
+            (
+                "Areas/General Considerations.md",
+                "# Intro\n### First Try\n",
+            ),
+            (
+                "Projects/initial general considerations.md",
+                "# Overview\n### First Try\n",
+            ),
+            ("Inbox/unrelated.md", "# Z\n"),
+        ]);
+        let src = VaultFilePickerSource::new(&vault);
+        let mut picker = FuzzyPicker::new(src).with_limit(10);
+        for c in "gen consid#Firs".chars() {
+            picker.handle_key(key(c));
+        }
+        let frame = render_str(&mut picker, 70, 12);
+        insta::assert_snapshot!("picker_vault_source_70x12", frame);
     }
 }

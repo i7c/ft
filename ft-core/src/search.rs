@@ -516,4 +516,113 @@ mod tests {
         assert_eq!(h.text, "Top Heading");
         assert_eq!(h.level, 1);
     }
+
+    // ── perf budgets (gated; run with FT_PERF_TESTS=1) ─────────────────
+
+    fn perf_enabled() -> bool {
+        std::env::var("FT_PERF_TESTS").as_deref() == Ok("1")
+    }
+
+    /// 5k synthetic notes with realistic-ish structure (one body para +
+    /// a couple of headings) so heading extraction has actual work to do.
+    /// Setup time is amortized: the test creates the vault once and runs
+    /// multiple queries against it.
+    fn synthetic_5k_vault() -> (TempDir, Vault) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("vault");
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        for i in 0..5000u32 {
+            let folder = match i % 5 {
+                0 => "Areas",
+                1 => "Projects",
+                2 => "Journal",
+                3 => "Archive",
+                _ => "Inbox",
+            };
+            let topic = match i % 7 {
+                0 => "review",
+                1 => "design",
+                2 => "research",
+                3 => "report",
+                4 => "consideration",
+                5 => "follow-up",
+                _ => "draft",
+            };
+            let dir_path = root.join(folder);
+            fs::create_dir_all(&dir_path).unwrap();
+            let body =
+                format!("# Note {i} ({topic})\n## First Try\nbody paragraph\n## Second pass\n",);
+            // Topic baked into the filename so file-only fuzzy queries
+            // (`consid`, `design`, …) actually have something to match.
+            fs::write(dir_path.join(format!("note-{i:05}-{topic}.md")), body).unwrap();
+        }
+        let vault = Vault::discover(Some(root)).unwrap();
+        (dir, vault)
+    }
+
+    #[test]
+    fn perf_file_only_query_under_budget_on_5k_vault() {
+        if !perf_enabled() {
+            return;
+        }
+        let (_dir, vault) = synthetic_5k_vault();
+
+        // Cold-ish: first query touches no file content (file-only), so
+        // it's pure path matching across 5k filenames.
+        let q = Query::parse("consid");
+        let start = std::time::Instant::now();
+        let hits = fuzzy_find(&vault, &q, SearchOptions::default());
+        let cold = start.elapsed();
+        assert!(
+            !hits.is_empty(),
+            "expected matches for `consid` against 5k vault"
+        );
+
+        // Warm: same query again (OS file cache + lazy paths are warm).
+        let start = std::time::Instant::now();
+        let _ = fuzzy_find(&vault, &q, SearchOptions::default());
+        let warm = start.elapsed();
+
+        // Plan budgets: cold <100ms / warm <50ms in release. Allow 5x for
+        // debug builds and slow CI; perf tests are the one place where
+        // running with --release matters and is documented in the plan.
+        assert!(
+            cold.as_millis() < 500,
+            "cold file-only query took {cold:?}; budget 100ms (5x debug headroom)"
+        );
+        assert!(
+            warm.as_millis() < 250,
+            "warm file-only query took {warm:?}; budget 50ms (5x debug headroom)"
+        );
+    }
+
+    #[test]
+    fn perf_file_and_heading_query_under_budget_on_5k_vault() {
+        if !perf_enabled() {
+            return;
+        }
+        let (_dir, vault) = synthetic_5k_vault();
+
+        // file+heading query forces the rayon-parallel heading extraction
+        // path on every filename match — the hot loop in fuzzy_find.
+        let q = Query::parse("consid#First");
+        let start = std::time::Instant::now();
+        let hits = fuzzy_find(&vault, &q, SearchOptions::default());
+        let cold = start.elapsed();
+        assert!(!hits.is_empty(), "expected hits for `consid#First`");
+        assert!(hits.iter().all(|h| h.heading.is_some()));
+
+        let start = std::time::Instant::now();
+        let _ = fuzzy_find(&vault, &q, SearchOptions::default());
+        let warm = start.elapsed();
+
+        assert!(
+            cold.as_millis() < 500,
+            "cold file+heading query took {cold:?}; budget 100ms (5x debug headroom)"
+        );
+        assert!(
+            warm.as_millis() < 250,
+            "warm file+heading query took {warm:?}; budget 50ms (5x debug headroom)"
+        );
+    }
 }

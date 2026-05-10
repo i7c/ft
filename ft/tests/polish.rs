@@ -62,6 +62,7 @@ fn man_out_dir_writes_pages_per_subcommand() {
         "ft-tasks-create.1",
         "ft-tasks-complete.1",
         "ft-tasks-move.1",
+        "ft-find.1",
     ] {
         let p = dir.path().join(expected);
         assert!(p.exists(), "expected {} to exist", p.display());
