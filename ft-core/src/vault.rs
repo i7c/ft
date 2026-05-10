@@ -81,7 +81,7 @@ impl Vault {
         scan
     }
 
-    fn markdown_files(&self) -> Vec<PathBuf> {
+    pub(crate) fn markdown_files(&self) -> Vec<PathBuf> {
         let mut overrides = OverrideBuilder::new(&self.path);
         for default in DEFAULT_IGNORED {
             // `!pattern` excludes; trailing `/` keeps it a directory match.

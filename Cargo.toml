@@ -21,6 +21,7 @@ chrono-english = "0.1"
 ignore = "0.4"
 rayon = "1.10"
 tempfile = "3"
+nucleo-matcher = "0.3"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

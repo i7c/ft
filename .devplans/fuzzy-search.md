@@ -2,7 +2,7 @@
 id: 005
 name: fuzzy-search
 title: Fuzzy file + heading search (ft-core capability)
-status: ready
+status: implementing
 created: 2026-05-10
 updated: 2026-05-10
 ---
@@ -50,44 +50,44 @@ User-driven scoping decisions:
 ## Acceptance Criteria
 
 ### Query language
-- [ ] `text` (no `#`) — fuzzy-match filenames only; results have no heading
-- [ ] `text#heading` — fuzzy-match filenames with `text`, then within each
+- [x] `text` (no `#`) — fuzzy-match filenames only; results have no heading
+- [x] `text#heading` — fuzzy-match filenames with `text`, then within each
       candidate file fuzzy-match headings with `heading`; results carry a
       `Heading` payload
-- [ ] `#heading` (empty file part) — fuzzy-match headings across the whole
+- [x] `#heading` (empty file part) — fuzzy-match headings across the whole
       vault; rank by heading score alone
-- [ ] `text#` (empty heading part) — same as `text` (the trailing `#` is
+- [x] `text#` (empty heading part) — same as `text` (the trailing `#` is
       treated as a no-op, not an error, so the user can type progressively)
-- [ ] Query parsing handles whitespace at the boundaries: leading /
+- [x] Query parsing handles whitespace at the boundaries: leading /
       trailing whitespace in each part is trimmed but inner whitespace is
       kept (it contributes to the fuzzy score as a subsequence char)
-- [ ] Empty query returns an empty result (no error)
+- [x] Empty query returns an empty result (no error)
 
 ### Heading extraction
-- [ ] Recognize ATX headings (`#`, `##`, `###`, `####`, `#####`, `######`)
+- [x] Recognize ATX headings (`#`, `##`, `###`, `####`, `#####`, `######`)
       followed by a space and text on a single line
-- [ ] Capture level (1–6), text (trimmed, trailing `#` stripped), and
+- [x] Capture level (1–6), text (trimmed, trailing `#` stripped), and
       1-indexed line number
-- [ ] Skip headings inside fenced code blocks (``` and ~~~) and inside
+- [x] Skip headings inside fenced code blocks (``` and ~~~) and inside
       indented code blocks (4-space)
-- [ ] Skip lines that look like headings but are actually inside frontmatter
+- [x] Skip lines that look like headings but are actually inside frontmatter
       (the leading `---` block at the very top of the file)
-- [ ] Setext headings (`===` / `---` underlines) explicitly out of scope —
+- [x] Setext headings (`===` / `---` underlines) explicitly out of scope —
       they're rare in modern Obsidian vaults
 
 ### Scoring & ranking
-- [ ] Filename fuzzy score uses `nucleo::Matcher` (or equivalent); higher =
+- [x] Filename fuzzy score uses `nucleo::Matcher` (or equivalent); higher =
       better; non-matches return `None`
-- [ ] Heading score uses the same matcher
-- [ ] Combined score (when both parts are present) = `file_score +
+- [x] Heading score uses the same matcher
+- [x] Combined score (when both parts are present) = `file_score +
       heading_score`; files with no matching heading are filtered out of
       the heading-query case
-- [ ] Bonus weighting: filename matches that hit the basename (not just
+- [x] Bonus weighting: filename matches that hit the basename (not just
       the directory path) get a small bonus; heading matches at level 1
       (`#`) get a small bonus over deeper levels
-- [ ] Stable tiebreaker: when scores tie, sort by path lexicographic asc
+- [x] Stable tiebreaker: when scores tie, sort by path lexicographic asc
       so results don't reshuffle between identical queries
-- [ ] Configurable `limit` (default 25) — only the top N hits are returned
+- [x] Configurable `limit` (default 25) — only the top N hits are returned
 
 ### Performance
 - [ ] First query on a 5k-note vault returns in <100ms in release (rayon-
@@ -267,9 +267,49 @@ natural order is:
 
 ## Sessions
 
-### Session 1 · 2026-05-10 · planned
+### Session 1 · 2026-05-10 · done
 **Goal:** ft_core foundation: add nucleo dep, ft_core::search module (Query::parse, Hit, SearchOptions), ft_core::markdown module (heading extractor with code-fence + frontmatter skip), Vault::fuzzy_find scan-on-query implementation using rayon. Full unit-test coverage on query parser, heading extractor, and fuzzy_find against a synthetic vault.
-**Outcome:** 
+**Outcome:** Foundation landed. Added `nucleo-matcher 0.3` as a workspace
+dep, exposed `Vault::markdown_files` as `pub(crate)`, and created two
+new modules:
+
+- `ft_core::markdown` (`markdown.rs`): `Heading` struct + `extract_headings`.
+  Line-by-line state machine handles ATX 1–6, skips fenced code blocks
+  (both ``` and ~~~), indented code blocks (4-col, tab counts as 4),
+  and leading YAML/TOML frontmatter (`---` block at file top, closing
+  on `---` or `...`). Closing `#`s are stripped per CommonMark. 10 unit
+  tests cover every code path, including the gotcha that the
+  `"\<newline>"` line-continuation syntax in Rust strings eats leading
+  whitespace (one test was initially broken by it).
+
+- `ft_core::search` (`search.rs`): `Query::parse` splits on the first
+  `#`, trims outer whitespace, treats `text#` as "no heading constraint".
+  `Hit { path, file_score, heading, heading_score, total_score }` with
+  scores as `u32` (matching nucleo's return type — deviated from the
+  plan's `i32` since we never see negative scores). Two-stage `fuzzy_find`:
+  (1) serial path-aware filename matching using
+  `Config::DEFAULT.match_paths()` (basename matches naturally outrank
+  directory-component ones thanks to nucleo's built-in bonuses); (2)
+  rayon-parallel file read + heading extraction on stage-1 survivors;
+  serial heading scoring with `Config::DEFAULT`. Manual `level_bonus`
+  (+10/+6/+3 for H1/H2/H3) layers on top so a level-1 match outranks
+  a deeper one of identical fuzzy quality. Tiebreaker is lexicographic
+  path asc so identical scores don't reshuffle. `SearchOptions` defaults
+  to `limit=25, include_headings=false`; heading extraction kicks in
+  automatically when the query has a `heading_part`. Heading-only
+  queries (`#term`) give every file a neutral `file_score=0` so ranking
+  is driven entirely by the heading match.
+
+`Vault::fuzzy_find` is added as an inherent-method convenience that
+delegates to the free function — both surfaces work.
+
+14 search tests cover Query parsing (6 cases) and `fuzzy_find` against
+synthetic vaults: file-only, file+heading (the canonical
+`gen consid#Firs` scenario from the plan), heading-only, no-match,
+empty-query, limit truncation, lexicographic tiebreaker, and
+include_headings-without-heading-part attaching the first heading.
+Workspace `cargo test` (404 tests), `cargo clippy --workspace
+--all-targets -- -D warnings`, and `cargo fmt --check` all clean.
 
 ### Session 2 · 2026-05-10 · planned
 **Goal:** ft find CLI command: ft/src/cmd/find.rs with clap derive, tab-separated stdout + ndjson format, color-on-TTY, --limit / --include-headings flags, exit codes per plan-001 conventions, integration tests + real-vault gated test.
@@ -282,4 +322,3 @@ natural order is:
 ### Session 4 · 2026-05-10 · planned
 **Goal:** Polish & audit: 5k-vault perf test gated on FT_PERF_TESTS=1 (<100ms release / <500ms debug budgets), snapshot completeness, help / man-page entries for ft find, no-warnings cleanup, real-vault smoke check.
 **Outcome:** 
-

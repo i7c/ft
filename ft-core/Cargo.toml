@@ -17,6 +17,7 @@ chrono-english = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 tempfile = { workspace = true }
+nucleo-matcher = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }
