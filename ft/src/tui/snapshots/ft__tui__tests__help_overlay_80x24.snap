@@ -4,25 +4,25 @@ expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
                                                                                 
-                                                                                
-                                                                                
-                                                                                
                 ┌ help ────────────────────────────────────────┐                
                 │Keybindings                                   │                
-         ██╗    │                                              │██████╗         
-         ██║    │  q / Ctrl+C        quit                      │█╔════╝         
-         ██║ █╗ │  ?                 toggle this help          │████╗           
-         ██║███╗│  Tab / Shift+Tab   next / previous tab       │█╔══╝           
-         ╚███╔██│  1 / 2             jump to tab N             │██████╗         
-          ╚══╝╚═│  Esc               close overlay             │══════╝         
+                │                                              │                
+                │  q / Ctrl+C        quit                      │                
+                │  ?                 toggle this help          │                
+         ██╗    │  Tab / Shift+Tab   next / previous tab       │██████╗         
+         ██║    │  1 / 2             jump to tab N             │█╔════╝         
+         ██║ █╗ │  /                 edit query                │████╗           
+         ██║███╗│  ↑ / ↓ · j / k     select task               │█╔══╝           
+         ╚███╔██│  ] / [             due date +1d / -1d        │██████╗         
+          ╚══╝╚═│  } / {             scheduled +1d / -1d       │══════╝         
+                │  p / P             priority cycle fwd / back │                
+                │  x / X             complete / cancel         │                
+                │  R                 reload vault              │                
+               p│  Esc               close overlay             │p               
                 │                                              │                
                 │  press ? or Esc to close                     │                
                 │                                              │                
-               p│                                              │p               
                 │                                              │                
                 └──────────────────────────────────────────────┘                
-                                                                                
-                                                                                
-                                                                                
                                                                                 
  vault: test-vault  ·  tab: Welcome         not yet refreshed        mode: help

@@ -437,6 +437,121 @@ pub fn complete_task(
     })
 }
 
+// ── update_task_line / cancel_task ───────────────────────────────────────────
+
+#[derive(Debug, Error)]
+pub enum UpdateError {
+    #[error("could not read {}: {source}", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("line {line} not found in {} ({file_lines} lines)", .path.display())]
+    LineMissing {
+        path: PathBuf,
+        line: usize,
+        file_lines: usize,
+    },
+    #[error("line {line} in {} is not a task", .path.display())]
+    NotATask { path: PathBuf, line: usize },
+    #[error("write failed: {source}")]
+    Write {
+        #[from]
+        source: crate::error::Error,
+    },
+}
+
+/// Apply `mutate` to the task at `target_path:line`, then serialize the
+/// result back into the file via `write_atomic`. Returns the post-mutation
+/// task with `source_file` / `source_line` filled in. Used by both the CLI
+/// and the TUI for quick-key edits (date nudges, priority cycle, cancel).
+///
+/// Does not handle recurrence — for completing recurring tasks, use
+/// [`complete_task`] which inserts the next instance.
+pub fn update_task_line<F>(target_path: &Path, line: usize, mutate: F) -> Result<Task, UpdateError>
+where
+    F: FnOnce(&mut Task),
+{
+    let content = std::fs::read_to_string(target_path).map_err(|e| UpdateError::Read {
+        path: target_path.to_path_buf(),
+        source: e,
+    })?;
+
+    let mut lines: Vec<String> = content
+        .split_inclusive('\n')
+        .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
+        .collect();
+
+    if line == 0 || line > lines.len() {
+        return Err(UpdateError::LineMissing {
+            path: target_path.to_path_buf(),
+            line,
+            file_lines: lines.len(),
+        });
+    }
+
+    let idx = line - 1;
+    let ctx = ParseContext {
+        source_file: target_path.to_path_buf(),
+        source_line: line,
+    };
+    let mut task =
+        EmojiFormat
+            .parse_line(&lines[idx], ctx)
+            .ok_or_else(|| UpdateError::NotATask {
+                path: target_path.to_path_buf(),
+                line,
+            })?;
+
+    mutate(&mut task);
+
+    let serialized = EmojiFormat.serialize_line(&task);
+    lines[idx] = serialized;
+
+    let mut joined = lines.join("\n");
+    joined.push('\n');
+    write_atomic(target_path, &joined)?;
+
+    Ok(task)
+}
+
+#[derive(Debug, Error)]
+pub enum CancelError {
+    #[error(transparent)]
+    Update(#[from] UpdateError),
+    #[error("task at {}:{} is already cancelled (on {})", .path.display(), .line, .cancelled)]
+    AlreadyCancelled {
+        path: PathBuf,
+        line: usize,
+        cancelled: NaiveDate,
+    },
+}
+
+/// Mark the task at `target_path:line` cancelled, recording `on` as the
+/// cancellation date. Cancelled tasks do not recur (so unlike
+/// [`complete_task`] no next-instance is generated).
+pub fn cancel_task(target_path: &Path, line: usize, on: NaiveDate) -> Result<Task, CancelError> {
+    // Snapshot the pre-state so we can detect "already cancelled" without
+    // racing the write inside the mutate closure.
+    let pre = update_task_line(target_path, line, |_| {})?;
+    if pre.status == Status::Cancelled {
+        if let Some(c) = pre.cancelled {
+            return Err(CancelError::AlreadyCancelled {
+                path: target_path.to_path_buf(),
+                line,
+                cancelled: c,
+            });
+        }
+    }
+
+    let task = update_task_line(target_path, line, |t| {
+        t.status = Status::Cancelled;
+        t.cancelled = Some(on);
+    })?;
+    Ok(task)
+}
+
 // ── move_tasks ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]

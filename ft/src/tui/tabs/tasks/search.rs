@@ -6,7 +6,10 @@ use ft_core::{
         dsl::{self, Query},
         sort::{sort_by_keys, SortKey, SortOrder},
     },
-    task::{Priority, Task},
+    task::{
+        ops::{self, CompleteOptions},
+        Priority, Task,
+    },
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -509,6 +512,17 @@ impl View for SearchView {
                 self.reload(ctx)?;
                 Ok(EventOutcome::Consumed)
             }
+            // Quick mutations on the selected task. Each writes atomically
+            // through ft-core, then re-scans so the row reflects the new
+            // state and overdue/upcoming bucketing stays correct.
+            (KeyCode::Char(']'), _) => self.nudge_field(ctx, Field::Due, 1),
+            (KeyCode::Char('['), _) => self.nudge_field(ctx, Field::Due, -1),
+            (KeyCode::Char('}'), _) => self.nudge_field(ctx, Field::Scheduled, 1),
+            (KeyCode::Char('{'), _) => self.nudge_field(ctx, Field::Scheduled, -1),
+            (KeyCode::Char('p'), KeyModifiers::NONE) => self.cycle_priority(ctx, 1),
+            (KeyCode::Char('P'), _) => self.cycle_priority(ctx, -1),
+            (KeyCode::Char('x'), KeyModifiers::NONE) => self.complete_selected(ctx),
+            (KeyCode::Char('X'), _) => self.cancel_selected(ctx),
             _ => Ok(EventOutcome::NotHandled),
         }
     }
@@ -531,7 +545,128 @@ impl View for SearchView {
     }
 }
 
+/// Which date column a `]`/`[`/`}`/`{` keypress targets.
+#[derive(Debug, Clone, Copy)]
+enum Field {
+    Due,
+    Scheduled,
+}
+
+/// Priority cycle order per plan: `p` walks None → Low → Medium → High → None;
+/// `P` walks the other way. Highest/Lowest aren't on the cycle — they're
+/// rarely used and the future edit popup will set them explicitly.
+const PRIORITY_CYCLE: &[Option<Priority>] = &[
+    None,
+    Some(Priority::Low),
+    Some(Priority::Medium),
+    Some(Priority::High),
+];
+
+fn cycle_pos(p: Option<Priority>) -> usize {
+    PRIORITY_CYCLE.iter().position(|x| *x == p).unwrap_or(0)
+}
+
 impl SearchView {
+    /// Re-scan the vault and recompute matches, then restore the selection
+    /// to the row whose `(path, line)` matches `anchor` if it's still in the
+    /// list. Falls back to saturating at the last row.
+    fn refresh_after_mutation(
+        &mut self,
+        ctx: &mut TabCtx,
+        anchor: Option<(std::path::PathBuf, usize)>,
+    ) -> Result<()> {
+        self.reload(ctx)?;
+        if let Some((path, line)) = anchor {
+            if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
+                let t = &self.tasks[task_idx];
+                t.source_file == path && t.source_line == line
+            }) {
+                self.selected = i;
+                return Ok(());
+            }
+        }
+        if !self.matches.is_empty() && self.selected >= self.matches.len() {
+            self.selected = self.matches.len() - 1;
+        }
+        Ok(())
+    }
+
+    fn with_selected_task<F>(&mut self, ctx: &mut TabCtx, op: F) -> Result<EventOutcome>
+    where
+        F: FnOnce(&std::path::Path, &Task, NaiveDate) -> Result<()>,
+    {
+        let Some(&task_idx) = self.matches.get(self.selected) else {
+            return Ok(EventOutcome::Consumed);
+        };
+        let task = &self.tasks[task_idx];
+        // Tasks store paths relative to the vault root; ft-core mutators
+        // need an absolute (or CWD-relative) path to read/write.
+        let absolute = ctx.vault.path.join(&task.source_file);
+        let anchor = Some((task.source_file.clone(), task.source_line));
+        op(&absolute, task, ctx.today)?;
+        self.refresh_after_mutation(ctx, anchor)?;
+        Ok(EventOutcome::Consumed)
+    }
+
+    fn nudge_field(
+        &mut self,
+        ctx: &mut TabCtx,
+        field: Field,
+        delta_days: i64,
+    ) -> Result<EventOutcome> {
+        self.with_selected_task(ctx, |path, task, today| {
+            let line = task.source_line;
+            ops::update_task_line(path, line, move |t| {
+                let current = match field {
+                    Field::Due => t.due,
+                    Field::Scheduled => t.scheduled,
+                };
+                let base = current.unwrap_or(today);
+                let next = base + Duration::days(delta_days);
+                match field {
+                    Field::Due => t.due = Some(next),
+                    Field::Scheduled => t.scheduled = Some(next),
+                }
+            })?;
+            Ok(())
+        })
+    }
+
+    fn cycle_priority(&mut self, ctx: &mut TabCtx, direction: i64) -> Result<EventOutcome> {
+        self.with_selected_task(ctx, |path, task, _today| {
+            let line = task.source_line;
+            ops::update_task_line(path, line, move |t| {
+                let pos = cycle_pos(t.priority) as i64;
+                let len = PRIORITY_CYCLE.len() as i64;
+                let next = ((pos + direction).rem_euclid(len)) as usize;
+                t.priority = PRIORITY_CYCLE[next];
+            })?;
+            Ok(())
+        })
+    }
+
+    fn complete_selected(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        self.with_selected_task(ctx, |path, task, today| {
+            // Already-done tasks are a no-op rather than an error so the user
+            // can hammer `x` without ceremony.
+            match ops::complete_task(path, task.source_line, CompleteOptions { on: today }) {
+                Ok(_) => Ok(()),
+                Err(ops::CompleteError::AlreadyDone { .. }) => Ok(()),
+                Err(e) => Err(anyhow::Error::from(e)),
+            }
+        })
+    }
+
+    fn cancel_selected(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        self.with_selected_task(ctx, |path, task, today| {
+            match ops::cancel_task(path, task.source_line, today) {
+                Ok(_) => Ok(()),
+                Err(ops::CancelError::AlreadyCancelled { .. }) => Ok(()),
+                Err(e) => Err(anyhow::Error::from(e)),
+            }
+        })
+    }
+
     fn handle_edit_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
         match (k.code, k.modifiers) {
             (KeyCode::Esc, _) => {

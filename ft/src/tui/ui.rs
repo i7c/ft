@@ -120,11 +120,18 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("?", "toggle this help"),
     ("Tab / Shift+Tab", "next / previous tab"),
     ("1 / 2", "jump to tab N"),
+    ("/", "edit query"),
+    ("↑ / ↓ · j / k", "select task"),
+    ("] / [", "due date +1d / -1d"),
+    ("} / {", "scheduled +1d / -1d"),
+    ("p / P", "priority cycle fwd / back"),
+    ("x / X", "complete / cancel"),
+    ("R", "reload vault"),
     ("Esc", "close overlay"),
 ];
 
 pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(60, 60, area);
+    let popup = centered_rect(60, 80, area);
     frame.render_widget(Clear, popup);
 
     let mut lines: Vec<Line> = Vec::with_capacity(HELP_LINES.len() + 2);

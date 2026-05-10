@@ -74,12 +74,12 @@ date and priority — exactly what matters at the start of a work session.
 - [x] `R` reloads all task data from disk and re-applies the current query
 
 ### Tasks tab — quick keybindings (selected task)
-- [ ] `]` moves the due date forward one day; `[` moves it back one day
-- [ ] `}` moves the scheduled date forward one day; `{` moves it back one day
-- [ ] `p` cycles priority up (none → low → medium → high); `P` cycles down
-- [ ] `x` completes the selected task (handles recurrence per plan 001 rules)
-- [ ] `X` cancels the selected task
-- [ ] All quick mutations write atomically via the `ft-core` atomic write helper and refresh the row in place
+- [x] `]` moves the due date forward one day; `[` moves it back one day
+- [x] `}` moves the scheduled date forward one day; `{` moves it back one day
+- [x] `p` cycles priority up (none → low → medium → high); `P` cycles down
+- [x] `x` completes the selected task (handles recurrence per plan 001 rules)
+- [x] `X` cancels the selected task
+- [x] All quick mutations write atomically via the `ft-core` atomic write helper and refresh the row in place
 
 ### Tasks tab — edit popup
 - [ ] `e` opens a modal form for the selected task with fields: description, due date, scheduled date, priority, tags, recurrence
@@ -231,9 +231,36 @@ up disk changes. 17 tui tests pass; full workspace `cargo test` (350+
 tests), `cargo clippy --workspace --all-targets`, and `cargo fmt --check`
 all clean.
 
-### Session 4 · 2026-05-10 · planned
+### Session 4 · 2026-05-10 · done
 **Goal:** Quick keybindings: []{}p P x X for date nudges, priority cycle, complete (with recurrence), cancel; atomic writes and in-place row updates
-**Outcome:** 
+**Outcome:** Wired the eight quick keybindings on the Search view: `]`/`[`
+nudge due ±1d, `}`/`{` nudge scheduled ±1d, `p`/`P` cycle priority through
+{None, Low, Medium, High} forward/backward, `x` completes (handing off to
+ft-core's `complete_task` so recurring tasks get their next instance
+inserted), `X` cancels (status=Cancelled + cancelled date). Already-done
+and already-cancelled targets are no-ops rather than errors so the user
+can hammer the key without ceremony.
+
+Two new ft-core ops shipped first so the CLI can use them too:
+- `ops::update_task_line(path, line, |&mut Task| ...)` — generic
+  read-parse-mutate-serialize-write_atomic helper, used by all four
+  nudges and the priority cycle.
+- `ops::cancel_task(path, line, on)` — sets Status::Cancelled + cancelled
+  date, returns AlreadyCancelled if the target is already cancelled.
+
+After every mutation the view re-scans the vault and recomputes matches,
+re-anchoring the selection to the same `(path, line)` when it's still
+present. This keeps the cursor on the row the user just operated on
+when the row stays in the active query, and saturates to the last row
+when it falls out (e.g. `x` makes a task disappear from the default
+`not done` query). Tasks store paths relative to the vault root, so the
+view joins with `vault.path` to get the absolute path before each call.
+
+Help overlay extended with the new bindings — popup grew from 60% to
+80% height to fit. 8 new behavioural tests + 1 recurring-complete test
+(asserting the next instance lands on disk). 30 tui tests pass; full
+workspace `cargo test`, `cargo clippy --workspace --all-targets`, and
+`cargo fmt --check` all clean.
 
 ### Session 5 · 2026-05-10 · planned
 **Goal:** Edit popup (e) with all task fields and CLI date parser; Enter editor handoff with TUI suspend/restore and forced refresh

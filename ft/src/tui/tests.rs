@@ -364,6 +364,169 @@ fn search_capital_r_reloads_and_picks_up_disk_changes() -> Result<()> {
     Ok(())
 }
 
+/// Path to the markdown file inside `populated_vault`. Tests use this to
+/// inspect on-disk state after a quick-key mutation.
+fn populated_tasks_path(dir: &TempDir) -> std::path::PathBuf {
+    dir.path().join("test-vault").join("tasks.md")
+}
+
+#[test]
+fn quick_key_bracket_close_nudges_due_forward() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // Selection starts on "Pay rent" (overdue 2026-05-08).
+    app.dispatch(key(']'))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("Pay rent ⏫ 📅 2026-05-09"),
+        "due should bump to 2026-05-09: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_bracket_open_nudges_due_back() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('['))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("Pay rent ⏫ 📅 2026-05-07"),
+        "due should bump back to 2026-05-07: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_brace_close_nudges_scheduled_forward() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // Move down to "Submit Q2 report" which has a scheduled date.
+    for _ in 0..3 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    }
+    app.dispatch(key('}'))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("⏳ 2026-05-12"),
+        "scheduled should bump from 2026-05-11 to 2026-05-12: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_p_cycles_priority_forward() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // Selection: "Pay rent" already has priority High (⏫). Cycle: high → none.
+    app.dispatch(key('p'))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        !body.contains("Pay rent ⏫"),
+        "p should clear priority on a high-pri task: \n{body}"
+    );
+    assert!(
+        body.contains("Pay rent 📅"),
+        "Pay rent line should still exist sans priority: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_capital_p_cycles_priority_backward() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // "Reply to Sara" has no priority — selection 2 (overdue 2 + first upcoming).
+    for _ in 0..2 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('P'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("Reply to Sara ⏫"),
+        "P (reverse) on no-pri task should land on High: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_x_completes_selected_task() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('x'))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("- [x] Pay rent"),
+        "x should mark Pay rent done: \n{body}"
+    );
+    assert!(
+        body.contains("✅ 2026-05-10"),
+        "completion date should be today: \n{body}"
+    );
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("Pay rent"),
+        "completed task should disappear from default `not done` query: \n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_key_capital_x_cancels_selected_task() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('X'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("- [-] Pay rent"),
+        "X should mark Pay rent cancelled: \n{body}"
+    );
+    assert!(
+        body.contains("❌ 2026-05-10"),
+        "cancellation date should be today: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quick_keys_recurring_complete_inserts_next_instance() -> Result<()> {
+    // Spin up a fresh vault with a recurring task so we can exercise the
+    // ft-core recurrence path without polluting populated_vault.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let body = "- [ ] Water plants 🔁 every week 📅 2026-05-09\n";
+    std::fs::write(vault_path.join("tasks.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('x'))?;
+    let body = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert!(
+        body.contains("- [ ] Water plants 🔁 every week 📅 2026-05-16"),
+        "next instance should be inserted with due = 2026-05-09 + 7d: \n{body}"
+    );
+    assert!(
+        body.contains("- [x] Water plants"),
+        "completed instance should remain: \n{body}"
+    );
+    Ok(())
+}
+
 #[test]
 fn question_mark_toggles_help_overlay() -> Result<()> {
     let (_dir, vault) = test_vault();
