@@ -486,6 +486,7 @@ dependencies = [
  "owo-colors",
  "predicates",
  "serde_json",
+ "similar",
  "tracing",
  "tracing-subscriber",
 ]

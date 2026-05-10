@@ -11,7 +11,8 @@ use ft_core::{
     selector,
     task::{
         ops::{
-            self, CompleteError, CompleteOptions, CreateError, CreateInput, CreateOptions, Position,
+            self, CompleteError, CompleteOptions, CreateError, CreateInput, CreateOptions,
+            MoveSource, MoveTarget, Position,
         },
         Priority, Status, Task,
     },
@@ -34,6 +35,8 @@ pub enum TasksCommand {
     Create(CreateArgs),
     /// Mark a task complete (and write the next instance if recurring).
     Complete(CompleteArgs),
+    /// Move tasks (and their subtasks) to another file or section.
+    Move(MoveArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -159,6 +162,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::List(list_args) => run_list(list_args, vault_flag),
         TasksCommand::Create(create_args) => run_create(create_args, vault_flag),
         TasksCommand::Complete(complete_args) => run_complete(complete_args, vault_flag),
+        TasksCommand::Move(move_args) => run_move(move_args, vault_flag),
     }
 }
 
@@ -741,6 +745,189 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
             )
         }
         other => anyhow!("{other}"),
+    }
+}
+
+// ── ft tasks move ────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct MoveArgs {
+    /// Selector for a single task (id, `<file>:<line>`, or fuzzy substring).
+    /// Mutually exclusive with `--query`.
+    #[arg(value_name = "SELECTOR", conflicts_with = "query")]
+    pub selector: Option<String>,
+
+    /// Bulk move: select tasks by query DSL. Mutually exclusive with the
+    /// positional selector.
+    #[arg(long, value_name = "DSL")]
+    pub query: Option<String>,
+
+    /// Target: a file path relative to the vault root, optionally suffixed
+    /// with `#Heading` to land under that section.
+    #[arg(long, value_name = "FILE[#HEADING]", required = true)]
+    pub to: String,
+
+    /// Print a unified diff of every affected file without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Skip the confirmation prompt for bulk moves.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let today = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive());
+
+    if args.selector.is_none() && args.query.is_none() {
+        return Err(anyhow!("provide either a selector or --query"));
+    }
+
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    let target = parse_move_target(&args.to, &vault.path);
+
+    let chosen: Vec<&Task> = if let Some(q) = args.query.as_deref() {
+        let parsed = dsl::parse(q, today).map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
+        scan.tasks
+            .iter()
+            .filter(|t| parsed.expr.as_ref().is_none_or(|e| e.matches(t)))
+            .collect()
+    } else {
+        let s = args.selector.as_deref().unwrap();
+        let sel = selector::parse(s);
+        let mut matches = selector::resolve(&scan.tasks, &sel);
+        if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) {
+            let fuzzy = ft_core::selector::Selector::Fuzzy(s.to_string());
+            matches = selector::resolve(&scan.tasks, &fuzzy);
+        }
+        if matches.is_empty() {
+            return Err(anyhow!("no tasks match selector `{s}`"));
+        }
+        matches
+    };
+
+    if chosen.is_empty() {
+        return Err(anyhow!("no tasks matched"));
+    }
+
+    // Confirm bulk operations interactively.
+    let bulk = chosen.len() > 1;
+    if bulk && !args.yes && !args.dry_run {
+        let stdin_is_tty = is_terminal::IsTerminal::is_terminal(&std::io::stdin());
+        if !stdin_is_tty {
+            return Err(anyhow!(
+                "{} tasks would be moved — pass --yes to confirm or --dry-run to preview",
+                chosen.len()
+            ));
+        }
+        let preview: Vec<String> = chosen
+            .iter()
+            .take(5)
+            .map(|t| {
+                format!(
+                    "  {}:{}  {}",
+                    t.source_file.display(),
+                    t.source_line,
+                    t.description
+                )
+            })
+            .collect();
+        let extra = if chosen.len() > 5 {
+            format!("\n  … and {} more", chosen.len() - 5)
+        } else {
+            String::new()
+        };
+        let prompt = format!(
+            "Move {} task(s) to {}?\n{}{extra}",
+            chosen.len(),
+            args.to,
+            preview.join("\n")
+        );
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt(prompt)
+            .default(false)
+            .interact_opt()
+            .map_err(|e| anyhow!("confirmation failed: {e}"))?
+            .unwrap_or(false);
+        if !confirmed {
+            return Err(anyhow!("aborted"));
+        }
+    }
+
+    let sources: Vec<MoveSource> = chosen
+        .iter()
+        .map(|t| MoveSource {
+            path: vault.path.join(&t.source_file),
+            line: t.source_line,
+        })
+        .collect();
+
+    let plan = ops::plan_move(&sources, &target).map_err(|e| anyhow!("{e}"))?;
+
+    if args.dry_run {
+        for edit in &plan.edits {
+            if edit.original == edit.new {
+                continue;
+            }
+            let rel = edit.path.strip_prefix(&vault.path).unwrap_or(&edit.path);
+            print_diff(rel, &edit.original, &edit.new);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    ops::apply_move_plan(&plan).map_err(|e| anyhow!("{e}"))?;
+
+    let target_rel = target
+        .path()
+        .strip_prefix(&vault.path)
+        .unwrap_or(target.path());
+    println!(
+        "Moved {} task(s) → {}",
+        plan.blocks.len(),
+        target_rel.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Parse `path[#heading]` into a [`MoveTarget`]. The path is resolved against
+/// the vault root if relative.
+fn parse_move_target(spec: &str, vault_root: &std::path::Path) -> MoveTarget {
+    let (file_part, heading_part) = match spec.split_once('#') {
+        Some((f, h)) => (f, Some(h.to_string())),
+        None => (spec, None),
+    };
+    let raw = std::path::Path::new(file_part);
+    let abs = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        vault_root.join(raw)
+    };
+    match heading_part {
+        Some(h) => MoveTarget::UnderHeading(abs, h),
+        None => MoveTarget::Append(abs),
+    }
+}
+
+fn print_diff(path: &std::path::Path, original: &str, new: &str) {
+    use similar::{ChangeTag, TextDiff};
+    println!("--- {} (before)", path.display());
+    println!("+++ {} (after)", path.display());
+    let diff = TextDiff::from_lines(original, new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        print!("{sign}{change}");
     }
 }
 

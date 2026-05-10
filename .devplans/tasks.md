@@ -86,10 +86,10 @@ everything that follows, so this plan invests in a strong test bed
 - [x] If task has `recurrence`, creates the next instance at the original location and marks the current one done — matching plugin behavior. Recurrence semantics in v1 cover daily/weekly/monthly with a clearly-tested whitelist; unsupported patterns error out with the exact unsupported token
 
 ### `ft tasks move` and bulk move
-- [ ] `ft tasks move <selector> --to <file>[#heading]` moves a single task (and its subtasks) to the new location
-- [ ] `ft tasks move --query "<DSL>" --to <file>[#heading]` bulk-moves all matching tasks; prompts for confirmation showing a count and a sample of 5 unless `--yes`
-- [ ] Move preserves indentation/subtask hierarchy, rewrites the source files atomically, and updates internal `[[wikilinks]]` ONLY if the target file is in a different folder (deferred — note in code comments that this needs a follow-up plan)
-- [ ] Dry-run with `--dry-run` prints the diff of every affected file without writing
+- [x] `ft tasks move <selector> --to <file>[#heading]` moves a single task (and its subtasks) to the new location
+- [x] `ft tasks move --query "<DSL>" --to <file>[#heading]` bulk-moves all matching tasks; prompts for confirmation showing a count and a sample of 5 unless `--yes`
+- [x] Move preserves indentation/subtask hierarchy, rewrites the source files atomically, and updates internal `[[wikilinks]]` ONLY if the target file is in a different folder (deferred — note in code comments that this needs a follow-up plan)
+- [x] Dry-run with `--dry-run` prints the diff of every affected file without writing
 
 ### Error model & UX
 - [ ] Library uses `thiserror` enums; binary uses `anyhow` with `Context`
@@ -686,7 +686,7 @@ explicit; (d) `ft tasks complete` (no selector) opens the picker over all
 open tasks rather than erroring — feels like the natural "what do I want
 to mark done right now?" affordance.
 
-### Session 7 · 2026-05-09 · planned
+### Session 7 · 2026-05-09 · done
 **Goal:** `ft tasks move` single + bulk-move + dry-run + diff preview + confirmation
 
 **Scope:**
@@ -726,7 +726,62 @@ to mark done right now?" affordance.
 
 **Deferred:** wikilink rewriting on cross-folder moves (plan 003).
 
-**Outcome:** 
+**Outcome:** Session 7 ships `ft tasks move` end-to-end. New ft-core
+types in `task::ops`: `MoveSource { path, line }`, `MoveTarget` (variants
+`Append(PathBuf)` / `UnderHeading(PathBuf, String)`), `MovePlan { edits,
+blocks }`, `FileEdit { path, original, new }`, `MovedBlock { source,
+end_line, task_description }`. `plan_move(sources, target)` reads each
+affected file once, parses the head line of each move source to learn its
+indent level, computes the contiguous block range (head line + every
+following line whose first non-whitespace column exceeds the head indent;
+blank lines bound the block), drops descendants whose range is contained
+in another in-list range so users can pass both `parent` and `child`
+selectors without double-moving, normalizes the moved block's indentation
+by stripping the head's leading whitespace from every line, and produces
+a `Vec<FileEdit>` of before/after content (target included; unchanged
+files yield `original == new`). When source and target are the same file
+the plan threads removals through before insertion. `apply_move_plan`
+walks the edits and writes atomically through `crate::fs::write_atomic`,
+skipping no-ops. Wikilink rewriting on cross-folder moves is explicitly
+deferred to plan 003 and called out in a code TODO at the top of
+`plan_move`. The CLI `tasks move` subcommand: positional `<selector>` or
+`--query DSL` (mutually exclusive via clap), `--to FILE[#HEADING]` (parsed
+into `MoveTarget`; relative paths resolve against the vault root),
+`--dry-run` prints unified per-file diffs via `similar::TextDiff` and
+never writes, `--yes` bypasses bulk confirmation; without `--yes` and
+without a TTY a bulk move errors with a message naming the flag, and with
+a TTY the user gets a `dialoguer::Confirm` prompt previewing 5 task
+lines + count. Selector resolution reuses `selector::parse` /
+`selector::resolve` with the same Id→Fuzzy fallback the `complete`
+subcommand has, so `ft tasks move buy-milk --to inbox.md` works for both
+literal IDs and fuzzy matches. Output uses vault-relative paths. New
+deps: `similar = "2"` for the unified diff renderer (added to workspace +
+`ft` binary). Tests: 11 new `task::ops::tests::move_*` unit tests
+covering single move, subtree-with-children, indent normalization, target
+heading existing/missing, parent-subsumes-child dedupe, multi-file bulk,
+within-same-file move, non-task error, line-out-of-range error, and the
+empty-input no-op edge case; 9 `tasks_move.rs` integration tests covering
+single by id, heading creation, subtree move, dry-run-no-mtime-change,
+bulk with `--yes`, bulk-no-tty errors, no-match error, idempotent second
+run, within-same-file under heading. **298 → 318 tests green** (`4 + 11
++ 18 + 46 + 9 + 5 + 224 + 1`); clippy clean with `-D warnings`; fmt
+clean. Real-vault smoke against `/Users/cmw/git/fortytwo`: created a
+temporary `_ft_smoke_session7/source.md` with two tagged tasks and one
+indented child; `--dry-run` printed the expected unified diff against
+both source and (yet-to-exist) target, leaving the source untouched and
+the target uncreated; the real bulk move with `--to
+'_ft_smoke_session7/triage.md#Triage'` excised the two parent tasks +
+the beta task's child, created the heading, dropped the duplicate child
+from the move list, and produced clean post-move file contents; cleanup
+removed the smoke directory. Decisions: (a) the block boundary stops at
+the first blank line, matching how Obsidian renders adjacent task lists
+as one item — this means moving a task does not pull in commentary from
+a separate following list; (b) `--to FILE` (no heading) appends to the
+target instead of inserting at the top, which feels closer to "queue"
+semantics for a triage workflow than "stack"; (c) child-subsumed-by-
+parent is computed by file-relative range containment rather than by
+walking `Task.parent` pointers — so the rule works even when the user
+passes raw `file:line` selectors that bypass scan-time hierarchy.
 
 ### Session 8 · 2026-05-09 · planned
 **Goal:** Polish — man pages, shell completions, color/`NO_COLOR`, `--json-errors`, docs, real-vault test
