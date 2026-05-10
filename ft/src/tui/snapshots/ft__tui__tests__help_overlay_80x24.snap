@@ -19,11 +19,11 @@ expression: frame
                 │  p / P             priority cycle fwd / back │                
                 │  x / X             complete / cancel         │                
                 │  e                 open edit popup           │                
-               p│  c                 new task (quickline)      │p               
+               p│  c / Shift+C       new task (line / form)    │p               
+                │  Ctrl+E            expand quickline → form   │                
                 │  Enter             open task in $EDITOR      │                
                 │  R                 reload vault              │                
                 │  Ctrl+W / Ctrl+⌫   delete previous word      │                
                 │  Esc               close overlay             │                
-                │                                              │                
                 └──────────────────────────────────────────────┘                
  vault: test-vault  ·  tab: Welcome         not yet refreshed        mode: help

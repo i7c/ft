@@ -51,9 +51,9 @@ opening the full form. The expanded form has a dedicated `target` field.
 - [x] `Esc` cancels with no write; the panel closes and the cursor returns
       to wherever it was in the task list
 - [x] `Enter` writes the task and closes the panel
-- [ ] `Ctrl+E` opens the full edit-style popup pre-populated from the
+- [x] `Ctrl+E` opens the full edit-style popup pre-populated from the
       parsed quickline state, transferring focus there; the quickline panel
-      closes on popup open *(session 4)*
+      closes on popup open
 - [x] The query bar, list navigation, and global keymap are all suppressed
       while the quickline is open (panel swallows keys like the popup does)
 - [x] Backspace, arrow keys, Home/End, Ctrl+W / Ctrl+Backspace / Alt+Backspace
@@ -113,30 +113,27 @@ or fall through to the form.
       `ops::create_task` semantics for daily notes)
 
 ### Expanded popup form (Ctrl+E)
-- [ ] Opens the existing edit popup component (or a near-clone) with title
+- [x] Opens the existing edit popup component (or a near-clone) with title
       `new task`
-- [ ] Six existing fields prefilled from the quickline parse:
+- [x] Six existing fields prefilled from the quickline parse:
       description, due, scheduled, priority, tags, recurrence
-- [ ] One new `target` field showing the resolved target path. Pressing
-      `Tab`/`Enter` on the field, or typing into it, opens the
-      `FuzzyPicker` from **plan 005** (`gen consid#Firs` style query —
-      file part fuzzy-matches filenames, optional `#heading` part fuzzy-
-      matches headings inside the chosen file). Selecting a result fills
-      the field; if a heading is chosen the new task is created
-      `Position::UnderHeading(heading.text)` instead of `Append`.
-- [ ] **Depends on plan 005 sessions 1–3** (the `FuzzyPicker` widget +
-      `Vault::fuzzy_find` API). If 005 isn't ready when this session
-      starts, fall back to a plain text input and file a follow-up issue
-      to swap it in.
-- [ ] Tab order: description → target → due → scheduled → priority → tags
-      → recurrence → back to description (target up near the top because
-      it's the highest-impact field after description)
-- [ ] `Ctrl+S` validates and writes; `Esc` cancels
-- [ ] Validation errors keep the popup open and focus the offending field,
+- [x] One new `target` field showing the target path. Plain text input
+      that supports `Path` and `Path#heading text`; the `#heading`
+      suffix translates to `Position::UnderHeading(heading)` on submit
+      so users can seed a task into a specific section.
+- [ ] **Picker UI deferred.** Plan 005's `FuzzyPicker` is shipped, but
+      wiring its `&Vault`-borrowing source into a long-lived popup
+      state runs into a self-borrow on `App`. v1 keeps the target
+      field as a plain text input; a follow-up will introduce the
+      picker (likely via `Arc<Vault>` on App, or a context-on-query
+      variant of `PickerSource`).
+- [x] Tab order: description → target → due → scheduled → priority → tags
+      → recurrence → back to description
+- [x] `Ctrl+S` validates and writes; `Esc` cancels
+- [x] Validation errors keep the popup open and focus the offending field,
       same UX as the edit popup
-- [ ] The popup also opens directly without the quickline if the user
-      presses `Shift+C` from the Search view (skip the quickline for users
-      who want the full form immediately)
+- [x] The popup also opens directly without the quickline if the user
+      presses `Shift+C` from the Search view
 
 ### Write + post-create UX
 - [x] On Enter (quickline) or Ctrl+S (popup): build a `CreateInput`,
@@ -467,9 +464,82 @@ the exhaustive match keeps working.
 103 tui tests; full workspace `cargo test` (494 tests); clippy
 `-D warnings` + fmt --check all clean.
 
-### Session 4 · 2026-05-10 · planned
+### Session 4 · 2026-05-10 · done
 **Goal:** Expanded popup: Shift+C opens the popup directly, Ctrl+E from quickline expands with parsed fields pre-populated, new target field with vault-root path validation, refactor edit popup to share render path between new/edit modes.
-**Outcome:** 
+**Outcome:** Expanded popup now serves both edit and new flows.
+
+**Popup refactor.** `EditPopup` gained:
+- `target: EditBuffer` — only rendered in `New` mode
+- `mode: PopupMode { Edit, New }` — drives the title (`edit task` vs
+  `new task`) and the field traversal order
+- `fields() -> &'static [EditField]` — single source of truth for
+  the ordered field list per mode. `Edit` skips `target`; `New`
+  weaves it in right after `description`. Removed the old hard-coded
+  `next()`/`prev()` matches in favor of `next_field()` /
+  `prev_field()` that index into `fields()`.
+- Constructors: `from_task` (existing, sets `mode = Edit`),
+  `new_blank` (Shift+C: empty `New` popup),
+  `from_quickline(parse)` (Ctrl+E: pre-fills every field from a
+  `QuicklineParse`).
+
+The renderer reads `popup.fields()` to lay out exactly the rows that
+belong in the current mode, so the rendered popup naturally has the
+extra `target` row for New and stays compact for Edit.
+
+**Submit path split.** `submit_popup` validates once and dispatches:
+- `submit_popup_edit` — the existing `update_task_line` path
+- `submit_popup_new` — parses the target field (treating `#heading`
+  via `ft_core::search::Query::parse` so the user can target a
+  section), resolves through `Vault::resolve_target` for the
+  daily-note default, builds a `CreateInput`, and calls
+  `ops::create_task`. `Position::UnderHeading(heading)` when a
+  heading suffix is supplied; `Position::Append` otherwise.
+- Captures the prior selection's `(path, line)` so the cursor anchor
+  falls back gracefully when the new task doesn't pass the filter.
+- Fires the same green/red toast and cursor-anchor logic as the
+  quickline submit path (refactored to share `refresh_and_anchor_to_create`).
+
+**Keybindings.**
+- `Shift+C` in search-view normal mode → opens a blank `New` popup
+  (skip the quickline for users who already know they want the full
+  form).
+- `Ctrl+E` inside the quickline → parses what's typed, opens a
+  pre-populated `New` popup, closes the quickline. Lets users start
+  fast in the quickline and fall through to the form when they want
+  to tweak something the quickline doesn't comfortably express.
+
+**Help overlay** gains `c / Shift+C — new task (line / form)` and
+`Ctrl+E — expand quickline → form`. Original labels overflowed the
+26-col description budget at 80x24, so both got tightened. Help
+snapshots refreshed; expected-label list in the audit test updated.
+
+**Picker integration deferred.** Plan 005 shipped the `FuzzyPicker`
+widget + `VaultFilePickerSource`, but wiring its `&'v Vault`-
+borrowing source into a popup state that lives across event-loop
+iterations runs into a self-borrow on App (`App.vault` and
+`App.popup.picker.source: &'v Vault` both held simultaneously). The
+cleanest fix is either `Arc<Vault>` on App or a context-on-query
+variant of `PickerSource` — both bigger changes than this session's
+scope. The target field accepts `Path#heading` directly via text
+input, so all functional capability is present; the picker is purely
+ergonomic and lands in a follow-up.
+
+**Tests (5 new + 1 regression + 1 snapshot).**
+- `shift_c_opens_blank_new_task_popup` — title + target field present
+- `ctrl_e_in_quickline_opens_popup_with_pre_populated_fields` —
+  every parsed field appears in the popup after Ctrl+E
+- `new_popup_ctrl_s_writes_to_in_target` — full Tab-through-form +
+  Ctrl+S writes to the override target
+- `new_popup_target_with_heading_uses_under_heading_position` —
+  `Inbox.md#Triage` writes inside the Triage section, before Done
+- `new_popup_empty_description_blocks_write` — validation traps the
+  empty-description case
+- `edit_popup_still_works_after_refactor` — regression on the
+  existing `e`-on-task flow
+- `new_popup_blank_80x24` snapshot — captures the 7-row form
+
+110 tui tests pass; workspace `cargo test` (498 tests); clippy
+`-D warnings` + fmt --check clean.
 
 ### Session 5 · 2026-05-10 · planned
 **Goal:** Polish & audit: help overlay rows (c / Shift+C / Ctrl+E), snapshot coverage (empty quickline, valid preview, parse error, expanded popup, toast in status bar), no-warnings cleanup, real-vault smoke run.

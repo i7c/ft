@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 712
+assertion_line: 713
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
@@ -19,11 +19,11 @@ expression: frame
 │               │  p / P             priority cycle fwd / back │               │
 │               │  x / X             complete / cancel         │               │
 │               │  e                 open edit popup           │               │
-│               │  c                 new task (quickline)      │               │
+│               │  c / Shift+C       new task (line / form)    │               │
+│               │  Ctrl+E            expand quickline → form   │               │
 │               │  Enter             open task in $EDITOR      │               │
 │               │  R                 reload vault              │               │
 │               │  Ctrl+W / Ctrl+⌫   delete previous word      │               │
 │               │  Esc               close overlay             │               │
-│               │                                              │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help

@@ -769,7 +769,8 @@ const EXPECTED_HELP_LABELS: &[&str] = &[
     "p / P",
     "x / X",
     "e",
-    "c",
+    "c / Shift+C",
+    "Ctrl+E",
     "Enter",
     "R",
     "Ctrl+W / Ctrl+⌫",
@@ -1509,6 +1510,202 @@ fn quickline_duplicate_does_not_raise_toast() -> Result<()> {
         app.current_toast().is_none(),
         "duplicate should stay inline, not fire a toast"
     );
+    Ok(())
+}
+
+// --- session 4: expanded popup (Shift+C / Ctrl+E) -------------------------
+
+#[test]
+fn shift_c_opens_blank_new_task_popup() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame.contains("new task"),
+        "popup title should be `new task`:\n{frame}"
+    );
+    // Target field is part of the New-mode form.
+    assert!(
+        frame.contains("target"),
+        "target field should be in the New popup:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn ctrl_e_in_quickline_opens_popup_with_pre_populated_fields() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "review report due:tomorrow pri:high #work in:Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("new task"), "popup not open:\n{frame}");
+    assert!(
+        frame.contains("review report"),
+        "description missing:\n{frame}"
+    );
+    assert!(frame.contains("2026-05-11"), "due missing:\n{frame}");
+    assert!(frame.contains("high"), "priority missing:\n{frame}");
+    assert!(frame.contains("Inbox.md"), "target missing:\n{frame}");
+    assert!(frame.contains("work"), "tags missing:\n{frame}");
+    Ok(())
+}
+
+#[test]
+fn new_popup_ctrl_s_writes_to_in_target() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    for c in "kickoff sync".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    for c in "Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    for c in "tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    let body = std::fs::read_to_string(&inbox)
+        .unwrap_or_else(|e| panic!("inbox missing: {}: {e}", inbox.display()));
+    assert!(
+        body.contains("kickoff sync"),
+        "description missing:\n{body}"
+    );
+    assert!(body.contains("📅 2026-05-11"), "due missing:\n{body}");
+    Ok(())
+}
+
+#[test]
+fn new_popup_target_with_heading_uses_under_heading_position() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    std::fs::write(
+        &inbox,
+        "# Inbox\n\n## Triage\n- [ ] existing 📅 2026-05-12\n\n## Done\n",
+    )
+    .unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    for c in "new triage item".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    for c in "Inbox.md#Triage".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let body = std::fs::read_to_string(&inbox).unwrap();
+    let triage_line = body
+        .lines()
+        .position(|l| l.contains("## Triage"))
+        .expect("Triage section missing");
+    let done_line = body
+        .lines()
+        .position(|l| l.contains("## Done"))
+        .expect("Done section missing");
+    let new_line = body
+        .lines()
+        .position(|l| l.contains("new triage item"))
+        .expect("new task missing");
+    assert!(
+        triage_line < new_line && new_line < done_line,
+        "new task should be under Triage, before Done:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn new_popup_empty_description_blocks_write() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("new task"), "popup stays open:\n{frame}");
+    assert!(
+        frame.contains("description is empty"),
+        "error missing:\n{frame}"
+    );
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    assert!(!daily.exists() || std::fs::read_to_string(&daily).unwrap().trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn edit_popup_still_works_after_refactor() -> Result<()> {
+    // Regression check: refactoring EditPopup to support both modes
+    // mustn't break the existing `e`-on-selected-task edit flow.
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for c in " (updated)".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let body = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert!(
+        body.contains("Pay rent (updated)"),
+        "edit should still write:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn new_popup_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("new_popup_blank_80x24", frame);
     Ok(())
 }
 

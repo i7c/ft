@@ -77,12 +77,14 @@ struct Quickline {
     error: Option<String>,
 }
 
-/// Modal form opened with `e` for the selected task. Six text fields plus
-/// focus tracking and a parse-error slot. Submit (Ctrl+S) parses dates via
-/// `ft_core::dates::parse` so users can type natural-language input.
+/// Modal form opened with `e` (edit), `Shift+C` (new — blank), or
+/// `Ctrl+E` from the quickline (new — pre-populated from the parsed
+/// quickline tokens). Same render path for both modes; the `mode` field
+/// drives the title and whether the `target` field is part of the form.
 #[derive(Debug, Clone)]
 struct EditPopup {
     description: EditBuffer,
+    target: EditBuffer,
     due: EditBuffer,
     scheduled: EditBuffer,
     priority: EditBuffer,
@@ -90,11 +92,35 @@ struct EditPopup {
     recurrence: EditBuffer,
     focus: EditField,
     error: Option<String>,
+    mode: PopupMode,
 }
+
+/// What the popup is doing: editing the task at `(path, line)` or
+/// creating a fresh one. The target field is only relevant in `New`
+/// mode — edits don't move the task to a different file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PopupMode {
+    Edit,
+    New,
+}
+
+/// Validated popup fields ready to be applied to disk: (description,
+/// due, scheduled, priority, tags, recurrence). Aliased so the two
+/// submit-path methods don't trip the `type_complexity` lint each time
+/// they pass the tuple around.
+type PopupFields = (
+    String,
+    Option<NaiveDate>,
+    Option<NaiveDate>,
+    Option<Priority>,
+    Vec<String>,
+    Option<String>,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditField {
     Description,
+    Target,
     Due,
     Scheduled,
     Priority,
@@ -106,33 +132,12 @@ impl EditField {
     fn label(self) -> &'static str {
         match self {
             EditField::Description => "description",
+            EditField::Target => "target",
             EditField::Due => "due",
             EditField::Scheduled => "scheduled",
             EditField::Priority => "priority",
             EditField::Tags => "tags",
             EditField::Recurrence => "recurrence",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            EditField::Description => EditField::Due,
-            EditField::Due => EditField::Scheduled,
-            EditField::Scheduled => EditField::Priority,
-            EditField::Priority => EditField::Tags,
-            EditField::Tags => EditField::Recurrence,
-            EditField::Recurrence => EditField::Description,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            EditField::Description => EditField::Recurrence,
-            EditField::Due => EditField::Description,
-            EditField::Scheduled => EditField::Due,
-            EditField::Priority => EditField::Scheduled,
-            EditField::Tags => EditField::Priority,
-            EditField::Recurrence => EditField::Tags,
         }
     }
 }
@@ -143,6 +148,7 @@ impl EditPopup {
     fn from_task(task: &Task) -> Self {
         Self {
             description: EditBuffer::from(&task.description),
+            target: EditBuffer::default(),
             due: EditBuffer::from(&fmt_date(task.due)),
             scheduled: EditBuffer::from(&fmt_date(task.scheduled)),
             priority: EditBuffer::from(priority_text(task.priority)),
@@ -150,12 +156,90 @@ impl EditPopup {
             recurrence: EditBuffer::from(task.recurrence.as_deref().unwrap_or("")),
             focus: EditField::Description,
             error: None,
+            mode: PopupMode::Edit,
         }
+    }
+
+    /// Blank "new task" popup. Opened by `Shift+C` from the search view.
+    fn new_blank() -> Self {
+        Self {
+            description: EditBuffer::default(),
+            target: EditBuffer::default(),
+            due: EditBuffer::default(),
+            scheduled: EditBuffer::default(),
+            priority: EditBuffer::default(),
+            tags: EditBuffer::default(),
+            recurrence: EditBuffer::default(),
+            focus: EditField::Description,
+            error: None,
+            mode: PopupMode::New,
+        }
+    }
+
+    /// "New task" popup pre-filled from a parsed quickline. Opened by
+    /// `Ctrl+E` so the user can fall through to the full form with their
+    /// in-flight quickline state intact.
+    fn from_quickline(parse: &crate::tui::tabs::tasks::quickline::QuicklineParse) -> Self {
+        let target = parse
+            .target
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        Self {
+            description: EditBuffer::from(&parse.description),
+            target: EditBuffer::from(&target),
+            due: EditBuffer::from(&fmt_date(parse.due)),
+            scheduled: EditBuffer::from(&fmt_date(parse.scheduled)),
+            priority: EditBuffer::from(priority_text(parse.priority)),
+            tags: EditBuffer::from(&parse.tags.join(" ")),
+            recurrence: EditBuffer::from(parse.recurrence.as_deref().unwrap_or("")),
+            focus: EditField::Description,
+            error: None,
+            mode: PopupMode::New,
+        }
+    }
+
+    /// Ordered field list for the current mode. Edit mode skips the
+    /// `target` field because the task already lives in a known file
+    /// (moving a task is a separate `m` operation, not part of edit).
+    fn fields(&self) -> &'static [EditField] {
+        match self.mode {
+            PopupMode::Edit => &[
+                EditField::Description,
+                EditField::Due,
+                EditField::Scheduled,
+                EditField::Priority,
+                EditField::Tags,
+                EditField::Recurrence,
+            ],
+            PopupMode::New => &[
+                EditField::Description,
+                EditField::Target,
+                EditField::Due,
+                EditField::Scheduled,
+                EditField::Priority,
+                EditField::Tags,
+                EditField::Recurrence,
+            ],
+        }
+    }
+
+    fn next_field(&self) -> EditField {
+        let fields = self.fields();
+        let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
+        fields[(i + 1) % fields.len()]
+    }
+
+    fn prev_field(&self) -> EditField {
+        let fields = self.fields();
+        let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
+        fields[(i + fields.len() - 1) % fields.len()]
     }
 
     fn focused_buffer_mut(&mut self) -> &mut EditBuffer {
         match self.focus {
             EditField::Description => &mut self.description,
+            EditField::Target => &mut self.target,
             EditField::Due => &mut self.due,
             EditField::Scheduled => &mut self.scheduled,
             EditField::Priority => &mut self.priority,
@@ -167,6 +251,7 @@ impl EditPopup {
     fn buffer_for(&self, field: EditField) -> &EditBuffer {
         match field {
             EditField::Description => &self.description,
+            EditField::Target => &self.target,
             EditField::Due => &self.due,
             EditField::Scheduled => &self.scheduled,
             EditField::Priority => &self.priority,
@@ -733,6 +818,13 @@ impl View for SearchView {
                 self.quickline = Some(Quickline::default());
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('C'), _) => {
+                // Shift+C — skip the quickline and go straight to the
+                // full form (useful when you already know you want
+                // priority/tags/recurrence/target).
+                self.popup = Some(EditPopup::new_blank());
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Enter, _) => {
                 self.request_editor_open(ctx);
                 Ok(EventOutcome::Consumed)
@@ -985,10 +1077,10 @@ impl SearchView {
             (KeyCode::Esc, _) => {
                 self.popup = None;
             }
-            (KeyCode::Tab, _) => popup.focus = popup.focus.next(),
-            (KeyCode::BackTab, _) => popup.focus = popup.focus.prev(),
-            (KeyCode::Down, _) => popup.focus = popup.focus.next(),
-            (KeyCode::Up, _) => popup.focus = popup.focus.prev(),
+            (KeyCode::Tab, _) => popup.focus = popup.next_field(),
+            (KeyCode::BackTab, _) => popup.focus = popup.prev_field(),
+            (KeyCode::Down, _) => popup.focus = popup.next_field(),
+            (KeyCode::Up, _) => popup.focus = popup.prev_field(),
             (KeyCode::Backspace, m)
                 if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
             {
@@ -1015,7 +1107,7 @@ impl SearchView {
         // Validate everything *before* mutating disk so a bad input keeps the
         // popup open with a clear message. Borrow popup immutably through the
         // validation phase, then drop the borrow before calling the mutator.
-        let validated = {
+        let (validated, mode) = {
             let Some(popup) = self.popup.as_ref() else {
                 return Ok(EventOutcome::Consumed);
             };
@@ -1052,9 +1144,23 @@ impl SearchView {
             // `t.tags = ...` is a no-op (tags are re-derived from the
             // description on parse).
             let description = merge_tags_into_description(&raw_description, &tags);
-            (description, due, scheduled, priority, tags, recurrence)
+            (
+                (description, due, scheduled, priority, tags, recurrence),
+                popup.mode.clone(),
+            )
         };
 
+        match mode {
+            PopupMode::Edit => self.submit_popup_edit(ctx, validated),
+            PopupMode::New => self.submit_popup_new(ctx, validated),
+        }
+    }
+
+    fn submit_popup_edit(
+        &mut self,
+        ctx: &mut TabCtx,
+        validated: PopupFields,
+    ) -> Result<EventOutcome> {
         let outcome = self.with_selected_task(ctx, |path, task, _today| {
             let (description, due, scheduled, priority, tags, recurrence) = validated;
             ops::update_task_line(path, task.source_line, move |t| {
@@ -1069,6 +1175,109 @@ impl SearchView {
         })?;
         self.popup = None;
         Ok(outcome)
+    }
+
+    fn submit_popup_new(
+        &mut self,
+        ctx: &mut TabCtx,
+        validated: PopupFields,
+    ) -> Result<EventOutcome> {
+        let (description, due, scheduled, priority, tags, recurrence) = validated;
+        if description.trim().is_empty() {
+            self.popup.as_mut().unwrap().error = Some("description is empty".into());
+            self.popup.as_mut().unwrap().focus = EditField::Description;
+            return Ok(EventOutcome::Consumed);
+        }
+
+        // Parse the target field: supports `Path` and `Path#heading text`.
+        // The optional `#heading` part translates to a `Position::UnderHeading`
+        // write — letting users seed the new task into a specific section
+        // without leaving the popup.
+        let target_raw = self.popup.as_ref().unwrap().target.text.trim().to_string();
+        let (target_path, heading): (Option<std::path::PathBuf>, Option<String>) =
+            if target_raw.is_empty() {
+                (None, None)
+            } else {
+                let q = ft_core::search::Query::parse(&target_raw);
+                let path = if q.file_part.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(&q.file_part))
+                };
+                (path, q.heading_part)
+            };
+
+        let resolved = match ctx.vault.resolve_target(ctx.today, target_path.as_deref()) {
+            Ok(p) => p,
+            Err(e) => {
+                self.popup.as_mut().unwrap().error = Some(e.to_string());
+                self.popup.as_mut().unwrap().focus = EditField::Target;
+                return Ok(EventOutcome::Consumed);
+            }
+        };
+
+        let position = match &heading {
+            Some(h) => ops::Position::UnderHeading(h.clone()),
+            None => ops::Position::Append,
+        };
+
+        let input = CreateInput {
+            description,
+            status: ft_core::task::Status::Open,
+            priority,
+            tags,
+            created: None,
+            start: None,
+            scheduled,
+            due,
+            recurrence,
+            id: None,
+            depends_on: Vec::new(),
+        };
+
+        // Capture prior selection so a create that doesn't pass the filter
+        // keeps the cursor where it was.
+        let prior = self
+            .matches
+            .get(self.selected)
+            .map(|&i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
+
+        match ops::create_task(
+            &resolved,
+            input,
+            ops::CreateOptions {
+                position,
+                force: false,
+            },
+        ) {
+            Ok(outcome) => {
+                self.popup = None;
+                let rel_target = resolved
+                    .strip_prefix(&ctx.vault.path)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| resolved.clone());
+                self.refresh_and_anchor_to_create(ctx, (rel_target.clone(), outcome.line), prior)?;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                    text: format!("created {}:{}", rel_target.display(), outcome.line),
+                    style: ToastStyle::Success,
+                });
+                Ok(EventOutcome::Consumed)
+            }
+            Err(ops::CreateError::Duplicate { path, line }) => {
+                let rel = path.strip_prefix(&ctx.vault.path).unwrap_or(&path);
+                self.popup.as_mut().unwrap().error =
+                    Some(format!("duplicate exists at {}:{line}", rel.display()));
+                Ok(EventOutcome::Consumed)
+            }
+            Err(e) => {
+                self.popup = None;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                    text: format!("create failed: {e}"),
+                    style: ToastStyle::Error,
+                });
+                Ok(EventOutcome::Consumed)
+            }
+        }
     }
 
     fn handle_edit_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
@@ -1146,6 +1355,14 @@ impl SearchView {
             }
             (KeyCode::Enter, _) => {
                 return self.submit_quickline(ctx);
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                // Expand to the full form. Parse what's in the quickline
+                // so the popup opens already pre-populated; close the
+                // quickline panel so its keys stop firing.
+                let parse = parse_quickline(&ql.input.text, ctx.today);
+                self.popup = Some(EditPopup::from_quickline(&parse));
+                self.quickline = None;
             }
             (KeyCode::Backspace, m)
                 if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
@@ -1346,38 +1563,34 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
 }
 
 /// Render the modal edit popup centered over `area`. Compact one-row-per-field
-/// layout (label : value) so all six fields fit within an 80x24 viewport.
+/// layout (label : value) so all fields fit within an 80x24 viewport.
 /// The focused field is bold and underlined; everyone else stays plain.
 fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &EditPopup) {
     use ratatui::widgets::Clear;
 
-    let popup_area = centered_rect(72, 60, area);
+    let popup_area = centered_rect(72, 65, area);
     frame.render_widget(Clear, popup_area);
 
+    let title = match popup.mode {
+        PopupMode::Edit => " edit task ",
+        PopupMode::New => " new task ",
+    };
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(" edit task ")
+        .title(title)
         .style(Style::default().bg(Color::Black));
     let inner = outer.inner(popup_area);
     frame.render_widget(outer, popup_area);
 
-    const FIELDS: &[EditField] = &[
-        EditField::Description,
-        EditField::Due,
-        EditField::Scheduled,
-        EditField::Priority,
-        EditField::Tags,
-        EditField::Recurrence,
-    ];
-
-    let label_width = FIELDS.iter().map(|f| f.label().len()).max().unwrap_or(0);
-    let mut lines: Vec<Line> = Vec::with_capacity(FIELDS.len() + 3);
+    let fields = popup.fields();
+    let label_width = fields.iter().map(|f| f.label().len()).max().unwrap_or(0);
+    let mut lines: Vec<Line> = Vec::with_capacity(fields.len() + 3);
     lines.push(Line::from("")); // top padding
 
     let inner_width = inner.width.saturating_sub(2) as usize; // 1-col gutter each side
     let value_width = inner_width.saturating_sub(label_width + 4); // "  " + ": "
 
-    for field in FIELDS {
+    for field in fields {
         let focused = popup.focus == *field;
         let buf = popup.buffer_for(*field);
         let label_style = if focused {
