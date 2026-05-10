@@ -58,10 +58,10 @@ date and priority — exactly what matters at the start of a work session.
 - [x] No interactive elements; any key press switches to the Tasks tab
 
 ### Tasks tab — layout
-- [ ] Split layout: fixed-width left sidebar (~25 chars) + right viewport filling the rest
-- [ ] Left sidebar contains: current date and time (updated every second), and a view dropdown
-- [ ] View dropdown lists available views; first and only v1 view is "Search"; navigate with `↑`/`↓`, select with `Enter`
-- [ ] Right viewport renders the active view
+- [x] Split layout: fixed-width left sidebar (~25 chars) + right viewport filling the rest
+- [x] Left sidebar contains: current date and time (updated every second), and a view dropdown
+- [x] View dropdown lists available views; first and only v1 view is "Search"; navigate with `↑`/`↓`, select with `Enter`
+- [x] Right viewport renders the active view
 - [ ] Loads task data on first focus (lazy); shows a loading indicator while scanning
 
 ### Tasks tab — Search view
@@ -165,9 +165,30 @@ tasks placeholder) plus 5 behavioural tests for the global keymap and tab
 switching. `cargo test --workspace`, `cargo clippy --workspace --all-targets`,
 and `cargo fmt --all -- --check` all clean.
 
-### Session 2 · 2026-05-10 · planned
+### Session 2 · 2026-05-10 · done
 **Goal:** Tasks tab skeleton: sidebar layout with live clock and view dropdown, viewport split, stub Search view, inner view abstraction
-**Outcome:** 
+**Outcome:** Promoted `tabs/tasks.rs` to a `tabs/tasks/` module folder. Defined
+the inner `View` trait (`title`, `render`, `handle_event`, `on_focus`,
+`refresh`) so the Tasks tab can own a `Vec<Box<dyn View>>`. `TasksTab` now
+renders a horizontal split: a 24-char sidebar block (date `%a %d %b`, clock
+`%H:%M:%S`, "── views ──" header, dropdown with a ▶ marker on the active
+entry) and a viewport that delegates to the active view. Sidebar dropdown
+is driven by `↑`/`↓` (wrap-around) and `Enter` (consumed; no-op until a
+second view exists). All other keys forward to the active view; if it
+returns `NotHandled`, the App's global keymap still applies. The Tick event
+already triggers a redraw on the next loop iteration, so the clock updates
+once per second without per-cell tracking. Clock is injected via a
+`ClockFn = fn() -> DateTime<Local>` field — production uses `Local::now`,
+tests pass a fixed 2026-05-10 14:32:05 closure for deterministic snapshots.
+Added `App::for_test_with_clock` to wire the test clock through. Stub
+`SearchView` shows a bordered `query` bar and a `tasks` placeholder; the
+real query DSL, lazy load, and overdue/upcoming divider land in session 3.
+Replaced the old `tasks_placeholder_80x24` snapshot with a richer
+`tasks_tab_80x24` snapshot covering the full sidebar + viewport layout, and
+added behavioural tests that `↑`/`↓` and `Enter` are consumed by the
+Tasks tab without panic. 10 tui tests pass; full workspace `cargo test`
+(345 tests), `cargo clippy --workspace --all-targets`, and
+`cargo fmt --check` all clean.
 
 ### Session 3 · 2026-05-10 · planned
 **Goal:** Search view: lazy task load, default overdue+upcoming query, row rendering with priority/due/scheduled, overdue/upcoming divider, navigation, editable query bar, R to reload

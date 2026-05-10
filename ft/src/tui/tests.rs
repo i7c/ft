@@ -1,10 +1,19 @@
 use anyhow::Result;
 use assert_fs::TempDir;
+use chrono::{DateTime, Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::vault::Vault;
 use ratatui::{backend::TestBackend, Terminal};
 
 use crate::tui::{event::Event, App};
+
+fn fixed_clock() -> DateTime<Local> {
+    // Sun 10 May 2026, 14:32:05 — matches the FT_TODAY used elsewhere.
+    Local
+        .with_ymd_and_hms(2026, 5, 10, 14, 32, 5)
+        .single()
+        .expect("fixed test clock must be unambiguous")
+}
 
 fn test_vault() -> (TempDir, Vault) {
     let dir = TempDir::new().unwrap();
@@ -57,12 +66,41 @@ fn help_overlay_renders_over_welcome() {
 }
 
 #[test]
-fn tasks_placeholder_tab_renders() -> Result<()> {
+fn tasks_tab_renders_sidebar_and_search_view() -> Result<()> {
     let (_dir, vault) = test_vault();
-    let mut app = App::for_test(vault);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(1)?;
     let frame = render(&mut app, 80, 24);
-    insta::assert_snapshot!("tasks_placeholder_80x24", frame);
+    insta::assert_snapshot!("tasks_tab_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn arrow_keys_navigate_view_dropdown_without_panic() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let up = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    // Single-view list — these wrap to themselves but must not panic or
+    // change the active tab.
+    app.dispatch(down.clone())?;
+    app.dispatch(up.clone())?;
+    assert_eq!(app.active_title(), "Tasks");
+    Ok(())
+}
+
+#[test]
+fn enter_on_dropdown_is_consumed_by_tasks_tab() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.dispatch(enter)?;
+    // Tasks tab consumed Enter — global keymap (which has no Enter binding)
+    // should not have run, and the app must still be alive.
+    assert!(!app.is_quit());
+    assert_eq!(app.active_title(), "Tasks");
     Ok(())
 }
 

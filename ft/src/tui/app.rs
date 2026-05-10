@@ -5,6 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::vault::Vault;
 use ratatui::Frame;
 
+#[cfg(test)]
+use crate::tui::tabs::tasks::ClockFn;
 use crate::tui::{
     event::{Event, EventStream},
     tab::{EventOutcome, Tab, TabCtx},
@@ -25,6 +27,10 @@ pub struct App {
 impl App {
     pub fn new(vault: Vault) -> Self {
         let tabs: Vec<Box<dyn Tab>> = vec![Box::new(WelcomeTab::new()), Box::new(TasksTab::new())];
+        Self::with_tabs(vault, tabs)
+    }
+
+    fn with_tabs(vault: Vault, tabs: Vec<Box<dyn Tab>>) -> Self {
         Self {
             vault,
             tabs,
@@ -183,6 +189,16 @@ impl App {
     /// snapshot tests that drive `draw` directly with a TestBackend.
     pub fn for_test(vault: Vault) -> Self {
         Self::new(vault)
+    }
+
+    /// Like [`for_test`], but injects a fixed clock into the Tasks tab so
+    /// snapshots that include the live clock are deterministic.
+    pub fn for_test_with_clock(vault: Vault, clock: ClockFn) -> Self {
+        let tabs: Vec<Box<dyn Tab>> = vec![
+            Box::new(WelcomeTab::new()),
+            Box::new(TasksTab::with_clock(clock)),
+        ];
+        Self::with_tabs(vault, tabs)
     }
 
     pub fn render_to(&mut self, frame: &mut Frame) {

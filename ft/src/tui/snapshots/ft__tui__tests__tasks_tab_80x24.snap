@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
+│                      ││query: (default — session 3 wires this up)            │
+│ Sun 10 May           │└──────────────────────────────────────────────────────┘
+│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
+│                      ││                                                      │
+│ ── views ──          ││                      Search view                     │
+│ ▶ Search             ││                                                      │
+│                      ││           (no tasks loaded yet — session 3)          │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks           not yet refreshed      mode: normal
