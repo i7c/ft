@@ -7,7 +7,7 @@ pub mod emoji;
 pub mod format;
 pub mod hierarchy;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
     Open,
     Done,

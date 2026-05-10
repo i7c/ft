@@ -52,14 +52,14 @@ everything that follows, so this plan invests in a strong test bed
 - [x] Parser preserves unknown emojis/fields in a `raw_trailing` field so we never lose data on rewrite
 
 ### Vault scanning
-- [ ] `Vault::scan()` walks markdown files using the `ignore` crate (respects `.gitignore` + configured `ignored_paths`)
-- [ ] Parallel parsing with `rayon`; aim for sub-second scan on a vault with ~5k notes on the test machine
-- [ ] Scan returns `Vec<Task>` with file/line provenance preserved
-- [ ] Scan errors per-file are collected and reported, not fatal — one bad file does not abort the run
-- [ ] Excludes binary files and any path under `.obsidian/`, `.git/`, `attachments/` (configurable)
+- [x] `Vault::scan()` walks markdown files using the `ignore` crate (respects `.gitignore` + configured `ignored_paths`)
+- [x] Parallel parsing with `rayon`; aim for sub-second scan on a vault with ~5k notes on the test machine
+- [x] Scan returns `Vec<Task>` with file/line provenance preserved
+- [x] Scan errors per-file are collected and reported, not fatal — one bad file does not abort the run
+- [x] Excludes binary files and any path under `.obsidian/`, `.git/`, `attachments/` (configurable)
 
 ### `ft tasks list`
-- [ ] Flag-based filters: `--status`, `--priority`, `--tag`, `--path`, `--due-before`, `--due-after`, `--scheduled-before`, `--scheduled-after`, `--has-due`, `--no-due`
+- [x] Flag-based filters: `--status`, `--priority`, `--tag`, `--path`, `--due-before`, `--due-after`, `--scheduled-before`, `--scheduled-after`, `--has-due`, `--no-due`
 - [ ] `--query "<DSL>"` accepts a subset of the Obsidian Tasks query language: status / priority / path / tag predicates, date comparisons, `and`/`or`/`not`, `sort by <field>`, `limit N`. Document the supported subset; reject the rest with a clear error pointing to the docs section
 - [ ] Flags compose with `--query` (flags appended as additional `and` clauses)
 - [ ] `--sort` flag with multiple keys; default sort: due date asc, then priority desc, then path
@@ -319,7 +319,7 @@ Space-preserving raw_trailing accumulator retains post-field comment content byt
 Real-vault smoke test: 4,674 tasks parsed, 0 unexpected round-trip mismatches (11 trailing-space
 and 1 unknown-status artifacts are documented, expected behavior). Clippy clean, fmt clean.
 
-### Session 3 · 2026-05-09 · planned
+### Session 3 · 2026-05-09 · done
 **Goal:** Parallel vault scan + `ft tasks list` with flag filters + table/JSON output
 
 **Scope:**
@@ -365,7 +365,21 @@ and 1 unknown-status artifacts are documented, expected behavior). Clippy clean,
 **Deferred:** query DSL, presets, `--sort`/`--group-by` flags, markdown
 and ndjson formats, `--allow-empty` — all session 4.
 
-**Outcome:** 
+**Outcome:** `Vault::scan()` walks markdown files via `ignore` (respecting `.gitignore`,
+default exclusions of `.obsidian/`, `.git/`, `attachments/`, plus per-vault `ignored_paths`),
+parses in parallel via `rayon`, and returns `Scan { tasks, errors }` with relative paths
+and per-file hierarchy resolved. `ft-core::query::filter::Filter` implements the conjunctive
+typed filter API; `query::sort::default_sort` orders due-asc, priority-desc, path. `ft tasks
+list` clap subcommand wires every flag from the plan (`--status`, `--priority`, `--tag`,
+`--path`, `--due-before/-after`, `--scheduled-before/-after`, `--has-due`, `--no-due`) plus
+`--format table|json` and `--no-color`. Table output via `comfy-table` with TTY/`NO_COLOR`/
+`--no-color`-aware coloring. Realistic fixture vault committed (~25 tasks across PARA folders
++ Journal + inbox, plus `.gitignore`'d `private/` and `attachments/` to prove exclusions
+fire). 18 integration tests + 5 new unit tests on scan/filter/sort = 112 total tests green;
+clippy clean with `-D warnings`; fmt clean. Real-vault smoke: 4,675 tasks scanned in ~0.7s
+wall time on `/Users/cmw/git/fortytwo`. `Status` enum gained `Copy`. Decision: tags must
+appear before field emojis in source lines to be indexed (parser stops at first field
+boundary); fixture authored accordingly, matching plugin convention.
 
 ### Session 4 · 2026-05-09 · planned
 **Goal:** Query DSL subset + sort/group + presets + markdown/ndjson output

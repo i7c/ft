@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod cmd;
+mod output;
 
 #[derive(Parser)]
 #[command(
@@ -27,6 +28,8 @@ struct Cli {
 enum Commands {
     /// Show resolved vault path, active config files, and merged configuration
     Vault(cmd::vault::VaultArgs),
+    /// Task operations: list, create, complete, move
+    Tasks(cmd::tasks::TasksArgs),
 }
 
 fn main() -> Result<()> {
@@ -47,6 +50,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Vault(args) => cmd::vault::run(args, cli.vault)?,
+        Commands::Tasks(args) => cmd::tasks::run(args, cli.vault)?,
     }
 
     Ok(())

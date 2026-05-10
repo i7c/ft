@@ -1,16 +1,36 @@
 use std::path::{Path, PathBuf};
 
+use ignore::{overrides::OverrideBuilder, WalkBuilder};
+use rayon::prelude::*;
 use tracing::debug;
 
 use crate::{
     config::{self, LayeredConfig},
-    error::{Error, Result},
+    error::{Error, Result, ScanError},
+    task::{
+        emoji::EmojiFormat,
+        format::{ParseContext, TaskFormat},
+        hierarchy::resolve_hierarchy,
+        Task,
+    },
 };
+
+/// Folders excluded from scanning by default. Combined with `.gitignore` and
+/// the vault's `ignored_paths` config.
+pub const DEFAULT_IGNORED: &[&str] = &[".obsidian", ".git", "attachments"];
 
 #[derive(Debug)]
 pub struct Vault {
     pub path: PathBuf,
     pub config: LayeredConfig,
+}
+
+/// Result of [`Vault::scan`]. Tasks across the vault, plus per-file errors
+/// collected non-fatally.
+#[derive(Debug, Default)]
+pub struct Scan {
+    pub tasks: Vec<Task>,
+    pub errors: Vec<ScanError>,
 }
 
 impl Vault {
@@ -38,6 +58,95 @@ impl Vault {
             config,
         })
     }
+
+    /// Walk the vault, parse every markdown file in parallel, and return all
+    /// tasks plus per-file errors. Respects `.gitignore`, default exclusions
+    /// (`.obsidian/`, `.git/`, `attachments/`), and the `ignored_paths` config.
+    pub fn scan(&self) -> Scan {
+        let files = self.markdown_files();
+        debug!(file_count = files.len(), "starting parallel parse");
+
+        let results: Vec<(Vec<Task>, Option<ScanError>)> = files
+            .par_iter()
+            .map(|path| parse_file(&self.path, path))
+            .collect();
+
+        let mut scan = Scan::default();
+        for (tasks, err) in results {
+            scan.tasks.extend(tasks);
+            if let Some(e) = err {
+                scan.errors.push(e);
+            }
+        }
+        scan
+    }
+
+    fn markdown_files(&self) -> Vec<PathBuf> {
+        let mut overrides = OverrideBuilder::new(&self.path);
+        for default in DEFAULT_IGNORED {
+            // `!pattern` excludes; trailing `/` keeps it a directory match.
+            let _ = overrides.add(&format!("!{default}/**"));
+        }
+        for extra in &self.config.config.ignored_paths {
+            let pattern = if extra.ends_with('/') {
+                format!("!{extra}**")
+            } else {
+                format!("!{extra}")
+            };
+            let _ = overrides.add(&pattern);
+        }
+        let overrides = overrides.build().expect("override patterns are valid");
+
+        let walker = WalkBuilder::new(&self.path)
+            .hidden(true)
+            .ignore(true)
+            .git_ignore(true)
+            .git_exclude(true)
+            .parents(false)
+            .overrides(overrides)
+            .build();
+
+        let mut files = Vec::new();
+        for entry in walker.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().is_some_and(|e| e == "md") {
+                files.push(path.to_path_buf());
+            }
+        }
+        files
+    }
+}
+
+fn parse_file(vault_root: &Path, path: &Path) -> (Vec<Task>, Option<ScanError>) {
+    let rel = path.strip_prefix(vault_root).unwrap_or(path).to_path_buf();
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                Vec::new(),
+                Some(ScanError {
+                    path: rel,
+                    message: format!("read failed: {e}"),
+                }),
+            );
+        }
+    };
+
+    let mut tasks = Vec::new();
+    for (lineno, line) in content.lines().enumerate() {
+        let ctx = ParseContext {
+            source_file: rel.clone(),
+            source_line: lineno + 1,
+        };
+        if let Some(task) = EmojiFormat.parse_line(line, ctx) {
+            tasks.push(task);
+        }
+    }
+    resolve_hierarchy(&mut tasks);
+    (tasks, None)
 }
 
 fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
@@ -226,6 +335,96 @@ mod tests {
 
     use std::sync::Mutex;
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── scan ──────────────────────────────────────────────────────────────────
+
+    fn make_vault_with(files: &[(&str, &str)]) -> (TempDir, Vault) {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        for (rel, content) in files {
+            let f = dir.child(rel);
+            f.touch().unwrap();
+            f.write_str(content).unwrap();
+        }
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        (dir, vault)
+    }
+
+    #[test]
+    fn scan_collects_tasks_from_multiple_files() {
+        let (_dir, vault) = make_vault_with(&[
+            ("a.md", "- [ ] task in A\n- [x] done in A ✅ 2026-05-01\n"),
+            ("b.md", "Some prose\n- [ ] task in B\n"),
+        ]);
+        let scan = vault.scan();
+        assert_eq!(scan.tasks.len(), 3, "expected 3 tasks total");
+        assert!(scan.errors.is_empty());
+    }
+
+    #[test]
+    fn scan_skips_default_excluded_dirs() {
+        let (_dir, vault) = make_vault_with(&[
+            ("notes/keep.md", "- [ ] keep me\n"),
+            ("attachments/skip.md", "- [ ] skip me\n"),
+        ]);
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(descs.contains(&"keep me".to_string()));
+        assert!(!descs.contains(&"skip me".to_string()));
+    }
+
+    #[test]
+    fn scan_respects_ignored_paths_from_config() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        dir.child(".ft/config.toml")
+            .write_str(r#"ignored_paths = ["private/"]"#)
+            .unwrap();
+        dir.child("public.md")
+            .write_str("- [ ] public task\n")
+            .unwrap();
+        dir.child("private/secret.md")
+            .write_str("- [ ] private task\n")
+            .unwrap();
+
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(descs.contains(&"public task".to_string()));
+        assert!(!descs.contains(&"private task".to_string()));
+    }
+
+    #[test]
+    fn scan_resolves_hierarchy_per_file() {
+        let (_dir, vault) = make_vault_with(&[(
+            "nested.md",
+            "- [ ] parent\n  - [ ] child A\n  - [ ] child B\n",
+        )]);
+        let scan = vault.scan();
+        assert_eq!(scan.tasks.len(), 3);
+        let parent = scan
+            .tasks
+            .iter()
+            .find(|t| t.description == "parent")
+            .unwrap();
+        let children: Vec<_> = scan
+            .tasks
+            .iter()
+            .filter(|t| t.parent == Some(parent.source_line))
+            .collect();
+        assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn scan_returns_relative_paths() {
+        let (_dir, vault) = make_vault_with(&[("notes/sub.md", "- [ ] task\n")]);
+        let scan = vault.scan();
+        assert_eq!(scan.tasks.len(), 1);
+        assert_eq!(
+            scan.tasks[0].source_file,
+            std::path::PathBuf::from("notes/sub.md")
+        );
+    }
 
     #[test]
     fn env_var_valid_vault() {

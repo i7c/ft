@@ -20,3 +20,19 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// A non-fatal error encountered while scanning one file. Collected in
+/// [`Scan::errors`] rather than aborting the whole scan.
+#[derive(Debug)]
+pub struct ScanError {
+    /// Vault-relative path of the offending file (or absolute if it sits
+    /// outside the vault root).
+    pub path: PathBuf,
+    pub message: String,
+}
+
+impl std::fmt::Display for ScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path.display(), self.message)
+    }
+}

@@ -10,17 +10,23 @@ rust-version = "1.85"
 [workspace.dependencies]
 # Shared
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 figment = { version = "0.10", features = ["toml"] }
 toml = "0.8"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
+ignore = "0.4"
+rayon = "1.10"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+comfy-table = "7"
+owo-colors = { version = "4", features = ["supports-colors"] }
+is-terminal = "0.4"
 
 # Dev / test (shared)
 assert_cmd = "2"
