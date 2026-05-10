@@ -6,8 +6,12 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{Local, NaiveDate};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
+    daily, dates,
     query::{dsl, expr::Expr, filter::Filter, preset, sort::sort_by_keys, SortKey, SortOrder},
-    task::{Priority, Status, Task},
+    task::{
+        ops::{self, CreateError, CreateInput, CreateOptions, Position},
+        Priority, Status, Task,
+    },
     vault::Vault,
 };
 
@@ -23,6 +27,8 @@ pub struct TasksArgs {
 pub enum TasksCommand {
     /// List tasks across the vault, optionally filtered.
     List(ListArgs),
+    /// Create a new task.
+    Create(CreateArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -146,6 +152,7 @@ pub struct ListArgs {
 pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         TasksCommand::List(list_args) => run_list(list_args, vault_flag),
+        TasksCommand::Create(create_args) => run_create(create_args, vault_flag),
     }
 }
 
@@ -352,6 +359,207 @@ fn group_labels(t: &Task, by: GroupBy) -> Vec<String> {
             }
         }
     }
+}
+
+// ── ft tasks create ──────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct CreateArgs {
+    /// Task description (free text). Tags from `--tag` are appended.
+    #[arg(value_name = "DESCRIPTION", required = true)]
+    pub description: Vec<String>,
+
+    /// Due date. Accepts ISO (`2026-05-10`), keywords (`today`, `tomorrow`),
+    /// relative (`+3d`, `-1w`), or natural language (`next monday`).
+    #[arg(long, value_name = "DATE")]
+    pub due: Option<String>,
+
+    /// Scheduled date.
+    #[arg(long, value_name = "DATE")]
+    pub scheduled: Option<String>,
+
+    /// Start date.
+    #[arg(long, value_name = "DATE")]
+    pub start: Option<String>,
+
+    /// Priority.
+    #[arg(long, value_enum)]
+    pub priority: Option<PriorityFlag>,
+
+    /// Tag (repeatable). Leading `#` is optional.
+    #[arg(long)]
+    pub tag: Vec<String>,
+
+    /// Recurrence rule, preserved verbatim (e.g. `"every month on the 18th"`).
+    #[arg(long)]
+    pub recurrence: Option<String>,
+
+    /// Stable identifier for this task (the 🆔 field).
+    #[arg(long)]
+    pub id: Option<String>,
+
+    /// Other task IDs this one depends on (repeatable).
+    #[arg(long = "depends-on")]
+    pub depends_on: Vec<String>,
+
+    /// Target file (relative to vault root). Defaults to today's daily note.
+    #[arg(long, value_name = "PATH")]
+    pub file: Option<PathBuf>,
+
+    /// Insert at the end of the section under this heading; create the
+    /// heading at file end if missing.
+    #[arg(long, value_name = "HEADING", conflicts_with_all = ["at_line", "append"])]
+    pub under_heading: Option<String>,
+
+    /// Insert at this 1-indexed line.
+    #[arg(long, value_name = "N", conflicts_with_all = ["under_heading", "append"])]
+    pub at_line: Option<usize>,
+
+    /// Append at file end (the default for daily notes; explicit for clarity).
+    #[arg(long, conflicts_with_all = ["under_heading", "at_line"])]
+    pub append: bool,
+
+    /// After writing, open `$EDITOR` on the new task line.
+    #[arg(long)]
+    pub edit: bool,
+
+    /// Insert even if a duplicate task (same description + dates) already exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let today = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive());
+
+    let target = resolve_target_path(&args, &vault, today)?;
+
+    let parse_date = |s: &str, label: &str| -> Result<NaiveDate> {
+        dates::parse(s, today).map_err(|e| anyhow!("--{label}: {e}"))
+    };
+
+    let description = args.description.join(" ");
+    let input = CreateInput {
+        description,
+        status: Status::Open,
+        priority: args.priority.map(Into::into),
+        tags: args.tag,
+        created: None,
+        start: args
+            .start
+            .as_deref()
+            .map(|s| parse_date(s, "start"))
+            .transpose()?,
+        scheduled: args
+            .scheduled
+            .as_deref()
+            .map(|s| parse_date(s, "scheduled"))
+            .transpose()?,
+        due: args
+            .due
+            .as_deref()
+            .map(|s| parse_date(s, "due"))
+            .transpose()?,
+        recurrence: args.recurrence,
+        id: args.id,
+        depends_on: args.depends_on,
+    };
+
+    let position = if let Some(h) = args.under_heading {
+        Position::UnderHeading(h)
+    } else if let Some(n) = args.at_line {
+        Position::AtLine(n)
+    } else {
+        Position::Append
+    };
+
+    let outcome = ops::create_task(
+        &target,
+        input,
+        CreateOptions {
+            position,
+            force: args.force,
+        },
+    )
+    .map_err(|e| match e {
+        CreateError::Duplicate { path, line } => {
+            let rel = path.strip_prefix(&vault.path).unwrap_or(&path);
+            anyhow!(
+                "duplicate task already exists at {}:{} (use --force to insert anyway)",
+                rel.display(),
+                line
+            )
+        }
+        other => anyhow!("{other}"),
+    })?;
+
+    let display_path = target.strip_prefix(&vault.path).unwrap_or(&target);
+    println!(
+        "Created task at {}:{}\n  {}",
+        display_path.display(),
+        outcome.line,
+        outcome.serialized
+    );
+
+    if args.edit {
+        open_editor(&target, outcome.line)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve `--file` against the vault root, or fall back to today's daily
+/// note. Returns an absolute path.
+fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
+    if let Some(file) = &args.file {
+        let p = if file.is_absolute() {
+            file.clone()
+        } else {
+            vault.path.join(file)
+        };
+        return Ok(p);
+    }
+
+    let cfg = daily::load(&vault.path).map_err(|e| {
+        anyhow!(
+            "{e}\n\nhint: configure Obsidian's core \"Daily notes\" plugin, or pass --file <PATH>"
+        )
+    })?;
+    daily::resolve_path(&vault.path, &cfg, today)
+        .context("could not resolve today's daily note path")
+}
+
+fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+    let basename = std::path::Path::new(&editor)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let supports_line_flag = matches!(
+        basename,
+        "vi" | "vim" | "nvim" | "view" | "nano" | "less" | "more"
+    );
+
+    let status = if supports_line_flag {
+        std::process::Command::new(&editor)
+            .arg(format!("+{line}"))
+            .arg(file)
+            .status()
+    } else {
+        std::process::Command::new(&editor).arg(file).status()
+    }
+    .with_context(|| format!("failed to launch editor `{editor}`"))?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "editor `{editor}` exited with status {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

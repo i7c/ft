@@ -69,16 +69,16 @@ everything that follows, so this plan invests in a strong test bed
 - [x] Exit code 1 if no tasks match (configurable via `--allow-empty`) — useful in scripting
 
 ### `ft tasks create`
-- [ ] Positional arg is the description; flags add metadata: `--due`, `--scheduled`, `--start`, `--priority`, `--tag` (repeatable), `--recurrence`, `--id`, `--depends-on`
-- [ ] Date parsing accepts ISO (`2026-05-10`), relative (`+3d`, `tomorrow`), and natural language (`next monday`) — `chrono` + `chrono-english`
-- [ ] Default location: today's daily note resolved from the daily-notes core plugin config (`<vault>/.obsidian/daily-notes.json`). If that file doesn't exist (templater not yet integrated), fail with a message that tells the user to either create it or pass `--file`
-- [ ] `--file <path>` overrides location (relative to vault root)
-- [ ] `--under-heading "<heading>"` inserts at the end of the section under that heading; creates the heading at file end if missing
-- [ ] `--at-line N` inserts at a specific 1-indexed line
-- [ ] `--append` appends to file end (default for daily note path with no heading)
-- [ ] `--edit` opens `$EDITOR` on the resulting line after writing, positioned at the new task (use `EDITOR` env var; fall back to `vi`)
-- [ ] Atomic writes: write to a temp file in the same directory, then rename; preserves file mode
-- [ ] Idempotency: refuses to create an exact duplicate task (same description + same dates) on the same day unless `--force`
+- [x] Positional arg is the description; flags add metadata: `--due`, `--scheduled`, `--start`, `--priority`, `--tag` (repeatable), `--recurrence`, `--id`, `--depends-on`
+- [x] Date parsing accepts ISO (`2026-05-10`), relative (`+3d`, `tomorrow`), and natural language (`next monday`) — `chrono` + `chrono-english`
+- [x] Default location: today's daily note resolved from the daily-notes core plugin config (`<vault>/.obsidian/daily-notes.json`). If that file doesn't exist (templater not yet integrated), fail with a message that tells the user to either create it or pass `--file`
+- [x] `--file <path>` overrides location (relative to vault root)
+- [x] `--under-heading "<heading>"` inserts at the end of the section under that heading; creates the heading at file end if missing
+- [x] `--at-line N` inserts at a specific 1-indexed line
+- [x] `--append` appends to file end (default for daily note path with no heading)
+- [x] `--edit` opens `$EDITOR` on the resulting line after writing, positioned at the new task (use `EDITOR` env var; fall back to `vi`)
+- [x] Atomic writes: write to a temp file in the same directory, then rename; preserves file mode
+- [x] Idempotency: refuses to create an exact duplicate task (same description + same dates) on the same day unless `--force`
 
 ### `ft tasks complete`
 - [ ] `ft tasks complete <selector>` marks one or more tasks done. Selector forms: task `id` (the `🆔 abc123` field), `<file>:<line>`, or interactive picker with `fzf`-style prompt (use `dialoguer` or `inquire`) when ambiguous
@@ -470,7 +470,7 @@ the more local override; (c) preset resolution prefers user config over
 built-ins by name match, with built-ins still living in code so they always
 have a known-parseable definition.
 
-### Session 5 · 2026-05-09 · planned
+### Session 5 · 2026-05-09 · done
 **Goal:** `ft tasks create` + atomic writes + daily-notes resolution + date parsing + editor handoff
 
 **Scope:**
@@ -519,7 +519,51 @@ have a known-parseable definition.
 **Deferred:** Templater integration to auto-create missing daily notes
 (future plan).
 
-**Outcome:** 
+**Outcome:** Session 5 ships `ft tasks create` end-to-end. New ft-core modules:
+`fs::write_atomic` (tempfile-based same-dir rename, preserves POSIX mode),
+`dates::parse` (ISO → keywords `today/tomorrow/yesterday` → relative `±Nd/±Nw`
+forms incl. `+10days` → chrono-english fallback), `daily` (reads
+`<vault>/.obsidian/daily-notes.json`, defaults `format` to `YYYY-MM-DD` and
+`folder` to `""` to match Obsidian, translates the supported moment.js subset
+`YYYY/YY/MMMM/MMM/MM/M/DDDD/DD/D/dddd/ddd/HH/mm/ss` plus `[literals]` to chrono
+format, rejects unsupported tokens by name), and `task::ops::create_task`
+(builds the task line via `EmojiFormat::serialize_line`, positions it via
+`Position::Append | UnderHeading | AtLine`, refuses duplicates whose
+description+due+scheduled+start all match unless `--force`, writes via
+`write_atomic`). `Status` gained `Default = Open`. The CLI `tasks create`
+subcommand wires every flag from the plan: free-text positional description
+(joined across argv), `--due/--scheduled/--start` parsed via `dates`,
+`--priority`, `--tag` (repeatable, `#` optional, deduplicated against the
+description), `--recurrence/--id/--depends-on`, plus position flags
+`--file/--under-heading/--at-line/--append` (mutually exclusive via clap),
+`--edit` (launches `$EDITOR` with `+N` for vim-family editors, otherwise just
+the file path; falls back to `vi`), and `--force`. Default location is today's
+daily note resolved from the core plugin config; missing config errors with a
+hint to either configure it or pass `--file`. The duplicate error and CLI
+output use vault-relative paths. `FT_TODAY=YYYY-MM-DD` honored for
+deterministic tests. New deps: `chrono-english 0.1`, `tempfile 3`,
+`serde_json` exposed in ft-core. Tests: 15 ft-core unit tests on `fs`/`dates`/
+`daily`/`ops` (atomic writes incl. mode preservation and an interrupted-write
+safety test, every supported and one rejected moment.js token, every date
+form incl. case-insensitive keywords, every position branch, idempotency
+with and without `--force`, distinct-dates non-duplicate, heading parsing
+edge cases) plus 14 new integration tests under `ft/tests/tasks_create.rs`
+covering create-in-daily-note, custom file, under-heading existing/missing,
+at-line, duplicate refusal/force/relative-path, invalid date, multi-arg
+description, recurrence/id/depends-on, missing daily-notes config remedy,
+round-trip create→list. **227 total tests green** (was 172), clippy clean
+with `-D warnings` (added a single `#[allow(clippy::large_enum_variant)]` on
+the top-level `Commands` enum since it's parsed once from argv), fmt clean.
+Real-vault smoke against `/Users/cmw/git/fortytwo`: both default daily-note
+resolution (folder `journal/2024` from the user's stale-but-real config
+landed the task at `journal/2024/2026-05-09.md`) and `--file` worked; both
+files cleaned up after verification. Decisions: (a) the "section end" for
+`UnderHeading` walks back over trailing blank lines so the new task visually
+belongs to its heading rather than the next section's whitespace; (b) tags
+passed via `--tag` are appended as `#tag` to the description (deduped) so
+they round-trip cleanly through the parser's tag index; (c) duplicate
+detection ignores status — a done duplicate is still a duplicate, matching
+"don't accidentally re-add the same thing" semantics.
 
 ### Session 6 · 2026-05-09 · planned
 **Goal:** `ft tasks complete` + selector resolution + recurrence engine (daily/weekly/monthly)

@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 pub mod emoji;
 pub mod format;
 pub mod hierarchy;
+pub mod ops;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Status {
+    #[default]
     Open,
     Done,
     InProgress,

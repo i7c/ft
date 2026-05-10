@@ -17,8 +17,10 @@ figment = { version = "0.10", features = ["toml"] }
 toml = "0.8"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-english = "0.1"
 ignore = "0.4"
 rayon = "1.10"
+tempfile = "3"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

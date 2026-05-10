@@ -6,14 +6,17 @@ rust-version.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+chrono-english = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

@@ -27,6 +27,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // single-instance argv parse; size doesn't matter
 enum Commands {
     /// Show resolved vault path, active config files, and merged configuration
     Vault(cmd::vault::VaultArgs),
