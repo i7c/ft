@@ -56,12 +56,22 @@ fn main() -> ExitCode {
         2 => "debug",
         _ => "trace",
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level)),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+
+    // Route tracing into a sink when running the TUI — the alternate screen
+    // owns stdout/stderr while the UI is up, so any writes to stderr would
+    // shred the layout. Other subcommands keep stderr-based logs.
+    let env_filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
+    if matches!(cli.command, Commands::Tui(_)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter())
+            .with_writer(std::io::sink)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter())
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     let json_errors = cli.json_errors;
     let vault = cli.vault;

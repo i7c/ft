@@ -389,7 +389,14 @@ impl SearchView {
             return;
         }
 
-        let lines = self.build_lines(today);
+        // Inner width inside the borders. The fixed cells are: cursor (2)
+        // + priority label (4) + due block (14) + scheduled block (14) = 34.
+        // The description column flexes to fill what's left, with a small
+        // floor so very narrow terminals still render something readable.
+        let inner_width = area.width.saturating_sub(2);
+        let desc_width = inner_width.saturating_sub(34).max(20) as usize;
+
+        let lines = self.build_lines(today, desc_width);
         let scroll = self.scroll;
         let list = Paragraph::new(lines)
             .scroll((scroll, 0))
@@ -397,7 +404,7 @@ impl SearchView {
         frame.render_widget(list, area);
     }
 
-    fn build_lines(&self, today: NaiveDate) -> Vec<Line<'static>> {
+    fn build_lines(&self, today: NaiveDate, desc_width: usize) -> Vec<Line<'static>> {
         let mut lines: Vec<Line> = Vec::with_capacity(self.matches.len() + 4);
         let upcoming_start = self.overdue_count;
 
@@ -405,7 +412,12 @@ impl SearchView {
             lines.push(divider_line(&format!("── overdue ({}) ──", upcoming_start)));
             for (i, &task_idx) in self.matches[..upcoming_start].iter().enumerate() {
                 let selected = i == self.selected;
-                lines.push(task_line(&self.tasks[task_idx], today, selected));
+                lines.push(task_line(
+                    &self.tasks[task_idx],
+                    today,
+                    selected,
+                    desc_width,
+                ));
             }
         }
         if upcoming_start < self.matches.len() {
@@ -413,7 +425,12 @@ impl SearchView {
             lines.push(divider_line(&format!("── upcoming ({}) ──", upcoming_n)));
             for (i, &task_idx) in self.matches[upcoming_start..].iter().enumerate() {
                 let selected = (i + upcoming_start) == self.selected;
-                lines.push(task_line(&self.tasks[task_idx], today, selected));
+                lines.push(task_line(
+                    &self.tasks[task_idx],
+                    today,
+                    selected,
+                    desc_width,
+                ));
             }
         }
         lines
@@ -590,7 +607,7 @@ fn divider_line(label: &str) -> Line<'static> {
     ))
 }
 
-fn task_line(task: &Task, today: NaiveDate, selected: bool) -> Line<'static> {
+fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -> Line<'static> {
     let pri_label = priority_label(task.priority);
     let pri_color = priority_color(task.priority);
 
@@ -609,17 +626,18 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool) -> Line<'static> {
         format!("{:<3} ", pri_label)
     };
 
-    // Description truncated to leave headroom for due (always shown when set)
-    // and scheduled (shown when it fits). The viewport inner width at 80x24
-    // is 54 cols; cursor(2) + pri(4) + desc(22) + " 📅 "(4) + date(10) = 42,
-    // leaving room for " ⏳ "(4) + date(10) = 14 more before clipping.
+    // Truncate the description only when it exceeds the budget the caller
+    // computed from the actual viewport width; otherwise pad to keep the
+    // due / scheduled columns aligned across rows.
     let desc = task.description.replace('\n', " ");
-    let desc_trimmed = if desc.chars().count() > 22 {
-        let cut: String = desc.chars().take(21).collect();
+    let desc_count = desc.chars().count();
+    let desc_trimmed = if desc_count > desc_width {
+        let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();
         format!("{cut}…")
     } else {
         desc
     };
+    let desc_padded = format!("{:<width$}", desc_trimmed, width = desc_width);
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(8);
     let row_style = if selected {
@@ -632,7 +650,7 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool) -> Line<'static> {
 
     spans.push(Span::styled(cursor.to_string(), row_style));
     spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
-    spans.push(Span::styled(format!("{:<22}", desc_trimmed), row_style));
+    spans.push(Span::styled(desc_padded, row_style));
     if let Some(due) = due_str {
         spans.push(Span::styled(" 📅 ", row_style.fg(Color::DarkGray)));
         spans.push(Span::styled(due, row_style.fg(due_color)));

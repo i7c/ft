@@ -118,6 +118,39 @@ fn tasks_tab_populated_renders_overdue_and_upcoming() -> Result<()> {
     Ok(())
 }
 
+/// Vault with a long task description, used to verify the description column
+/// expands when the terminal is wider than the 80x24 minimum.
+fn long_description_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let body = "\
+- [ ] This is a fairly long task description that would not fit at 80 cols 📅 2026-05-12
+";
+    std::fs::write(vault_path.join("tasks.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn tasks_tab_wide_terminal_uses_available_width() -> Result<()> {
+    let (_dir, vault) = long_description_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    let narrow = render(&mut app, 80, 24);
+    assert!(
+        narrow.contains("This is a fairly l…") || narrow.contains("This is a fairly lo…"),
+        "narrow terminal should truncate long description: {narrow}"
+    );
+
+    let wide = render(&mut app, 160, 24);
+    assert!(
+        wide.contains("This is a fairly long task description that would not fit at 80 cols"),
+        "wide terminal should show full description without truncation: {wide}"
+    );
+    Ok(())
+}
+
 #[test]
 fn tasks_tab_query_edit_mode_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
