@@ -139,7 +139,7 @@ fn tasks_tab_wide_terminal_uses_available_width() -> Result<()> {
     app.switch_to(1)?;
     let narrow = render(&mut app, 80, 24);
     assert!(
-        narrow.contains("This is a fairly l…") || narrow.contains("This is a fairly lo…"),
+        narrow.contains("This is a fairl") && narrow.contains('…'),
         "narrow terminal should truncate long description: {narrow}"
     );
 
@@ -873,6 +873,86 @@ fn perf_first_render_5k_vault_under_budget() -> Result<()> {
         "first render took {:?}; budget {budget_ms}ms (4x of 500ms target). \
          Run --release for tight timing.",
         elapsed
+    );
+    Ok(())
+}
+
+// --- session 6 follow-ups: status indicator in rows ------------------------
+
+/// Vault with one task per status, used to exercise the status-glyph column
+/// when the query is broad enough to include done / cancelled / in-progress.
+fn mixed_status_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let body = "\
+- [ ] Open task 📅 2026-05-15
+- [x] Done task 📅 2026-05-15 ✅ 2026-05-09
+- [-] Cancelled task 📅 2026-05-15 ❌ 2026-05-09
+- [/] In-progress task 📅 2026-05-15
+";
+    std::fs::write(vault_path.join("tasks.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn search_view_renders_status_glyphs_when_query_includes_all_statuses() -> Result<()> {
+    let (_dir, vault) = mixed_status_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // Default query is `not done` — replace with a no-op filter so every
+    // task shows up regardless of status.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    // Empty query matches everything; the parser treats this as no filter.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("Open task"), "open row missing:\n{frame}");
+    assert!(frame.contains("Done task"), "done row missing:\n{frame}");
+    assert!(
+        frame.contains("Cancelled task"),
+        "cancelled row missing:\n{frame}"
+    );
+    assert!(
+        frame.contains("In-progress task"),
+        "in-progress row missing:\n{frame}"
+    );
+
+    // Each non-open status renders a unique glyph in the new column.
+    let done_line = frame
+        .lines()
+        .find(|l| l.contains("Done task"))
+        .expect("done line missing");
+    assert!(
+        done_line.contains('✓'),
+        "done row should display ✓:\n{done_line}"
+    );
+    let cancelled_line = frame
+        .lines()
+        .find(|l| l.contains("Cancelled task"))
+        .expect("cancelled line missing");
+    assert!(
+        cancelled_line.contains('✗'),
+        "cancelled row should display ✗:\n{cancelled_line}"
+    );
+    let inprogress_line = frame
+        .lines()
+        .find(|l| l.contains("In-progress task"))
+        .expect("in-progress line missing");
+    assert!(
+        inprogress_line.contains('▷'),
+        "in-progress row should display ▷:\n{inprogress_line}"
     );
     Ok(())
 }

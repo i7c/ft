@@ -8,7 +8,7 @@ use ft_core::{
     },
     task::{
         ops::{self, CompleteOptions},
-        Priority, Task,
+        Priority, Status, Task,
     },
 };
 use ratatui::{
@@ -607,11 +607,12 @@ impl SearchView {
         }
 
         // Inner width inside the borders. The fixed cells are: cursor (2)
-        // + priority label (4) + due block (14) + scheduled block (14) = 34.
-        // The description column flexes to fill what's left, with a small
-        // floor so very narrow terminals still render something readable.
+        // + status glyph (2) + priority label (4) + due block (14)
+        // + scheduled block (14) = 36. The description column flexes to fill
+        // what's left, with a small floor so very narrow terminals still
+        // render something readable.
         let inner_width = area.width.saturating_sub(2);
-        let desc_width = inner_width.saturating_sub(34).max(20) as usize;
+        let desc_width = inner_width.saturating_sub(36).max(16) as usize;
 
         let lines = self.build_lines(today, desc_width);
         let scroll = self.scroll;
@@ -1236,6 +1237,7 @@ fn divider_line(label: &str) -> Line<'static> {
 fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -> Line<'static> {
     let pri_label = priority_label(task.priority);
     let pri_color = priority_color(task.priority);
+    let (status_glyph, status_color) = status_marker(task.status);
 
     let due_str = task.due.map(|d| d.format("%Y-%m-%d").to_string());
     let due_color = task
@@ -1251,6 +1253,7 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     } else {
         format!("{:<3} ", pri_label)
     };
+    let status_text = format!("{status_glyph} ");
 
     // Truncate the description only when it exceeds the budget the caller
     // computed from the actual viewport width; otherwise pad to keep the
@@ -1265,16 +1268,23 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     };
     let desc_padded = format!("{:<width$}", desc_trimmed, width = desc_width);
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(8);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
+    // Non-selected done/cancelled rows fade so they visually recede when the
+    // query includes terminal statuses (e.g. `status is any`). Selected rows
+    // keep the highlight so the cursor is always clearly visible.
+    let terminal_status = matches!(task.status, Status::Done | Status::Cancelled);
     let row_style = if selected {
         Style::default()
             .bg(Color::Rgb(40, 40, 60))
             .add_modifier(Modifier::BOLD)
+    } else if terminal_status {
+        Style::default().add_modifier(Modifier::DIM)
     } else {
         Style::default()
     };
 
     spans.push(Span::styled(cursor.to_string(), row_style));
+    spans.push(Span::styled(status_text, row_style.fg(status_color)));
     spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
     spans.push(Span::styled(desc_padded, row_style));
     if let Some(due) = due_str {
@@ -1288,6 +1298,18 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
         spans.push(Span::styled(sch, row_style.fg(Color::Cyan)));
     }
     Line::from(spans)
+}
+
+/// Single-char status glyph + color. Open is a blank space so the row reads
+/// uncluttered when the default `not done` query is active and every row is
+/// open anyway; non-open statuses are immediately visible.
+fn status_marker(status: Status) -> (&'static str, Color) {
+    match status {
+        Status::Open => (" ", Color::DarkGray),
+        Status::Done => ("✓", Color::Green),
+        Status::Cancelled => ("✗", Color::Red),
+        Status::InProgress => ("▷", Color::Yellow),
+    }
 }
 
 fn priority_label(p: Option<Priority>) -> &'static str {

@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 117
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
@@ -8,12 +9,12 @@ expression: frame
 │ Sun 10 May           │└──────────────────────────────────────────────────────┘
 │ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
 │                      ││ ── overdue (2) ──                                    │
-│ ── views ──          ││▶ !!  Pay rent             📅  2026-05-08              │
-│ ▶ Search             ││  !   Renew passport       📅  2026-05-09              │
+│ ── views ──          ││▶   !!  Pay rent           📅  2026-05-08              │
+│ ▶ Search             ││    !   Renew passport     📅  2026-05-09              │
 │                      ││ ── upcoming (3) ──                                   │
-│                      ││      Reply to Sara        📅  2026-05-10              │
-│                      ││  !!  Submit Q2 report     📅  2026-05-12 ⏳  2026-05-11│
-│                      ││  v   Buy birthday gift    📅  2026-05-15              │
+│                      ││        Reply to Sara      📅  2026-05-10              │
+│                      ││    !!  Submit Q2 report   📅  2026-05-12 ⏳  2026-05-11│
+│                      ││    v   Buy birthday gift  📅  2026-05-15              │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
