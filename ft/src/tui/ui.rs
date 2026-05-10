@@ -128,6 +128,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("p / P", "priority cycle fwd / back"),
     ("x / X", "complete / cancel"),
     ("e", "open edit popup"),
+    ("c", "new task (quickline)"),
     ("Enter", "open task in $EDITOR"),
     ("R", "reload vault"),
     ("Ctrl+W / Ctrl+⌫", "delete previous word"),
@@ -135,7 +136,10 @@ const HELP_LINES: &[(&str, &str)] = &[
 ];
 
 pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(60, 80, area);
+    // 90% height (was 80%) — the binding list grew past what 80% of a
+    // 24-row terminal could contain after plan-004 added `c` for the
+    // new-task quickline.
+    let popup = centered_rect(60, 90, area);
     frame.render_widget(Clear, popup);
 
     let mut lines: Vec<Line> = Vec::with_capacity(HELP_LINES.len() + 2);

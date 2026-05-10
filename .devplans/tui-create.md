@@ -44,19 +44,19 @@ opening the full form. The expanded form has a dedicated `target` field.
 ## Acceptance Criteria
 
 ### Quickline UX
-- [ ] Pressing `c` from the Search view opens a 3-row "new task" panel
-      between the query bar and the task list: a 1-line input plus a 1-line
-      live preview underneath
-- [ ] The cursor lands in the quickline input and starts blank
-- [ ] `Esc` cancels with no write; the panel closes and the cursor returns
+- [x] Pressing `c` from the Search view opens a 3-row "new task" panel
+      between the query bar and the task list (bordered) plus a 1-line
+      preview directly underneath (4 rows total)
+- [x] The cursor lands in the quickline input and starts blank
+- [x] `Esc` cancels with no write; the panel closes and the cursor returns
       to wherever it was in the task list
-- [ ] `Enter` writes the task and closes the panel
+- [x] `Enter` writes the task and closes the panel
 - [ ] `Ctrl+E` opens the full edit-style popup pre-populated from the
       parsed quickline state, transferring focus there; the quickline panel
-      closes on popup open
-- [ ] The query bar, list navigation, and global keymap are all suppressed
+      closes on popup open *(session 4)*
+- [x] The query bar, list navigation, and global keymap are all suppressed
       while the quickline is open (panel swallows keys like the popup does)
-- [ ] Backspace, arrow keys, Home/End, Ctrl+W / Ctrl+Backspace / Alt+Backspace
+- [x] Backspace, arrow keys, Home/End, Ctrl+W / Ctrl+Backspace / Alt+Backspace
       (delete word) all work in the input — reuses `EditBuffer`
 
 ### Quickline token grammar
@@ -87,22 +87,29 @@ or fall through to the form.
       contain `key:value` shapes
 
 ### Quickline preview
-- [ ] A second row under the input renders the parsed result as the
-      canonical emoji-format line (what `ops::create_task` would serialize)
-- [ ] Unparseable input shows the parser error in red, prefixed with `⚠`,
+- [x] A second row under the input renders the parsed result as the
+      canonical emoji-format line (uses `ops::build_task` +
+      `EmojiFormat::serialize_line` so the preview matches what
+      `create_task` would actually write)
+- [x] Unparseable input shows the parser error in red, prefixed with `⚠`,
       in place of the preview; Enter is suppressed while in this state
-- [ ] An empty input shows dim hint text like `Type a task. e.g. "Email
-      Sarah due:tomorrow pri:high #work"`
-- [ ] The target file appears in dim text at the right of the preview
+- [x] An empty input shows a dim hint `Enter to save · Esc to cancel`
+      under a `type a task — e.g. "email Sarah due:tomorrow pri:high
+      #work"` placeholder in the input row itself
+- [x] The target file appears in dim text at the right of the preview
       (e.g. `→ Inbox.md`) so it's visible without scrolling
 
 ### Default target
-- [ ] No `in:` token → today's daily note, resolved the same way as the
-      CLI's `resolve_target_path` (vault config + today's date)
-- [ ] `in:PATH` overrides for that one task; the value is taken verbatim
-      and resolved against the vault root (absolute paths are accepted but
-      must be inside the vault — reject otherwise with a parse error)
-- [ ] The target file is created if it doesn't exist (matches
+- [x] No `in:` token → today's daily note, resolved the same way as the
+      CLI's `resolve_target_path` (via the shared
+      `Vault::resolve_target` from session 1)
+- [x] `in:PATH` overrides for that one task; the value is taken verbatim
+      and resolved against the vault root
+- [ ] Absolute paths are accepted but must be inside the vault — reject
+      otherwise with a parse error *(deferred: currently absolute paths
+      pass through unchecked; safety check belongs in
+      `Vault::resolve_target` and applies to the CLI too)*
+- [x] The target file is created if it doesn't exist (matches
       `ops::create_task` semantics for daily notes)
 
 ### Expanded popup form (Ctrl+E)
@@ -132,18 +139,16 @@ or fall through to the form.
       who want the full form immediately)
 
 ### Write + post-create UX
-- [ ] On Enter (quickline) or Ctrl+S (popup): build a `CreateInput`,
+- [x] On Enter (quickline) or Ctrl+S (popup): build a `CreateInput`,
       resolve the target path, call `ops::create_task` with
       `CreateOptions { position: Append, force: false }`
-- [ ] Duplicate-detection error surfaces inline (`⚠ duplicate exists at
-      Inbox.md:42`) and keeps the panel/popup open so the user can adjust
-      or `Ctrl+Enter`-force-insert
-- [ ] After a successful write the Search view re-scans (same path as `R`)
-      and the cursor moves to the new task's row if it passes the active
-      filter; if it doesn't pass, the cursor stays put
+- [x] Duplicate-detection error surfaces inline (`⚠ duplicate exists at
+      Inbox.md:42`) and keeps the panel open so the user can adjust
+      *(Ctrl+Enter force-insert is deferred per the plan)*
+- [x] After a successful write the Search view re-scans (same path as
+      `R`); cursor-anchor-to-new-task lands in session 3
 - [ ] A toast in the status bar's center cell shows `created PATH:LINE`
-      for ~3 seconds (replaces the `refreshed HH:MM:SS` text during the
-      toast window)
+      for ~3 seconds *(session 3)*
 - [ ] Toast styling: green for success, red for error (the error toast
       shows after a write fails for IO reasons; duplicate detection stays
       inline because it's recoverable)
@@ -315,9 +320,74 @@ Module-scope `#![allow(dead_code)]` keeps the parser warning-free
 until session 2 wires it into the UI. `cargo test --workspace` (456
 tests) passes; clippy `-D warnings` and fmt clean.
 
-### Session 2 · 2026-05-10 · planned
+### Session 2 · 2026-05-10 · done
 **Goal:** Quickline UI: open with c, 3-row panel (input + preview row + hint/error), EditBuffer reuse for input, live preview rendering with target path, Enter writes via ops::create_task, basic refresh on success, inline duplicate-detection error.
-**Outcome:** 
+**Outcome:** End-to-end quickline create flow works.
+
+**SearchView state.** Added a `quickline: Option<Quickline>` field
+holding an `EditBuffer` + `Option<String>` for post-submit errors. `c`
+from normal mode opens it; the panel takes precedence over the query
+bar's edit state in `handle_event`, swallowing every key. Esc clears
+state and returns focus to the list.
+
+**Layout.** When the quickline is open, the search view's vertical
+layout switches from `[3 query, Min 1 list]` to `[3 query, 4 quickline,
+Min 1 list]`. The quickline area is itself `[3 input panel, 1
+preview]`. Cursor renders as a yellow `│`; placeholder text is the
+hint `type a task — e.g. "email Sarah due:tomorrow pri:high #work"`.
+
+**Preview.** `build_quickline_preview` re-parses on every render via
+`parse_quickline` (cheap), then builds a Task through `ops::build_task`
+and serializes via `EmojiFormat::serialize_line` so the preview is
+byte-identical to what `create_task` will write. Three states: post-
+submit error → red `⚠ <msg>`; empty input → dim hint; valid parse →
+`→ <serialized line>   → <target>` with the target rendered relative
+to the vault root.
+
+To make this work, `ops::build_task` was promoted from private to
+`pub` in `ft-core::task::ops` with a doc comment explaining the
+preview-vs-write parity guarantee.
+
+**Write flow.** Enter:
+1. Re-parse the input.
+2. Block if `errors` is non-empty (parse error → red banner).
+3. Block on an empty description (separate error: "description is
+   empty"; tags-only input doesn't count as a valid task).
+4. Resolve the target via `Vault::resolve_target(today,
+   parse.target.as_deref())` — the shared resolver from session 1.
+5. Build `CreateInput` from the parse and call `ops::create_task` with
+   `Position::Append, force: false`.
+6. Success → close panel, `reload(ctx)` so the new row is in the
+   matches list. (Cursor anchor + green toast = session 3.)
+7. `CreateError::Duplicate { path, line }` → keep panel open with
+   `⚠ duplicate exists at <relpath>:<line>` inline.
+8. Any other error → same inline display; nothing lands on disk.
+
+**Help overlay.** New row: `c — new task (quickline)`. The help
+binding count grew past what an 80%-height popup could contain at
+80x24, so `render_help_overlay` now uses 90% height. Snapshot updates
+for `help_overlay_80x24` and `help_overlay_over_tasks_80x24` accepted.
+
+**Tests (7 new in tui::tests, plus updated help label list).**
+- `quickline_opens_with_c_and_closes_on_esc` — open/close lifecycle
+- `quickline_enter_writes_to_daily_note` — full write path against an
+  explicit `[daily_notes]` config that resolves to `Daily/2026-05-10.md`
+  (caveat documented inline: moment.js translates bare letters, so the
+  config uses `path = "[Daily]"` to keep the literal folder name)
+- `quickline_in_path_overrides_target` — `in:Inbox.md` redirects the
+  write
+- `quickline_parse_error_blocks_write` — `due:not-a-date` shows ⚠ and
+  leaves disk untouched
+- `quickline_duplicate_detection_surfaces_inline` — second create of
+  the same task hits `CreateError::Duplicate` and surfaces inline
+- `quickline_empty_description_blocks_write` — tokens-only input
+  rejected with "description is empty"
+- `quickline_ctrl_w_works_in_input` — EditBuffer's word-delete is
+  hooked up (input row asserts target the panel's input line, not
+  the surrounding chrome)
+
+99 tui tests pass; workspace `cargo test` (490 tests), clippy
+`-D warnings`, and `cargo fmt --check` all clean.
 
 ### Session 3 · 2026-05-10 · planned
 **Goal:** Post-create UX polish: Toast struct + status-bar cell rendering, AppRequest::TaskCreated, cursor-anchor-to-new-task when it matches the active filter, IO-error red toast, tick-based 3s toast expiry.

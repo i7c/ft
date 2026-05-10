@@ -768,6 +768,7 @@ const EXPECTED_HELP_LABELS: &[&str] = &[
     "p / P",
     "x / X",
     "e",
+    "c",
     "Enter",
     "R",
     "Ctrl+W / Ctrl+⌫",
@@ -1215,6 +1216,220 @@ fn perf_keystrokes_5k_vault_under_budget() -> Result<()> {
         "per-keystroke {per_key_ms}ms exceeded budget {budget_ms}ms \
          (target 50ms). Total: {:?} across {iterations} iters.",
         elapsed
+    );
+    Ok(())
+}
+
+// --- plan 004 session 2: quickline (new task) ------------------------------
+
+/// Vault preconfigured to drop a daily note at `<root>/Daily/2026-05-10.md`
+/// using the explicit `[daily_notes]` source, so quickline writes without
+/// `in:` land somewhere predictable for assertions.
+fn quickline_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    // NB: in moment.js syntax (which the explicit resolver uses) bare
+    // letters like `D` are tokens, so `Daily` would translate to
+    // `10aily`. Wrap literal folder names in `[…]` to opt out.
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[daily_notes]\nsource = \"explicit\"\npath = \"[Daily]\"\nformat = \"YYYY-MM-DD\"\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn quickline_opens_with_c_and_closes_on_esc() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame.contains("new task"),
+        "panel title missing after `c`:\n{frame}"
+    );
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let after = render(&mut app, 100, 24);
+    assert!(
+        !after.contains("new task"),
+        "panel should close on Esc:\n{after}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_enter_writes_to_daily_note() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "buy milk due:tomorrow pri:high #grocery".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    let body = std::fs::read_to_string(&daily)
+        .unwrap_or_else(|e| panic!("daily note missing: {}: {e}", daily.display()));
+    assert!(body.contains("buy milk"), "description missing:\n{body}");
+    assert!(body.contains("⏫"), "high priority emoji missing:\n{body}");
+    assert!(body.contains("📅 2026-05-11"), "due date missing:\n{body}");
+    assert!(body.contains("#grocery"), "tag missing:\n{body}");
+    // Panel should close on success.
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        !frame.contains("new task"),
+        "panel should close after a successful write:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_in_path_overrides_target() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "remember to call dentist in:Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    let body = std::fs::read_to_string(&inbox).unwrap();
+    assert!(body.contains("call dentist"));
+    // Daily note shouldn't have been touched.
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    assert!(
+        !daily.exists()
+            || !std::fs::read_to_string(&daily)
+                .unwrap()
+                .contains("call dentist"),
+        "daily note shouldn't have the in:-overridden task"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_parse_error_blocks_write() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "draft due:not-a-date".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame.contains("new task"),
+        "panel should stay open on parse error:\n{frame}"
+    );
+    assert!(frame.contains("⚠"), "error indicator missing:\n{frame}");
+    // Nothing landed on disk.
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    assert!(
+        !daily.exists() || std::fs::read_to_string(&daily).unwrap().trim().is_empty(),
+        "daily note should be empty when parse fails"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_duplicate_detection_surfaces_inline() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    // Pre-seed an identical task so the second create hits the duplicate
+    // detector inside ops::create_task.
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    std::fs::write(&inbox, "- [ ] follow up with team 📅 2026-05-11\n").unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "follow up with team due:tomorrow in:Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame.contains("duplicate"),
+        "duplicate error should surface inline:\n{frame}"
+    );
+    assert!(
+        frame.contains("new task"),
+        "panel should stay open on duplicate:\n{frame}"
+    );
+    // Inbox unchanged (still only the pre-seeded line).
+    let body = std::fs::read_to_string(&inbox).unwrap();
+    assert_eq!(body.lines().filter(|l| l.contains("follow up")).count(), 1);
+    Ok(())
+}
+
+#[test]
+fn quickline_empty_description_blocks_write() -> Result<()> {
+    let (dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    // Only a tag — no description text.
+    for c in "due:tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("new task"), "panel stays open: \n{frame}");
+    assert!(
+        frame.contains("description is empty"),
+        "error missing: \n{frame}"
+    );
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    assert!(!daily.exists() || std::fs::read_to_string(daily).unwrap().trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn quickline_ctrl_w_works_in_input() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "foo bar".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('w'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    // Pick the input row from the new-task panel specifically; the rest
+    // of the frame contains "sidebar"/"Inbox.md" etc. that would yield
+    // false positives for the "bar" substring check.
+    let input_row = frame
+        .lines()
+        .find(|l| l.contains("foo"))
+        .expect("input row with `foo` missing");
+    assert!(
+        !input_row.contains("bar"),
+        "bar deleted from input row: {input_row}"
     );
     Ok(())
 }

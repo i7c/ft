@@ -4,26 +4,26 @@ assertion_line: 712
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
-┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
-│               ┌ help ────────────────────────────────────────┐ by due, priori│
-│ Sun 10 May    │Keybindings                                   │───────────────┘
-│ 14:32:05      │                                              │───────────────┐
-│               │  q / Ctrl+C        quit                      │               │
-│ ── views ──   │  ?                 toggle this help          │8              │
-│ ▶ Search      │  Tab / Shift+Tab   next / previous tab       │9              │
-│               │  1 / 2             jump to tab N             │               │
-│               │  /                 edit query                │0              │
-│               │  ↑ / ↓ · j / k     select task               │2 ⏳  2026-05-11│
-│               │  ] / [             due date +1d / -1d        │5              │
-│               │  } / {             scheduled +1d / -1d       │               │
+┌ sidebar ──────┌ help ────────────────────────────────────────┐───────────────┐
+│               │Keybindings                                   │ by due, priori│
+│ Sun 10 May    │                                              │───────────────┘
+│ 14:32:05      │  q / Ctrl+C        quit                      │───────────────┐
+│               │  ?                 toggle this help          │               │
+│ ── views ──   │  Tab / Shift+Tab   next / previous tab       │8              │
+│ ▶ Search      │  1 / 2             jump to tab N             │9              │
+│               │  /                 edit query                │               │
+│               │  ↑ / ↓ · j / k     select task               │0              │
+│               │  ] / [             due date +1d / -1d        │2 ⏳  2026-05-11│
+│               │  } / {             scheduled +1d / -1d       │5              │
 │               │  t                 set due to today          │               │
 │               │  p / P             priority cycle fwd / back │               │
 │               │  x / X             complete / cancel         │               │
 │               │  e                 open edit popup           │               │
+│               │  c                 new task (quickline)      │               │
 │               │  Enter             open task in $EDITOR      │               │
 │               │  R                 reload vault              │               │
 │               │  Ctrl+W / Ctrl+⌫   delete previous word      │               │
 │               │  Esc               close overlay             │               │
-│               └──────────────────────────────────────────────┘               │
-└──────────────────────┘└──────────────────────────────────────────────────────┘
+│               │                                              │               │
+└───────────────└──────────────────────────────────────────────┘───────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help

@@ -84,7 +84,11 @@ pub struct CreateOutcome {
 }
 
 /// Build a `Task` value suitable for serialization from user input.
-fn build_task(input: &CreateInput) -> Task {
+///
+/// Public so callers can preview what `create_task` would write before
+/// committing to disk (the TUI quickline uses this to render a live
+/// emoji-format preview as the user types).
+pub fn build_task(input: &CreateInput) -> Task {
     let mut description = input.description.trim_end().to_string();
     for tag in &input.tags {
         let bare = tag.trim_start_matches('#');

@@ -7,7 +7,7 @@ use ft_core::{
         sort::{sort_by_keys, SortKey, SortOrder},
     },
     task::{
-        ops::{self, CompleteOptions},
+        ops::{self, CompleteOptions, CreateInput},
         Priority, Status, Task,
     },
 };
@@ -22,7 +22,7 @@ use ratatui::{
 use crate::tui::{
     event::Event,
     tab::{AppRequest, EventOutcome, TabCtx},
-    tabs::tasks::view::View,
+    tabs::tasks::{quickline::parse_quickline, view::View},
     widgets::EditBuffer,
 };
 
@@ -60,6 +60,21 @@ pub struct SearchView {
     /// Open edit-popup state, if any. Set by `e`; cleared by Esc / Ctrl+S.
     /// While the popup is open, all keys go to it.
     popup: Option<EditPopup>,
+
+    /// Open quickline state, if any. Set by `c`; cleared by Esc / Enter
+    /// (on a successful write). While the quickline is open, all keys
+    /// go to its input buffer.
+    quickline: Option<Quickline>,
+}
+
+/// "New task" quickline state — a single edit buffer plus a slot for
+/// post-submit errors (duplicate detection, IO failures). The parsed form
+/// is re-derived on every render from `input.text`; parsing is cheap
+/// enough that caching adds complexity without buying us anything.
+#[derive(Debug, Clone, Default)]
+struct Quickline {
+    input: EditBuffer,
+    error: Option<String>,
 }
 
 /// Modal form opened with `e` for the selected task. Six text fields plus
@@ -272,6 +287,7 @@ impl SearchView {
             parse_state: ParseState::Ok(None),
             edit_state: None,
             popup: None,
+            quickline: None,
         }
     }
 
@@ -468,6 +484,54 @@ impl SearchView {
         frame.render_widget(para, area);
     }
 
+    /// Render the new-task quickline panel. The caller picks a 4-row
+    /// `area` (3 for the bordered input, 1 for the preview underneath).
+    fn render_quickline(&self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
+        let Some(ql) = self.quickline.as_ref() else {
+            return;
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Length(1)])
+            .split(area);
+
+        // ── input row ───────────────────────────────────────────────
+        let chars: Vec<char> = ql.input.text.chars().collect();
+        let cursor = ql.input.cursor.min(chars.len());
+        let line = if chars.is_empty() {
+            Line::from(Span::styled(
+                "type a task — e.g. \"email Sarah due:tomorrow pri:high #work\"",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ))
+        } else {
+            let mut iter = chars.iter().copied();
+            let left: String = iter.by_ref().take(cursor).collect();
+            let right: String = iter.collect();
+            Line::from(vec![
+                Span::styled(left, Style::default().fg(Color::White)),
+                Span::styled(
+                    "│",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(right, Style::default().fg(Color::White)),
+            ])
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .title(" new task ");
+        frame.render_widget(Paragraph::new(line).block(block), chunks[0]);
+
+        // ── preview row ─────────────────────────────────────────────
+        let preview = build_quickline_preview(ql, ctx);
+        frame.render_widget(Paragraph::new(preview), chunks[1]);
+    }
+
     fn render_list(&self, frame: &mut Frame, area: Rect, today: NaiveDate) {
         // Parse error short-circuits the list.
         if let ParseState::Err(msg) = &self.parse_state {
@@ -616,6 +680,14 @@ impl View for SearchView {
             return self.handle_popup_key(k, ctx);
         }
 
+        // Quickline panel swallows everything until Esc / Enter (success).
+        // Checked before edit_state because the quickline is a stronger
+        // focus context — opening it from the query bar shouldn't happen
+        // (the query bar is closed on `c` from normal mode anyway).
+        if self.quickline.is_some() {
+            return self.handle_quickline_key(k, ctx);
+        }
+
         // Editing the query bar swallows everything except Apply/Cancel.
         if self.edit_state.is_some() {
             return Ok(self.handle_edit_key(k, ctx));
@@ -657,6 +729,10 @@ impl View for SearchView {
                 self.open_edit_popup();
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+                self.quickline = Some(Quickline::default());
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Enter, _) => {
                 self.request_editor_open(ctx);
                 Ok(EventOutcome::Consumed)
@@ -666,16 +742,33 @@ impl View for SearchView {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(1)])
-            .split(area);
+        // When the quickline is open, slot it between the query bar and
+        // the task list. 3-row bordered input + 1-row preview = 4 rows.
+        let chunks = if self.quickline.is_some() {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(4),
+                    Constraint::Min(1),
+                ])
+                .split(area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Min(1)])
+                .split(area)
+        };
 
         self.render_query_bar(frame, chunks[0]);
-        // Scroll adjustment depends on the body area height; calculate before
-        // the render call so the snapshot reflects the post-adjustment state.
-        self.adjust_scroll(chunks[1].height);
-        self.render_list(frame, chunks[1], ctx.today);
+        if self.quickline.is_some() {
+            self.render_quickline(frame, chunks[1], ctx);
+            self.adjust_scroll(chunks[2].height);
+            self.render_list(frame, chunks[2], ctx.today);
+        } else {
+            self.adjust_scroll(chunks[1].height);
+            self.render_list(frame, chunks[1], ctx.today);
+        }
 
         // Popup is drawn last so it floats above the list. Use the full body
         // area as the anchor — the helper centers the popup within it.
@@ -999,6 +1092,200 @@ impl SearchView {
         }
         EventOutcome::Consumed
     }
+
+    // ── quickline (new task) ───────────────────────────────────────────
+
+    fn handle_quickline_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Some(ql) = self.quickline.as_mut() else {
+            return Ok(EventOutcome::Consumed);
+        };
+
+        // Submitting clears `error` for re-evaluation; navigation keys
+        // leave it alone so a stale error stays visible.
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.quickline = None;
+            }
+            (KeyCode::Enter, _) => {
+                return self.submit_quickline(ctx);
+            }
+            (KeyCode::Backspace, m)
+                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+            {
+                ql.input.delete_word_backward();
+                ql.error = None;
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                ql.input.delete_word_backward();
+                ql.error = None;
+            }
+            (KeyCode::Backspace, _) => {
+                ql.input.backspace();
+                ql.error = None;
+            }
+            (KeyCode::Delete, _) => {
+                ql.input.delete();
+                ql.error = None;
+            }
+            (KeyCode::Left, _) => ql.input.left(),
+            (KeyCode::Right, _) => ql.input.right(),
+            (KeyCode::Home, _) => ql.input.home(),
+            (KeyCode::End, _) => ql.input.end(),
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                ql.input.insert(c);
+                ql.error = None;
+            }
+            _ => {}
+        }
+        Ok(EventOutcome::Consumed)
+    }
+
+    fn submit_quickline(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Some(ql) = self.quickline.as_ref() else {
+            return Ok(EventOutcome::Consumed);
+        };
+        let parse = parse_quickline(&ql.input.text, ctx.today);
+
+        // Parse errors block the write; the preview already shows the
+        // first error, but we copy it into the post-submit slot so the
+        // user gets the same red `⚠` banner whether the failure was at
+        // parse time or write time.
+        if !parse.errors.is_empty() {
+            self.quickline.as_mut().unwrap().error = Some(parse.errors[0].clone());
+            return Ok(EventOutcome::Consumed);
+        }
+        if parse.description.trim().is_empty() {
+            self.quickline.as_mut().unwrap().error = Some("description is empty".into());
+            return Ok(EventOutcome::Consumed);
+        }
+
+        let target = match ctx.vault.resolve_target(ctx.today, parse.target.as_deref()) {
+            Ok(p) => p,
+            Err(e) => {
+                self.quickline.as_mut().unwrap().error = Some(e.to_string());
+                return Ok(EventOutcome::Consumed);
+            }
+        };
+
+        let input = CreateInput {
+            description: parse.description.clone(),
+            status: ft_core::task::Status::Open,
+            priority: parse.priority,
+            tags: parse.tags.clone(),
+            created: None,
+            start: parse.start,
+            scheduled: parse.scheduled,
+            due: parse.due,
+            recurrence: parse.recurrence.clone(),
+            id: parse.id.clone(),
+            depends_on: Vec::new(),
+        };
+
+        match ops::create_task(
+            &target,
+            input,
+            ops::CreateOptions {
+                position: ops::Position::Append,
+                force: false,
+            },
+        ) {
+            Ok(_) => {
+                // Success — close panel, refresh so the new row is in
+                // the matches list, and let session 3 handle cursor-anchor
+                // and toast. For now the user sees the panel disappear
+                // and the list reload.
+                self.quickline = None;
+                self.reload(ctx)?;
+                Ok(EventOutcome::Consumed)
+            }
+            Err(ops::CreateError::Duplicate { path, line }) => {
+                let rel = path.strip_prefix(&ctx.vault.path).unwrap_or(&path);
+                self.quickline.as_mut().unwrap().error =
+                    Some(format!("duplicate exists at {}:{line}", rel.display()));
+                Ok(EventOutcome::Consumed)
+            }
+            Err(e) => {
+                self.quickline.as_mut().unwrap().error = Some(e.to_string());
+                Ok(EventOutcome::Consumed)
+            }
+        }
+    }
+}
+
+/// Build the preview line shown beneath the quickline input. Three states:
+/// (1) post-submit error or parse error → red `⚠ <msg>`, (2) empty input →
+/// dim hint, (3) parsed cleanly → the same emoji-format line `create_task`
+/// would write, plus a `→ <target>` indicator on the right.
+fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
+    // Surfaced submit error (duplicate, IO) takes precedence so the user
+    // sees the most recent failure instead of the live parse preview.
+    if let Some(err) = &ql.error {
+        return Line::from(vec![
+            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
+            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+        ]);
+    }
+
+    if ql.input.text.trim().is_empty() {
+        return Line::from(Span::styled(
+            "  Enter to save · Esc to cancel",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+
+    let parse = parse_quickline(&ql.input.text, ctx.today);
+    if let Some(first) = parse.errors.first() {
+        return Line::from(vec![
+            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
+            Span::styled(first.clone(), Style::default().fg(Color::Red)),
+        ]);
+    }
+
+    let task = ops::build_task(&CreateInput {
+        description: parse.description.clone(),
+        status: Status::Open,
+        priority: parse.priority,
+        tags: parse.tags.clone(),
+        created: None,
+        start: parse.start,
+        scheduled: parse.scheduled,
+        due: parse.due,
+        recurrence: parse.recurrence.clone(),
+        id: parse.id.clone(),
+        depends_on: Vec::new(),
+    });
+    use ft_core::task::{emoji::EmojiFormat, format::TaskFormat};
+    let serialized = EmojiFormat.serialize_line(&task);
+
+    // Target: shown on the right in dim text. We don't resolve to an
+    // absolute path here — the relative `in:` value (or the daily-note
+    // basename) is more useful than `/Users/.../Inbox.md`.
+    let target_label = match &parse.target {
+        Some(p) => p.display().to_string(),
+        None => match ctx
+            .vault
+            .resolve_target(ctx.today, None)
+            .ok()
+            .and_then(|p| {
+                p.strip_prefix(&ctx.vault.path)
+                    .ok()
+                    .map(|x| x.to_path_buf())
+            }) {
+            Some(p) => p.display().to_string(),
+            None => "<daily note>".into(),
+        },
+    };
+
+    Line::from(vec![
+        Span::styled("  → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(serialized, Style::default().fg(Color::White)),
+        Span::styled(
+            format!("   → {target_label}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
 }
 
 /// Render the modal edit popup centered over `area`. Compact one-row-per-field

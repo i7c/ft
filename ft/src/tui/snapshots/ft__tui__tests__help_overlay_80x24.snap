@@ -4,26 +4,26 @@ assertion_line: 98
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
-                                                                                
                 ┌ help ────────────────────────────────────────┐                
                 │Keybindings                                   │                
                 │                                              │                
                 │  q / Ctrl+C        quit                      │                
                 │  ?                 toggle this help          │                
-         ██╗    │  Tab / Shift+Tab   next / previous tab       │██████╗         
-         ██║    │  1 / 2             jump to tab N             │█╔════╝         
-         ██║ █╗ │  /                 edit query                │████╗           
-         ██║███╗│  ↑ / ↓ · j / k     select task               │█╔══╝           
-         ╚███╔██│  ] / [             due date +1d / -1d        │██████╗         
-          ╚══╝╚═│  } / {             scheduled +1d / -1d       │══════╝         
-                │  t                 set due to today          │                
+                │  Tab / Shift+Tab   next / previous tab       │                
+         ██╗    │  1 / 2             jump to tab N             │██████╗         
+         ██║    │  /                 edit query                │█╔════╝         
+         ██║ █╗ │  ↑ / ↓ · j / k     select task               │████╗           
+         ██║███╗│  ] / [             due date +1d / -1d        │█╔══╝           
+         ╚███╔██│  } / {             scheduled +1d / -1d       │██████╗         
+          ╚══╝╚═│  t                 set due to today          │══════╝         
                 │  p / P             priority cycle fwd / back │                
                 │  x / X             complete / cancel         │                
-               p│  e                 open edit popup           │p               
+                │  e                 open edit popup           │                
+               p│  c                 new task (quickline)      │p               
                 │  Enter             open task in $EDITOR      │                
                 │  R                 reload vault              │                
                 │  Ctrl+W / Ctrl+⌫   delete previous word      │                
                 │  Esc               close overlay             │                
+                │                                              │                
                 └──────────────────────────────────────────────┘                
-                                                                                
  vault: test-vault  ·  tab: Welcome         not yet refreshed        mode: help
