@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate};
@@ -61,7 +62,12 @@ pub enum EventOutcome {
 /// the shared `&TabCtx` they receive in `render` and `handle_event` —
 /// the App reads it back when drawing the status bar.
 pub struct TabCtx<'a> {
-    pub vault: &'a Vault,
+    /// `&Arc<Vault>` (rather than `&Vault`) so a tab can `Arc::clone(ctx.vault)`
+    /// to hand a vault handle to a widget whose lifetime outlives the
+    /// borrow of `App` — e.g. the fuzzy picker tucked inside a popup.
+    /// Existing `ctx.vault.scan()` / `ctx.vault.path` callers keep working
+    /// through `Arc`'s auto-deref to `&Vault`.
+    pub vault: &'a Arc<Vault>,
     pub today: NaiveDate,
     pub last_refresh: &'a Cell<Option<DateTime<Local>>>,
     /// Pending side-effect for the App to handle after `handle_event` returns.

@@ -771,6 +771,7 @@ const EXPECTED_HELP_LABELS: &[&str] = &[
     "e",
     "c / Shift+C",
     "Ctrl+E",
+    "Enter (target)",
     "Enter",
     "R",
     "Ctrl+W / Ctrl+⌫",
@@ -1566,6 +1567,10 @@ fn ctrl_e_in_quickline_opens_popup_with_pre_populated_fields() -> Result<()> {
 #[test]
 fn new_popup_ctrl_s_writes_to_in_target() -> Result<()> {
     let (dir, vault) = quickline_vault();
+    // Inbox.md needs to exist so the picker can find it on the first
+    // keystroke — the target field is now pick-driven, not type-literal.
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    std::fs::write(&inbox, "# Inbox\n").unwrap();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(1)?;
     app.dispatch(Event::Key(KeyEvent::new(
@@ -1576,9 +1581,16 @@ fn new_popup_ctrl_s_writes_to_in_target() -> Result<()> {
         app.dispatch(key(c))?;
     }
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
-    for c in "Inbox.md".chars() {
+    // Type into target — first char opens the picker, subsequent chars
+    // feed it. Enter selects the highlighted hit and fills the field as
+    // `Inbox.md`.
+    for c in "Inbox".chars() {
         app.dispatch(key(c))?;
     }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
     for c in "tomorrow".chars() {
         app.dispatch(key(c))?;
@@ -1588,7 +1600,6 @@ fn new_popup_ctrl_s_writes_to_in_target() -> Result<()> {
         KeyModifiers::CONTROL,
     )))?;
 
-    let inbox = dir.path().join("test-vault/Inbox.md");
     let body = std::fs::read_to_string(&inbox)
         .unwrap_or_else(|e| panic!("inbox missing: {}: {e}", inbox.display()));
     assert!(
@@ -1619,9 +1630,17 @@ fn new_popup_target_with_heading_uses_under_heading_position() -> Result<()> {
         app.dispatch(key(c))?;
     }
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    // Typing the file+heading query opens the picker on the first char
+    // and feeds the rest. Picker matches the `## Triage` heading inside
+    // Inbox.md. Enter selects it; the target field gets filled with
+    // `Inbox.md#Triage`.
     for c in "Inbox.md#Triage".chars() {
         app.dispatch(key(c))?;
     }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('s'),
         KeyModifiers::CONTROL,
@@ -1733,6 +1752,206 @@ fn quickline_ctrl_w_works_in_input() -> Result<()> {
     assert!(
         !input_row.contains("bar"),
         "bar deleted from input row: {input_row}"
+    );
+    Ok(())
+}
+
+// --- target-field fuzzy picker (plan 006) -------------------------------
+
+/// Test fixture: a vault with a couple of pickable files so the target
+/// picker has something to match. Mirrors `quickline_vault` but adds two
+/// known notes — `Areas/General Considerations.md` (with a `## Triage`
+/// heading) and `Inbox.md` — so we don't have to repeat the boilerplate
+/// in every picker test.
+fn target_picker_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::create_dir_all(vault_path.join("Areas")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[daily_notes]\nsource = \"explicit\"\npath = \"[Daily]\"\nformat = \"YYYY-MM-DD\"\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("Inbox.md"), "# Inbox\n").unwrap();
+    std::fs::write(
+        vault_path.join("Areas/General Considerations.md"),
+        "# Intro\n\n## Triage\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Open the new-task popup with target focused and the picker ready
+/// to be triggered. Shared setup for the picker tests below.
+fn open_new_popup_on_target(app: &mut App) -> Result<()> {
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    // Description → Target (single Tab).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    Ok(())
+}
+
+#[test]
+fn target_picker_opens_on_enter_with_field_text_as_seed() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    // Press Enter on the empty target field — picker opens with empty
+    // input, so the header is visible but no rows.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 100, 30);
+    assert!(
+        frame.contains("pick target"),
+        "picker title missing:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_opens_on_first_keystroke_and_seeds_input() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    // `g` opens the picker with `g` already in the input, narrowing
+    // the result list to `General Considerations.md`.
+    app.dispatch(key('g'))?;
+    // Wider terminal so the path doesn't get truncated inside the
+    // popup-in-popup column.
+    let frame = render(&mut app, 140, 30);
+    assert!(frame.contains("pick target"), "picker not open:\n{frame}");
+    assert!(
+        frame.contains("General Considerations"),
+        "expected file match after seeding `g`:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_enter_fills_field_with_path_only() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    for c in "Inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 100, 30);
+    assert!(
+        !frame.contains("pick target"),
+        "picker should close after select:\n{frame}"
+    );
+    assert!(
+        frame.contains("Inbox.md"),
+        "target field should hold `Inbox.md`:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_enter_fills_field_with_path_and_heading() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    // Heading-query syntax mirrors the literal text the field
+    // would have accepted before plan 006 — the round-trip stays
+    // symmetric.
+    for c in "gen consid#Tri".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 120, 30);
+    assert!(
+        !frame.contains("pick target"),
+        "picker should close after select:\n{frame}"
+    );
+    assert!(
+        frame.contains("General Considerations.md#Triage"),
+        "target field should hold path#heading:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_navigation_changes_selection() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    // Query that hits multiple files so navigation has an effect:
+    // `.md` matches every markdown file in the vault.
+    for c in ".md".chars() {
+        app.dispatch(key(c))?;
+    }
+    let initial = render(&mut app, 100, 30);
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::NONE,
+    )))?;
+    let after_down = render(&mut app, 100, 30);
+    assert!(
+        initial != after_down,
+        "Down arrow should change the highlighted row:\nbefore:\n{initial}\nafter:\n{after_down}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_esc_cancels_and_leaves_field_unchanged() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    open_new_popup_on_target(&mut app)?;
+    for c in "Inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 100, 30);
+    assert!(
+        !frame.contains("pick target"),
+        "picker should be closed:\n{frame}"
+    );
+    assert!(
+        frame.contains("new task"),
+        "popup should still be open:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn target_picker_does_not_open_from_description_field() -> Result<()> {
+    let (_dir, vault) = target_picker_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    // Description is the default focus — typing here must not open
+    // the picker, it should insert into the description buffer.
+    for c in "Inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 100, 30);
+    assert!(
+        !frame.contains("pick target"),
+        "picker must not open from description focus:\n{frame}"
+    );
+    assert!(
+        frame.contains("Inbox"),
+        "description should show typed text:\n{frame}"
     );
     Ok(())
 }

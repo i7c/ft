@@ -23,7 +23,7 @@ use crate::tui::{
     event::Event,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{quickline::parse_quickline, view::View},
-    widgets::EditBuffer,
+    widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -81,7 +81,11 @@ struct Quickline {
 /// `Ctrl+E` from the quickline (new — pre-populated from the parsed
 /// quickline tokens). Same render path for both modes; the `mode` field
 /// drives the title and whether the `target` field is part of the form.
-#[derive(Debug, Clone)]
+///
+/// `target_picker` is `Some` only while the fuzzy picker is open over
+/// the target field; all keys route to it for the duration. `FuzzyPicker`
+/// holds a `Matcher` (no `Clone`/`Debug`), so the popup itself can't
+/// derive either — nothing currently relies on them.
 struct EditPopup {
     description: EditBuffer,
     target: EditBuffer,
@@ -93,6 +97,7 @@ struct EditPopup {
     focus: EditField,
     error: Option<String>,
     mode: PopupMode,
+    target_picker: Option<FuzzyPicker<VaultFilePickerSource>>,
 }
 
 /// What the popup is doing: editing the task at `(path, line)` or
@@ -157,6 +162,7 @@ impl EditPopup {
             focus: EditField::Description,
             error: None,
             mode: PopupMode::Edit,
+            target_picker: None,
         }
     }
 
@@ -173,6 +179,7 @@ impl EditPopup {
             focus: EditField::Description,
             error: None,
             mode: PopupMode::New,
+            target_picker: None,
         }
     }
 
@@ -196,6 +203,7 @@ impl EditPopup {
             focus: EditField::Description,
             error: None,
             mode: PopupMode::New,
+            target_picker: None,
         }
     }
 
@@ -864,7 +872,7 @@ impl View for SearchView {
 
         // Popup is drawn last so it floats above the list. Use the full body
         // area as the anchor — the helper centers the popup within it.
-        if let Some(popup) = &self.popup {
+        if let Some(popup) = &mut self.popup {
             render_edit_popup(frame, area, popup);
         }
     }
@@ -1068,9 +1076,32 @@ impl SearchView {
             return Ok(EventOutcome::Consumed);
         };
 
+        // Open picker — all keys go to it, the form is paused beneath.
+        if popup.target_picker.is_some() {
+            return Ok(handle_target_picker_key(popup, k));
+        }
+
         // Ctrl+S submits regardless of focused field.
         if k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL) {
             return self.submit_popup(ctx);
+        }
+
+        // Picker triggers — only fire when target is the focused field and
+        // we're in `New` mode (Edit mode hides the target field entirely).
+        if popup.focus == EditField::Target && popup.mode == PopupMode::New {
+            match (k.code, k.modifiers) {
+                (KeyCode::Enter, _) => {
+                    open_target_picker(popup, ctx, None);
+                    return Ok(EventOutcome::Consumed);
+                }
+                (KeyCode::Char(c), m)
+                    if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+                {
+                    open_target_picker(popup, ctx, Some(c));
+                    return Ok(EventOutcome::Consumed);
+                }
+                _ => {}
+            }
         }
 
         match (k.code, k.modifiers) {
@@ -1562,10 +1593,58 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
     ])
 }
 
+/// Open the fuzzy picker over the target field. Seeds the picker's
+/// input with `seed_char` when triggered by a keystroke, or with the
+/// field's current text when triggered by Enter — so a partial query
+/// the user already typed becomes the starting query.
+fn open_target_picker(popup: &mut EditPopup, ctx: &TabCtx, seed_char: Option<char>) {
+    let source = VaultFilePickerSource::new(std::sync::Arc::clone(ctx.vault));
+    let mut picker = FuzzyPicker::new(source);
+    // Seed: either the keystroke that triggered the open, or the
+    // current field text. We send each char through `handle_key` so
+    // the picker's internal `refresh` runs and the result list
+    // populates immediately.
+    let seed: String = match seed_char {
+        Some(c) => c.to_string(),
+        None => popup.target.text.clone(),
+    };
+    for c in seed.chars() {
+        picker.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    popup.target_picker = Some(picker);
+}
+
+/// Route a key to the open picker; on Selected/Cancelled, close the
+/// picker and (for Selected) replace the target field's text with
+/// `path` or `path#heading text`.
+fn handle_target_picker_key(popup: &mut EditPopup, k: KeyEvent) -> EventOutcome {
+    let Some(picker) = popup.target_picker.as_mut() else {
+        return EventOutcome::Consumed;
+    };
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(hit) => {
+            let text = match &hit.heading {
+                Some(h) => format!("{}#{}", hit.path.display(), h.text),
+                None => hit.path.display().to_string(),
+            };
+            popup.target = EditBuffer::from(&text);
+            popup.target_picker = None;
+        }
+        PickerOutcome::Cancelled => {
+            popup.target_picker = None;
+        }
+        PickerOutcome::StillOpen | PickerOutcome::NotHandled => {}
+    }
+    EventOutcome::Consumed
+}
+
 /// Render the modal edit popup centered over `area`. Compact one-row-per-field
 /// layout (label : value) so all fields fit within an 80x24 viewport.
 /// The focused field is bold and underlined; everyone else stays plain.
-fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &EditPopup) {
+///
+/// Takes `&mut EditPopup` so the optional fuzzy picker (whose `render`
+/// needs `&mut self` to adjust its internal scroll) can draw on top.
+fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
     use ratatui::widgets::Clear;
 
     let popup_area = centered_rect(72, 65, area);
@@ -1651,6 +1730,22 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &EditPopup) {
     lines.push(footer);
 
     frame.render_widget(Paragraph::new(lines), inner);
+
+    // Picker overlay: rendered last so it floats above the form. The
+    // form's values aren't lost — `popup.target` (and every other
+    // field's buffer) still holds whatever was typed before the
+    // picker opened; we just visually hide them while picking.
+    if let Some(picker) = popup.target_picker.as_mut() {
+        let picker_area = centered_rect(60, 70, popup_area);
+        frame.render_widget(Clear, picker_area);
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .title(" pick target ")
+            .style(Style::default().bg(Color::Black));
+        let inner = outer.inner(picker_area);
+        frame.render_widget(outer, picker_area);
+        picker.render(frame, inner);
+    }
 }
 
 /// Centered rect helper duplicated from `ui.rs` so this file stays

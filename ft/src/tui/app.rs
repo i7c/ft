@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -41,7 +42,10 @@ pub struct Toast {
 const TOAST_DURATION: Duration = Duration::from_secs(3);
 
 pub struct App {
-    vault: Vault,
+    /// Shared so widgets that outlive a single event-loop borrow (e.g. the
+    /// fuzzy picker held inside a popup) can clone a handle to the vault
+    /// without colliding with App's own borrow of `tabs`.
+    vault: Arc<Vault>,
     today: NaiveDate,
     tabs: Vec<Box<dyn Tab>>,
     active: usize,
@@ -54,13 +58,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(vault: Vault) -> Self {
+    pub fn new(vault: Arc<Vault>) -> Self {
         let today = resolve_today();
         let tabs: Vec<Box<dyn Tab>> = vec![Box::new(WelcomeTab::new()), Box::new(TasksTab::new())];
         Self::with_tabs(vault, today, tabs)
     }
 
-    fn with_tabs(vault: Vault, today: NaiveDate, tabs: Vec<Box<dyn Tab>>) -> Self {
+    fn with_tabs(vault: Arc<Vault>, today: NaiveDate, tabs: Vec<Box<dyn Tab>>) -> Self {
         Self {
             vault,
             today,
@@ -353,8 +357,13 @@ fn spawn_editor(path: &Path, line: usize) -> Result<()> {
 impl App {
     /// Construct an App without starting the event loop. Useful for
     /// snapshot tests that drive `draw` directly with a TestBackend.
+    ///
+    /// Accepts an owned [`Vault`] (rather than `Arc<Vault>`) so the
+    /// existing test sites stay unchanged after the production refactor;
+    /// the wrap-in-`Arc` happens here so production and test go through
+    /// the same internal shape.
     pub fn for_test(vault: Vault) -> Self {
-        Self::new(vault)
+        Self::new(Arc::new(vault))
     }
 
     /// Like [`for_test`], but injects a fixed clock and derives `today` from
@@ -365,7 +374,7 @@ impl App {
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::with_clock(clock)),
         ];
-        Self::with_tabs(vault, today, tabs)
+        Self::with_tabs(Arc::new(vault), today, tabs)
     }
 
     pub fn render_to(&mut self, frame: &mut Frame) {

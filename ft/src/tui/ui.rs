@@ -145,6 +145,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("e", "open edit popup"),
     ("c / Shift+C", "new task (line / form)"),
     ("Ctrl+E", "expand quickline → form"),
+    ("Enter (target)", "open file/heading picker"),
     ("Enter", "open task in $EDITOR"),
     ("R", "reload vault"),
     ("Ctrl+W / Ctrl+⌫", "delete previous word"),

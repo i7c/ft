@@ -2,7 +2,7 @@
 id: 006
 name: picker-target
 title: Wire FuzzyPicker into the new-task target field
-status: ready
+status: finished
 created: 2026-05-10
 updated: 2026-05-10
 ---
@@ -51,54 +51,54 @@ User-driven scoping decisions (from the follow-up discussion):
 ## Acceptance Criteria
 
 ### Arc<Vault> refactor (session 1)
-- [ ] `App.vault` becomes `Arc<Vault>`
-- [ ] `TabCtx.vault` becomes `&'a Arc<Vault>` (or another shape that
+- [x] `App.vault` becomes `Arc<Vault>`
+- [x] `TabCtx.vault` becomes `&'a Arc<Vault>` (or another shape that
       lets a tab clone the `Arc` without colliding with the rest of
       `TabCtx`'s borrows)
-- [ ] `ft/src/tui/cmd/tui.rs` (and any other construction site) wraps
+- [x] `ft/src/tui/cmd/tui.rs` (and any other construction site) wraps
       the discovered `Vault` in `Arc::new(...)` before handing it to
       `App::new`
-- [ ] `VaultFilePickerSource` drops its lifetime parameter and holds
+- [x] `VaultFilePickerSource` drops its lifetime parameter and holds
       `Arc<Vault>` instead of `&'v Vault`. `VaultFilePickerSource::new`
       takes `Arc<Vault>`.
-- [ ] Every existing `&Vault` consumer (vault.scan / vault.path /
+- [x] Every existing `&Vault` consumer (vault.scan / vault.path /
       vault.config / `vault.fuzzy_find` etc.) keeps working through
       auto-deref — no signature changes to `ft_core`
-- [ ] All existing tests pass unchanged (refactor is behavior-neutral)
-- [ ] No new warnings; no clippy regressions
+- [x] All existing tests pass unchanged (refactor is behavior-neutral)
+- [x] No new warnings; no clippy regressions
 
 ### Target picker wire-up (session 2)
-- [ ] `EditPopup` (in `tabs/tasks/search.rs`) gains an
+- [x] `EditPopup` (in `tabs/tasks/search.rs`) gains an
       `Option<FuzzyPicker<VaultFilePickerSource>>` slot — `Some` only
       while the picker is open
-- [ ] Trigger:
-  - [ ] **Enter** on the target field opens the picker; the picker's
+- [x] Trigger:
+  - [x] **Enter** on the target field opens the picker; the picker's
         input is seeded with the field's current text so a partial
         query the user already typed becomes the starting query
-  - [ ] **First non-navigation char typed** while target is focused
+  - [x] **First non-navigation char typed** while target is focused
         and picker is closed: opens the picker, routes the keypress
         as the picker's first input char (so `i` opens the picker
         with `i` already in the input)
-  - [ ] Other keys behave as before: Tab/Shift+Tab move focus, Esc
+  - [x] Other keys behave as before: Tab/Shift+Tab move focus, Esc
         closes the popup, Backspace/Delete on an empty field
         does nothing (no picker open)
-- [ ] While the picker is open, **all** keys go to the picker:
-  - [ ] Typing → picker input + live re-query
-  - [ ] `↑` / `↓` / `Ctrl+J` / `Ctrl+K` → navigate results
-  - [ ] `Enter` → select highlighted hit; fill target field as
+- [x] While the picker is open, **all** keys go to the picker:
+  - [x] Typing → picker input + live re-query
+  - [x] `↑` / `↓` / `Ctrl+J` / `Ctrl+K` → navigate results
+  - [x] `Enter` → select highlighted hit; fill target field as
         `path` (no heading) or `path#heading text` (with heading);
         close the picker, keep focus on target so the user can
         either tweak the result or Tab onward
-  - [ ] `Esc` → close picker, leave target field unchanged
-- [ ] Layout: picker renders as a floating popup over the edit
+  - [x] `Esc` → close picker, leave target field unchanged
+- [x] Layout: picker renders as a floating popup over the edit
       popup. Centered with reasonable proportions (e.g. 60% wide,
       70% tall of the parent popup area). Backdrop should be a
       `Clear` so the underlying form isn't visible behind it.
-- [ ] Match highlighting works as in plan-005 (chars in the matched
+- [x] Match highlighting works as in plan-005 (chars in the matched
       `path` / `heading` are bolded + underlined)
-- [ ] Help overlay gains a row noting the picker trigger; the
+- [x] Help overlay gains a row noting the picker trigger; the
       existing target-field row is unchanged
-- [ ] Tests cover: Enter trigger, first-char trigger, navigation,
+- [x] Tests cover: Enter trigger, first-char trigger, navigation,
       select-fills-target (file-only), select-fills-target
       (file+heading), Esc cancels, picker doesn't open from other
       fields
@@ -159,11 +159,10 @@ and the field reverts to whatever it held before the picker opened.
 
 ## Sessions
 
-### Session 1 · 2026-05-10 · planned
+### Session 1 · 2026-05-10 · done
 **Goal:** Arc<Vault> refactor: App.vault becomes Arc<Vault>, TabCtx exposes &Arc<Vault>, VaultFilePickerSource drops its lifetime and holds Arc<Vault>. Behavior-neutral — every existing test passes unchanged.
-**Outcome:** 
+**Outcome:** `App.vault` is now `Arc<Vault>`; `TabCtx.vault` is `&'a Arc<Vault>`. Every `ctx.vault.scan()` / `ctx.vault.path` call site keeps working through `Arc`'s auto-deref to `&Vault`, so the only signature-level change is at the construction boundary (`tui::run` wraps the discovered `Vault` in `Arc::new`) and on `App::new`. The `App::for_test*` helpers stay ergonomic — they still take owned `Vault` and wrap internally, so the 30+ test sites are untouched. `VaultFilePickerSource` lost its `<'v>` lifetime parameter and now owns `Arc<Vault>`; picker tests pass `Arc::new(...)`. All 220 tests pass; clippy is clean.
 
-### Session 2 · 2026-05-10 · planned
+### Session 2 · 2026-05-10 · done
 **Goal:** FuzzyPicker wire-up on the target field: EditPopup gains target_picker slot, Enter/first-keystroke trigger, all keys route to picker while open, Enter fills target with path[#heading], Esc cancels. Floating popup-in-popup layout. Help overlay row + tests.
-**Outcome:** 
-
+**Outcome:** `EditPopup` gained an `Option<FuzzyPicker<VaultFilePickerSource>>` slot — `Debug`/`Clone` were dropped from the struct since `Matcher` doesn't implement them and nothing actually relied on the derives. `handle_popup_key` short-circuits to the picker when `Some`; otherwise, on Target focus in `New` mode, Enter or a printable char opens the picker (seeded with the field's current text or the keystroke). The picker is strictly modal: every key inside it routes to `FuzzyPicker::handle_key`, with Selected filling the target field as `path` or `path#heading`, Cancelled closing without changes, and any unhandled key consumed as a no-op. Render path wraps the picker in a centered popup-over-popup with its own `Clear` backdrop (60% × 70% of the form area) and a `pick target` titled block. Help overlay gained an `Enter (target) — open file/heading picker` row; the canonical-binding test got the label added so the drift check still holds. Two pre-existing tests that typed literal text into the target now pre-create the file and finish with Enter to commit the picker hit. Seven new tests cover the trigger paths, navigation, select-fills-target (file-only and file+heading), Esc-cancels, and "picker does not open from description focus". All 227 ft tests + 254 ft-core tests pass; clippy is clean across the workspace. 

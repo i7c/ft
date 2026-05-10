@@ -16,6 +16,8 @@
 
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::search::{fuzzy_find, Hit, Query, SearchOptions};
 use ft_core::vault::Vault;
@@ -371,14 +373,18 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
 /// Holds two `Matcher`s (one path-aware for the file part, one default for
 /// heading text) so the indices we compute for highlighting match the
 /// scoring done inside `fuzzy_find`.
-pub struct VaultFilePickerSource<'v> {
-    vault: &'v Vault,
+///
+/// Owns an `Arc<Vault>` rather than `&Vault` so the source can outlive a
+/// single event-loop borrow of `App` — the picker lives inside the popup
+/// while the same `App` that owns it also owns the vault.
+pub struct VaultFilePickerSource {
+    vault: Arc<Vault>,
     path_matcher: Matcher,
     text_matcher: Matcher,
 }
 
-impl<'v> VaultFilePickerSource<'v> {
-    pub fn new(vault: &'v Vault) -> Self {
+impl VaultFilePickerSource {
+    pub fn new(vault: Arc<Vault>) -> Self {
         Self {
             vault,
             path_matcher: Matcher::new(Config::DEFAULT.match_paths()),
@@ -387,7 +393,7 @@ impl<'v> VaultFilePickerSource<'v> {
     }
 }
 
-impl<'v> PickerSource for VaultFilePickerSource<'v> {
+impl PickerSource for VaultFilePickerSource {
     type Item = Hit;
 
     fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<Hit>> {
@@ -396,7 +402,7 @@ impl<'v> PickerSource for VaultFilePickerSource<'v> {
             return Vec::new();
         }
         let hits = fuzzy_find(
-            self.vault,
+            &self.vault,
             &parsed,
             SearchOptions {
                 limit,
@@ -638,7 +644,7 @@ mod tests {
 
     // ── VaultFilePickerSource against a real synthetic vault ────────────
 
-    fn make_vault(files: &[(&str, &str)]) -> (TempDir, Vault) {
+    fn make_vault(files: &[(&str, &str)]) -> (TempDir, Arc<Vault>) {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("vault");
         std::fs::create_dir_all(root.join(".obsidian")).unwrap();
@@ -650,7 +656,7 @@ mod tests {
             std::fs::write(path, body).unwrap();
         }
         let vault = Vault::discover(Some(root)).unwrap();
-        (dir, vault)
+        (dir, Arc::new(vault))
     }
 
     #[test]
@@ -659,7 +665,7 @@ mod tests {
             ("General Considerations.md", "# Intro\n### First Try\n"),
             ("unrelated.md", "# Z\n"),
         ]);
-        let mut src = VaultFilePickerSource::new(&vault);
+        let mut src = VaultFilePickerSource::new(vault);
         let items = src.query("gen consid#Firs", 10);
         assert!(!items.is_empty(), "expected at least one item");
         let top = &items[0];
@@ -684,7 +690,7 @@ mod tests {
     #[test]
     fn vault_picker_empty_query_returns_empty() {
         let (_dir, vault) = make_vault(&[("a.md", "# A\n")]);
-        let mut src = VaultFilePickerSource::new(&vault);
+        let mut src = VaultFilePickerSource::new(vault);
         assert!(src.query("", 10).is_empty());
     }
 
@@ -704,7 +710,7 @@ mod tests {
             ),
             ("Inbox/unrelated.md", "# Z\n"),
         ]);
-        let src = VaultFilePickerSource::new(&vault);
+        let src = VaultFilePickerSource::new(vault);
         let mut picker = FuzzyPicker::new(src).with_limit(10);
         for c in "gen consid#Firs".chars() {
             picker.handle_key(key(c));

@@ -8,6 +8,7 @@ mod ui;
 mod widgets;
 
 use std::io::{self, Stdout};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use crossterm::{
@@ -26,7 +27,7 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// always restores the terminal on exit (success or panic).
 pub fn run(vault: Vault) -> Result<()> {
     let mut terminal = setup_terminal().context("failed to enter TUI mode")?;
-    let mut app = App::new(vault);
+    let mut app = App::new(Arc::new(vault));
     let result = app.run(&mut terminal);
     restore_terminal(&mut terminal).context("failed to restore terminal")?;
     result
