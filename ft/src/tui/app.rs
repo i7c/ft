@@ -1,9 +1,16 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::io;
+use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use ft_core::vault::Vault;
 use ratatui::Frame;
 
@@ -11,7 +18,7 @@ use ratatui::Frame;
 use crate::tui::tabs::tasks::ClockFn;
 use crate::tui::{
     event::{Event, EventStream},
-    tab::{EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx},
     tabs::{tasks::TasksTab, welcome::WelcomeTab},
     ui::{self, Mode},
     Tui,
@@ -24,6 +31,7 @@ pub struct App {
     active: usize,
     mode: Mode,
     last_refresh: Cell<Option<DateTime<Local>>>,
+    pending_request: RefCell<Option<AppRequest>>,
     should_quit: bool,
 }
 
@@ -42,6 +50,7 @@ impl App {
             active: 0,
             mode: Mode::Normal,
             last_refresh: Cell::new(None),
+            pending_request: RefCell::new(None),
             should_quit: false,
         }
     }
@@ -55,6 +64,7 @@ impl App {
                 vault: &self.vault,
                 today: self.today,
                 last_refresh: &self.last_refresh,
+                pending_request: &self.pending_request,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
         }
@@ -66,6 +76,11 @@ impl App {
             if self.should_quit {
                 return Ok(());
             }
+            // Service any side-effect requests the view raised. Done outside
+            // `handle_event` so the App owns the Terminal during suspend.
+            if let Some(req) = self.pending_request.take() {
+                self.service_request(terminal, req)?;
+            }
         }
     }
 
@@ -74,9 +89,8 @@ impl App {
         let titles: Vec<&str> = self.tabs.iter().map(|t| t.title()).collect();
         ui::render_tab_bar(frame, tab_bar, &titles, self.active);
 
-        // Render the status bar before constructing the body's `TabCtx` —
-        // the ctx borrows `&self.last_refresh` for the body to write through,
-        // and the status bar reads the same Cell to display the timestamp.
+        // Render the status bar after the body so the body can update
+        // `last_refresh` (via the Cell) before we read it back.
         let vault_name = self
             .vault
             .path
@@ -88,6 +102,7 @@ impl App {
             vault: &self.vault,
             today: self.today,
             last_refresh: &self.last_refresh,
+            pending_request: &self.pending_request,
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
@@ -125,6 +140,7 @@ impl App {
                 vault: &self.vault,
                 today: self.today,
                 last_refresh: &self.last_refresh,
+                pending_request: &self.pending_request,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
         };
@@ -186,11 +202,36 @@ impl App {
             vault: &self.vault,
             today: self.today,
             last_refresh: &self.last_refresh,
+            pending_request: &self.pending_request,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
         self.tabs[self.active].on_focus(&mut ctx)?;
         Ok(())
+    }
+
+    fn service_request(&mut self, terminal: &mut Tui, req: AppRequest) -> Result<()> {
+        match req {
+            AppRequest::OpenInEditor { path, line } => {
+                suspend_terminal(terminal).context("could not suspend terminal for $EDITOR")?;
+                let status = spawn_editor(&path, line);
+                restore_terminal(terminal).context("could not restore terminal after $EDITOR")?;
+                terminal.clear()?;
+                // Whatever the editor did, force a refresh so the row reflects
+                // the on-disk state.
+                {
+                    let mut ctx = TabCtx {
+                        vault: &self.vault,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                    };
+                    self.tabs[self.active].refresh(&mut ctx)?;
+                }
+                status?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -201,6 +242,58 @@ fn resolve_today() -> NaiveDate {
         .ok()
         .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
         .unwrap_or_else(|| Local::now().date_naive())
+}
+
+// --- editor handoff ----------------------------------------------------------
+
+fn suspend_terminal(terminal: &mut Tui) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn restore_terminal(terminal: &mut Tui) -> Result<()> {
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.hide_cursor()?;
+    Ok(())
+}
+
+/// Spawn `$EDITOR` (or `$VISUAL`, falling back to `vi`) on `path`, jumping to
+/// `line` if the editor supports the `+N` flag (vim/nvim/nano/emacs all do).
+fn spawn_editor(path: &Path, line: usize) -> Result<()> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    // Best-effort split for "editor with args" (e.g. EDITOR="code -w").
+    let mut parts = editor.split_whitespace();
+    let program = parts.next().unwrap_or("vi");
+    let extra_args: Vec<&str> = parts.collect();
+
+    let line_arg = format!("+{line}");
+    let mut cmd = Command::new(program);
+    cmd.args(&extra_args).arg(&line_arg).arg(path);
+
+    let status = cmd.status().with_context(|| {
+        format!("failed to launch $EDITOR ({program}); set EDITOR or VISUAL to a working editor")
+    })?;
+    if !status.success() {
+        // Editor exited non-zero — surface as warning via the `last_refresh`
+        // log... actually we can't log to TUI yet. Just write to stderr; main
+        // routes that to a sink so it's harmless. Future: a status toast.
+        let _ = io::Write::write_all(&mut io::stderr(), b"editor exited non-zero\n");
+    }
+    Ok(())
 }
 
 // --- test-only helpers ---------------------------------------------------
@@ -250,5 +343,11 @@ impl App {
 
     pub fn is_quit(&self) -> bool {
         self.should_quit
+    }
+
+    /// Inspect or take any pending request that the active tab/view raised.
+    /// Used by tests to assert that an Enter keypress queued an editor open.
+    pub fn take_pending_request(&self) -> Option<AppRequest> {
+        self.pending_request.borrow_mut().take()
     }
 }

@@ -82,13 +82,13 @@ date and priority — exactly what matters at the start of a work session.
 - [x] All quick mutations write atomically via the `ft-core` atomic write helper and refresh the row in place
 
 ### Tasks tab — edit popup
-- [ ] `e` opens a modal form for the selected task with fields: description, due date, scheduled date, priority, tags, recurrence
-- [ ] Date fields accept ISO, relative, and natural-language input (same parser as the CLI)
-- [ ] `Esc` cancels with no write; `Ctrl+S` submits and writes atomically
-- [ ] On submit, the task row in the list updates in place without a full reload
+- [x] `e` opens a modal form for the selected task with fields: description, due date, scheduled date, priority, tags, recurrence
+- [x] Date fields accept ISO, relative, and natural-language input (same parser as the CLI)
+- [x] `Esc` cancels with no write; `Ctrl+S` submits and writes atomically
+- [x] On submit, the task row in the list updates in place without a full reload
 
 ### Tasks tab — editor handoff
-- [ ] `Enter` on a selected task suspends the TUI (disables raw mode, leaves alternate screen), opens the source file in `$EDITOR` at the correct line, then restores the TUI and forces a full refresh of the current view on return
+- [x] `Enter` on a selected task suspends the TUI (disables raw mode, leaves alternate screen), opens the source file in `$EDITOR` at the correct line, then restores the TUI and forces a full refresh of the current view on return
 
 ### Performance
 - [ ] First render of the task list under 500ms on a 5k-note vault (same scan path as the CLI)
@@ -262,9 +262,41 @@ Help overlay extended with the new bindings — popup grew from 60% to
 workspace `cargo test`, `cargo clippy --workspace --all-targets`, and
 `cargo fmt --check` all clean.
 
-### Session 5 · 2026-05-10 · planned
+### Session 5 · 2026-05-10 · done
 **Goal:** Edit popup (e) with all task fields and CLI date parser; Enter editor handoff with TUI suspend/restore and forced refresh
-**Outcome:** 
+**Outcome:** Three features in one session.
+
+1. **`t` shortcut** (user request): sets the selected task's due date to
+   today via `update_task_line`. Reuses the same write+refresh pipeline as
+   the other quick keys.
+2. **Edit popup** (`e`): modal form with six fields — description, due,
+   scheduled, priority, tags, recurrence — pre-populated from the selected
+   task. Layout is compact (one row per field) so it fits at 80x24. Tab /
+   Shift+Tab / ↑ / ↓ navigate fields; Esc cancels without writing; Ctrl+S
+   parses and writes. Date fields go through `ft_core::dates::parse` so
+   ISO, relative (`+3d`), and natural-language input all work like in the
+   CLI. Priority parses lowercase keywords (`none`/`low`/`medium`/`high`/
+   `highest`/`lowest`). Validation runs *before* any disk write — a bad
+   field keeps the popup open with an error indicator (`⚠`) and refocuses
+   the offending field.
+3. **Editor handoff** (`Enter`): suspends the TUI (`disable_raw_mode` +
+   `LeaveAlternateScreen`), spawns `$VISUAL` (or `$EDITOR`, fallback `vi`)
+   with `+<line>` so the cursor lands on the right row, then re-enters
+   the alt-screen and force-refreshes the active tab on return.
+
+To plumb the editor request from the view back to the App (which owns
+the Terminal) without breaking the Tab trait, added `AppRequest` enum
+plus `pending_request: &'a RefCell<Option<AppRequest>>` on `TabCtx`.
+The view writes the request via `ctx.pending_request.borrow_mut()`; the
+App's main loop drains it after `handle_event` returns and services it
+outside the borrow chain. Easy to extend in future sessions (e.g.
+"open URL", "show toast") without touching the Tab signature.
+
+Help overlay extended with `t`, `e`, `Enter`, and the existing list.
+Total tui tests: 37 (7 new — t shortcut, popup open/snapshot/save/cancel/
+parse-error, editor-open request queueing). Full workspace `cargo test`,
+`cargo clippy --workspace --all-targets`, and `cargo fmt --check` all
+clean.
 
 ### Session 6 · 2026-05-10 · planned
 **Goal:** Performance budgets on 5k-note fixture, fill remaining snapshot tests, help overlay audit, no-warnings cleanup, real-vault smoke check

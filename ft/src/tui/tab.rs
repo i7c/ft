@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate};
@@ -6,6 +7,14 @@ use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::event::Event;
+
+/// Side-effect a tab/view can request from the App. Currently only used for
+/// suspending the alt-screen and spawning `$EDITOR`; future sessions may add
+/// "open URL" or "show toast" without touching the Tab trait.
+#[derive(Debug, Clone)]
+pub enum AppRequest {
+    OpenInEditor { path: PathBuf, line: usize },
+}
 
 /// What the App should do after a tab handles an event. `Consumed` and `Quit`
 /// are part of the contract but unused in session 1; sessions 2+ surface them
@@ -34,6 +43,9 @@ pub struct TabCtx<'a> {
     pub vault: &'a Vault,
     pub today: NaiveDate,
     pub last_refresh: &'a Cell<Option<DateTime<Local>>>,
+    /// Pending side-effect for the App to handle after `handle_event` returns.
+    /// `RefCell` rather than `Cell` because [`AppRequest`] isn't `Copy`.
+    pub pending_request: &'a RefCell<Option<AppRequest>>,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to

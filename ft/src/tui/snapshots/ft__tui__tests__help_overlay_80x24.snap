@@ -15,13 +15,13 @@ expression: frame
          ██║███╗│  ↑ / ↓ · j / k     select task               │█╔══╝           
          ╚███╔██│  ] / [             due date +1d / -1d        │██████╗         
           ╚══╝╚═│  } / {             scheduled +1d / -1d       │══════╝         
+                │  t                 set due to today          │                
                 │  p / P             priority cycle fwd / back │                
                 │  x / X             complete / cancel         │                
+               p│  e                 open edit popup           │p               
+                │  Enter             open task in $EDITOR      │                
                 │  R                 reload vault              │                
-               p│  Esc               close overlay             │p               
-                │                                              │                
-                │  press ? or Esc to close                     │                
-                │                                              │                
+                │  Esc               close overlay             │                
                 │                                              │                
                 └──────────────────────────────────────────────┘                
                                                                                 

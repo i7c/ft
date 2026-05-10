@@ -124,8 +124,11 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("↑ / ↓ · j / k", "select task"),
     ("] / [", "due date +1d / -1d"),
     ("} / {", "scheduled +1d / -1d"),
+    ("t", "set due to today"),
     ("p / P", "priority cycle fwd / back"),
     ("x / X", "complete / cancel"),
+    ("e", "open edit popup"),
+    ("Enter", "open task in $EDITOR"),
     ("R", "reload vault"),
     ("Esc", "close overlay"),
 ];

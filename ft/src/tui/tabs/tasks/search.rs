@@ -21,7 +21,7 @@ use ratatui::{
 
 use crate::tui::{
     event::Event,
-    tab::{EventOutcome, TabCtx},
+    tab::{AppRequest, EventOutcome, TabCtx},
     tabs::tasks::view::View,
 };
 
@@ -55,6 +55,160 @@ pub struct SearchView {
     /// Whether the query bar is focused for editing. While editing, all key
     /// events go to the buffer (not the list).
     edit_state: Option<EditBuffer>,
+
+    /// Open edit-popup state, if any. Set by `e`; cleared by Esc / Ctrl+S.
+    /// While the popup is open, all keys go to it.
+    popup: Option<EditPopup>,
+}
+
+/// Modal form opened with `e` for the selected task. Six text fields plus
+/// focus tracking and a parse-error slot. Submit (Ctrl+S) parses dates via
+/// `ft_core::dates::parse` so users can type natural-language input.
+#[derive(Debug, Clone)]
+struct EditPopup {
+    description: EditBuffer,
+    due: EditBuffer,
+    scheduled: EditBuffer,
+    priority: EditBuffer,
+    tags: EditBuffer,
+    recurrence: EditBuffer,
+    focus: EditField,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditField {
+    Description,
+    Due,
+    Scheduled,
+    Priority,
+    Tags,
+    Recurrence,
+}
+
+impl EditField {
+    fn label(self) -> &'static str {
+        match self {
+            EditField::Description => "description",
+            EditField::Due => "due",
+            EditField::Scheduled => "scheduled",
+            EditField::Priority => "priority",
+            EditField::Tags => "tags",
+            EditField::Recurrence => "recurrence",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            EditField::Description => EditField::Due,
+            EditField::Due => EditField::Scheduled,
+            EditField::Scheduled => EditField::Priority,
+            EditField::Priority => EditField::Tags,
+            EditField::Tags => EditField::Recurrence,
+            EditField::Recurrence => EditField::Description,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            EditField::Description => EditField::Recurrence,
+            EditField::Due => EditField::Description,
+            EditField::Scheduled => EditField::Due,
+            EditField::Priority => EditField::Scheduled,
+            EditField::Tags => EditField::Priority,
+            EditField::Recurrence => EditField::Tags,
+        }
+    }
+}
+
+impl EditPopup {
+    /// Pre-populate from the selected task so the popup opens with the
+    /// current state and the user can edit-in-place.
+    fn from_task(task: &Task) -> Self {
+        Self {
+            description: EditBuffer::from(&task.description),
+            due: EditBuffer::from(&fmt_date(task.due)),
+            scheduled: EditBuffer::from(&fmt_date(task.scheduled)),
+            priority: EditBuffer::from(priority_text(task.priority)),
+            tags: EditBuffer::from(&task.tags.join(" ")),
+            recurrence: EditBuffer::from(task.recurrence.as_deref().unwrap_or("")),
+            focus: EditField::Description,
+            error: None,
+        }
+    }
+
+    fn focused_buffer_mut(&mut self) -> &mut EditBuffer {
+        match self.focus {
+            EditField::Description => &mut self.description,
+            EditField::Due => &mut self.due,
+            EditField::Scheduled => &mut self.scheduled,
+            EditField::Priority => &mut self.priority,
+            EditField::Tags => &mut self.tags,
+            EditField::Recurrence => &mut self.recurrence,
+        }
+    }
+
+    fn buffer_for(&self, field: EditField) -> &EditBuffer {
+        match field {
+            EditField::Description => &self.description,
+            EditField::Due => &self.due,
+            EditField::Scheduled => &self.scheduled,
+            EditField::Priority => &self.priority,
+            EditField::Tags => &self.tags,
+            EditField::Recurrence => &self.recurrence,
+        }
+    }
+}
+
+fn fmt_date(d: Option<NaiveDate>) -> String {
+    d.map(|x| x.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+fn priority_text(p: Option<Priority>) -> &'static str {
+    match p {
+        None => "",
+        Some(Priority::Lowest) => "lowest",
+        Some(Priority::Low) => "low",
+        Some(Priority::Medium) => "medium",
+        Some(Priority::High) => "high",
+        Some(Priority::Highest) => "highest",
+    }
+}
+
+fn parse_priority(s: &str) -> Result<Option<Priority>, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
+        "lowest" => Ok(Some(Priority::Lowest)),
+        "low" => Ok(Some(Priority::Low)),
+        "medium" | "med" => Ok(Some(Priority::Medium)),
+        "high" => Ok(Some(Priority::High)),
+        "highest" => Ok(Some(Priority::Highest)),
+        other => Err(format!(
+            "priority `{other}` not recognized (try none / low / medium / high)"
+        )),
+    }
+}
+
+fn parse_tags_field(s: &str) -> Vec<String> {
+    s.split(|c: char| c.is_whitespace() || c == ',')
+        .map(|t| t.trim_start_matches('#').trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect()
+}
+
+fn parse_optional_date(s: &str, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    ft_core::dates::parse(trimmed, today)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 /// Result of compiling the active `query_text` against the current `today`.
@@ -149,6 +303,7 @@ impl SearchView {
             query_text: String::new(),
             parse_state: ParseState::Ok(None),
             edit_state: None,
+            popup: None,
         }
     }
 
@@ -487,6 +642,11 @@ impl View for SearchView {
             return Ok(EventOutcome::NotHandled);
         };
 
+        // Modal popup swallows everything until Esc / Ctrl+S.
+        if self.popup.is_some() {
+            return self.handle_popup_key(k, ctx);
+        }
+
         // Editing the query bar swallows everything except Apply/Cancel.
         if self.edit_state.is_some() {
             return Ok(self.handle_edit_key(k, ctx));
@@ -523,6 +683,15 @@ impl View for SearchView {
             (KeyCode::Char('P'), _) => self.cycle_priority(ctx, -1),
             (KeyCode::Char('x'), KeyModifiers::NONE) => self.complete_selected(ctx),
             (KeyCode::Char('X'), _) => self.cancel_selected(ctx),
+            (KeyCode::Char('t'), KeyModifiers::NONE) => self.set_due_today(ctx),
+            (KeyCode::Char('e'), KeyModifiers::NONE) => {
+                self.open_edit_popup();
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Enter, _) => {
+                self.request_editor_open(ctx);
+                Ok(EventOutcome::Consumed)
+            }
             _ => Ok(EventOutcome::NotHandled),
         }
     }
@@ -538,6 +707,12 @@ impl View for SearchView {
         // the render call so the snapshot reflects the post-adjustment state.
         self.adjust_scroll(chunks[1].height);
         self.render_list(frame, chunks[1], ctx.today);
+
+        // Popup is drawn last so it floats above the list. Use the full body
+        // area as the anchor — the helper centers the popup within it.
+        if let Some(popup) = &self.popup {
+            render_edit_popup(frame, area, popup);
+        }
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -632,6 +807,16 @@ impl SearchView {
         })
     }
 
+    fn set_due_today(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        self.with_selected_task(ctx, |path, task, today| {
+            let line = task.source_line;
+            ops::update_task_line(path, line, move |t| {
+                t.due = Some(today);
+            })?;
+            Ok(())
+        })
+    }
+
     fn cycle_priority(&mut self, ctx: &mut TabCtx, direction: i64) -> Result<EventOutcome> {
         self.with_selected_task(ctx, |path, task, _today| {
             let line = task.source_line;
@@ -665,6 +850,112 @@ impl SearchView {
                 Err(e) => Err(anyhow::Error::from(e)),
             }
         })
+    }
+
+    fn open_edit_popup(&mut self) {
+        let Some(&task_idx) = self.matches.get(self.selected) else {
+            return;
+        };
+        self.popup = Some(EditPopup::from_task(&self.tasks[task_idx]));
+    }
+
+    fn request_editor_open(&self, ctx: &TabCtx) {
+        let Some(&task_idx) = self.matches.get(self.selected) else {
+            return;
+        };
+        let task = &self.tasks[task_idx];
+        let absolute = ctx.vault.path.join(&task.source_file);
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+            path: absolute,
+            line: task.source_line,
+        });
+    }
+
+    fn handle_popup_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Some(popup) = self.popup.as_mut() else {
+            return Ok(EventOutcome::Consumed);
+        };
+
+        // Ctrl+S submits regardless of focused field.
+        if k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.submit_popup(ctx);
+        }
+
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.popup = None;
+            }
+            (KeyCode::Tab, _) => popup.focus = popup.focus.next(),
+            (KeyCode::BackTab, _) => popup.focus = popup.focus.prev(),
+            (KeyCode::Down, _) => popup.focus = popup.focus.next(),
+            (KeyCode::Up, _) => popup.focus = popup.focus.prev(),
+            (KeyCode::Backspace, _) => popup.focused_buffer_mut().backspace(),
+            (KeyCode::Delete, _) => popup.focused_buffer_mut().delete(),
+            (KeyCode::Left, _) => popup.focused_buffer_mut().left(),
+            (KeyCode::Right, _) => popup.focused_buffer_mut().right(),
+            (KeyCode::Home, _) => popup.focused_buffer_mut().home(),
+            (KeyCode::End, _) => popup.focused_buffer_mut().end(),
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                popup.focused_buffer_mut().insert(c);
+            }
+            _ => {}
+        }
+        Ok(EventOutcome::Consumed)
+    }
+
+    fn submit_popup(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        // Validate everything *before* mutating disk so a bad input keeps the
+        // popup open with a clear message. Borrow popup immutably through the
+        // validation phase, then drop the borrow before calling the mutator.
+        let validated = {
+            let Some(popup) = self.popup.as_ref() else {
+                return Ok(EventOutcome::Consumed);
+            };
+            let due = match parse_optional_date(&popup.due.text, ctx.today) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.popup.as_mut().unwrap().error = Some(format!("due: {e}"));
+                    self.popup.as_mut().unwrap().focus = EditField::Due;
+                    return Ok(EventOutcome::Consumed);
+                }
+            };
+            let scheduled = match parse_optional_date(&popup.scheduled.text, ctx.today) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.popup.as_mut().unwrap().error = Some(format!("scheduled: {e}"));
+                    self.popup.as_mut().unwrap().focus = EditField::Scheduled;
+                    return Ok(EventOutcome::Consumed);
+                }
+            };
+            let priority = match parse_priority(&popup.priority.text) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.popup.as_mut().unwrap().error = Some(e);
+                    self.popup.as_mut().unwrap().focus = EditField::Priority;
+                    return Ok(EventOutcome::Consumed);
+                }
+            };
+            let recurrence = popup.recurrence.text.trim();
+            let recurrence = (!recurrence.is_empty()).then(|| recurrence.to_string());
+            let description = popup.description.text.trim().to_string();
+            let tags = parse_tags_field(&popup.tags.text);
+            (description, due, scheduled, priority, tags, recurrence)
+        };
+
+        let outcome = self.with_selected_task(ctx, |path, task, _today| {
+            let (description, due, scheduled, priority, tags, recurrence) = validated;
+            ops::update_task_line(path, task.source_line, move |t| {
+                t.description = description;
+                t.due = due;
+                t.scheduled = scheduled;
+                t.priority = priority;
+                t.tags = tags;
+                t.recurrence = recurrence;
+            })?;
+            Ok(())
+        })?;
+        self.popup = None;
+        Ok(outcome)
     }
 
     fn handle_edit_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
@@ -714,6 +1005,122 @@ impl SearchView {
         }
         EventOutcome::Consumed
     }
+}
+
+/// Render the modal edit popup centered over `area`. Compact one-row-per-field
+/// layout (label : value) so all six fields fit within an 80x24 viewport.
+/// The focused field is bold and underlined; everyone else stays plain.
+fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &EditPopup) {
+    use ratatui::widgets::Clear;
+
+    let popup_area = centered_rect(72, 60, area);
+    frame.render_widget(Clear, popup_area);
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" edit task ")
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup_area);
+    frame.render_widget(outer, popup_area);
+
+    const FIELDS: &[EditField] = &[
+        EditField::Description,
+        EditField::Due,
+        EditField::Scheduled,
+        EditField::Priority,
+        EditField::Tags,
+        EditField::Recurrence,
+    ];
+
+    let label_width = FIELDS.iter().map(|f| f.label().len()).max().unwrap_or(0);
+    let mut lines: Vec<Line> = Vec::with_capacity(FIELDS.len() + 3);
+    lines.push(Line::from("")); // top padding
+
+    let inner_width = inner.width.saturating_sub(2) as usize; // 1-col gutter each side
+    let value_width = inner_width.saturating_sub(label_width + 4); // "  " + ": "
+
+    for field in FIELDS {
+        let focused = popup.focus == *field;
+        let buf = popup.buffer_for(*field);
+        let label_style = if focused {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let value_spans: Vec<Span<'static>> = if focused {
+            let chars: Vec<char> = buf.text.chars().collect();
+            let cursor = buf.cursor.min(chars.len());
+            let scroll = horizontal_scroll(cursor, chars.len(), value_width);
+            let visible_end = (scroll + value_width.saturating_sub(1)).min(chars.len());
+            let visible: String = chars[scroll..visible_end].iter().collect();
+            let visible_cursor = cursor.saturating_sub(scroll);
+            let split = visible_cursor.min(visible.chars().count());
+            let mut iter = visible.chars();
+            let left: String = iter.by_ref().take(split).collect();
+            let right: String = iter.collect();
+            vec![
+                Span::styled(left, Style::default().fg(Color::White)),
+                Span::styled(
+                    "│",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(right, Style::default().fg(Color::White)),
+            ]
+        } else {
+            let display: String = buf.text.chars().take(value_width).collect();
+            vec![Span::styled(display, Style::default().fg(Color::White))]
+        };
+
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(value_spans.len() + 2);
+        spans.push(Span::styled(
+            format!("  {:>width$} : ", field.label(), width = label_width),
+            label_style,
+        ));
+        spans.extend(value_spans);
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from("")); // separator before footer
+    let footer = if let Some(msg) = &popup.error {
+        Line::from(vec![
+            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
+            Span::styled(msg.clone(), Style::default().fg(Color::Red)),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "  Tab/Shift+Tab next · Ctrl+S save · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        ))
+    };
+    lines.push(footer);
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Centered rect helper duplicated from `ui.rs` so this file stays
+/// self-contained for popup rendering.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// Pick a horizontal scroll offset (in chars) so `cursor` is visible within

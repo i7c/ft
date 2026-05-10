@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::vault::Vault;
 use ratatui::{backend::TestBackend, Terminal};
 
-use crate::tui::{event::Event, App};
+use crate::tui::{event::Event, tab::AppRequest, App};
 
 fn fixed_clock() -> DateTime<Local> {
     // Sun 10 May 2026, 14:32:05 — matches the FT_TODAY used elsewhere.
@@ -498,6 +498,165 @@ fn quick_key_capital_x_cancels_selected_task() -> Result<()> {
         body.contains("❌ 2026-05-10"),
         "cancellation date should be today: \n{body}"
     );
+    Ok(())
+}
+
+#[test]
+fn quick_key_t_sets_due_to_today() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    // Selection starts on "Pay rent" (📅 2026-05-08, overdue).
+    app.dispatch(key('t'))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("Pay rent ⏫ 📅 2026-05-10"),
+        "t should set due to today (2026-05-10): \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn edit_popup_opens_on_e_with_current_values() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(frame.contains("edit task"), "popup title missing:\n{frame}");
+    assert!(
+        frame.contains("Pay rent"),
+        "description prefilled:\n{frame}"
+    );
+    assert!(frame.contains("2026-05-08"), "due prefilled:\n{frame}");
+    assert!(frame.contains("high"), "priority prefilled:\n{frame}");
+    Ok(())
+}
+
+#[test]
+fn edit_popup_renders_at_80x24_snapshot() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("edit_popup_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn edit_popup_ctrl_s_saves_changes() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Tab to the due field, clear it, type "+3d" (CLI relative-date).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "+3d".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Ctrl+S submit.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    // 2026-05-10 + 3 days = 2026-05-13.
+    assert!(
+        body.contains("Pay rent ⏫ 📅 2026-05-13"),
+        "+3d should resolve to 2026-05-13: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn edit_popup_esc_cancels_without_writing() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let before = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    for c in "garbage".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let after = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert_eq!(before, after, "Esc must not touch disk");
+    Ok(())
+}
+
+#[test]
+fn edit_popup_invalid_date_keeps_popup_open_with_error() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Tab to due, clear, type garbage.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "not-a-date-at-all".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("⚠"),
+        "error indicator should appear:\n{frame}"
+    );
+    assert!(
+        frame.contains("due:"),
+        "error should call out the offending field:\n{frame}"
+    );
+    let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
+    assert!(
+        body.contains("📅 2026-05-08"),
+        "disk unchanged on parse error"
+    );
+    Ok(())
+}
+
+#[test]
+fn enter_on_search_view_queues_editor_open_request() -> Result<()> {
+    let (dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("Enter should queue an editor-open request");
+    match req {
+        AppRequest::OpenInEditor { path, line } => {
+            // Both paths get canonicalized to compare reliably across
+            // macOS' /var → /private/var symlink.
+            let expected = dir
+                .path()
+                .join("test-vault/tasks.md")
+                .canonicalize()
+                .unwrap();
+            let actual = path.canonicalize().unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(line, 1, "first selection should be at line 1");
+        }
+    }
     Ok(())
 }
 
