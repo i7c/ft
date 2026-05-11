@@ -253,28 +253,38 @@ pub fn write_pair(
     Ok(())
 }
 
-/// Build an `obsidian://open?vault=…&file=…[&heading=…]` URL.
+/// Build an `obsidian://…` URL that opens `rel_path` in the named vault.
+///
+/// - No heading → vanilla `obsidian://open?vault=…&file=…`, which any
+///   Obsidian install handles.
+/// - With a heading → switches to the Advanced URI plugin scheme
+///   `obsidian://adv-uri?vault=…&filepath=…&heading=…`, which is the only
+///   way Obsidian jumps to a section. Vanilla Obsidian ignores `&heading=`
+///   on `obsidian://open`, and embedding `#heading` in the file path
+///   errors with "File not found" — so the plugin is required for
+///   heading nav. Users without it just won't get the jump.
 ///
 /// `vault_name` is whatever string Obsidian uses to register the vault —
 /// usually the basename of the vault root, which callers can compute via
 /// `vault.path.file_name()`. `rel_path` is the file path relative to the
-/// vault root. `heading`, if present, appends `&heading=<text>` — vanilla
-/// Obsidian ignores it and opens the file; the Advanced URI plugin jumps
-/// to the heading. Document as best-effort.
+/// vault root.
 ///
 /// Both CLI (`ft notes open --obsidian`) and TUI (`Ctrl+O` on a hit)
 /// call into this builder so URL shape stays consistent across surfaces.
 pub fn obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>) -> String {
-    let mut url = format!(
-        "obsidian://open?vault={}&file={}",
-        urlencoding::encode(vault_name),
-        urlencoding::encode(&rel_path.to_string_lossy())
-    );
-    if let Some(h) = heading {
-        url.push_str("&heading=");
-        url.push_str(&urlencoding::encode(&h.text));
+    match heading {
+        None => format!(
+            "obsidian://open?vault={}&file={}",
+            urlencoding::encode(vault_name),
+            urlencoding::encode(&rel_path.to_string_lossy())
+        ),
+        Some(h) => format!(
+            "obsidian://adv-uri?vault={}&filepath={}&heading={}",
+            urlencoding::encode(vault_name),
+            urlencoding::encode(&rel_path.to_string_lossy()),
+            urlencoding::encode(&h.text),
+        ),
     }
-    url
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -924,13 +934,20 @@ c body
     }
 
     #[test]
-    fn obsidian_url_with_heading_encodes_text() {
+    fn obsidian_url_with_heading_uses_adv_uri_scheme() {
         let h = Heading {
             text: "Day 1 / overview".to_string(),
             level: 2,
             line: 3,
         };
         let url = obsidian_url("vault", std::path::Path::new("a.md"), Some(&h));
+        // Heading nav requires the Advanced URI plugin, which uses a
+        // different scheme (`adv-uri`) and parameter name (`filepath`).
+        assert!(
+            url.starts_with("obsidian://adv-uri?vault="),
+            "expected adv-uri scheme, got {url}"
+        );
+        assert!(url.contains("filepath=a.md"), "got {url}");
         // `/` is reserved; `urlencoding::encode` percent-encodes it.
         assert!(
             url.ends_with("&heading=Day%201%20%2F%20overview"),

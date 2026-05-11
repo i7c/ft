@@ -106,13 +106,15 @@ fn open_obsidian_dry_run_emits_url_on_stdout() {
         .stdout
         .clone();
     let stdout = String::from_utf8(out).unwrap();
+    // Fuzzy search resolves `finance` to the `# Finance` heading, so the
+    // URL uses the Advanced URI scheme with `filepath=` (heading nav).
     assert!(
-        stdout.starts_with("obsidian://open?vault="),
+        stdout.starts_with("obsidian://"),
         "expected obsidian URL: {stdout:?}"
     );
     assert!(
-        stdout.contains("file=finance.md"),
-        "expected file param: {stdout:?}"
+        stdout.contains("filepath=finance.md") || stdout.contains("file=finance.md"),
+        "expected file/filepath param: {stdout:?}"
     );
 }
 
