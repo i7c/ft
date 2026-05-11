@@ -230,6 +230,29 @@ fn welcome_any_key_switches_to_tasks() -> Result<()> {
 }
 
 #[test]
+fn welcome_digit_jumps_directly_to_target_tab() -> Result<()> {
+    // `3` from the splash screen should land on Notes in one keypress,
+    // not redirect to Tasks first.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    assert_eq!(app.active_index(), 0);
+    app.dispatch(key('3'))?;
+    assert_eq!(app.active_index(), 2);
+    assert_eq!(app.active_title(), "Notes");
+    Ok(())
+}
+
+#[test]
+fn welcome_q_quits_directly() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    assert_eq!(app.active_index(), 0);
+    app.dispatch(key('q'))?;
+    assert!(app.is_quit());
+    Ok(())
+}
+
+#[test]
 fn q_quits_from_tasks_tab() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);

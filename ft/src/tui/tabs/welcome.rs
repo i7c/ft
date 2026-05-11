@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -38,9 +39,24 @@ impl Tab for WelcomeTab {
     }
 
     fn handle_event(&mut self, ev: Event, _ctx: &mut TabCtx) -> Result<EventOutcome> {
-        match ev {
-            Event::Key(_) => Ok(EventOutcome::SwitchTab(TASKS_TAB_INDEX)),
-            _ => Ok(EventOutcome::NotHandled),
+        let Event::Key(k) = ev else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        // Keys the global handler owns (direct tab nav, quit, help) must
+        // pass through; otherwise the splash screen would swallow them and
+        // the user would need a second press to reach the requested tab.
+        let is_global = match (k.code, k.modifiers) {
+            (KeyCode::Char(c), _) if c.is_ascii_digit() => true,
+            (KeyCode::Tab | KeyCode::BackTab, _) => true,
+            (KeyCode::Char('q' | '?'), _) => true,
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => true,
+            (KeyCode::Esc, _) => true,
+            _ => false,
+        };
+        if is_global {
+            Ok(EventOutcome::NotHandled)
+        } else {
+            Ok(EventOutcome::SwitchTab(TASKS_TAB_INDEX))
         }
     }
 
