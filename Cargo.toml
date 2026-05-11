@@ -22,6 +22,8 @@ ignore = "0.4"
 rayon = "1.10"
 tempfile = "3"
 nucleo-matcher = "0.3"
+regex = "1"
+urlencoding = "2"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

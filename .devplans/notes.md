@@ -78,54 +78,54 @@ sequential pair-write.
 
 ### CLI — `ft notes open`
 
-- [ ] `ft notes open <QUERY>` — runs `Vault::fuzzy_find` and opens the top
+- [x] `ft notes open <QUERY>` — runs `Vault::fuzzy_find` and opens the top
       hit. Honors the `file#heading` query syntax. `QUERY` is required;
       passing no query exits 2 with a message pointing at `ft tui`.
-- [ ] Opens in `$EDITOR` (resolving `VISUAL` → `EDITOR` → `vi`, same as
+- [x] Opens in `$EDITOR` (resolving `VISUAL` → `EDITOR` → `vi`, same as
       `spawn_editor` in app.rs). When the hit carries a heading, passes
       the heading's line as `+<line>` so the editor jumps to the section.
-- [ ] `--obsidian` flag — prints (and `open`s on macOS) an
+- [x] `--obsidian` flag — prints (and `open`s on macOS) an
       `obsidian://open?vault=<name>&file=<url-encoded-path>` URL. When the
       hit has a heading, appends `&heading=<url-encoded-text>` (Obsidian's
       advanced-URI plugin honors it; vanilla Obsidian falls back to
       opening the file). Document this as best-effort.
-- [ ] `--editor <bin>` — overrides `$EDITOR` for this invocation.
-- [ ] Exit codes: 0 success, 1 no match, 2 bad args / error.
+- [x] `--editor <bin>` — overrides `$EDITOR` for this invocation.
+- [x] Exit codes: 0 success, 1 no match, 2 bad args / error.
 
 ### CLI — `ft notes move-section`
 
-- [ ] Required: `--from <path>`, `--to <path>`, and at least one of
+- [x] Required: `--from <path>`, `--to <path>`, and at least one of
       `--heading TEXT` / `--heading-regex PATTERN` / `--from-query QUERY`.
-- [ ] `--heading TEXT` — exact match against heading text (trimmed,
+- [x] `--heading TEXT` — exact match against heading text (trimmed,
       case-insensitive). Repeatable to pick multiple distinct sections.
-- [ ] `--heading-regex PATTERN` — Rust regex matched against heading text.
+- [x] `--heading-regex PATTERN` — Rust regex matched against heading text.
       Repeatable; results combine with `--heading` results.
-- [ ] `--match-policy first|all|error` — what to do when a `--heading` or
+- [x] `--match-policy first|all|error` — what to do when a `--heading` or
       `--heading-regex` matches more than one heading in the source.
       Default: `error` (refuse to write, list the line numbers of the
       ambiguous matches). `first` takes the first match in document order.
       `all` takes every match.
-- [ ] `--from-query QUERY` — convenience; uses `file#heading` fuzzy syntax
+- [x] `--from-query QUERY` — convenience; uses `file#heading` fuzzy syntax
       via `Vault::fuzzy_find`, picks the top hit. Mutually exclusive with
       `--from` + `--heading`.
-- [ ] `--at-level N` — drop the moved sections at heading level `N` in the
+- [x] `--at-level N` — drop the moved sections at heading level `N` in the
       target (the cascade scales nested headings). Default: preserve source
       level. Errors if the cascade would push any nested heading past
       level 6.
-- [ ] `--after TEXT` — place moved sections after the named heading in the
+- [x] `--after TEXT` — place moved sections after the named heading in the
       target. Uses the same `--match-policy` for disambiguation. Omitting
       `--after` inserts at the top of the target (before its first
       heading). When multiple sections are moved with one CLI invocation,
       they all share the same insertion point and `--at-level`.
-- [ ] Disjoint-section validation: if the picked sections overlap (a
+- [x] Disjoint-section validation: if the picked sections overlap (a
       parent and a child both selected), error with the line numbers of
       the offenders. The TUI prevents this UX-side; the CLI catches it.
-- [ ] Same-file move (source path == target path) errors as out of scope.
-- [ ] Prints a unified diff of both files to stdout before writing, then
+- [x] Same-file move (source path == target path) errors as out of scope.
+- [x] Prints a unified diff of both files to stdout before writing, then
       prompts `Apply? [y/N]`. `--yes` / `-y` skips the prompt. On a non-
       TTY (piped) invocation without `--yes`, exits 2 with a message
       requesting `--yes`.
-- [ ] Exit codes: 0 success, 1 nothing matched, 2 bad args / error.
+- [x] Exit codes: 0 success, 1 nothing matched, 2 bad args / error.
 
 ### TUI — Notes tab
 
@@ -213,11 +213,11 @@ sequential pair-write.
       target headings, insertion after last target heading, source content
       remainder is contiguous (no orphaned blank lines between sibling
       remainders).
-- [ ] Integration tests for `ft notes open`: top-hit opens correct path
+- [x] Integration tests for `ft notes open`: top-hit opens correct path
       (captured by overriding `EDITOR` with a recording shim),
       `--obsidian` emits the right URL on stdout when `FT_OBSIDIAN_DRY_RUN=1`
       is set, no-match exits 1, missing query exits 2.
-- [ ] Integration tests for `ft notes move-section`:
+- [x] Integration tests for `ft notes move-section`:
       - Single heading with `--heading` succeeds; ambiguous match with
         default policy errors and lists line numbers.
       - `--match-policy first` resolves ambiguity.
@@ -324,13 +324,34 @@ are picked. All workspace tests (286 + integration + the 32 new) pass;
 `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --check` clean.
 
-### Session 2 · planned
+### Session 2 · 2026-05-11 · done
 **Goal:** CLI commands. `ft notes open` (top-hit + `$EDITOR` + `--obsidian`)
 and `ft notes move-section` with the full flag set (`--heading`,
 `--heading-regex`, `--match-policy`, `--from-query`, `--at-level`,
 `--after`, `--yes`). Unified-diff preview, TTY/non-TTY prompt handling.
 Integration tests against a `tests/fixtures/notes-move/` vault.
-**Outcome:**
+**Outcome:** Added `ft/src/cmd/notes.rs` (`Open` + `MoveSection`
+subcommands) wired into `Cli`. `open` resolves `VISUAL`→`EDITOR`→`vi`,
+spawns with `+<line>` jump, and prints/dispatches an `obsidian://open`
+URL with optional `&heading=` when `--obsidian` is set (gated through
+`FT_OBSIDIAN_DRY_RUN=1` for hermetic tests). `move-section` collects
+picks via `--heading` (trimmed/case-insensitive) and `--heading-regex`,
+disambiguates via `--match-policy first|all|error` (default `error`
+lists offending line numbers), resolves source via `--from` or
+`--from-query`, places picks via `--after` (same policy) or at the top,
+applies `--at-level` with cascade-overflow detection, prints a unified
+diff for both files via `similar`, prompts on a TTY (or errors on
+piped stdin without `--yes`), then commits with `write_pair`. Switched
+the integration tests to per-test `assert_fs::TempDir` vaults (the
+pattern already used by `tasks_move.rs`) instead of a shared fixture
+directory — more hermetic, no risk of cross-test mutation. Added 6
+`notes_open` tests (top hit + line jump, heading line, obsidian URL,
+obsidian heading param, no-match → 1, missing query → 2) and 13
+`notes_move_section` tests covering the full matrix. Workspace tests
+clean (286 lib + 14 integration files all green); `cargo clippy
+--workspace --all-targets -- -D warnings` and `cargo fmt --check`
+silent. Three workspace dependencies added: `regex` and `urlencoding`
+(declared on the `ft` and `ft-core` crates as workspace deps already).
 
 ### Session 3 · planned
 **Goal:** TUI Notes tab skeleton + open flow. Register the Notes tab as
