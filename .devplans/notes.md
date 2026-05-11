@@ -75,6 +75,13 @@ sequential pair-write.
       writes target first, then source, each via `fs::write_atomic`. Order
       matters: a crash between the two writes leaves the moved sections
       duplicated (recoverable by hand) rather than lost.
+- [ ] `obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>) -> String` —
+      lives in `ft_core::notes` (not the CLI module) so both `ft notes
+      open --obsidian` and the TUI's `Ctrl+O` branch call the same builder.
+      Hoisted out of `ft/src/cmd/notes.rs` as part of session 3; the CLI's
+      private helper becomes a one-line delegation. `vault_name` is whatever
+      override the caller has (CLI flag, future TUI config) falling back to
+      the basename of the vault root.
 
 ### CLI — `ft notes open`
 
@@ -136,6 +143,13 @@ sequential pair-write.
       `o` open · `m` move sections · `?` help. No vault listing or
       auto-loaded preview; the panel is the only thing on screen until a
       flow starts. Mirrors the empty-state pattern of the Tasks tab.
+- [ ] **`?` help overlay** — modal panel rendered over the tab when `?`
+      is pressed (idle state only; flows own their own keybindings). Two
+      sections: **Open flow** (`o` open picker · `Enter` open in
+      `$EDITOR` at line · `Ctrl+O` open in Obsidian · `Esc` cancel) and
+      **Section-move flow** (`m` start · `Space` toggle heading · `Enter`
+      advance · `Shift+↑/↓` reorder · `←/→` shift level · `Esc` go
+      back). Dismissed by `?`, `Esc`, or `q`.
 - [ ] **Open flow** (`o` key while the Notes tab is focused):
       - Opens a `FuzzyPicker` over the vault, using `VaultFilePickerSource`.
       - `Enter` issues `AppRequest::OpenInEditor { path, line }` — line is
@@ -190,10 +204,20 @@ sequential pair-write.
 - [ ] A status-line footer under each step shows the step indicator
       (`1/4 source · 2/4 select · 3/4 target · 4/4 compose`) and the
       active keybindings for that step.
-- [ ] If the source file changes on disk between step 2 and step 4 (e.g.
-      the user edited it externally) and the picked headings no longer
-      exist, the commit errors with a toast and the user returns to the
-      idle state — no partial write.
+- [ ] **Clipboard contents and lifecycle**: at the step-2 → step-3
+      transition, the picked sections' bodies are extracted from the
+      in-memory source content (via `extract_sections`) and cached on the
+      `Composing` state alongside each pick's original `(line, level,
+      heading_text)`. From that point on the flow has the data it needs
+      to render and commit without re-reading the source — *except* for
+      the commit-time freshness check below.
+- [ ] **Commit-time freshness check**: when `Enter` fires in `Composing`,
+      the source file is re-read from disk. For every cached pick, verify
+      a heading still exists at the recorded line with the recorded text
+      and level. On mismatch, abort with an error toast (`source changed
+      on disk — aborted`) and return to the idle state. No partial write.
+      Successful path: build `picks` + `plan` from the freshly re-read
+      source, call `move_sections` + `write_pair`.
 
 ### Testing
 
@@ -229,15 +253,22 @@ sequential pair-write.
         inserts at top.
       - `--yes` skips the prompt; piped invocation without `--yes` exits 2.
       - Same-file move exits 2.
-- [ ] Snapshot tests for the Notes tab:
-      - Idle state with help panel.
-      - Open picker showing realistic vault hits.
-      - Heading multi-select with one explicit and one implicit-via-parent
-        selection visible.
-      - Compose view with target headings interleaved with two pending
-        items at different levels.
+- [ ] Snapshot tests for the Notes tab, driven through the existing
+      `tui::tests` harness (`App::for_test_with_clock` + a fixed
+      `FT_TODAY` so the status bar is deterministic). One golden per
+      scene under `ft/src/tui/snapshots/notes_*`:
+      - `notes_idle.snap` — idle state with help panel.
+      - `notes_help_overlay.snap` — `?` overlay over the idle state.
+      - `notes_open_picker.snap` — open picker with a realistic
+        multi-hit query (file + heading rows).
+      - `notes_move_multiselect.snap` — heading multi-select with one
+        explicit and one implicit-via-parent selection visible.
+      - `notes_move_compose.snap` — compose view with target headings
+        interleaved with two pending items at different levels.
 - [ ] End-to-end flow test (using the `tui::tests` harness) that drives
-      keys through all four steps and verifies both files on disk.
+      keys through all four steps of the section-move flow against a
+      `TempDir` vault and verifies both files on disk match the expected
+      post-move content (full string compare, not snapshot).
 
 ## Technical Notes
 
@@ -268,7 +299,8 @@ sequential pair-write.
   with optional `&heading=<url-encoded-text>`. The vault name is the
   basename of the vault root (`Vault::path.file_name()`); document as
   best-effort and add a `--vault-name` flag escape hatch if users report
-  mismatch.
+  mismatch. The builder lives in `ft_core::notes::obsidian_url` (hoisted
+  out of `ft/src/cmd/notes.rs` in session 3) so CLI and TUI share it.
 - **Obsidian URL dispatch**: macOS uses `open <url>`; Linux uses
   `xdg-open <url>`. A new `AppRequest::OpenInObsidian { url }` variant
   keeps the TUI flow uniform with the existing `OpenInEditor`. The
@@ -281,6 +313,14 @@ sequential pair-write.
   The anchors are static once step 4 opens; reorder/level-shift only
   mutates `Pending` rows. At commit time, the layout is transformed into
   `picks` + `plan` for `move_sections`.
+- **Clipboard payload**: the `Composing` state carries
+  `clipboard: Vec<ClipboardItem>` where
+  `ClipboardItem { source_line: usize, source_text: String, level: u8, body: String }`.
+  `source_line` + `source_text` are the freshness-check identity; `body`
+  is the extracted section content used for rendering the compose
+  preview. At commit, `body` is *not* re-used — the source is re-read
+  and `move_sections` re-extracts so the on-disk source is the
+  source of truth for what actually moves.
 - **Fixture vault** at `tests/fixtures/notes-move/` with:
   - A daily note with multiple H2 sections, some with H3 children.
   - A target project note with existing H1/H2/H3 hierarchy.
@@ -353,18 +393,45 @@ clean (286 lib + 14 integration files all green); `cargo clippy
 silent. Three workspace dependencies added: `regex` and `urlencoding`
 (declared on the `ft` and `ft-core` crates as workspace deps already).
 
-### Session 3 · planned
-**Goal:** TUI Notes tab skeleton + open flow. Register the Notes tab as
-the third tab. Implement the idle help panel. Implement the `o` open
-flow: `FuzzyPicker` → `Enter` issues `OpenInEditor`, `Ctrl+O` issues a
-new `OpenInObsidian` request (wire the variant + the OS-dispatch handler
-in `app.rs::service_request`). Snapshot tests for idle and picker states.
+### Session 3 · 2026-05-11 · planned
+**Goal:** TUI Notes tab skeleton + open flow. Concretely:
+1. Hoist `obsidian_url` from `ft/src/cmd/notes.rs` to
+   `ft_core::notes::obsidian_url` (keep the CLI helper as a one-line
+   delegate; add a focused unit test for the heading-encoding path).
+2. Add `AppRequest::OpenInObsidian { url }` variant + a
+   `service_request` arm that spawns `open` (macOS) / `xdg-open` (else)
+   without suspending the alt screen (Obsidian raises its own window).
+3. Create `ft/src/tui/tabs/notes/{mod.rs,view.rs}` with the idle help
+   panel and the `?` help overlay.
+4. Register `NotesTab` as the third tab in `App::new` *and*
+   `App::for_test_with_clock`.
+5. Wire the `o` open flow: `FuzzyPicker<VaultFilePickerSource>` (same
+   pattern as `tabs/tasks/search.rs`), `Enter` → `OpenInEditor`,
+   `Ctrl+O` → `OpenInObsidian`, `Esc` → idle.
+6. Snapshots: `notes_idle`, `notes_help_overlay`, `notes_open_picker`.
 **Outcome:**
 
-### Session 4 · planned
-**Goal:** TUI section-move flow. Implement `SectionMoveState` and drive
-all four steps: source picker, hierarchical heading multi-select, target
-picker, compose view with `Shift+↑/↓` reorder + `←/→` level-shift.
-Commit calls `move_sections` + `write_pair` and emits a success toast.
-Snapshot tests for each step plus a full end-to-end key-driven test.
+### Session 4 · 2026-05-11 · planned
+**Goal:** Section-move flow — steps 1-3 (source pick, heading
+multi-select, target pick). Implement `SectionMoveState` enum with
+`SourcePicking`, `HeadingMultiSelect`, `TargetPicking` variants and the
+transitions between them. Build the `ClipboardItem` payload at the
+step-2 → step-3 transition (extract bodies via `extract_sections`).
+Same-file target rejection in step 3 with inline footer error. No
+compose view yet — `Enter` in `TargetPicking` lands on a placeholder
+`Composing` state that immediately falls back to idle with a toast
+(`compose view lands in session 5`). Snapshots: source picker, heading
+multi-select with mixed explicit/implicit selection, target picker.
+**Outcome:**
+
+### Session 5 · 2026-05-11 · planned
+**Goal:** Compose view + commit. Implement the `Composing` variant with
+the interleaved `Vec<ComposeRow>` layout, `Shift+↑/↓` pending-row
+reorder, `←/→` level shift with cascade-overflow blocking, and `Enter`
+commit. Commit re-reads the source for the freshness check, builds
+`picks` + `plan`, calls `move_sections` + `write_pair`, emits the
+success toast, and returns to idle. `Esc` returns to step 3 with the
+compose layout preserved. Snapshot: `notes_move_compose`. End-to-end
+test through all four steps against a `TempDir` vault verifies both
+files on disk.
 **Outcome:**
