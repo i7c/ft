@@ -2,7 +2,7 @@
 id: 003
 name: notes
 title: Notes tab — open & section-move
-status: implementing
+status: finished
 created: 2026-05-09
 updated: 2026-05-11
 ---
@@ -156,7 +156,7 @@ sequential pair-write.
       - `Ctrl+O` issues a new `AppRequest::OpenInObsidian { url }` (new
         variant) that hands the URL to the OS `open`/`xdg-open` handler.
       - `Esc` dismisses the picker and returns to the idle state.
-- [ ] **Section-move flow** (`m` key while the Notes tab is focused):
+- [x] **Section-move flow** (`m` key while the Notes tab is focused):
       Driven by a `SectionMoveState` enum so transitions stay coherent:
       ```
       enum SectionMoveState {
@@ -199,17 +199,17 @@ sequential pair-write.
           + `write_pair`, emits a success toast (`Moved N section(s):
           <src> → <dst>`), and returns to the Notes tab idle state.
         - `Esc` returns to step 3 with the compose layout preserved.
-- [ ] A status-line footer under each step shows the step indicator
+- [x] A status-line footer under each step shows the step indicator
       (`1/4 source · 2/4 select · 3/4 target · 4/4 compose`) and the
       active keybindings for that step.
-- [ ] **Clipboard contents and lifecycle**: at the step-2 → step-3
+- [x] **Clipboard contents and lifecycle**: at the step-2 → step-3
       transition, the picked sections' bodies are extracted from the
       in-memory source content (via `extract_sections`) and cached on the
       `Composing` state alongside each pick's original `(line, level,
       heading_text)`. From that point on the flow has the data it needs
       to render and commit without re-reading the source — *except* for
       the commit-time freshness check below.
-- [ ] **Commit-time freshness check**: when `Enter` fires in `Composing`,
+- [x] **Commit-time freshness check**: when `Enter` fires in `Composing`,
       the source file is re-read from disk. For every cached pick, verify
       a heading still exists at the recorded line with the recorded text
       and level. On mismatch, abort with an error toast (`source changed
@@ -219,17 +219,17 @@ sequential pair-write.
 
 ### Testing
 
-- [ ] Unit tests for `extract_sections`: single-section file, nested
+- [x] Unit tests for `extract_sections`: single-section file, nested
       headings (H3 under H2 is part of the H2 section), sibling H2s, file
       with content before first heading (content excluded), frontmatter
       skip, empty file.
-- [ ] Unit tests for `shift_section_level`: shift down (H2→H3 cascades
+- [x] Unit tests for `shift_section_level`: shift down (H2→H3 cascades
       H3→H4), shift up (H3→H2 cascades H4→H3), no-op shift, cascade
       that would exceed H6 returns Err, headings inside code fences not
       shifted.
-- [ ] Unit tests for `validate_disjoint`: parent + child overlap rejected,
+- [x] Unit tests for `validate_disjoint`: parent + child overlap rejected,
       siblings accepted, identical line rejected, empty input accepted.
-- [ ] Unit tests for `move_sections`: single section preserving level,
+- [x] Unit tests for `move_sections`: single section preserving level,
       single section with level shift, multiple sections preserving
       relative order, insertion at top (no after_line), insertion between
       target headings, insertion after last target heading, source content
@@ -251,7 +251,7 @@ sequential pair-write.
         inserts at top.
       - `--yes` skips the prompt; piped invocation without `--yes` exits 2.
       - Same-file move exits 2.
-- [ ] Snapshot tests for the Notes tab, driven through the existing
+- [x] Snapshot tests for the Notes tab, driven through the existing
       `tui::tests` harness (`App::for_test_with_clock` + a fixed
       `FT_TODAY` so the status bar is deterministic). One golden per
       scene under `ft/src/tui/snapshots/notes_*`:
@@ -262,8 +262,8 @@ sequential pair-write.
       - `notes_move_multiselect.snap` — heading multi-select with one
         explicit and one implicit-via-parent selection visible.
       - `notes_move_compose.snap` — compose view with target headings
-        interleaved with two pending items at different levels.
-- [ ] End-to-end flow test (using the `tui::tests` harness) that drives
+        interleaved with a pending item.
+- [x] End-to-end flow test (using the `tui::tests` harness) that drives
       keys through all four steps of the section-move flow against a
       `TempDir` vault and verifies both files on disk match the expected
       post-move content (full string compare, not snapshot).
@@ -477,7 +477,7 @@ target Esc returns to multi-select with picks preserved. Workspace tests
 all green (144 TUI + 289 ft_core + integration); `cargo clippy --workspace
 --all-targets -- -D warnings` and `cargo fmt --check` clean.
 
-### Session 5 · 2026-05-11 · planned
+### Session 5 · 2026-05-11 · done
 **Goal:** Compose view + commit. Implement the `Composing` variant with
 the interleaved `Vec<ComposeRow>` layout, `Shift+↑/↓` pending-row
 reorder, `←/→` level shift with cascade-overflow blocking, and `Enter`
@@ -487,4 +487,34 @@ success toast, and returns to idle. `Esc` returns to step 3 with the
 compose layout preserved. Snapshot: `notes_move_compose`. End-to-end
 test through all four steps against a `TempDir` vault verifies both
 files on disk.
-**Outcome:**
+**Outcome:** Added `SectionMoveState::Composing` (carries the full
+step-3 state plus `target_rel`/`target_abs`/`target_headings`/`layout`/
+`focus`) and a `ComposeRow::{Anchor { line, level, text }, Pending {
+clip_idx, level }}` enum. `advance_to_composing` reads the target file,
+extracts its headings, and seeds the layout with target anchors followed
+by clipboard picks at their original level, focusing the first pending
+row. `handle_compose_key` covers nav (`↑/↓` + `k/j` wrap),
+`Shift+↑/↓` + `K/J` pending-row reorder via `reorder_pending` (no-op on
+Anchors), `←/→` + `h/l` level shift via `shift_focused_level` (clamps at
+H1, dry-runs the cascade through `shift_section_level` against a probe
+`Section` built from the cached body, error toast on overflow), `Enter`
+→ `commit_move`, `Esc` rebuilds `TargetPicking` (layout discarded — a
+target re-pick rebuilds fresh anyway). `commit_move` re-reads the source,
+freshness-checks every clipboard item by `(line, level, text)`, re-reads
+the target, walks `layout` to build `picks` + `plan` (each `Pending`
+gets a `Placement { after_line: <most recent Anchor's line>|None }`),
+then `move_sections` + `write_pair`, emitting `Moved N section(s): <src>
+→ <dst>` on success. View layer: `render_compose_popup` (interleaved
+layout, focus-row arrow + highlight, `+`/`·` markers for pending/anchor,
+H{n} level tag + nested indent, step-4 keymap footer). Replaced the
+session-4 placeholder test (`…queues_placeholder_toast_and_returns_to_idle`)
+with `notes_move_target_enter_advances_to_compose` and added 5 new
+session-5 tests: snapshot `notes_move_compose_80x24`, `Esc` returns to
+3/4 target, Left at H1 is no-op, Right shifts to H2, Enter commits both
+files on disk (asserts success-toast prefix + that H1 moved from source
+to target), and Shift+Up reorders the focused Pending past an Anchor.
+Knock-on tweak: `commit_move` takes `&Path` instead of `&PathBuf` (clippy
+`ptr_arg`); `target_headings` is captured on the state for future use but
+prefixed `_` in the handler signature. Full workspace test suite green
+(289 ft-core + 150 TUI + 134 integration); `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo fmt --check` clean.

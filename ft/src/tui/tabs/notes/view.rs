@@ -14,7 +14,9 @@ use ratatui::{
 };
 
 use crate::tui::tab::TabCtx;
-use crate::tui::tabs::notes::{is_implicitly_selected, NotesState, SectionMoveState};
+use crate::tui::tabs::notes::{
+    is_implicitly_selected, ClipboardItem, ComposeRow, NotesState, SectionMoveState,
+};
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
 /// the `?` help overlay so users see one canonical list.
@@ -46,6 +48,15 @@ const MOVE_STEP_2_KEYS: &[(&str, &str)] = &[
 
 /// Footer keymap for step 3/4 (target picker).
 const MOVE_STEP_3_KEYS: &[(&str, &str)] = &[("Enter", "use target"), ("Esc", "back to selection")];
+
+/// Footer keymap for step 4/4 (compose).
+const MOVE_STEP_4_KEYS: &[(&str, &str)] = &[
+    ("↑/↓", "focus"),
+    ("Shift+↑/↓", "reorder"),
+    ("←/→", "level"),
+    ("Enter", "commit"),
+    ("Esc", "back"),
+];
 
 pub(super) fn render(
     frame: &mut Frame,
@@ -125,7 +136,113 @@ fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState)
                 error.as_deref(),
             );
         }
+        SectionMoveState::Composing {
+            target_rel,
+            clipboard,
+            layout,
+            focus,
+            ..
+        } => {
+            render_compose_popup(
+                frame,
+                area,
+                target_rel.display().to_string(),
+                clipboard,
+                layout,
+                *focus,
+            );
+        }
     }
+}
+
+fn render_compose_popup(
+    frame: &mut Frame,
+    area: Rect,
+    target_label: String,
+    clipboard: &[ClipboardItem],
+    layout: &[ComposeRow],
+    focus: usize,
+) {
+    let popup = centered_rect(70, 80, area);
+    frame.render_widget(Clear, popup);
+    let pending_count = layout
+        .iter()
+        .filter(|r| matches!(r, ComposeRow::Pending { .. }))
+        .count();
+    let title = format!(" move · 4/4 compose · {pending_count} pending → {target_label} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+
+    let body_area = chunks[0];
+    let visible = body_area.height as usize;
+    let total = layout.len();
+    let scroll = compute_scroll(focus, visible, total);
+    let end = (scroll + visible).min(total);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(scroll));
+    for i in scroll..end {
+        lines.push(render_compose_row(layout, clipboard, focus, i));
+    }
+    frame.render_widget(Paragraph::new(lines), body_area);
+
+    let footer = keymap_line(MOVE_STEP_4_KEYS);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[1],
+    );
+}
+
+fn render_compose_row(
+    layout: &[ComposeRow],
+    clipboard: &[ClipboardItem],
+    focus: usize,
+    i: usize,
+) -> Line<'static> {
+    let row = &layout[i];
+    let cursor = if i == focus { "▶ " } else { "  " };
+    let (level, text, is_pending) = match row {
+        ComposeRow::Anchor { level, text, .. } => (*level, text.clone(), false),
+        ComposeRow::Pending { clip_idx, level } => {
+            (*level, clipboard[*clip_idx].source_text.clone(), true)
+        }
+    };
+    let indent = "  ".repeat((level as usize).saturating_sub(1));
+    let level_tag = format!("H{level}  ");
+    let marker = if is_pending { "+ " } else { "· " };
+    let row_style = if i == focus {
+        Style::default()
+            .bg(Color::Rgb(40, 40, 60))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let marker_style = if is_pending {
+        row_style.fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        row_style.fg(Color::DarkGray)
+    };
+    let text_style = if is_pending {
+        row_style.fg(Color::White)
+    } else {
+        row_style.fg(Color::DarkGray)
+    };
+    Line::from(vec![
+        Span::styled(cursor, row_style),
+        Span::styled(marker, marker_style),
+        Span::styled(indent, row_style),
+        Span::styled(level_tag, row_style.fg(Color::DarkGray)),
+        Span::styled(text, text_style),
+    ])
 }
 
 fn render_picker_popup(

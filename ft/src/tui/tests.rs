@@ -2379,7 +2379,7 @@ fn notes_move_target_same_file_rejected_inline() -> Result<()> {
 }
 
 #[test]
-fn notes_move_target_enter_queues_placeholder_toast_and_returns_to_idle() -> Result<()> {
+fn notes_move_target_enter_advances_to_compose() -> Result<()> {
     let (_dir, vault) = notes_move_vault();
     let mut app = drive_to_multiselect(vault)?;
     app.dispatch(Event::Key(KeyEvent::new(
@@ -2397,22 +2397,14 @@ fn notes_move_target_enter_queues_placeholder_toast_and_returns_to_idle() -> Res
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("Enter on valid target should queue a toast");
-    match req {
-        AppRequest::Toast { text, .. } => {
-            assert!(
-                text.contains("session 5"),
-                "placeholder toast must reference session 5: {text}"
-            );
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
     let frame = render(&mut app, 80, 24);
     assert!(
-        !frame.contains("3/4 target") && !frame.contains("2/4 select"),
-        "should be back on idle:\n{frame}"
+        frame.contains("4/4 compose"),
+        "should advance to compose:\n{frame}"
+    );
+    assert!(
+        frame.contains("archive.md"),
+        "target file should appear in title:\n{frame}"
     );
     Ok(())
 }
@@ -2441,6 +2433,142 @@ fn notes_move_target_esc_returns_to_multiselect_preserving_picks() -> Result<()>
     assert!(
         frame.contains('■'),
         "selection should be preserved:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Notes tab · section-move flow (plan 003 · session 5) ─────────────────
+
+/// Drive the Notes tab all the way to the compose step, with the H1
+/// "Project" picked as the only section. Source is `project.md`, target
+/// is `archive.md`.
+fn drive_to_compose(vault: Vault) -> Result<App> {
+    let mut app = drive_to_multiselect(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "archive".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(app)
+}
+
+#[test]
+fn notes_move_compose_renders_interleaved_layout() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_compose_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_esc_returns_to_target_picker() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("3/4 target"),
+        "Esc should return to target picker:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_level_shift_clamps_at_one() -> Result<()> {
+    // Pending starts at H1; Left should be ignored (already min).
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    let before = render(&mut app, 80, 24);
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)))?;
+    let after = render(&mut app, 80, 24);
+    assert_eq!(before, after, "Left at H1 should be a no-op");
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_level_shift_right_increments() -> Result<()> {
+    // Move Pending from H1 to H2. Note: source content has H1 (Project)
+    // with H2/H3 descendants, so shifting from 1→2 would cascade an H3
+    // to H4, which is fine (no overflow). Shifting to H2 should succeed.
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // After shift the focused Pending row should be H2.
+    assert!(
+        frame.contains("H2  Project"),
+        "Pending row should now be H2:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_enter_commits_and_writes_files() -> Result<()> {
+    let (dir, vault) = notes_move_vault();
+    let vault_path = vault.path.clone();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("commit should queue a success toast");
+    match req {
+        AppRequest::Toast { text, .. } => {
+            assert!(
+                text.starts_with("Moved 1 section(s):"),
+                "success toast text: {text}"
+            );
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let new_source = std::fs::read_to_string(vault_path.join("project.md"))?;
+    let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
+    assert!(
+        !new_source.contains("# Project"),
+        "H1 should be moved out of source:\n{new_source}"
+    );
+    assert!(
+        new_target.contains("# Project"),
+        "H1 should appear in target:\n{new_target}"
+    );
+    // Returned to idle.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("4/4 compose"),
+        "should leave compose after commit:\n{frame}"
+    );
+    drop(dir);
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_reorder_shift_down_swaps_with_anchor() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    // Focus starts on the first Pending row, which sits after the target's
+    // anchors. Shift+Up swaps the Pending up past one Anchor.
+    let before = render(&mut app, 80, 24);
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)))?;
+    let after = render(&mut app, 80, 24);
+    assert_ne!(
+        before, after,
+        "Shift+Up on the first Pending should reorder it past an Anchor"
     );
     Ok(())
 }
