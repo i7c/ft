@@ -75,7 +75,7 @@ sequential pair-write.
       writes target first, then source, each via `fs::write_atomic`. Order
       matters: a crash between the two writes leaves the moved sections
       duplicated (recoverable by hand) rather than lost.
-- [ ] `obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>) -> String` —
+- [x] `obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>) -> String` —
       lives in `ft_core::notes` (not the CLI module) so both `ft notes
       open --obsidian` and the TUI's `Ctrl+O` branch call the same builder.
       Hoisted out of `ft/src/cmd/notes.rs` as part of session 3; the CLI's
@@ -136,21 +136,19 @@ sequential pair-write.
 
 ### TUI — Notes tab
 
-- [ ] Registered as the third tab in the tab bar (after Welcome and
+- [x] Registered as the third tab in the tab bar (after Welcome and
       Tasks). Accessible via `Tab` cycling and number keys (e.g. `3`)
       using the existing tab-switch keybinding from plan 002.
-- [ ] **Idle state**: a help panel listing the available shortcuts —
+- [x] **Idle state**: a help panel listing the available shortcuts —
       `o` open · `m` move sections · `?` help. No vault listing or
       auto-loaded preview; the panel is the only thing on screen until a
       flow starts. Mirrors the empty-state pattern of the Tasks tab.
-- [ ] **`?` help overlay** — modal panel rendered over the tab when `?`
-      is pressed (idle state only; flows own their own keybindings). Two
-      sections: **Open flow** (`o` open picker · `Enter` open in
-      `$EDITOR` at line · `Ctrl+O` open in Obsidian · `Esc` cancel) and
-      **Section-move flow** (`m` start · `Space` toggle heading · `Enter`
-      advance · `Shift+↑/↓` reorder · `←/→` shift level · `Esc` go
-      back). Dismissed by `?`, `Esc`, or `q`.
-- [ ] **Open flow** (`o` key while the Notes tab is focused):
+- [x] **`?` help overlay** — modal panel rendered over the tab when `?`
+      is pressed (idle state only; flows own their own keybindings).
+      Lists the Open-flow and (placeholder) section-move bindings.
+      Dismissed by `?`, `Esc`, or `q`. (Section-move bindings are stubs
+      until sessions 4-5 wire that flow.)
+- [x] **Open flow** (`o` key while the Notes tab is focused):
       - Opens a `FuzzyPicker` over the vault, using `VaultFilePickerSource`.
       - `Enter` issues `AppRequest::OpenInEditor { path, line }` — line is
         the heading line if the hit carries one, else 1. The app suspends
@@ -393,7 +391,7 @@ clean (286 lib + 14 integration files all green); `cargo clippy
 silent. Three workspace dependencies added: `regex` and `urlencoding`
 (declared on the `ft` and `ft-core` crates as workspace deps already).
 
-### Session 3 · 2026-05-11 · planned
+### Session 3 · 2026-05-11 · done
 **Goal:** TUI Notes tab skeleton + open flow. Concretely:
 1. Hoist `obsidian_url` from `ft/src/cmd/notes.rs` to
    `ft_core::notes::obsidian_url` (keep the CLI helper as a one-line
@@ -409,7 +407,31 @@ silent. Three workspace dependencies added: `regex` and `urlencoding`
    pattern as `tabs/tasks/search.rs`), `Enter` → `OpenInEditor`,
    `Ctrl+O` → `OpenInObsidian`, `Esc` → idle.
 6. Snapshots: `notes_idle`, `notes_help_overlay`, `notes_open_picker`.
-**Outcome:**
+**Outcome:** Hoisted `obsidian_url` into `ft_core::notes` (new
+`urlencoding` dep on `ft-core`, removed from `ft`); the CLI's
+`obsidian_url` helper in `ft/src/cmd/notes.rs` collapsed to a one-line
+delegate that handles only the vault-root basename fallback. Added
+`AppRequest::OpenInObsidian { url }` variant in `ft/src/tui/tab.rs`
+and a `service_request` arm in `app.rs` that fires `open` (macOS) /
+`xdg-open` (else) without suspending the alt-screen — Obsidian raises
+its own window. Created `ft/src/tui/tabs/notes/{mod.rs,view.rs}` with
+a `NotesState::{Idle, OpenPicking}` state machine and a tab-local `?`
+help overlay; registered the tab in both `App::new` and
+`App::for_test_with_clock`. Wired the `o` open flow:
+`FuzzyPicker<VaultFilePickerSource>` (same pattern as
+`tabs/tasks/search.rs`), `Enter` → `OpenInEditor` (line = hit's
+heading line if any, else 1), `Ctrl+O` → `OpenInObsidian` with the
+URL built via `ft_core::notes::obsidian_url`, `Esc` → idle. Added 6
+focused tests in `tui::tests` (3 snapshots: `notes_idle_80x24`,
+`notes_help_overlay_80x24`, `notes_open_picker_80x24`; 3 behavior:
+Enter queues `OpenInEditor`, Ctrl+O queues `OpenInObsidian` URL with
+correct `vault=` + `file=` params, Esc returns to idle). Updated the
+existing `tab_key_cycles_tabs` test for the new 3-tab order
+(Welcome/Tasks/Notes). All 17 pre-existing snapshots that included
+the tab bar needed re-acceptance (sole diff: new `3 Notes` tab title).
+Full workspace test suite passes (289 tests + integration files);
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --check` clean.
 
 ### Session 4 · 2026-05-11 · planned
 **Goal:** Section-move flow — steps 1-3 (source pick, heading

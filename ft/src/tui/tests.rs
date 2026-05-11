@@ -257,6 +257,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     app.switch_to(1)?; // start on Tasks so Tab key isn't intercepted by Welcome
     let tab_ev = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Notes");
+    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Welcome");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");
@@ -656,7 +658,7 @@ fn enter_on_search_view_queues_editor_open_request() -> Result<()> {
             assert_eq!(actual, expected);
             assert_eq!(line, 1, "first selection should be at line 1");
         }
-        AppRequest::Toast { .. } => panic!("expected OpenInEditor, got Toast"),
+        other => panic!("expected OpenInEditor, got {other:?}"),
     }
     Ok(())
 }
@@ -2025,6 +2027,134 @@ fn target_picker_does_not_open_from_description_field() -> Result<()> {
     assert!(
         frame.contains("Inbox"),
         "description should show typed text:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Notes tab (plan 003 · session 3) ─────────────────────────────────────
+
+/// Notes-tab snapshot vault: a couple of files with headings so the
+/// fuzzy picker has something to surface.
+fn notes_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("project.md"),
+        "# Project\n\n## Background\n\nIntro.\n\n## Tasks\n\n- Do thing\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("inbox.md"), "# Inbox\n\nNotes.\n").unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+const NOTES_TAB_INDEX: usize = 2;
+
+#[test]
+fn notes_tab_idle_renders_keymap_panel() -> Result<()> {
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_idle_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_tab_help_overlay_renders_over_idle() -> Result<()> {
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('?'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_help_overlay_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_tab_open_picker_renders_results() -> Result<()> {
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_open_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_tab_open_picker_enter_queues_editor_open() -> Result<()> {
+    let (dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("Enter should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, line: _ } => {
+            let expected = dir
+                .path()
+                .join("test-vault/project.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_open_picker_ctrl_o_queues_obsidian_url() -> Result<()> {
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('o'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("Ctrl+O should queue OpenInObsidian");
+    match req {
+        AppRequest::OpenInObsidian { url } => {
+            assert!(
+                url.starts_with("obsidian://open?vault=") && url.contains("file=project.md"),
+                "unexpected URL: {url}"
+            );
+        }
+        other => panic!("expected OpenInObsidian, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_open_picker_esc_returns_to_idle() -> Result<()> {
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("pick file / heading"),
+        "picker should be closed:\n{frame}"
     );
     Ok(())
 }

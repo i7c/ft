@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
+┌ notes ───────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Notes — Obsidian-flavoured editing                                          │
+│                                                                              │
+│  o     open file / heading                                                   │
+│  m     move section(s) to another file                                       │
+│  ?     show this h┌ notes · help ────────────────────────┐                   │
+│  Esc   close overl│                                      │                   │
+│                   │  Notes keybindings                   │                   │
+│                   │                                      │                   │
+│                   │  o       open file / heading         │                   │
+│                   │  m       move section(s) to another f│                   │
+│                   │  ?       show this help              │                   │
+│                   │  Esc     close overlay               │                   │
+│                   │                                      │                   │
+│                   │  press ? or Esc to close             │                   │
+│                   └──────────────────────────────────────┘                   │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Notes           not yet refreshed      mode: normal

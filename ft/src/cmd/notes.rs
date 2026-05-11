@@ -12,7 +12,9 @@ use std::process::{Command as ProcCommand, ExitCode};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::markdown::{extract_headings, Heading};
-use ft_core::notes::{move_sections, write_pair, Placement, SectionPick};
+use ft_core::notes::{
+    move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
+};
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
 use ft_core::vault::Vault;
 use regex::Regex;
@@ -154,10 +156,10 @@ fn spawn_editor(editor: &str, path: &Path, line: usize) -> Result<()> {
     Ok(())
 }
 
-/// Build the `obsidian://open?vault=…&file=…[&heading=…]` URL. We
-/// document this as best-effort: vanilla Obsidian uses `file`, while the
-/// Advanced URI plugin honors `heading`. The vault name defaults to the
-/// basename of the vault root.
+/// Resolve `--vault-name` override → vault-root basename → "vault", then
+/// delegate to [`ft_core::notes::obsidian_url`] for the actual URL build.
+/// Both CLI and TUI use the core builder; this thin wrapper handles the
+/// CLI-only `vault_root` fallback so call sites stay one-liners.
 fn obsidian_url(
     vault_name_override: Option<&str>,
     vault_root: &Path,
@@ -170,16 +172,7 @@ fn obsidian_url(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "vault".to_string())
     });
-    let mut url = format!(
-        "obsidian://open?vault={}&file={}",
-        urlencoding::encode(&vault_name),
-        urlencoding::encode(&rel_path.to_string_lossy())
-    );
-    if let Some(h) = heading {
-        url.push_str("&heading=");
-        url.push_str(&urlencoding::encode(&h.text));
-    }
-    url
+    core_obsidian_url(&vault_name, rel_path, heading)
 }
 
 #[cfg(target_os = "macos")]
@@ -531,33 +524,20 @@ mod tests {
     }
 
     #[test]
-    fn obsidian_url_no_heading() {
-        let url = obsidian_url(
-            Some("My Vault"),
-            Path::new("/tmp/vault"),
-            Path::new("notes/x.md"),
+    fn obsidian_url_falls_back_to_vault_basename() {
+        // Encoding paths are tested in `ft_core::notes::obsidian_url`. This
+        // wrapper-only behavior is the `Option<&str>` fallback chain:
+        // override → vault_root.basename → "vault".
+        let url_override = obsidian_url(
+            Some("Override"),
+            Path::new("/tmp/IgnoredBase"),
+            Path::new("a.md"),
             None,
         );
-        assert!(url.starts_with("obsidian://open?vault="));
-        assert!(url.contains("vault=My%20Vault"));
-        assert!(url.contains("file=notes%2Fx.md"));
-        assert!(!url.contains("heading="));
-    }
+        assert!(url_override.contains("vault=Override"));
 
-    #[test]
-    fn obsidian_url_with_heading() {
-        let h = Heading {
-            text: "Day 1".to_string(),
-            level: 2,
-            line: 3,
-        };
-        let url = obsidian_url(
-            Some("vault"),
-            Path::new("/tmp/vault"),
-            Path::new("a.md"),
-            Some(&h),
-        );
-        assert!(url.ends_with("&heading=Day%201"));
+        let url_basename = obsidian_url(None, Path::new("/tmp/My Vault"), Path::new("a.md"), None);
+        assert!(url_basename.contains("vault=My%20Vault"));
     }
 
     #[test]

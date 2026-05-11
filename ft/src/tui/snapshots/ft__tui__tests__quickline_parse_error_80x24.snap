@@ -2,7 +2,7 @@
 source: ft/src/tui/tests.rs
 expression: frame
 ---
-  1 Welcome  │  2 Tasks                                                         
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
 ┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
 │                      ││not done and due before 2026-05-18 sort by due, priori│
 │ Sun 10 May           │└──────────────────────────────────────────────────────┘

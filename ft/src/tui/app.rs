@@ -20,7 +20,7 @@ use crate::tui::tabs::tasks::ClockFn;
 use crate::tui::{
     event::{Event, EventStream},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    tabs::{tasks::TasksTab, welcome::WelcomeTab},
+    tabs::{notes::NotesTab, tasks::TasksTab, welcome::WelcomeTab},
     ui::{self, Mode},
     Tui,
 };
@@ -60,7 +60,11 @@ pub struct App {
 impl App {
     pub fn new(vault: Arc<Vault>) -> Self {
         let today = resolve_today();
-        let tabs: Vec<Box<dyn Tab>> = vec![Box::new(WelcomeTab::new()), Box::new(TasksTab::new())];
+        let tabs: Vec<Box<dyn Tab>> = vec![
+            Box::new(WelcomeTab::new()),
+            Box::new(TasksTab::new()),
+            Box::new(NotesTab::new()),
+        ];
         Self::with_tabs(vault, today, tabs)
     }
 
@@ -278,6 +282,11 @@ impl App {
                 status?;
                 Ok(())
             }
+            AppRequest::OpenInObsidian { url } => {
+                spawn_url_opener(&url)
+                    .with_context(|| format!("could not launch URL handler for {url}"))?;
+                Ok(())
+            }
             AppRequest::Toast { text, style } => {
                 *self.toast.borrow_mut() = Some(Toast {
                     text,
@@ -320,6 +329,22 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
         EnableMouseCapture
     )?;
     terminal.hide_cursor()?;
+    Ok(())
+}
+
+/// Fire-and-forget the OS URL handler for `url`. `open` on macOS,
+/// `xdg-open` on every other unix. We don't wait for the child — Obsidian
+/// raises its own window and the TUI keeps drawing.
+fn spawn_url_opener(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(target_os = "macos"))]
+    let program = "xdg-open";
+
+    Command::new(program)
+        .arg(url)
+        .spawn()
+        .with_context(|| format!("failed to launch `{program}`"))?;
     Ok(())
 }
 
@@ -373,6 +398,7 @@ impl App {
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::with_clock(clock)),
+            Box::new(NotesTab::new()),
         ];
         Self::with_tabs(Arc::new(vault), today, tabs)
     }

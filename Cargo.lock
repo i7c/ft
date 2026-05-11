@@ -599,7 +599,6 @@ dependencies = [
  "similar",
  "tracing",
  "tracing-subscriber",
- "urlencoding",
 ]
 
 [[package]]
@@ -623,6 +622,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]

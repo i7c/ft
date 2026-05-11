@@ -18,6 +18,12 @@ pub enum AppRequest {
         path: PathBuf,
         line: usize,
     },
+    /// Launch the OS handler for an `obsidian://...` URL. Unlike
+    /// [`OpenInEditor`], the app does NOT suspend the alt-screen — Obsidian
+    /// raises its own window, so the TUI keeps drawing underneath.
+    OpenInObsidian {
+        url: String,
+    },
     /// Show a transient status-bar message — replaces the
     /// `refreshed HH:MM:SS` cell for ~3 seconds.
     Toast {

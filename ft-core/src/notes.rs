@@ -253,6 +253,30 @@ pub fn write_pair(
     Ok(())
 }
 
+/// Build an `obsidian://open?vault=…&file=…[&heading=…]` URL.
+///
+/// `vault_name` is whatever string Obsidian uses to register the vault —
+/// usually the basename of the vault root, which callers can compute via
+/// `vault.path.file_name()`. `rel_path` is the file path relative to the
+/// vault root. `heading`, if present, appends `&heading=<text>` — vanilla
+/// Obsidian ignores it and opens the file; the Advanced URI plugin jumps
+/// to the heading. Document as best-effort.
+///
+/// Both CLI (`ft notes open --obsidian`) and TUI (`Ctrl+O` on a hit)
+/// call into this builder so URL shape stays consistent across surfaces.
+pub fn obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>) -> String {
+    let mut url = format!(
+        "obsidian://open?vault={}&file={}",
+        urlencoding::encode(vault_name),
+        urlencoding::encode(&rel_path.to_string_lossy())
+    );
+    if let Some(h) = heading {
+        url.push_str("&heading=");
+        url.push_str(&urlencoding::encode(&h.text));
+    }
+    url
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /// Byte offset of the start of each 1-indexed line. `offsets[0]` is 0;
@@ -886,5 +910,38 @@ c body
             std::fs::read_to_string(&source_path).unwrap(),
             "new source\n"
         );
+    }
+
+    // ── obsidian_url ─────────────────────────────────────────────────────
+
+    #[test]
+    fn obsidian_url_basic_no_heading() {
+        let url = obsidian_url("My Vault", std::path::Path::new("notes/x.md"), None);
+        assert!(url.starts_with("obsidian://open?vault="));
+        assert!(url.contains("vault=My%20Vault"));
+        assert!(url.contains("file=notes%2Fx.md"));
+        assert!(!url.contains("heading="));
+    }
+
+    #[test]
+    fn obsidian_url_with_heading_encodes_text() {
+        let h = Heading {
+            text: "Day 1 / overview".to_string(),
+            level: 2,
+            line: 3,
+        };
+        let url = obsidian_url("vault", std::path::Path::new("a.md"), Some(&h));
+        // `/` is reserved; `urlencoding::encode` percent-encodes it.
+        assert!(
+            url.ends_with("&heading=Day%201%20%2F%20overview"),
+            "unexpected URL: {url}"
+        );
+    }
+
+    #[test]
+    fn obsidian_url_percent_encodes_path_separators() {
+        let url = obsidian_url("v", std::path::Path::new("sub dir/file.md"), None);
+        // Spaces and slashes in the path should both be percent-encoded.
+        assert!(url.contains("file=sub%20dir%2Ffile.md"), "got {url}");
     }
 }
