@@ -390,7 +390,7 @@ impl SearchView {
     fn default_query(today: NaiveDate) -> String {
         let upper = today + Duration::days(8);
         format!(
-            "not done and due before {} sort by due, priority reverse",
+            "not done and due before {} sort by due, priority",
             upper.format("%Y-%m-%d")
         )
     }
