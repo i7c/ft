@@ -24,7 +24,7 @@ use ratatui::{layout::Rect, Frame};
 use crate::tui::{
     event::Event,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
+    widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
 mod view;
@@ -100,7 +100,24 @@ pub enum SectionMoveState {
         clipboard: Vec<ClipboardItem>,
         layout: Vec<ComposeRow>,
         focus: usize,
+        /// Transient sub-mode: while `Some`, the user is typing into a
+        /// rename buffer attached to the focused Pending row. `None` is
+        /// the normal compose-keymap mode.
+        editing: Option<RenameBuffer>,
     },
+}
+
+/// Inline rename buffer attached to a Pending row in the compose layout.
+/// Owns its own `EditBuffer` so the compose state's level/order is
+/// untouched until the user commits with `Enter`.
+#[derive(Debug, Clone)]
+pub struct RenameBuffer {
+    /// Index of the Pending row in `Composing.layout` being renamed.
+    pub row_idx: usize,
+    /// Single-line text input. Pre-filled with the row's current
+    /// effective text on open; commits to `ComposeRow::Pending.rename`
+    /// on `Enter`, discards on `Esc`.
+    pub buf: EditBuffer,
 }
 
 /// One row in the compose layout. Anchor rows are the target's pre-existing
@@ -116,6 +133,10 @@ pub enum ComposeRow {
     Pending {
         clip_idx: usize,
         level: u8,
+        /// `Some(s)` overrides the source heading text at commit time
+        /// (threaded into `SectionPick.new_text`). `None` keeps the
+        /// source text. Independent of `level` — both can change.
+        rename: Option<String>,
     },
 }
 
@@ -279,6 +300,7 @@ impl NotesTab {
                 clipboard,
                 layout,
                 focus,
+                editing,
             } => handle_compose_key(
                 k,
                 source_rel,
@@ -292,6 +314,7 @@ impl NotesTab {
                 clipboard,
                 layout,
                 focus,
+                editing,
                 ctx,
             ),
         };
@@ -536,6 +559,7 @@ fn advance_to_composing(
         layout.push(ComposeRow::Pending {
             clip_idx: idx,
             level: item.level,
+            rename: None,
         });
     }
     // Focus the first pending row so the user lands on something
@@ -554,6 +578,7 @@ fn advance_to_composing(
         clipboard,
         layout,
         focus,
+        editing: None,
     })
 }
 
@@ -578,8 +603,14 @@ fn handle_compose_key(
     clipboard: &mut Vec<ClipboardItem>,
     layout: &mut Vec<ComposeRow>,
     focus: &mut usize,
+    editing: &mut Option<RenameBuffer>,
     ctx: &TabCtx,
 ) -> MoveAction {
+    // Rename buffer is a sub-mode of Composing: when open it consumes
+    // every compose key so `r`/`Shift+↑`/`←` etc. don't fire under it.
+    if editing.is_some() {
+        return handle_rename_buffer_key(k, layout, editing, ctx);
+    }
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
     match (k.code, shift) {
         (KeyCode::Esc, _) => MoveAction::Set(Box::new(NotesState::MoveSection(
@@ -629,6 +660,10 @@ fn handle_compose_key(
             shift_focused_level(layout, clipboard, *focus, 1, ctx);
             MoveAction::Stay
         }
+        (KeyCode::Char('r'), false) => {
+            open_rename_buffer(layout, clipboard, *focus, editing);
+            MoveAction::Stay
+        }
         (KeyCode::Enter, _) => {
             commit_move(
                 ctx, source_rel, source_abs, target_rel, target_abs, clipboard, layout,
@@ -636,6 +671,108 @@ fn handle_compose_key(
             MoveAction::Set(Box::new(NotesState::Idle))
         }
         _ => MoveAction::NotHandled,
+    }
+}
+
+/// Open the inline rename buffer on the focused Pending row, pre-filled
+/// with that row's current effective text (override if set, otherwise
+/// the source heading). No-op on Anchor rows.
+fn open_rename_buffer(
+    layout: &[ComposeRow],
+    clipboard: &[ClipboardItem],
+    focus: usize,
+    editing: &mut Option<RenameBuffer>,
+) {
+    let Some(row) = layout.get(focus) else {
+        return;
+    };
+    let ComposeRow::Pending {
+        clip_idx, rename, ..
+    } = row
+    else {
+        return;
+    };
+    let initial = rename
+        .as_deref()
+        .unwrap_or_else(|| clipboard[*clip_idx].source_text.as_str());
+    *editing = Some(RenameBuffer {
+        row_idx: focus,
+        buf: EditBuffer::from(initial),
+    });
+}
+
+/// Handle a single key while the rename buffer is open. Printable chars
+/// go into the buffer; `Enter` validates + commits into the row;
+/// `Esc` discards; everything else is consumed without effect (so
+/// `r`/`Shift+↑`/`←` etc. don't leak through to compose-level handlers).
+fn handle_rename_buffer_key(
+    k: KeyEvent,
+    layout: &mut [ComposeRow],
+    editing: &mut Option<RenameBuffer>,
+    ctx: &TabCtx,
+) -> MoveAction {
+    let Some(rb) = editing.as_mut() else {
+        return MoveAction::NotHandled;
+    };
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match (k.code, ctrl) {
+        (KeyCode::Esc, _) => {
+            *editing = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Enter, _) => {
+            let trimmed = rb.buf.text.trim();
+            if trimmed.is_empty() {
+                queue_toast(ctx, "rename cannot be empty", ToastStyle::Error);
+                return MoveAction::Stay;
+            }
+            if trimmed.contains('\n') || trimmed.contains('\r') {
+                queue_toast(ctx, "rename cannot contain newlines", ToastStyle::Error);
+                return MoveAction::Stay;
+            }
+            let new_text = trimmed.to_string();
+            let row_idx = rb.row_idx;
+            if let Some(ComposeRow::Pending { rename, .. }) = layout.get_mut(row_idx) {
+                *rename = Some(new_text);
+            }
+            *editing = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Char('w'), true) => {
+            rb.buf.delete_word_backward();
+            MoveAction::Stay
+        }
+        (KeyCode::Char(c), false) => {
+            rb.buf.insert(c);
+            MoveAction::Stay
+        }
+        (KeyCode::Backspace, _) => {
+            rb.buf.backspace();
+            MoveAction::Stay
+        }
+        (KeyCode::Delete, _) => {
+            rb.buf.delete();
+            MoveAction::Stay
+        }
+        (KeyCode::Left, _) => {
+            rb.buf.left();
+            MoveAction::Stay
+        }
+        (KeyCode::Right, _) => {
+            rb.buf.right();
+            MoveAction::Stay
+        }
+        (KeyCode::Home, _) => {
+            rb.buf.home();
+            MoveAction::Stay
+        }
+        (KeyCode::End, _) => {
+            rb.buf.end();
+            MoveAction::Stay
+        }
+        // Swallow everything else so compose-level keys (`r`, `Shift+↑`,
+        // navigation, Enter-modifiers) can't fire under the buffer.
+        _ => MoveAction::Stay,
     }
 }
 
@@ -673,7 +810,9 @@ fn shift_focused_level(
         return;
     };
     let (clip_idx, cur_level) = match row {
-        ComposeRow::Pending { clip_idx, level } => (*clip_idx, *level),
+        ComposeRow::Pending {
+            clip_idx, level, ..
+        } => (*clip_idx, *level),
         ComposeRow::Anchor { .. } => {
             return;
         }
@@ -807,12 +946,17 @@ fn build_picks_and_plan(
             ComposeRow::Anchor { line, .. } => {
                 after_line = Some(*line);
             }
-            ComposeRow::Pending { clip_idx, level } => {
+            ComposeRow::Pending {
+                clip_idx,
+                level,
+                rename,
+            } => {
                 let item = &clipboard[*clip_idx];
                 let pick_idx = picks.len();
                 picks.push(SectionPick {
                     source_line: item.source_line,
                     new_level: *level,
+                    new_text: rename.clone(),
                 });
                 plan.push(Placement {
                     pick_idx,

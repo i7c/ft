@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 2493
+assertion_line: 2941
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes                                             
@@ -20,9 +20,9 @@ expression: frame
 │           │                                                      │           │
 │           │                                                      │           │
 │           │                                                      │           │
+│           │▏ rename → Sprint█                                    │           │
 │           │                                                      │           │
-│           │                                                      │           │
-│           │ ↑/↓ focus   Shift+↑/↓ reorder   ←/→ level   r rename │           │
+│           │          Enter commit rename   Esc discard           │           │
 │           └──────────────────────────────────────────────────────┘           │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘

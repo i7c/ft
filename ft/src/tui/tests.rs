@@ -2595,3 +2595,425 @@ fn notes_move_compose_reorder_shift_down_swaps_with_anchor() -> Result<()> {
     );
     Ok(())
 }
+
+// ── Notes tab · section-move flow (plan 007 · rename) ────────────────────
+
+/// Drive into compose with two H2 picks (Background + Tasks). Source
+/// `project.md` keeps H1 Project; target is `archive.md`. Two Pending
+/// rows in the compose layout.
+fn drive_to_compose_two_h2_picks(vault: Vault) -> Result<App> {
+    let mut app = drive_to_multiselect(vault)?;
+    // Focus starts on heading 0 (H1 Project). Move down to H2 Background.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // Down past H3 Details (implicit) to H2 Tasks.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "archive".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(app)
+}
+
+#[test]
+fn notes_move_compose_r_opens_rename_buffer_prefilled() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("rename → Project"),
+        "buffer should be pre-filled with source text:\n{frame}"
+    );
+    assert!(
+        frame.contains("commit rename"),
+        "footer should switch to the rename-buffer keymap:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_enter_commits_override() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    // Clear pre-filled text and type a new title.
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Sprint 1".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("→ Sprint 1"),
+        "Pending row should show the rename override:\n{frame}"
+    );
+    assert!(
+        !frame.contains("rename → "),
+        "edit field should be gone after commit:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_empty_keeps_buffer_open_with_toast() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    // Empty out the pre-filled text.
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("empty rename should queue a toast");
+    match req {
+        AppRequest::Toast { text, style } => {
+            assert_eq!(text, "rename cannot be empty");
+            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("rename → "),
+        "buffer should stay open after invalid Enter:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_whitespace_only_keeps_buffer_open_with_toast() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(key(' '))?;
+    app.dispatch(key(' '))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("whitespace-only rename should queue a toast");
+    match req {
+        AppRequest::Toast { text, .. } => {
+            assert_eq!(text, "rename cannot be empty");
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("rename → "),
+        "buffer should stay open after whitespace-only Enter:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_esc_discards_buffer() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for c in "garbage".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("rename → "),
+        "buffer should be closed after Esc:\n{frame}"
+    );
+    assert!(
+        !frame.contains("→ garbage"),
+        "row should not carry the discarded override:\n{frame}"
+    );
+    assert!(
+        frame.contains("4/4 compose"),
+        "should still be on compose step:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_buffer_swallows_shift_up() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    let before = render(&mut app, 80, 24);
+    // Shift+Up would reorder a Pending row in normal compose; the
+    // buffer must swallow it so the layout stays put.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)))?;
+    let after = render(&mut app, 80, 24);
+    assert_eq!(
+        before, after,
+        "Shift+Up should be a no-op while the rename buffer is open"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_preserved_after_shift_up() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Renamed".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now reorder the renamed Pending row up past an Anchor.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("→ Renamed"),
+        "rename override should survive a reorder:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_preserved_after_level_shift() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Renamed".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Bump level from H1 to H2; cascade is safe (H3 → H4 still in range).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("H2  Project"),
+        "level shift should apply:\n{frame}"
+    );
+    assert!(
+        frame.contains("→ Renamed"),
+        "rename override should survive a level shift:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_writes_renamed_heading_to_disk() -> Result<()> {
+    let (dir, vault) = notes_move_vault();
+    let vault_path = vault.path.clone();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Renamed Project".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Commit the move.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("commit should queue a success toast");
+    match req {
+        AppRequest::Toast { text, .. } => {
+            assert!(
+                text.starts_with("Moved 1 section(s):"),
+                "success toast: {text}"
+            );
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
+    assert!(
+        new_target.contains("# Renamed Project"),
+        "target should contain the renamed H1:\n{new_target}"
+    );
+    assert!(
+        !new_target.contains("# Project\n"),
+        "target should NOT contain the original H1 line:\n{new_target}"
+    );
+    drop(dir);
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_renamed_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Renamed Project".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_compose_renamed_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_renaming_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_compose(vault)?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Sprint".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_compose_renaming_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_compose_rename_e2e_two_h2_picks() -> Result<()> {
+    let (dir, vault) = notes_move_vault();
+    let vault_path = vault.path.clone();
+    let mut app = drive_to_compose_two_h2_picks(vault)?;
+    // Layout: anchors [Archive, Old] then pending [Background, Tasks].
+    // Focus lands on the first Pending (Background). Move focus down to
+    // the second Pending (Tasks) and rename only that one.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(key('r'))?;
+    for _ in 0..32 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "Sprint 1".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Commit.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("commit should queue a success toast");
+    match req {
+        AppRequest::Toast { text, .. } => {
+            assert!(
+                text.starts_with("Moved 2 section(s):"),
+                "success toast: {text}"
+            );
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let new_source = std::fs::read_to_string(vault_path.join("project.md"))?;
+    let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
+    // Source loses both moved sections.
+    assert!(
+        !new_source.contains("## Background"),
+        "Background should be removed from source:\n{new_source}"
+    );
+    assert!(
+        !new_source.contains("## Tasks"),
+        "Tasks should be removed from source:\n{new_source}"
+    );
+    // Target keeps prior content and gains both sections; Tasks is renamed.
+    assert!(
+        new_target.contains("# Archive"),
+        "Archive H1 preserved in target:\n{new_target}"
+    );
+    assert!(
+        new_target.contains("## Background"),
+        "un-renamed pending should land verbatim:\n{new_target}"
+    );
+    assert!(
+        new_target.contains("### Details"),
+        "nested H3 should cascade with its parent:\n{new_target}"
+    );
+    assert!(
+        new_target.contains("## Sprint 1"),
+        "renamed pending should land with the new title:\n{new_target}"
+    );
+    assert!(
+        !new_target.contains("## Tasks"),
+        "original 'Tasks' title should NOT appear:\n{new_target}"
+    );
+    drop(dir);
+    Ok(())
+}

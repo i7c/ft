@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 2493
+assertion_line: 2922
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes                                             
@@ -9,7 +9,7 @@ expression: frame
 │  Notes — O┌ move · 4/4 compose · 1 pending → archive.md ─────────┐           │
 │           │  · H1  Archive                                       │           │
 │  o     ope│  ·   H2  Old                                         │           │
-│  m     mov│▶ + H1  Project                                       │           │
+│  m     mov│▶ + H1  Project  → Renamed Project                    │           │
 │  ?     sho│                                                      │           │
 │  Esc   clo│                                                      │           │
 │           │                                                      │           │

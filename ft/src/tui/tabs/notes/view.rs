@@ -15,7 +15,7 @@ use ratatui::{
 
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::{
-    is_implicitly_selected, ClipboardItem, ComposeRow, NotesState, SectionMoveState,
+    is_implicitly_selected, ClipboardItem, ComposeRow, NotesState, RenameBuffer, SectionMoveState,
 };
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
@@ -54,9 +54,15 @@ const MOVE_STEP_4_KEYS: &[(&str, &str)] = &[
     ("↑/↓", "focus"),
     ("Shift+↑/↓", "reorder"),
     ("←/→", "level"),
+    ("r", "rename"),
     ("Enter", "commit"),
     ("Esc", "back"),
 ];
+
+/// Footer keymap shown while the inline rename buffer is open. Replaces
+/// the standard compose keymap so the user only sees keys that actually
+/// fire under the buffer.
+const MOVE_STEP_4_RENAME_KEYS: &[(&str, &str)] = &[("Enter", "commit rename"), ("Esc", "discard")];
 
 pub(super) fn render(
     frame: &mut Frame,
@@ -141,6 +147,7 @@ fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState)
             clipboard,
             layout,
             focus,
+            editing,
             ..
         } => {
             render_compose_popup(
@@ -150,6 +157,7 @@ fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState)
                 clipboard,
                 layout,
                 *focus,
+                editing.as_ref(),
             );
         }
     }
@@ -162,6 +170,7 @@ fn render_compose_popup(
     clipboard: &[ClipboardItem],
     layout: &[ComposeRow],
     focus: usize,
+    editing: Option<&RenameBuffer>,
 ) {
     let popup = centered_rect(70, 80, area);
     frame.render_widget(Clear, popup);
@@ -178,9 +187,17 @@ fn render_compose_popup(
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
+    // When the rename buffer is open, reserve one extra line above the
+    // footer for the inline edit field. We keep the body the same height
+    // and the edit row floats just under it.
+    let edit_height: u16 = if editing.is_some() { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(edit_height),
+            Constraint::Length(2),
+        ])
         .split(inner);
 
     let body_area = chunks[0];
@@ -195,10 +212,35 @@ fn render_compose_popup(
     }
     frame.render_widget(Paragraph::new(lines), body_area);
 
-    let footer = keymap_line(MOVE_STEP_4_KEYS);
+    if let Some(rb) = editing {
+        let edit_line = Line::from(vec![
+            Span::styled(
+                "▏ ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("rename → ", Style::default().fg(Color::Yellow)),
+            Span::styled(rb.buf.text.clone(), Style::default().fg(Color::White)),
+            Span::styled(
+                "█",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(edit_line), chunks[1]);
+    }
+
+    let keys = if editing.is_some() {
+        MOVE_STEP_4_RENAME_KEYS
+    } else {
+        MOVE_STEP_4_KEYS
+    };
+    let footer = keymap_line(keys);
     frame.render_widget(
         Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
-        chunks[1],
+        chunks[2],
     );
 }
 
@@ -210,11 +252,18 @@ fn render_compose_row(
 ) -> Line<'static> {
     let row = &layout[i];
     let cursor = if i == focus { "▶ " } else { "  " };
-    let (level, text, is_pending) = match row {
-        ComposeRow::Anchor { level, text, .. } => (*level, text.clone(), false),
-        ComposeRow::Pending { clip_idx, level } => {
-            (*level, clipboard[*clip_idx].source_text.clone(), true)
-        }
+    let (level, text, is_pending, rename) = match row {
+        ComposeRow::Anchor { level, text, .. } => (*level, text.clone(), false, None),
+        ComposeRow::Pending {
+            clip_idx,
+            level,
+            rename,
+        } => (
+            *level,
+            clipboard[*clip_idx].source_text.clone(),
+            true,
+            rename.clone(),
+        ),
     };
     let indent = "  ".repeat((level as usize).saturating_sub(1));
     let level_tag = format!("H{level}  ");
@@ -236,13 +285,24 @@ fn render_compose_row(
     } else {
         row_style.fg(Color::DarkGray)
     };
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(cursor, row_style),
         Span::styled(marker, marker_style),
         Span::styled(indent, row_style),
         Span::styled(level_tag, row_style.fg(Color::DarkGray)),
         Span::styled(text, text_style),
-    ])
+    ];
+    if let Some(new_text) = rename {
+        spans.push(Span::styled(
+            "  → ",
+            row_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            new_text,
+            row_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn render_picker_popup(

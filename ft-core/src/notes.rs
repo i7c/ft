@@ -43,10 +43,19 @@ pub struct Section {
 /// source content — the same `line` field that [`extract_headings`] /
 /// [`extract_sections`] produce. Line numbers (not heading text) key
 /// the pick so duplicate headings are unambiguous.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `new_text` optionally overrides the *top* heading's text at the
+/// destination. `None` preserves the source text; `Some(s)` re-renders
+/// the first heading line of the moved body with `s` (after trimming).
+/// Validation (non-empty, no `\n`/`\r`) runs in [`move_sections`] before
+/// any rewrite, so a bad rename produces a clean `Err` with no partial
+/// write. The override applies only to the top heading — nested
+/// headings inside the section body are untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionPick {
     pub source_line: usize,
     pub new_level: u8,
+    pub new_text: Option<String>,
 }
 
 /// Where in the target each pick lands.
@@ -217,7 +226,8 @@ pub fn move_sections(
     let selected_lines: Vec<usize> = picks.iter().map(|p| p.source_line).collect();
     validate_disjoint(&selected_lines, &source_headings)?;
 
-    // Resolve each pick to its source section + level-shifted body.
+    // Resolve each pick to its source section + level-shifted body,
+    // then apply the optional rename to the top heading line.
     let mut shifted: Vec<String> = Vec::with_capacity(picks.len());
     let mut picked_indices: Vec<usize> = Vec::with_capacity(picks.len());
     for pick in picks {
@@ -230,7 +240,24 @@ pub fn move_sections(
                     pick.source_line
                 ))
             })?;
-        shifted.push(shift_section_level(&source_sections[idx], pick.new_level)?);
+        let mut body = shift_section_level(&source_sections[idx], pick.new_level)?;
+        if let Some(raw) = pick.new_text.as_deref() {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(Error::Notes(format!(
+                    "pick at line {} has empty rename text",
+                    pick.source_line
+                )));
+            }
+            if trimmed.contains('\n') || trimmed.contains('\r') {
+                return Err(Error::Notes(format!(
+                    "pick at line {} rename text contains a newline",
+                    pick.source_line
+                )));
+            }
+            body = rename_first_heading(&body, trimmed);
+        }
+        shifted.push(body);
         picked_indices.push(idx);
     }
 
@@ -320,6 +347,30 @@ fn rerender_heading_line(line: &str, new_level: u8) -> String {
     let rest = &after_ws[hash_run..];
     let new_hashes = "#".repeat(new_level as usize);
     format!("{leading_ws}{new_hashes}{rest}{newline}")
+}
+
+/// Re-render the first line of `body` (assumed to be a heading line, per
+/// the [`extract_sections`] contract) with `new_text` as the heading
+/// text. Preserves leading whitespace, the existing hash run, and the
+/// trailing newline. Any prior heading text — including a closing-hash
+/// suffix like `## title ##` — is replaced. Caller must pass `new_text`
+/// pre-validated (non-empty, no newline).
+fn rename_first_heading(body: &str, new_text: &str) -> String {
+    let (first_line, rest) = match body.find('\n') {
+        Some(nl) => (&body[..=nl], &body[nl + 1..]),
+        None => (body, ""),
+    };
+    let (newline, line_body) = if let Some(stripped) = first_line.strip_suffix('\n') {
+        ("\n", stripped)
+    } else {
+        ("", first_line)
+    };
+    let leading_ws_len = line_body.len() - line_body.trim_start().len();
+    let leading_ws = &line_body[..leading_ws_len];
+    let after_ws = &line_body[leading_ws_len..];
+    let hash_run = after_ws.chars().take_while(|c| *c == '#').count();
+    let hashes = &after_ws[..hash_run];
+    format!("{leading_ws}{hashes} {new_text}{newline}{rest}")
 }
 
 /// Drop the picked sections out of the source, returning the remainder.
@@ -705,6 +756,7 @@ move body
         let picks = [SectionPick {
             source_line: 3, // "## Move me"
             new_level: 2,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -723,6 +775,7 @@ move body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 3,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -748,10 +801,12 @@ c body
             SectionPick {
                 source_line: 1,
                 new_level: 2,
+                new_text: None,
             }, // A
             SectionPick {
                 source_line: 5,
                 new_level: 2,
+                new_text: None,
             }, // C
         ];
         let plan = [
@@ -779,6 +834,7 @@ c body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 2,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -795,6 +851,7 @@ c body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 2,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -820,6 +877,7 @@ c body
         let picks = [SectionPick {
             source_line: 99,
             new_level: 2,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -836,6 +894,7 @@ c body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 2,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -853,10 +912,12 @@ c body
             SectionPick {
                 source_line: 1,
                 new_level: 2,
+                new_text: None,
             },
             SectionPick {
                 source_line: 2,
                 new_level: 3,
+                new_text: None,
             },
         ];
         let plan = [
@@ -880,6 +941,7 @@ c body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 2,
+            new_text: None,
         }];
         let plan: [Placement; 0] = [];
         let err = move_sections(source, &picks, target, &plan).unwrap_err();
@@ -893,6 +955,7 @@ c body
         let picks = [SectionPick {
             source_line: 1,
             new_level: 3,
+            new_text: None,
         }];
         let plan = [Placement {
             pick_idx: 0,
@@ -900,6 +963,193 @@ c body
         }];
         let err = move_sections(source, &picks, target, &plan).unwrap_err();
         assert!(matches!(err, Error::Notes(_)));
+    }
+
+    // ── rename (SectionPick.new_text) ────────────────────────────────────
+
+    #[test]
+    fn move_rename_only_changes_top_heading_text() {
+        let source = "## Old name\nbody line\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("New name".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let (new_source, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_source, "");
+        assert_eq!(new_target, "# T\n## New name\nbody line\n");
+    }
+
+    #[test]
+    fn move_rename_with_shift_down_renames_top_and_cascades_nested() {
+        let source = "## Old\nlead\n### Inner\nbody\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 3,
+            new_text: Some("New".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let (_, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_target, "# T\n### New\nlead\n#### Inner\nbody\n");
+    }
+
+    #[test]
+    fn move_rename_with_shift_up_renames_top_and_cascades_nested() {
+        let source = "### Old\nlead\n#### Inner\nbody\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("New".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let (_, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_target, "# T\n## New\nlead\n### Inner\nbody\n");
+    }
+
+    #[test]
+    fn move_rename_empty_string_errors() {
+        let source = "## A\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let err = move_sections(source, &picks, target, &plan).unwrap_err();
+        assert!(matches!(err, Error::Notes(msg) if msg.contains("empty")));
+    }
+
+    #[test]
+    fn move_rename_whitespace_only_errors() {
+        let source = "## A\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("   ".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let err = move_sections(source, &picks, target, &plan).unwrap_err();
+        assert!(matches!(err, Error::Notes(msg) if msg.contains("empty")));
+    }
+
+    #[test]
+    fn move_rename_multiline_errors() {
+        let source = "## A\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("a\nb".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let err = move_sections(source, &picks, target, &plan).unwrap_err();
+        assert!(matches!(err, Error::Notes(msg) if msg.contains("newline")));
+    }
+
+    #[test]
+    fn move_rename_carriage_return_errors() {
+        let source = "## A\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("a\rb".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let err = move_sections(source, &picks, target, &plan).unwrap_err();
+        assert!(matches!(err, Error::Notes(msg) if msg.contains("newline")));
+    }
+
+    #[test]
+    fn move_rename_trims_surrounding_whitespace() {
+        let source = "## A\nbody\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("  spaced  ".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let (_, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_target, "# T\n## spaced\nbody\n");
+    }
+
+    #[test]
+    fn move_rename_two_picks_to_same_text_succeeds() {
+        let source = "## A\nbody A\n## B\nbody B\n";
+        let target = "# T\n";
+        let picks = [
+            SectionPick {
+                source_line: 1,
+                new_level: 2,
+                new_text: Some("Renamed".into()),
+            },
+            SectionPick {
+                source_line: 3,
+                new_level: 2,
+                new_text: Some("Renamed".into()),
+            },
+        ];
+        let plan = [
+            Placement {
+                pick_idx: 0,
+                after_line: Some(1),
+            },
+            Placement {
+                pick_idx: 1,
+                after_line: Some(1),
+            },
+        ];
+        let (new_source, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_source, "");
+        assert_eq!(new_target, "# T\n## Renamed\nbody A\n## Renamed\nbody B\n");
+    }
+
+    #[test]
+    fn move_rename_drops_closing_hash_suffix() {
+        let source = "## Old ##\nbody\n";
+        let target = "# T\n";
+        let picks = [SectionPick {
+            source_line: 1,
+            new_level: 2,
+            new_text: Some("New".into()),
+        }];
+        let plan = [Placement {
+            pick_idx: 0,
+            after_line: Some(1),
+        }];
+        let (_, new_target) = move_sections(source, &picks, target, &plan).unwrap();
+        assert_eq!(new_target, "# T\n## New\nbody\n");
     }
 
     // ── write_pair ───────────────────────────────────────────────────────

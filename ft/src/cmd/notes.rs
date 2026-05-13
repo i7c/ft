@@ -387,6 +387,7 @@ fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Resul
                     .map(|h| h.level)
                     .unwrap_or(2)
             }),
+            new_text: None,
         })
         .collect();
     let plan: Vec<Placement> = (0..picks.len())
