@@ -21,6 +21,7 @@ use ft_core::notes::{
     extract_sections, move_sections, shift_section_level, write_pair, Placement, Section,
     SectionPick,
 };
+use ft_core::periodic::{create_or_get_periodic_path, Period};
 use ft_core::search::Hit;
 use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
@@ -53,6 +54,11 @@ pub enum NotesState {
     MoveSection(SectionMoveState),
     /// Create-flow (plan 009 session 4). See [`CreateState`].
     Creating(CreateState),
+    /// Plan 010 session 3 — transient modal entered by pressing `p` from
+    /// idle. A second key (`d|w|m|q|y`) fires the periodic-open flow for
+    /// the corresponding period and drops back to idle. Any other key
+    /// (including `Esc`) cancels back to idle with no toast.
+    PeriodicLeader,
 }
 
 /// Step-3 state for the section-move flow, bundled so the
@@ -405,8 +411,39 @@ impl NotesTab {
                 self.state = NotesState::Creating(begin_template_picking(ctx));
                 EventOutcome::Consumed
             }
+            // `t` is a one-shot synonym for `p` then `d` — opens today's
+            // daily note directly without entering the leader modal.
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                run_periodic_open(self, ctx, Period::Daily);
+                EventOutcome::Consumed
+            }
+            // `p` enters the leader; the next key chooses a period.
+            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+                self.state = NotesState::PeriodicLeader;
+                EventOutcome::Consumed
+            }
             _ => EventOutcome::NotHandled,
         }
+    }
+
+    fn handle_periodic_leader_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        // Period letters fire the open flow; everything else (including
+        // `Esc`, `p` re-entry, and unknown letters) cancels back to idle
+        // silently. The state transition happens before the open flow so
+        // a toast from `run_periodic_open` lands cleanly under idle.
+        let period = match (k.code, k.modifiers) {
+            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Period::Daily),
+            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(Period::Weekly),
+            (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Period::Monthly),
+            (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Period::Quarterly),
+            (KeyCode::Char('y'), KeyModifiers::NONE) => Some(Period::Yearly),
+            _ => None,
+        };
+        self.state = NotesState::Idle;
+        if let Some(p) = period {
+            run_periodic_open(self, ctx, p);
+        }
+        EventOutcome::Consumed
     }
 
     fn handle_open_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
@@ -598,6 +635,7 @@ impl Tab for NotesTab {
             NotesState::OpenPicking { .. } => self.handle_open_picker_key(k, ctx),
             NotesState::MoveSection(_) => self.handle_move_key(k, ctx),
             NotesState::Creating(_) => self.handle_create_key(k, ctx),
+            NotesState::PeriodicLeader => self.handle_periodic_leader_key(k, ctx),
         };
         Ok(outcome)
     }
@@ -1381,6 +1419,75 @@ fn request_open_in_editor(ctx: &TabCtx, hit: &Hit) {
     // `record_open` is best-effort and never errors.
     ctx.recents.record_open(&hit.path);
     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor { path: abs, line });
+}
+
+/// Open today's periodic note for `period`, creating it from the
+/// configured template (or a blank stub) when missing. On success,
+/// queues an [`AppRequest::OpenInEditor`] (the implicit acknowledgement
+/// that matches what `commit_create` does on the new-note path); on
+/// any failure path — missing config, render error, write error —
+/// queues an error toast and no editor request.
+///
+/// Both `t` and `p<letter>` route through here so the file-creation
+/// path is identical regardless of how the user got here.
+fn run_periodic_open(_tab: &mut NotesTab, ctx: &TabCtx, period: Period) {
+    // 1. Pull the per-period config — missing config = error toast.
+    let pn = &ctx.vault.config.config.periodic_notes;
+    let cfg_opt = match period {
+        Period::Daily => pn.daily.as_ref(),
+        Period::Weekly => pn.weekly.as_ref(),
+        Period::Monthly => pn.monthly.as_ref(),
+        Period::Quarterly => pn.quarterly.as_ref(),
+        Period::Yearly => pn.yearly.as_ref(),
+    };
+    let Some(cfg) = cfg_opt else {
+        queue_toast(
+            ctx,
+            &format!("{} not configured", period.as_str()),
+            ToastStyle::Error,
+        );
+        return;
+    };
+
+    // 2. today / now follow plan 009's convention (used by the create
+    //    flow at line 1947): today is the App-wide ctx.today (already
+    //    FT_TODAY-aware via resolve_today / for_test_with_clock); now
+    //    pins to FT_TODAY at 00:00 when set, else local wall clock.
+    let today = ctx.today;
+    let now: NaiveDateTime = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .map(|d| d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
+        .unwrap_or_else(|| Local::now().naive_local());
+
+    // 3. Create-or-get. Library errors (template render, write failure,
+    //    bad format string) surface as an error toast.
+    let templates_dir = ctx.vault.templates_dir();
+    let (abs_path, _created) = match create_or_get_periodic_path(
+        &ctx.vault.path,
+        &templates_dir,
+        cfg,
+        today,
+        today,
+        now,
+    ) {
+        Ok(pair) => pair,
+        Err(e) => {
+            queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+            return;
+        }
+    };
+
+    // 4. Record the open so future picker invocations surface this
+    //    note at the top, then queue the editor handoff (line 1, since
+    //    every periodic note starts with its `# <title>` heading).
+    if let Ok(rel) = abs_path.strip_prefix(&ctx.vault.path) {
+        ctx.recents.record_open(rel);
+    }
+    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+        path: abs_path,
+        line: 1,
+    });
 }
 
 fn request_open_in_obsidian(ctx: &TabCtx, hit: &Hit) {

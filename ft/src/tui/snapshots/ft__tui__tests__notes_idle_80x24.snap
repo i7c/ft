@@ -11,10 +11,10 @@ expression: frame
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
 │  C     create note from template                                             │
+│  t     open today's daily note                                               │
+│  p     periodic note · d/w/m/q/y                                             │
 │  ?     show this help                                                        │
 │  Esc   close overlay                                                         │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

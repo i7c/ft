@@ -11,10 +11,10 @@ expression: frame
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
 │  C     create ┌ create · 4/4 vars · ./lunch.md · 1/1 ────────┐               │
-│  ?     show th│▏ name = Sandw█                               │               │
+│  t     open to│▏ name = Sandw█                               │               │
+│  p     periodi│                                              │               │
+│  ?     show th│                                              │               │
 │  Esc   close o│                                              │               │
-│               │                                              │               │
-│               │                                              │               │
 │               │                                              │               │
 │               │        Enter next   Esc cancel create        │               │
 │               └──────────────────────────────────────────────┘               │

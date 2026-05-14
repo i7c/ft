@@ -2,7 +2,7 @@
 id: 010
 name: notes-periodic
 title: Notes: periodic notes (daily/weekly/monthly/quarterly/yearly)
-status: implementing
+status: finished
 created: 2026-05-14
 updated: 2026-05-14
 ---
@@ -499,18 +499,201 @@ each duplicate that check in their period-lookup paths — fine, it's a
 two-liner and lifting it into ft-core would mean threading the whole
 `PeriodicNotes` map through, which is more ceremony than savings. 
 
-### Session 2 · 2026-05-14 · planned
+### Session 2 · 2026-05-14 · done
 **Goal:** CLI — `ft notes periodic <period>` with `--date`/`--offset`/
 `--no-open`/`--obsidian`/`--editor`/`--vault-name`. `ft notes today` as
 the alias. Integration tests against per-test `TempDir` vaults covering
 every period, `--offset` behavior, missing-config exit-2, `--obsidian`
 dry-run, file-exists-just-opens vs. file-missing-creates.
-**Outcome:** 
+**Outcome:** Two new `NotesCommand` variants — `Periodic(PeriodicArgs)`
+and `Today(TodayArgs)` — wired through `cmd::notes::run()` to two thin
+handlers (`run_periodic` / `run_today`) that delegate to a shared
+`run_periodic_inner(vault_flag, period, date_override, offset, no_open,
+obsidian, editor, vault_name)`. `PeriodicArgs` carries `period: String`
+plus the documented flag set; `TodayArgs` is the same minus `--offset`
+(the alias is dead-simple per the plan). Period parsing reuses
+`ft_core::periodic::Period::FromStr` (long + short forms,
+case-insensitive); unknown values exit 2 with the FromStr error text.
 
-### Session 3 · 2026-05-14 · planned
+`run_periodic_inner` flow:
+1. `Vault::discover` (anyhow-propagated as today).
+2. Lookup `config.periodic_notes.<period>` — `None` exits 2 with
+   `error: <period> not configured — add [periodic_notes.<period>] to
+   your config`.
+3. `today_now_from_env()` resolves the FT_TODAY pair (extracted from the
+   existing `build_template_context` so both call sites share one
+   source of truth — saved the four-line duplication the plan
+   suggested).
+4. Target date = `--date` parsed (exit 2 with the `YYYY-MM-DD` hint on
+   parse failure) or `today`, then `Period::offset_date(base, offset)`
+   (overflow exits 2).
+5. `create_or_get_periodic_path` runs against `(target_date, today,
+   now)`. Library errors surface as exit 2 with the user-readable
+   message. Library success returns `(abs_path, created)`.
+6. `println!("{verb} {rel}")` with `verb = "Created"` when the bool
+   says we wrote the file, `"Opened"` otherwise.
+7. Post-create handoff mirrors `run_create` exactly: `--obsidian` →
+   build URL, honor `FT_OBSIDIAN_DRY_RUN=1`, print + open; else
+   `!--no-open` → `spawn_editor(editor_bin, &abs_path, 1)`.
+
+Integration tests live in `ft/tests/notes_periodic.rs` (16 tests, all
+green). Mirrors `notes_create.rs` patterns: per-test `assert_fs::TempDir`
+vault with `.obsidian/` marker and a `.ft/config.toml`, `FT_TODAY` pinned
+to `2026-05-13` (a Wednesday in ISO W20 of 2026 — picked so the
+weekly `--offset -1` test lands cleanly in W19 and the quarterly test
+exercises Q2). Coverage:
+- daily missing → Created with `# 2026-05-13\n\n`, opened on second
+  call without rewriting (mutation between calls asserts no overwrite);
+- daily-with-template renders the `templates-ft/daily.md` fixture
+  containing `tags: [Created-2026-05-13]`, `# 2026-05-13`, and
+  `(done 2026-05-13)` — confirms `today`/`title` both reach MiniJinja
+  via the shared `today_now_from_env` helper;
+- weekly `--offset -1` → `journal/2026/2026-W19.md`;
+- monthly `--date 2026-01-31 --offset 1` → `journal/2026/2026-02.md`
+  (month-end clamp);
+- quarterly format `%Y-Q%q` → `journal/2026/2026-Q2.md`;
+- yearly minimal config (path `journal`, format `%Y`) → `2026.md` at
+  the configured folder with `# 2026\n\n` body;
+- short-form `d` accepted (proxy for w/m/q/y via FromStr);
+- `ft notes today` creates the same file as `ft notes periodic daily`
+  + a `--date` override variant;
+- missing-period config exits 2 with the `[periodic_notes.weekly]`
+  hint visible in stderr;
+- `--date "garbage"` exits 2 with the `YYYY-MM-DD` hint;
+- unknown period (`fortnightly`) exits 2 with `unknown period`;
+- `--no-open` skips the editor; default invokes it (asserted via the
+  `echo` editor printing `+1 …2026-05-13.md`);
+- `--obsidian` under `FT_OBSIDIAN_DRY_RUN=1` prints the URL and skips
+  the editor; `--vault-name MyVault` overrides the URL's `vault=`
+  segment.
+
+**Semantic decision worth recording:** `today` (template context) =
+**invocation time**, not the target date. This follows plan 009's
+`FT_TODAY` propagation pattern verbatim. Consequence: for
+`--offset -1`, the daily.md fixture's `{{ today | date }}` heading
+renders today's actual date, not the offset date — users who want the
+heading to track the filename should use `{{ title }}` in their
+template. Documented implicitly via the
+`daily_with_template_renders_against_invocation_today` test name.
+
+Refactor note: collapsed the chrono `Local`/`NaiveTime` boilerplate
+inside `build_template_context` into a tiny private
+`today_now_from_env()` helper. Two callers now (the create flow's
+context builder + the periodic handler); cheaper than the plan's
+"duplicate the four-line stanza" suggestion because both call sites
+truly need the same `(today, now)` pair.
+
+Workspace state: `cargo test --workspace` → 721 tests green (up from
+705 — 16 new in `notes_periodic.rs`). `cargo clippy --workspace
+--all-targets -- -D warnings` clean. `cargo fmt --check` clean after
+one autoformat pass on the new test file (rustfmt collapsed the
+`ft().args([...]).assert().success();` chains where they fit one
+level deeper). Session 3 (TUI `t` / `p<...>` leader chord) can now
+build on `run_periodic_inner`'s shape — the TUI just needs to do the
+same config lookup + `create_or_get_periodic_path` call and queue an
+`OpenInEditor` request instead of spawning $EDITOR.
+
+### Session 3 · 2026-05-14 · done
 **Goal:** TUI — `t` (today) and `p<d|w|m|q|y>` leader chord on the Notes
 tab idle state. `NotesState::PeriodicLeader` variant + view layer +
 toast wiring. Snapshots: idle keymap with new keys, leader modal.
 Behavior tests for every period chord, missing-config toast, file-
 exists vs. file-created toast prefix, unknown-leader-key cancel.
-**Outcome:** 
+**Outcome:** New `NotesState::PeriodicLeader` variant on the state enum
+(`ft/src/tui/tabs/notes/mod.rs`). Idle handler now recognises `t`
+(synonym for `p`+`d`) and `p` (enters leader state). New
+`handle_periodic_leader_key` consumes the second key: `d|w|m|q|y` fire
+`run_periodic_open` for the matching `Period`; anything else (including
+`Esc`, `p` re-entry, and unknown letters like `x`) cancels back to idle
+silently. `handle_event` dispatches the new state variant.
+
+`run_periodic_open` is the shared helper both `t` and `p+<letter>`
+route through:
+1. Look up `config.periodic_notes.<period>` — missing → `queue_toast`
+   `"<period> not configured"` with `ToastStyle::Error`, no editor
+   request. (No `[periodic_notes.<period>]` hint in the toast — the
+   short message reads better in the status bar; users running into
+   this find the longer hint via the CLI's `ft notes periodic`.)
+2. Build `today`/`now` exactly like the create flow's
+   `build_template_context` at line 1947: `today` is `ctx.today`
+   (already FT_TODAY-aware via `App::resolve_today` /
+   `for_test_with_clock`); `now` is FT_TODAY-pinned at 00:00 when the
+   env var is set, else `Local::now().naive_local()`.
+3. Call `ft_core::periodic::create_or_get_periodic_path` against the
+   vault root + `ctx.vault.templates_dir()`. Library errors (template
+   render, write failure) surface as a single error toast.
+4. Record the open in `ctx.recents` (so the just-opened periodic note
+   surfaces in the next picker invocation) and queue
+   `AppRequest::OpenInEditor { path, line: 1 }`.
+
+**Important architectural decision (matches the existing codebase
+pattern):** the success path queues *only* `OpenInEditor`, no toast.
+`TabCtx.pending_request` is a single-slot `Option<AppRequest>` — there
+is no way to stack a Toast and an editor request, and `commit_create`
+already follows this pattern (success = implicit acknowledgement via
+the editor opening; failure = explicit error toast). The plan's
+"Opened …" / "Created …" toast prefix is therefore dropped in favour
+of mirroring `commit_create`. Tests assert on the queued `OpenInEditor`
+path + on-disk file body (`# 2026-05-10\n\n` for the blank stub) which
+proves Created vs Opened semantics without needing a toast.
+
+View layer (`ft/src/tui/tabs/notes/view.rs`):
+- `IDLE_KEYS` grew two rows: `t open today's daily note` and `p
+  periodic note · d/w/m/q/y`. Same constant feeds both the idle keymap
+  panel and the `?` help overlay, so one update covers both surfaces.
+- New `PERIODIC_LEADER_KEYS` constant (6 entries: d/w/m/q/y + Esc).
+- New `render_periodic_leader` widget — centered popup with a cyan
+  border and the 6 rows in the same `yellow key + white desc` style as
+  the idle body. Sized `40w × 45h` to fit on 80×24 without clipping.
+- `render_help_overlay`'s popup bumped from `50w × 50h` to `50w × 65h`
+  to fit the 8-row IDLE_KEYS list + 4 frame lines + 2-line footer
+  ("press ? or Esc to close").
+
+Tests (in `ft/src/tui/tests.rs`, 13 new):
+- `notes_tab_t_opens_today_when_daily_configured` — `t` queues
+  `OpenInEditor` for `journal/2026/2026-05-10.md` (fixed_clock day),
+  file body is the blank stub.
+- `notes_tab_t_emits_error_toast_when_daily_unconfigured` — `t` on a
+  vault with no `[periodic_notes.daily]` queues `Toast` with
+  `ToastStyle::Error` and text containing `"daily not configured"`.
+- `notes_tab_p_enters_leader_modal` — `p` shows the
+  "periodic note · pick a period" title in the rendered frame and
+  doesn't queue any request.
+- `notes_tab_p_esc_returns_to_idle_silently` — `p` then `Esc`
+  dismisses the modal, returns to idle ("Notes — Obsidian-flavoured
+  editing" body visible), no request queued.
+- `notes_tab_p_then_d_opens_daily` — equivalent to `t`.
+- `notes_tab_p_then_w_opens_weekly` — resolves to
+  `journal/2026/2026-W19.md` (2026-05-10 is Sunday of ISO W19).
+- `notes_tab_p_then_m_opens_monthly` → `journal/2026/2026-05.md`.
+- `notes_tab_p_then_q_opens_quarterly` → `journal/2026/2026-Q2.md`.
+- `notes_tab_p_then_y_opens_yearly` → `journal/2026.md`.
+- `notes_tab_p_then_unknown_letter_cancels_silently` — `p` then `x`
+  dismisses the modal back to idle with no editor request and no
+  toast.
+- `notes_tab_periodic_second_call_does_not_overwrite` — first `t`
+  creates with blank stub; user hand-edits the file; second `t` queues
+  `OpenInEditor` against the same path and the body remains the
+  hand-edited content.
+- `notes_tab_p_then_w_emits_toast_when_weekly_unconfigured` — vault
+  with `daily` but not `weekly`; `p,w` queues
+  `Toast(Error, "weekly not configured")`.
+- `notes_periodic_leader_modal_snapshot` — golden snapshot of the
+  leader modal centered over the idle body.
+
+**Snapshot churn (accepted with `cargo insta accept`):** 17 existing
+snapshots changed because the wider IDLE_KEYS list shows through under
+every Notes-tab popup (the open picker, the move pickers, the create
+flow's prompts/pickers/collision, the new-target sub-flow's pickers,
+etc.). Each absorbed the two new rows (`t` and `p`) in its idle
+backdrop; popup contents themselves didn't change. Plus the
+`notes_help_overlay_80x24` snapshot reflects the taller help popup,
+and the new `notes_periodic_leader_80x24` snapshot lands the modal.
+
+Workspace state: `cargo test --workspace` → 734 tests green (up from
+721, +13 new). `cargo clippy --workspace --all-targets -- -D warnings`
+clean. `cargo fmt --check` clean after one autoformat pass on
+`run_periodic_open` (rustfmt expanded the closure-style `match` chain).
+The notes-periodic feature is now reachable from CLI (`ft notes
+periodic <PERIOD>` + `ft notes today`) and TUI (`t` + `p<letter>` on
+the Notes tab idle state) — plan complete. 

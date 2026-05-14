@@ -26,8 +26,22 @@ const IDLE_KEYS: &[(&str, &str)] = &[
     ("m", "move section(s) to another file"),
     ("c", "create note (blank)"),
     ("C", "create note from template"),
+    ("t", "open today's daily note"),
+    ("p", "periodic note · d/w/m/q/y"),
     ("?", "show this help"),
     ("Esc", "close overlay"),
+];
+
+/// Periodic-leader modal — the body lines that list the five period
+/// choices. Rendered by [`render_periodic_leader`] when the Notes tab
+/// state is [`NotesState::PeriodicLeader`].
+const PERIODIC_LEADER_KEYS: &[(&str, &str)] = &[
+    ("d", "daily"),
+    ("w", "weekly"),
+    ("m", "monthly"),
+    ("q", "quarterly"),
+    ("y", "yearly"),
+    ("Esc", "cancel"),
 ];
 
 /// Open-flow picker keymap shown along the bottom while the open-flow
@@ -141,7 +155,38 @@ pub(super) fn render(
         }
         NotesState::MoveSection(ms) => render_move_overlay(frame, area, ms),
         NotesState::Creating(cs) => render_create_overlay(frame, area, cs),
+        NotesState::PeriodicLeader => render_periodic_leader(frame, area),
     }
+}
+
+fn render_periodic_leader(frame: &mut Frame, area: Rect) {
+    // 40w × 45h fits the 6 PERIODIC_LEADER_KEYS rows + a leading blank
+    // within a 24-row terminal with room for borders.
+    let popup = centered_rect(40, 45, area);
+    frame.render_widget(Clear, popup);
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" periodic note · pick a period ")
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(PERIODIC_LEADER_KEYS.len() + 2);
+    lines.push(Line::from(""));
+    for (key, desc) in PERIODIC_LEADER_KEYS {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {key:<6}"),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(*desc, Style::default().fg(Color::White)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
 }
 
 fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
@@ -1180,7 +1225,9 @@ fn render_idle_body(frame: &mut Frame, area: Rect) {
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(50, 50, area);
+    // 65% height accommodates the 8 IDLE_KEYS rows plus title + footer.
+    // Bumped from 50% in plan 010 session 3 when `t` and `p` joined.
+    let popup = centered_rect(50, 65, area);
     frame.render_widget(Clear, popup);
 
     let mut lines: Vec<Line> = Vec::with_capacity(IDLE_KEYS.len() + 4);

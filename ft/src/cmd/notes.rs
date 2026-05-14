@@ -8,8 +8,10 @@
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcCommand, ExitCode};
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
+use chrono::{NaiveDate, NaiveDateTime};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::fs::write_atomic;
 use ft_core::markdown::{extract_headings, Heading};
@@ -17,6 +19,7 @@ use ft_core::notes::template::{render as render_template, TemplateContext};
 use ft_core::notes::{
     move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
 };
+use ft_core::periodic::{create_or_get_periodic_path, Period};
 use ft_core::recents::RecentsLog;
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
 use ft_core::vault::Vault;
@@ -37,6 +40,11 @@ pub enum NotesCommand {
     MoveSection(MoveSectionArgs),
     /// Create a new note from a template (or a blank `# <title>` stub).
     Create(CreateArgs),
+    /// Open today's daily note (alias for `ft notes periodic daily`).
+    Today(TodayArgs),
+    /// Open a periodic note (daily/weekly/monthly/quarterly/yearly),
+    /// creating it from the configured template if missing.
+    Periodic(PeriodicArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -44,6 +52,8 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Open(o) => run_open(o, vault_flag),
         NotesCommand::MoveSection(m) => run_move_section(m, vault_flag),
         NotesCommand::Create(c) => run_create(c, vault_flag),
+        NotesCommand::Today(t) => run_today(t, vault_flag),
+        NotesCommand::Periodic(p) => run_periodic(p, vault_flag),
     }
 }
 
@@ -746,23 +756,227 @@ fn resolve_template_path(vault: &Vault, arg: &Path) -> Result<PathBuf> {
 }
 
 fn build_template_context(title: String, vars: &[(String, String)]) -> TemplateContext {
-    use chrono::{Local, NaiveDate, NaiveTime};
-    let (today, now) = if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
-        } else {
-            let local = Local::now();
-            (local.date_naive(), local.naive_local())
-        }
-    } else {
-        let local = Local::now();
-        (local.date_naive(), local.naive_local())
-    };
+    let (today, now) = today_now_from_env();
     let mut ctx = TemplateContext::new(title, today, now);
     for (k, v) in vars {
         ctx.vars.insert(k.clone(), v.clone());
     }
     ctx
+}
+
+/// Resolve the `(today, now)` pair for template rendering. Honors the
+/// `FT_TODAY=YYYY-MM-DD` override (used by integration tests and pinned
+/// runs); otherwise reads the local wall clock.
+fn today_now_from_env() -> (NaiveDate, NaiveDateTime) {
+    use chrono::{Local, NaiveTime};
+    if let Ok(s) = std::env::var("FT_TODAY") {
+        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
+        }
+    }
+    let local = Local::now();
+    (local.date_naive(), local.naive_local())
+}
+
+// ── ft notes periodic / ft notes today ───────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct PeriodicArgs {
+    /// One of `daily | weekly | monthly | quarterly | yearly` (also
+    /// accepts the short forms `d | w | m | q | y`).
+    #[arg(value_name = "PERIOD", required = true)]
+    pub period: String,
+
+    /// Target date in `YYYY-MM-DD`. Defaults to `FT_TODAY` (when set) or
+    /// today's local date. `--offset` is applied on top of this date.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    pub date: Option<String>,
+
+    /// Shift the target date by N period units. `--offset -1` on
+    /// `weekly` is "last week"; `--offset 1` on `monthly --date
+    /// 2026-01-31` resolves to Feb 28/29 (month-end clamp).
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 0,
+        allow_negative_numbers = true
+    )]
+    pub offset: i32,
+
+    /// Suppress the default behavior of opening the note in `$EDITOR`.
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Open via the `obsidian://open` URL scheme instead of `$EDITOR`.
+    /// `FT_OBSIDIAN_DRY_RUN=1` suppresses the OS handoff and just prints.
+    #[arg(long)]
+    pub obsidian: bool,
+
+    /// Override `$EDITOR` for this invocation.
+    #[arg(long, value_name = "BIN")]
+    pub editor: Option<String>,
+
+    /// Override the vault basename used in the `obsidian://` URL.
+    #[arg(long, value_name = "NAME")]
+    pub vault_name: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct TodayArgs {
+    /// Target date in `YYYY-MM-DD`. Defaults to `FT_TODAY` (when set) or
+    /// today's local date.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    pub date: Option<String>,
+
+    /// Suppress the default behavior of opening the note in `$EDITOR`.
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Open via the `obsidian://open` URL scheme instead of `$EDITOR`.
+    #[arg(long)]
+    pub obsidian: bool,
+
+    /// Override `$EDITOR` for this invocation.
+    #[arg(long, value_name = "BIN")]
+    pub editor: Option<String>,
+
+    /// Override the vault basename used in the `obsidian://` URL.
+    #[arg(long, value_name = "NAME")]
+    pub vault_name: Option<String>,
+}
+
+fn run_periodic(args: PeriodicArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let period = match Period::from_str(&args.period) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Ok(ExitCode::from(2));
+        }
+    };
+    run_periodic_inner(
+        vault_flag,
+        period,
+        args.date.as_deref(),
+        args.offset,
+        args.no_open,
+        args.obsidian,
+        args.editor.as_deref(),
+        args.vault_name.as_deref(),
+    )
+}
+
+fn run_today(args: TodayArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    run_periodic_inner(
+        vault_flag,
+        Period::Daily,
+        args.date.as_deref(),
+        0,
+        args.no_open,
+        args.obsidian,
+        args.editor.as_deref(),
+        args.vault_name.as_deref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_periodic_inner(
+    vault_flag: Option<PathBuf>,
+    period: Period,
+    date_override: Option<&str>,
+    offset: i32,
+    no_open: bool,
+    obsidian: bool,
+    editor: Option<&str>,
+    vault_name: Option<&str>,
+) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    // 1. Pull the per-period config — exit 2 with a hint when missing.
+    let cfg_opt = match period {
+        Period::Daily => vault.config.config.periodic_notes.daily.as_ref(),
+        Period::Weekly => vault.config.config.periodic_notes.weekly.as_ref(),
+        Period::Monthly => vault.config.config.periodic_notes.monthly.as_ref(),
+        Period::Quarterly => vault.config.config.periodic_notes.quarterly.as_ref(),
+        Period::Yearly => vault.config.config.periodic_notes.yearly.as_ref(),
+    };
+    let Some(cfg) = cfg_opt else {
+        eprintln!(
+            "error: {period} not configured — add `[periodic_notes.{period}]` to your config",
+            period = period.as_str()
+        );
+        return Ok(ExitCode::from(2));
+    };
+
+    // 2. Resolve invocation `today`/`now` (FT_TODAY-aware).
+    let (today, now) = today_now_from_env();
+
+    // 3. Target date: --date if given, else `today`; then shift by --offset.
+    let base_date = match date_override {
+        Some(s) => match NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => {
+                eprintln!("error: --date must be YYYY-MM-DD, got {s:?}");
+                return Ok(ExitCode::from(2));
+            }
+        },
+        None => today,
+    };
+    let Some(target_date) = period.offset_date(base_date, offset) else {
+        eprintln!(
+            "error: --offset {offset} on {} overflows the representable date range",
+            period.as_str()
+        );
+        return Ok(ExitCode::from(2));
+    };
+
+    // 4. Create-or-get the note. Errors here (template render, write
+    //    failure) surface as exit 2 with the library's user-readable
+    //    message.
+    let (abs_path, created) = match create_or_get_periodic_path(
+        &vault.path,
+        &vault.templates_dir(),
+        cfg,
+        target_date,
+        today,
+        now,
+    ) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return Ok(ExitCode::from(2));
+        }
+    };
+
+    let rel = abs_path
+        .strip_prefix(&vault.path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| abs_path.display().to_string());
+
+    let verb = if created { "Created" } else { "Opened" };
+    println!("{verb} {rel}");
+
+    // 5. Post-create handoff: obsidian URL or editor (skipped under --no-open).
+    if obsidian {
+        let rel_p = abs_path
+            .strip_prefix(&vault.path)
+            .unwrap_or(&abs_path)
+            .to_path_buf();
+        let url = obsidian_url(vault_name, &vault.path, &rel_p, None);
+        if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
+            println!("{url}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        open_url(&url)?;
+        println!("{url}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if !no_open {
+        let editor_bin = resolve_editor(editor);
+        spawn_editor(&editor_bin, &abs_path, 1)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

@@ -9,16 +9,16 @@ expression: frame
 │                                                                              │
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
-│  c     create note (blank)                                                   │
-│  C     create note from template                                             │
-│  t     open to┌ move · new target · filename · proj.md → proj┐               │
-│  p     periodi│▏ filename: Q3-█                              │               │
-│  ?     show th│                                              │               │
-│  Esc   close o│ Enter next   Esc back to folder   Ctrl+W dele│               │
-│               │                                              │               │
-│               └──────────────────────────────────────────────┘               │
-│                                                                              │
-│                                                                              │
+│  c     create note (bl┌ periodic note · pick a period┐                       │
+│  C     create note fro│                              │                       │
+│  t     open today's da│  d     daily                 │                       │
+│  p     periodic note ·│  w     weekly                │                       │
+│  ?     show this help │  m     monthly               │                       │
+│  Esc   close overlay  │  q     quarterly             │                       │
+│                       │  y     yearly                │                       │
+│                       │  Esc   cancel                │                       │
+│                       │                              │                       │
+│                       └──────────────────────────────┘                       │
 │                                                                              │
 │                                                                              │
 │                                                                              │

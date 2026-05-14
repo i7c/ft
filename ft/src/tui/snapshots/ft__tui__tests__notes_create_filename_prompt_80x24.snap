@@ -11,10 +11,10 @@ expression: frame
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
 │  C     create note from template                                             │
-│  ?     show th┌ create · 2/2 filename · . ───────────────────┐               │
-│  Esc   close o│▏ filename: scrat█                            │               │
-│               │                                              │               │
-│               │ Enter commit   Esc back   Ctrl+W delete word │               │
+│  t     open to┌ create · 2/2 filename · . ───────────────────┐               │
+│  p     periodi│▏ filename: scrat█                            │               │
+│  ?     show th│                                              │               │
+│  Esc   close o│ Enter commit   Esc back   Ctrl+W delete word │               │
 │               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │

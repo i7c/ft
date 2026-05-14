@@ -4189,3 +4189,363 @@ fn notes_move_new_target_collision_cancel_returns_to_filename() -> Result<()> {
     );
     Ok(())
 }
+
+// ── Notes tab · periodic notes flow (plan 010 · session 3) ────────────────
+
+/// Vault wired with every periodic-note config block (daily, weekly,
+/// monthly, quarterly, yearly). No template references — the periodic
+/// helper writes a blank `# <title>\n\n` stub when `template` is unset,
+/// which is enough for the leader-chord behavior tests.
+fn periodic_vault_all_periods() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"journal/%Y\"\nformat = \"%Y-%m-%d\"\n\
+         [periodic_notes.weekly]\npath = \"journal/%Y\"\nformat = \"%G-W%V\"\n\
+         [periodic_notes.monthly]\npath = \"journal/%Y\"\nformat = \"%Y-%m\"\n\
+         [periodic_notes.quarterly]\npath = \"journal/%Y\"\nformat = \"%Y-Q%q\"\n\
+         [periodic_notes.yearly]\npath = \"journal\"\nformat = \"%Y\"\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Vault with no `[periodic_notes.*]` configured — used to test the
+/// "<period> not configured" error toast path.
+fn periodic_vault_no_config() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn notes_tab_t_opens_today_when_daily_configured() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    // `t` is the one-shot daily synonym for `p` then `d`.
+    app.dispatch(key('t'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("`t` should queue OpenInEditor for today's daily");
+    match req {
+        AppRequest::OpenInEditor { path, line } => {
+            assert_eq!(line, 1, "should jump to line 1 of the daily note");
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05-10.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+            // File body must be the blank stub the periodic helper writes.
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(body, "# 2026-05-10\n\n");
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_t_emits_error_toast_when_daily_unconfigured() -> Result<()> {
+    let (_dir, vault) = periodic_vault_no_config();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('t'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("`t` should queue a Toast when daily isn't configured");
+    match req {
+        AppRequest::Toast { text, style } => {
+            assert!(
+                text.contains("daily not configured"),
+                "toast should call out the missing period: {text:?}"
+            );
+            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
+        }
+        other => panic!("expected Toast(error), got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_enters_leader_modal() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("periodic note · pick a period"),
+        "expected leader modal title:\n{frame}"
+    );
+    assert!(
+        frame.contains("d") && frame.contains("daily"),
+        "expected daily row in leader modal:\n{frame}"
+    );
+    // No editor open should have been queued — leader is just a state change.
+    assert!(
+        app.take_pending_request().is_none(),
+        "`p` alone must not queue any request"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_esc_returns_to_idle_silently() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("periodic note · pick a period"),
+        "Esc should dismiss the leader modal:\n{frame}"
+    );
+    assert!(
+        frame.contains("Notes — Obsidian-flavoured editing"),
+        "should be back at idle:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "Esc from leader must not queue anything"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_d_opens_daily() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('d'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("p,d should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05-10.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_w_opens_weekly() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('w'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("p,w should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            // 2026-05-10 (fixed_clock) is Sunday of ISO week 19, 2026.
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-W19.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_m_opens_monthly() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('m'))?;
+    let req = app
+        .take_pending_request()
+        .expect("p,m should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_q_opens_quarterly() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('q'))?;
+    let req = app
+        .take_pending_request()
+        .expect("p,q should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-Q2.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_y_opens_yearly() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('y'))?;
+    let req = app
+        .take_pending_request()
+        .expect("p,y should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_unknown_letter_cancels_silently() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    // `x` isn't a valid period letter — should drop us back to idle
+    // without queuing anything (neither editor nor toast).
+    app.dispatch(key('x'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("periodic note · pick a period"),
+        "leader modal should be dismissed after unknown letter:\n{frame}"
+    );
+    assert!(
+        frame.contains("Notes — Obsidian-flavoured editing"),
+        "should be back at idle:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "unknown-letter cancel must not queue anything"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_tab_periodic_second_call_does_not_overwrite() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+
+    // First `t`: file gets created with the blank stub.
+    app.dispatch(key('t'))?;
+    let _ = app.take_pending_request();
+    let path = dir.path().join("test-vault/journal/2026/2026-05-10.md");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# 2026-05-10\n\n");
+
+    // Hand-edit the file to simulate the user typing into the daily.
+    std::fs::write(&path, "# manually edited\n").unwrap();
+
+    // Second `t`: the helper sees the file exists and must NOT rewrite it;
+    // it only queues OpenInEditor for the existing file.
+    app.dispatch(key('t'))?;
+    let req = app.take_pending_request().expect("second `t` should queue");
+    match req {
+        AppRequest::OpenInEditor { path: opened, .. } => {
+            assert_eq!(opened.canonicalize().unwrap(), path.canonicalize().unwrap());
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# manually edited\n",
+        "second invocation must not rewrite an existing file"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_tab_p_then_w_emits_toast_when_weekly_unconfigured() -> Result<()> {
+    // Vault has daily configured but not weekly — `p,w` should hit the
+    // missing-config error path.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('w'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("p,w with no weekly config should queue an error toast");
+    match req {
+        AppRequest::Toast { text, style } => {
+            assert!(
+                text.contains("weekly not configured"),
+                "toast should name the unconfigured period: {text:?}"
+            );
+            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
+        }
+        other => panic!("expected Toast(error), got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn notes_periodic_leader_modal_snapshot() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_periodic_leader_80x24", frame);
+    Ok(())
+}

@@ -11,10 +11,10 @@ expression: frame
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
 │  C     create note from template                                             │
-│  ?     show th┌ create · collision ──────────────────────────┐               │
-│  Esc   close o│   target already exists: inbox/existing.md   │               │
-│               │                                              │               │
-│               │  [O]verwrite     [U]se existing     [C]ancel │               │
+│  t     open to┌ create · collision ──────────────────────────┐               │
+│  p     periodi│   target already exists: inbox/existing.md   │               │
+│  ?     show th│                                              │               │
+│  Esc   close o│  [O]verwrite     [U]se existing     [C]ancel │               │
 │               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │
