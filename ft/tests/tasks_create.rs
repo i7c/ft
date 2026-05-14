@@ -2,21 +2,23 @@ use assert_cmd::Command;
 use assert_fs::prelude::*;
 use predicates::prelude::*;
 
-/// Build a temp vault with a `.obsidian/daily-notes.json` config so the
-/// default `--file` resolution works.
+/// Build a temp vault with a `[periodic_notes.daily]` config in
+/// `.ft/config.toml` so the default `--file` resolution works.
+///
+/// `format` accepts moment-style placeholders (`Some("YYYY-MM-DD")`) for
+/// call-site readability — they're translated to the chrono `%`-tokens
+/// the new resolver expects. `None` defaults to `%Y-%m-%d`.
 fn vault_with_daily(folder: &str, format: Option<&str>) -> assert_fs::TempDir {
     let dir = assert_fs::TempDir::new().unwrap();
     dir.child(".obsidian").create_dir_all().unwrap();
-    let cfg = match format {
-        Some(f) => format!(
-            r#"{{"folder":"{folder}","format":"{f}","autorun":true}}"#,
-            folder = folder,
-            f = f
-        ),
-        None => format!(r#"{{"folder":"{folder}","autorun":true}}"#, folder = folder),
+    let chrono_fmt = match format {
+        Some("YYYY-MM-DD") | None => "%Y-%m-%d",
+        Some(other) => panic!("unexpected daily-format token in tests: {other:?}"),
     };
-    dir.child(".obsidian/daily-notes.json")
-        .write_str(&cfg)
+    dir.child(".ft/config.toml")
+        .write_str(&format!(
+            "[periodic_notes.daily]\npath = \"{folder}\"\nformat = \"{chrono_fmt}\"\n"
+        ))
         .unwrap();
     dir
 }
@@ -189,8 +191,9 @@ fn round_trip_create_then_list() {
 }
 
 #[test]
-fn missing_daily_notes_config_explains_remedy() {
-    // Vault with no daily-notes.json and no --file should fail with hint.
+fn missing_periodic_daily_config_explains_remedy() {
+    // Vault with no [periodic_notes.daily] block and no --file should
+    // fail with a hint pointing at the config key.
     let dir = assert_fs::TempDir::new().unwrap();
     dir.child(".obsidian").create_dir_all().unwrap();
     Command::cargo_bin("ft")
@@ -205,23 +208,21 @@ fn missing_daily_notes_config_explains_remedy() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--file"));
+        .stderr(predicate::str::contains("periodic_notes.daily"));
 }
 
 #[test]
-fn periodic_notes_source_resolves_daily_path() {
+fn daily_path_with_year_token_resolves_per_year() {
+    // [periodic_notes.daily] with a %Y folder token keeps working as the
+    // year rolls over without reconfiguring.
     let dir = assert_fs::TempDir::new().unwrap();
-    dir.child(".obsidian/plugins/periodic-notes")
-        .create_dir_all()
-        .unwrap();
-    dir.child(".obsidian/plugins/periodic-notes/data.json")
-        .write_str(r#"{"daily":{"folder":"journal/2026","format":"","enabled":true}}"#)
-        .unwrap();
+    dir.child(".obsidian").create_dir_all().unwrap();
     dir.child(".ft/config.toml")
         .write_str(
             r#"
-[daily_notes]
-source = "periodic-notes"
+[periodic_notes.daily]
+path = "journal/%Y"
+format = "%Y-%m-%d"
 "#,
         )
         .unwrap();
@@ -232,9 +233,9 @@ source = "periodic-notes"
 }
 
 #[test]
-fn explicit_source_with_path_pattern() {
-    // [daily_notes].source = "explicit" with a YYYY pattern in `path` keeps
-    // working as the year rolls over without reconfiguring.
+fn old_daily_notes_block_rejected_with_config_error() {
+    // The pre-010 `[daily_notes]` block is no longer accepted — the
+    // figment loader rejects unknown top-level keys.
     let dir = assert_fs::TempDir::new().unwrap();
     dir.child(".obsidian").create_dir_all().unwrap();
     dir.child(".ft/config.toml")
@@ -242,29 +243,11 @@ fn explicit_source_with_path_pattern() {
             r#"
 [daily_notes]
 source = "explicit"
-path = "journal/YYYY"
+path = "journal"
 format = "YYYY-MM-DD"
 "#,
         )
         .unwrap();
-
-    run(dir.path(), &["Buy milk", "--due", "tomorrow"]).success();
-    let content = std::fs::read_to_string(dir.path().join("journal/2026/2026-05-09.md")).unwrap();
-    assert_eq!(content, "- [ ] Buy milk 📅 2026-05-10\n");
-}
-
-#[test]
-fn explicit_source_missing_path_errors() {
-    let dir = assert_fs::TempDir::new().unwrap();
-    dir.child(".obsidian").create_dir_all().unwrap();
-    dir.child(".ft/config.toml")
-        .write_str(
-            r#"
-[daily_notes]
-source = "explicit"
-"#,
-        )
-        .unwrap();
     Command::cargo_bin("ft")
         .unwrap()
         .env("FT_TODAY", "2026-05-09")
@@ -277,38 +260,7 @@ source = "explicit"
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("path"));
-}
-
-#[test]
-fn periodic_notes_disabled_errors_with_hint() {
-    let dir = assert_fs::TempDir::new().unwrap();
-    dir.child(".obsidian/plugins/periodic-notes")
-        .create_dir_all()
-        .unwrap();
-    dir.child(".obsidian/plugins/periodic-notes/data.json")
-        .write_str(r#"{"daily":{"folder":"journal","format":"","enabled":false}}"#)
-        .unwrap();
-    dir.child(".ft/config.toml")
-        .write_str(
-            r#"[daily_notes]
-source = "periodic-notes"
-"#,
-        )
-        .unwrap();
-    Command::cargo_bin("ft")
-        .unwrap()
-        .env("FT_TODAY", "2026-05-09")
-        .args([
-            "--vault",
-            dir.path().to_str().unwrap(),
-            "tasks",
-            "create",
-            "Stuff",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("disabled"));
+        .stderr(predicate::str::contains("daily_notes"));
 }
 
 #[test]

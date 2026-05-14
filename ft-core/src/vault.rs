@@ -156,7 +156,8 @@ impl Vault {
 
     /// Resolve the target file for a new task: an explicit override if
     /// supplied (joined against the vault root when relative), otherwise
-    /// today's daily note. Returns an absolute path.
+    /// today's daily note (from `[periodic_notes.daily]`). Returns an
+    /// absolute path.
     ///
     /// Shared by the CLI (`ft tasks create --file`) and the TUI's
     /// quickline `in:PATH` token so both surfaces agree on what "target
@@ -165,7 +166,7 @@ impl Vault {
         &self,
         today: chrono::NaiveDate,
         file_override: Option<&Path>,
-    ) -> std::result::Result<PathBuf, crate::daily::DailyError> {
+    ) -> Result<PathBuf> {
         if let Some(file) = file_override {
             let p = if file.is_absolute() {
                 file.to_path_buf()
@@ -174,7 +175,19 @@ impl Vault {
             };
             return Ok(p);
         }
-        crate::daily::resolve_daily_path(&self.path, &self.config.config.daily_notes, today)
+        let daily = self
+            .config
+            .config
+            .periodic_notes
+            .daily
+            .as_ref()
+            .ok_or_else(|| {
+                Error::Periodic(
+                    "no `[periodic_notes.daily]` configured — add it to your config or pass `--file <PATH>`"
+                        .to_string(),
+                )
+            })?;
+        crate::periodic::resolve_periodic_path(&self.path, daily, today)
     }
 }
 

@@ -32,15 +32,24 @@ pub fn run(_args: VaultArgs, vault_flag: Option<PathBuf>) -> Result<()> {
         "default_task_location",
         cfg.default_task_location.as_deref(),
     );
-    println!("  daily_notes:");
-    let source_label = match cfg.daily_notes.source {
-        ft_core::config::DailySource::Core => "core",
-        ft_core::config::DailySource::PeriodicNotes => "periodic-notes",
-        ft_core::config::DailySource::Explicit => "explicit",
-    };
-    println!("    source = {:?}", source_label);
-    print_opt("    path", cfg.daily_notes.path.as_deref());
-    print_opt("    format", cfg.daily_notes.format.as_deref());
+    println!("  periodic_notes:");
+    for (label, p) in [
+        ("daily", &cfg.periodic_notes.daily),
+        ("weekly", &cfg.periodic_notes.weekly),
+        ("monthly", &cfg.periodic_notes.monthly),
+        ("quarterly", &cfg.periodic_notes.quarterly),
+        ("yearly", &cfg.periodic_notes.yearly),
+    ] {
+        match p {
+            Some(period) => {
+                println!("    [{label}]");
+                println!("      path = {:?}", period.path);
+                println!("      format = {:?}", period.format);
+                print_opt("      template", period.template.as_deref());
+            }
+            None => println!("    [{label}] = (not configured)"),
+        }
+    }
     if cfg.ignored_paths.is_empty() {
         println!("  ignored_paths = []");
     } else {

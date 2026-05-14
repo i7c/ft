@@ -20,6 +20,9 @@ pub enum Error {
 
     #[error("notes: {0}")]
     Notes(String),
+
+    #[error("periodic notes: {0}")]
+    Periodic(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

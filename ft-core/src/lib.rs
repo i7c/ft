@@ -1,10 +1,10 @@
 pub mod config;
-pub mod daily;
 pub mod dates;
 pub mod error;
 pub mod fs;
 pub mod markdown;
 pub mod notes;
+pub mod periodic;
 pub mod query;
 pub mod recents;
 pub mod search;

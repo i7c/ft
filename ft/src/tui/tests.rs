@@ -1254,19 +1254,16 @@ fn perf_keystrokes_5k_vault_under_budget() -> Result<()> {
 // --- plan 004 session 2: quickline (new task) ------------------------------
 
 /// Vault preconfigured to drop a daily note at `<root>/Daily/2026-05-10.md`
-/// using the explicit `[daily_notes]` source, so quickline writes without
-/// `in:` land somewhere predictable for assertions.
+/// via `[periodic_notes.daily]`, so quickline writes without `in:` land
+/// somewhere predictable for assertions.
 fn quickline_vault() -> (TempDir, Vault) {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("test-vault");
     std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
     std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
-    // NB: in moment.js syntax (which the explicit resolver uses) bare
-    // letters like `D` are tokens, so `Daily` would translate to
-    // `10aily`. Wrap literal folder names in `[…]` to opt out.
     std::fs::write(
         vault_path.join(".ft/config.toml"),
-        "[daily_notes]\nsource = \"explicit\"\npath = \"[Daily]\"\nformat = \"YYYY-MM-DD\"\n",
+        "[periodic_notes.daily]\npath = \"Daily\"\nformat = \"%Y-%m-%d\"\n",
     )
     .unwrap();
     let vault = Vault::discover(Some(vault_path)).unwrap();
@@ -1875,7 +1872,7 @@ fn target_picker_vault() -> (TempDir, Vault) {
     std::fs::create_dir_all(vault_path.join("Areas")).unwrap();
     std::fs::write(
         vault_path.join(".ft/config.toml"),
-        "[daily_notes]\nsource = \"explicit\"\npath = \"[Daily]\"\nformat = \"YYYY-MM-DD\"\n",
+        "[periodic_notes.daily]\npath = \"Daily\"\nformat = \"%Y-%m-%d\"\n",
     )
     .unwrap();
     std::fs::write(vault_path.join("Inbox.md"), "# Inbox\n").unwrap();

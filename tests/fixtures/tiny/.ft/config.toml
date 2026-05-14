@@ -1,7 +1,6 @@
 default_task_location = "Tasks.md"
 ignored_paths = ["attachments/"]
 
-[daily_notes]
-source = "explicit"
-path = "Journal"
-format = "YYYY-MM-DD"
+[periodic_notes.daily]
+path = "Journal/%Y"
+format = "%Y-%m-%d"
