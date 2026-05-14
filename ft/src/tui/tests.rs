@@ -3289,3 +3289,465 @@ fn cli_record_open_through_recents_log() -> Result<()> {
     assert_eq!(entries, vec![std::path::PathBuf::from("note.md")]);
     Ok(())
 }
+
+// ── Notes tab · create flow (plan 009 · session 4) ───────────────────────
+
+/// Build a vault with two folders + two templates so the create flow has
+/// realistic state to render.
+fn notes_create_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join("inbox")).unwrap();
+    std::fs::create_dir_all(vault_path.join("proj")).unwrap();
+    std::fs::write(vault_path.join("inbox/existing.md"), "# Existing\n").unwrap();
+
+    // Drop two ft-flavoured templates into the default templates dir.
+    let templates_dir = vault_path.join("templates-ft");
+    std::fs::create_dir_all(&templates_dir).unwrap();
+    std::fs::write(
+        templates_dir.join("new.md"),
+        "---\ntags: [Created-{{ today | date(format=\"%Y-%m-%d\") }}]\n---\n# {{ title }}\n\n",
+    )
+    .unwrap();
+    std::fs::write(
+        templates_dir.join("quick-add.md"),
+        "---\ntags: [Created-{{ today | date(format=\"%Y-%m-%d\") }}]\n---\n# {{ vars.name }}\n",
+    )
+    .unwrap();
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn notes_tab_c_opens_folder_picker() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2/2 folder · blank") || frame.contains("folder · blank"),
+        "c should open the folder picker on the blank path:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_tab_capital_c_opens_template_picker() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("1/4 template"),
+        "Shift+C should open template picker:\n{frame}"
+    );
+    assert!(
+        frame.contains("new.md") && frame.contains("quick-add.md"),
+        "template picker should list templates:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_template_picker_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_create_template_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_create_folder_picker_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_create_folder_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_create_filename_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    // Pick the first folder (vault root, ".").
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Type a partial filename.
+    for c in "scrat".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_create_filename_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_create_var_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    // Filter to quick-add (the only template with a custom var).
+    for c in "quick".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Pick first folder (root).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Type a filename.
+    for c in "lunch".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now in var prompt for `name`. Type a partial value.
+    for c in "Sandw".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_create_var_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_create_collision_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    // Filter folders to "inbox".
+    for c in "inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename that collides with inbox/existing.md.
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_create_collision_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_create_blank_end_to_end_writes_file_and_queues_editor() -> Result<()> {
+    let (dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    // Vault root folder.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "scratch".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("commit should queue OpenInEditor");
+    let abs = dir.path().join("test-vault/scratch.md");
+    match req {
+        AppRequest::OpenInEditor { path, line } => {
+            assert_eq!(path.canonicalize().unwrap(), abs.canonicalize().unwrap());
+            assert_eq!(line, 1);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    let content = std::fs::read_to_string(&abs)?;
+    assert_eq!(content, "# scratch\n");
+    Ok(())
+}
+
+#[test]
+fn notes_create_template_with_var_writes_rendered_content() -> Result<()> {
+    let (dir, vault) = notes_create_vault();
+    // FT_TODAY = 2026-05-10 via fixed_clock; the template renders today.
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    for c in "quick".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Vault root folder.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "lunch".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Var prompt for `name`.
+    for c in "Lunch sandwich".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // File should now exist with rendered content.
+    let content = std::fs::read_to_string(dir.path().join("test-vault/lunch.md"))?;
+    assert!(content.contains("# Lunch sandwich"), "{content}");
+    assert!(content.contains("Created-"), "{content}");
+    Ok(())
+}
+
+#[test]
+fn notes_create_collision_overwrite_writes_new_content() -> Result<()> {
+    let (dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    for c in "inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now in CollisionPrompt — press `o` to overwrite.
+    app.dispatch(key('o'))?;
+    let _ = app.take_pending_request(); // OpenInEditor on the new file
+    let content = std::fs::read_to_string(dir.path().join("test-vault/inbox/existing.md"))?;
+    assert_eq!(content, "# existing\n");
+    Ok(())
+}
+
+#[test]
+fn notes_create_collision_use_existing_does_not_overwrite() -> Result<()> {
+    let (dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    for c in "inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // `u` → use existing → OpenInEditor on the unchanged file.
+    app.dispatch(key('u'))?;
+    let req = app
+        .take_pending_request()
+        .expect("u should queue OpenInEditor");
+    let abs = dir.path().join("test-vault/inbox/existing.md");
+    match req {
+        AppRequest::OpenInEditor { path, line: _ } => {
+            assert_eq!(path.canonicalize().unwrap(), abs.canonicalize().unwrap());
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    // Content unchanged.
+    let content = std::fs::read_to_string(&abs)?;
+    assert_eq!(content, "# Existing\n");
+    Ok(())
+}
+
+#[test]
+fn notes_create_collision_cancel_returns_to_filename() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    for c in "inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // `c` (collision-prompt cancel) → back to filename prompt.
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("filename:") && frame.contains("existing"),
+        "expected filename prompt with `existing` preserved:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_filename_empty_errors_in_place() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Hit Enter with empty buffer.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("filename is required"),
+        "expected error in footer:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_filename_with_slash_errors() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "a/b".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("can't contain path separators"),
+        "expected separator-rejection error:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_esc_from_template_picker_returns_to_idle() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("template") || frame.contains("notes"),
+        "should be back at notes-idle:\n{frame}"
+    );
+    // We're back at idle if the help-line list shows up at the top.
+    assert!(
+        frame.contains("create note (blank)"),
+        "expected idle keymap panel:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_esc_from_folder_picker_blank_returns_to_idle() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('c'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("create note (blank)"),
+        "expected idle keymap panel:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_create_esc_from_folder_picker_template_path_returns_to_template_picker() -> Result<()> {
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    for c in "new".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Esc out of folder picker.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("1/4 template"),
+        "expected template picker again:\n{frame}"
+    );
+    Ok(())
+}

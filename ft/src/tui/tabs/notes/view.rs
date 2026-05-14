@@ -15,7 +15,8 @@ use ratatui::{
 
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::{
-    is_implicitly_selected, ClipboardItem, ComposeRow, NotesState, RenameBuffer, SectionMoveState,
+    is_implicitly_selected, ClipboardItem, ComposeRow, CreateState, NotesState, RenameBuffer,
+    SectionMoveState,
 };
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
@@ -23,6 +24,8 @@ use crate::tui::tabs::notes::{
 const IDLE_KEYS: &[(&str, &str)] = &[
     ("o", "open file / heading"),
     ("m", "move section(s) to another file"),
+    ("c", "create note (blank)"),
+    ("C", "create note from template"),
     ("?", "show this help"),
     ("Esc", "close overlay"),
 ];
@@ -64,6 +67,27 @@ const MOVE_STEP_4_KEYS: &[(&str, &str)] = &[
 /// fire under the buffer.
 const MOVE_STEP_4_RENAME_KEYS: &[(&str, &str)] = &[("Enter", "commit rename"), ("Esc", "discard")];
 
+/// Footer keymap for the create-flow template picker.
+const CREATE_TEMPLATE_KEYS: &[(&str, &str)] = &[("Enter", "use template"), ("Esc", "cancel")];
+/// Footer keymap for the create-flow folder picker.
+const CREATE_FOLDER_KEYS: &[(&str, &str)] = &[("Enter", "use folder"), ("Esc", "back")];
+/// Footer keymap for the filename prompt.
+const CREATE_FILENAME_KEYS: &[(&str, &str)] = &[
+    ("Enter", "commit"),
+    ("Esc", "back"),
+    ("Ctrl+W", "delete word"),
+];
+/// Footer keymap for var prompts.
+const CREATE_VAR_KEYS: &[(&str, &str)] = &[("Enter", "next"), ("Esc", "cancel create")];
+/// Footer keymap for the collision prompt.
+const CREATE_COLLISION_KEYS: &[(&str, &str)] = &[
+    ("o", "overwrite"),
+    ("u", "use existing"),
+    ("c", "cancel"),
+    ("←/→", "focus"),
+    ("Enter", "commit"),
+];
+
 pub(super) fn render(
     frame: &mut Frame,
     area: Rect,
@@ -90,7 +114,345 @@ pub(super) fn render(
             );
         }
         NotesState::MoveSection(ms) => render_move_overlay(frame, area, ms),
+        NotesState::Creating(cs) => render_create_overlay(frame, area, cs),
     }
+}
+
+fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
+    use crate::tui::tabs::notes::CreateState as CS;
+    match cs {
+        CS::TemplatePicking { picker } => render_path_picker_popup(
+            frame,
+            area,
+            " create · 1/4 template ",
+            picker,
+            CREATE_TEMPLATE_KEYS,
+        ),
+        CS::FolderPicking { template, picker } => {
+            let step = step_count(template.as_ref());
+            let title = match template {
+                Some(t) => format!(" create · 2/{step} folder · {} ", t.rel.display()),
+                None => format!(" create · 1/{step} folder · blank "),
+            };
+            render_path_picker_popup(frame, area, &title, picker, CREATE_FOLDER_KEYS);
+        }
+        CS::FilenamePrompt {
+            template,
+            folder,
+            buf,
+            error,
+        } => render_filename_prompt(
+            frame,
+            area,
+            template.as_ref(),
+            folder,
+            buf,
+            error.as_deref(),
+        ),
+        CS::VarPrompt {
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            next_idx,
+            buf,
+        } => render_var_prompt(
+            frame,
+            area,
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            *next_idx,
+            buf,
+        ),
+        CS::CollisionPrompt {
+            template,
+            folder,
+            filename,
+            vars: _,
+            abs_path: _,
+            focus,
+        } => render_collision_prompt(frame, area, template.as_ref(), folder, filename, *focus),
+    }
+}
+
+fn step_count(template: Option<&crate::tui::tabs::notes::TemplatePick>) -> usize {
+    match template {
+        None => 2,
+        Some(t) if t.vars_needed.is_empty() => 3,
+        Some(_) => 4,
+    }
+}
+
+fn render_path_picker_popup(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    picker: &mut crate::tui::widgets::FuzzyPicker<crate::tui::widgets::PathListPickerSource>,
+    keys: &[(&str, &str)],
+) {
+    let popup = centered_rect(60, 70, area);
+    frame.render_widget(Clear, popup);
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title.to_string())
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+    picker.render(frame, chunks[0]);
+    let footer = keymap_line(keys);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[1],
+    );
+}
+
+fn render_filename_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    folder: &std::path::Path,
+    buf: &crate::tui::widgets::EditBuffer,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(60, 30, area);
+    frame.render_widget(Clear, popup);
+    let folder_label = if folder.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        folder.display().to_string()
+    };
+    let title = match template {
+        Some(t) => format!(
+            " create · 3/{step} filename · {} → {} ",
+            t.rel.display(),
+            folder_label,
+            step = step_count(Some(t))
+        ),
+        None => format!(
+            " create · 2/{step} filename · {} ",
+            folder_label,
+            step = step_count(None)
+        ),
+    };
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let footer_height = if error.is_some() { 3 } else { 2 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(footer_height),
+        ])
+        .split(inner);
+
+    let input = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("filename: ", Style::default().fg(Color::Gray)),
+        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(input), chunks[0]);
+
+    let mut footer_lines: Vec<Line> = Vec::with_capacity(2);
+    if let Some(msg) = error {
+        footer_lines.push(Line::from(Span::styled(
+            msg.to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
+    footer_lines.push(keymap_line(CREATE_FILENAME_KEYS));
+    frame.render_widget(
+        Paragraph::new(footer_lines).alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_var_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    template: &crate::tui::tabs::notes::TemplatePick,
+    folder: &std::path::Path,
+    filename: &str,
+    vars_so_far: &std::collections::BTreeMap<String, String>,
+    next_idx: usize,
+    buf: &crate::tui::widgets::EditBuffer,
+) {
+    let popup = centered_rect(60, 35, area);
+    frame.render_widget(Clear, popup);
+    let folder_label = if folder.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        folder.display().to_string()
+    };
+    let total = template.vars_needed.len();
+    let cur = next_idx + 1;
+    let key_name = template
+        .vars_needed
+        .get(next_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("?");
+    let title = format!(
+        " create · 4/{step} vars · {folder_label}/{filename} · {cur}/{total} ",
+        step = step_count(Some(template))
+    );
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let prompt = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
+        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(prompt), chunks[0]);
+
+    let so_far_label: String = if vars_so_far.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = vars_so_far
+            .iter()
+            .map(|(k, v)| format!("{k}={v:?}"))
+            .collect();
+        format!("set: {}", parts.join(", "))
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            so_far_label,
+            Style::default().fg(Color::DarkGray),
+        ))),
+        chunks[1],
+    );
+
+    let footer = keymap_line(CREATE_VAR_KEYS);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[3],
+    );
+}
+
+fn render_collision_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    _template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    folder: &std::path::Path,
+    filename: &str,
+    focus: crate::tui::tabs::notes::CollisionChoice,
+) {
+    let rel = if folder.as_os_str().is_empty() {
+        filename.to_string()
+    } else {
+        format!("{}/{}", folder.display(), filename)
+    };
+    use crate::tui::tabs::notes::CollisionChoice as CC;
+    let popup = centered_rect(60, 30, area);
+    frame.render_widget(Clear, popup);
+    let title = " create · collision ".to_string();
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("target already exists: {rel}"),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Center),
+        chunks[0],
+    );
+
+    let opt_span = |label: &str, choice: CC| {
+        let style = if focus == choice {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        Span::styled(format!(" {label} "), style)
+    };
+    let opts = Line::from(vec![
+        opt_span("[O]verwrite", CC::Overwrite),
+        Span::raw("   "),
+        opt_span("[U]se existing", CC::UseExisting),
+        Span::raw("   "),
+        opt_span("[C]ancel", CC::Cancel),
+    ]);
+    frame.render_widget(Paragraph::new(opts).alignment(Alignment::Center), chunks[2]);
+
+    let footer = keymap_line(CREATE_COLLISION_KEYS);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[4],
+    );
 }
 
 fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState) {

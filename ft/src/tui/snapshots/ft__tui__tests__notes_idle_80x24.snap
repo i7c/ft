@@ -9,10 +9,10 @@ expression: frame
 │                                                                              │
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
+│  c     create note (blank)                                                   │
+│  C     create note from template                                             │
 │  ?     show this help                                                        │
 │  Esc   close overlay                                                         │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

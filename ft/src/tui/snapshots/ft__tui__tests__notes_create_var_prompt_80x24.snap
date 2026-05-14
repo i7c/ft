@@ -9,17 +9,17 @@ expression: frame
 │                                                                              │
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
-│  c     create note┌ notes · help ────────────────────────┐                   │
-│  C     create note│                                      │                   │
-│  ?     show this h│  Notes keybindings                   │                   │
-│  Esc   close overl│                                      │                   │
-│                   │  o       open file / heading         │                   │
-│                   │  m       move section(s) to another f│                   │
-│                   │  c       create note (blank)         │                   │
-│                   │  C       create note from template   │                   │
-│                   │  ?       show this help              │                   │
-│                   │  Esc     close overlay               │                   │
-│                   └──────────────────────────────────────┘                   │
+│  c     create note (blank)                                                   │
+│  C     create ┌ create · 4/4 vars · ./lunch.md · 1/1 ────────┐               │
+│  ?     show th│▏ name = Sandw█                               │               │
+│  Esc   close o│                                              │               │
+│               │                                              │               │
+│               │                                              │               │
+│               │                                              │               │
+│               │        Enter next   Esc cancel create        │               │
+│               └──────────────────────────────────────────────┘               │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

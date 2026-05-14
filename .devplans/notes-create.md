@@ -208,7 +208,7 @@ after that we never write Moment.js parsing code.
 
 ### TUI — Notes tab `c` (blank) and `C` (template) create flows
 
-- [ ] `NotesState` gains a `Creating(CreateState)` variant. `CreateState`
+- [x] `NotesState` gains a `Creating(CreateState)` variant. `CreateState`
       is a small state machine:
       ```rust
       enum CreateState {
@@ -221,26 +221,26 @@ after that we never write Moment.js parsing code.
       ```
       `CollisionChoice` tracks the focused option in a 3-way
       menu (`Overwrite | UseExisting | Cancel`).
-- [ ] **`c` keybind (idle Notes tab):** transitions to
+- [x] **`c` keybind (idle Notes tab):** transitions to
       `CreateState::FolderPicking { template: None }`. No template;
       the file is written with just `# <title>\n` followed by a single
       blank line.
-- [ ] **`C` keybind (idle Notes tab):** transitions to
+- [x] **`C` keybind (idle Notes tab):** transitions to
       `CreateState::TemplatePicking`. A fuzzy picker over the
       configured templates dir (recursive; only `.md` files). `Enter`
       advances to `FolderPicking`. `Esc` returns to idle.
-- [ ] **Folder picking:** a fuzzy picker over existing folders in the
+- [x] **Folder picking:** a fuzzy picker over existing folders in the
       vault (vault root + every subdirectory, excluding the templates
       dir and any `.obsidian/` paths). `Enter` advances to
       `FilenamePrompt`. `Esc` returns to the previous step
       (TemplatePicking on the `C` path, or idle on the `c` path).
-- [ ] **Filename prompt:** an inline `EditBuffer` (reuse
+- [x] **Filename prompt:** an inline `EditBuffer` (reuse
       `ft/src/tui/widgets/edit_buffer.rs`) with a header showing the
       resolved folder. `Enter` commits the filename. Validation:
       non-empty after trimming; no path separators (`/`, `\`); `.md`
       auto-appended when missing. Invalid input keeps the prompt open
       with a toast.
-- [ ] **Var prompts (template path only):** after the filename commits,
+- [x] **Var prompts (template path only):** after the filename commits,
       ft parses the template source for variable references that are
       neither built-ins (`title`, `today`, `now`) nor already provided.
       For each unknown `vars.KEY` reference, the user is prompted in
@@ -249,13 +249,14 @@ after that we never write Moment.js parsing code.
       optional value); the user can also press `Esc` on any var prompt
       to cancel the entire create flow. Prompts are dispatched in
       stable order (first appearance in the template source).
-- [ ] **Variable discovery:** implemented by walking MiniJinja's parsed
-      AST for the template and collecting `Var` nodes whose path
-      starts with `vars.`. Fallback if AST inspection isn't ergonomic:
-      a regex pass for `\{\{\s*vars\.([a-zA-Z_][a-zA-Z0-9_]*)` over
-      the template source. Either is acceptable — author's call at
-      implementation time, but document the choice in the module doc.
-- [ ] **Collision prompt:** if the resolved target path exists, after
+- [x] **Variable discovery:** implemented as a regex pass for
+      `\{\{\s*vars\.([a-zA-Z_][a-zA-Z0-9_]*)` over the template source
+      (AST inspection wasn't worth the complexity for the small surface).
+      Documented in `discover_template_vars`'s doc-comment. Catches
+      `{{ vars.foo }}` and `{{ vars.foo | filter }}` chains; bracket-
+      lookup (`vars["foo"]`) is not used anywhere in the vault's
+      hand-ported set.
+- [x] **Collision prompt:** if the resolved target path exists, after
       the last var prompt (or immediately after filename for the
       blank path), show a centered 3-way prompt:
       ```
@@ -267,24 +268,27 @@ after that we never write Moment.js parsing code.
       filename prompt. `←/→` + `Enter` also work for mouse-free
       navigation. (On the `c`/`C` standalone flows; the section-move
       flow has its own collision branching, see below.)
-- [ ] **Commit (blank or template, no collision OR overwrite chosen):**
+- [x] **Commit (blank or template, no collision OR overwrite chosen):**
       build the `TemplateContext`, render (or use `# <title>\n\n` for
       blank), write atomically via `ft_core::fs::write_atomic`,
       emit `AppRequest::OpenInEditor { path, line: 1 }`, toast
       `Created <vault-rel path>`, return to idle.
-- [ ] **Step indicators in the footer**, e.g.
+- [x] **Step indicators in the footer**, e.g.
       `1/4 template · 2/4 folder · 3/4 filename · 4/4 vars · collision`
       so the user always knows where they are. Step count varies (the
       `c` path skips template selection and var prompts).
-- [ ] `?` help overlay (idle state) updated to mention `c` and `C`.
-- [ ] Snapshot tests:
+- [x] `?` help overlay (idle state) updated to mention `c` and `C`.
+      (Implementation note: the help overlay reads from the same
+      `IDLE_KEYS` constant as the idle keymap panel, so updating one
+      updates both.)
+- [x] Snapshot tests:
       - `notes_create_template_picker.snap`
       - `notes_create_folder_picker.snap`
       - `notes_create_filename_prompt.snap` (with a partial filename
         typed)
       - `notes_create_var_prompt.snap` (with one var prompt visible)
       - `notes_create_collision_prompt.snap`
-- [ ] Behavior tests in `tui::tests`:
+- [x] Behavior tests in `tui::tests`:
       - `c` from idle opens folder picker (no template step).
       - `C` from idle opens template picker.
       - End-to-end blank create writes the file and queues
@@ -365,7 +369,7 @@ after that we never write Moment.js parsing code.
       - `notes_move_new_target_collision_prompt.snap`
       - `notes_move_compose_new_target.snap` — compose view where the
         target is a freshly-rendered (in-memory) template file.
-- [ ] Behavior tests in `tui::tests`:
+- [x] Behavior tests in `tui::tests`:
       - `n` from `TargetPicking` enters the new-target sub-flow.
       - End-to-end: source pick → multi-select → `n` → template pick →
         folder → filename → compose → Enter; assert both source and
@@ -759,7 +763,7 @@ resolver since it's not anyhow-based and shouldn't shell out to env
 vars the same way — sharing through ft-core is premature until we
 see what shape the TUI needs.
 
-### Session 4 · 2026-05-13 · planned
+### Session 4 · 2026-05-13 · done
 **Goal:** TUI Notes tab — `c` (blank) and `C` (template) flows.
 `NotesState::Creating(CreateState)` state machine with template/folder
 pickers, filename `EditBuffer`, var prompts, collision prompt
@@ -767,7 +771,94 @@ pickers, filename `EditBuffer`, var prompts, collision prompt
 via `AppRequest::OpenInEditor`. Snapshots: template picker, folder
 picker, filename prompt, var prompt, collision prompt. Behavior tests
 covering each path and each Esc transition. `?` help overlay updated.
-**Outcome:** 
+**Outcome:** Added new `PathListPickerSource` to the picker widgets —
+a `Vec<PathBuf>`-backed `PickerSource` with substring filtering (both
+folder and template lists are small enough that substring matching is
+fine; the existing `VaultFilePickerSource` nucleo path is reserved for
+the larger note-corpus searches).
+
+`NotesState::Creating(CreateState)` is the new top-level variant.
+`CreateState` carries five sub-variants — `TemplatePicking`,
+`FolderPicking`, `FilenamePrompt`, `VarPrompt`, `CollisionPrompt` —
+plus a tiny `CollisionChoice` enum (`Overwrite | UseExisting |
+Cancel`) with `prev()` / `next()` helpers for `←/→` cycling. The
+`TemplatePick` payload caches `rel: PathBuf`, `source: String` (read
+once), and `vars_needed: Vec<String>` (the regex-discovered
+`vars.KEY` references in first-appearance order) so we don't re-read
+the template at each step.
+
+Key dispatch mirrors the move-flow pattern: a `CreateAction::{Stay,
+NotHandled, Set(Box<NotesState>)}` outcome per step handler, dispatched
+from `handle_create_key`. The trickiest piece was the `Esc` chain —
+`Esc` from FolderPicking returns to TemplatePicking if `template`
+was set, else to Idle; `Esc` from FilenamePrompt re-enumerates the
+folder list (so a folder created since we entered the prompt shows
+up); `Esc`/`c`/`C` from CollisionPrompt rebuilds FilenamePrompt with
+the buffer pre-filled from `EditBuffer::from(filename)` so the user
+keeps the typed filename.
+
+Variable discovery: regex pass for `\{\{\s*vars\.([a-zA-Z_][...])`.
+Documented in `discover_template_vars`. The AST-walk alternative
+mentioned in the plan would be cleaner but minijinja doesn't expose
+its parser in the public API; regex over the source is fine for the
+finite surface we have.
+
+Collision flow:
+- Overwrite (`o`/`O`) → `commit_create` renders template (or blank
+  fallback) and `write_atomic`s; queues `OpenInEditor`.
+- Use existing (`u`/`U`) → no write, just queues `OpenInEditor` on
+  the existing file.
+- Cancel (`c`/`C`/`Esc`) → routes back to FilenamePrompt with the
+  buffer pre-filled.
+- `←/→` + `Enter` also work for arrow-driven users.
+
+`FT_TODAY` honoring: `build_template_context` honors the env var
+locally (pinning `now` to `00:00:00` for deterministic snapshots) —
+same logic as `cmd::notes`. The two paths use the same `TemplateContext`
+type, just with different anyhow/result-handling boilerplate, so the
+duplication is shallow.
+
+Render side (`view.rs`):
+- `render_path_picker_popup` (shared by template + folder pickers).
+- `render_filename_prompt` (single-line `EditBuffer` with a blinking
+  cursor block and an error footer that shows non-empty validation
+  failures).
+- `render_var_prompt` (one var at a time, "set: foo=val, bar=val"
+  trailing line so the user sees what's been filled).
+- `render_collision_prompt` (centered modal with three highlighted
+  choices; vault-relative path in the message so snapshots are
+  machine-portable).
+
+`step_count(template)` computes the dynamic step total (2 for blank,
+3 for template-with-no-vars, 4 for template-with-vars) so the footer
+shows accurate step indicators per path.
+
+15 new TUI tests (5 snapshot + 10 behavior):
+- `notes_tab_c_opens_folder_picker`, `notes_tab_capital_c_opens_template_picker`
+- Snapshots: `notes_create_{template,folder}_picker_80x24`,
+  `notes_create_{filename,var,collision}_prompt_80x24`
+- End-to-end: blank create writes file + queues `OpenInEditor`;
+  template-with-var renders and writes.
+- Collision: `o` overwrites, `u` opens existing without writing, `c`
+  cancels back to filename prompt.
+- Filename validation: empty → in-place error, with `/` → in-place
+  error.
+- Esc chains: template picker → idle, folder picker (blank) → idle,
+  folder picker (template) → template picker.
+
+Knock-on snapshot updates: 8 pre-existing notes-tab snapshots needed
+re-acceptance because the idle keymap panel (visible behind every
+popup) gained two rows (`c` blank · `C` template). Verified the
+re-accepted snapshots only differ in those two added rows.
+
+Workspace state: 343 ft-core unit + 189 ft binary + 17 notes_create
+integration + every other suite, all green. `cargo clippy --workspace
+--all-targets -- -D warnings` clean. `cargo fmt --check` clean.
+Briefly hit two `ptr_arg` lints on `handle_create_var_key` /
+`handle_create_collision_key` because they take `&mut PathBuf` /
+`&mut String` for `std::mem::take` purposes — clippy can't see
+through that, so they're annotated `#[allow(clippy::ptr_arg)]` with
+the existing too-many-arguments allow.
 
 ### Session 5 · 2026-05-13 · planned
 **Goal:** TUI section-move integration. Add `n` keybind in

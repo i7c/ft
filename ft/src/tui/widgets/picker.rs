@@ -398,6 +398,56 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
     }
 }
 
+// ── concrete source: in-memory list of paths ────────────────────────────
+
+/// Simple [`PickerSource`] backed by a fixed `Vec<PathBuf>`. Filtering is
+/// case-insensitive substring matching — fast enough for the small lists
+/// (≤ ~100 entries) the create-flow surfaces drive (templates,
+/// vault folders). Items are returned in their source order so callers
+/// can pre-sort once.
+///
+/// On empty input the whole list is returned (capped at the picker's
+/// limit) so the user can browse without typing.
+pub struct PathListPickerSource {
+    items: Vec<std::path::PathBuf>,
+}
+
+impl PathListPickerSource {
+    pub fn new(items: Vec<std::path::PathBuf>) -> Self {
+        Self { items }
+    }
+}
+
+impl PickerSource for PathListPickerSource {
+    type Item = std::path::PathBuf;
+
+    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<std::path::PathBuf>> {
+        self.items
+            .iter()
+            .take(limit)
+            .map(|p| PickerItem {
+                label: p.display().to_string(),
+                match_indices: Vec::new(),
+                data: p.clone(),
+            })
+            .collect()
+    }
+
+    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<std::path::PathBuf>> {
+        let lower = q.to_lowercase();
+        self.items
+            .iter()
+            .filter(|p| p.display().to_string().to_lowercase().contains(&lower))
+            .take(limit)
+            .map(|p| PickerItem {
+                label: p.display().to_string(),
+                match_indices: Vec::new(),
+                data: p.clone(),
+            })
+            .collect()
+    }
+}
+
 // ── concrete source: vault files + headings ─────────────────────────────
 
 /// Hard cap on the number of recents shown on empty input. Picked to

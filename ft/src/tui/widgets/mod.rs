@@ -8,4 +8,7 @@ pub use edit_buffer::EditBuffer;
 // `crate::tui::widgets::FuzzyPicker` once plan-004 session 4 wires it in.
 // `#[allow(unused_imports)]` keeps the re-exports legal until then.
 #[allow(unused_imports)]
-pub use picker::{FuzzyPicker, PickerItem, PickerOutcome, PickerSource, VaultFilePickerSource};
+pub use picker::{
+    FuzzyPicker, PathListPickerSource, PickerItem, PickerOutcome, PickerSource,
+    VaultFilePickerSource,
+};

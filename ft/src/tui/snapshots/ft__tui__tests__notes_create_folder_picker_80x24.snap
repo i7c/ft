@@ -6,21 +6,21 @@ expression: frame
 ┌ notes ───────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  Notes — Obsidian-flavoured editing                                          │
-│               ┌ move · 1/4 source ───────────────────────────┐               │
+│               ┌ create · 1/2 folder · blank ─────────────────┐               │
 │  o     open fi│┌ find ──────────────────────────────────────┐│               │
-│  m     move se││project│                                    ││               │
+│  m     move se││type to search…                             ││               │
 │  c     create │└────────────────────────────────────────────┘│               │
-│  C     create │┌ results ───────────────────────────────────┐│               │
-│  ?     show th││▶ project.md                                ││               │
-│  Esc   close o││                                            ││               │
-│               ││                                            ││               │
+│  C     create │┌ recent · type to search ───────────────────┐│               │
+│  ?     show th││▶ .                                         ││               │
+│  Esc   close o││  inbox                                     ││               │
+│               ││  proj                                      ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               │└────────────────────────────────────────────┘│               │
-│               │      Enter use source   Esc cancel move      │               │
 │               │                                              │               │
+│               │         Enter use folder   Esc back          │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │
 │                                                                              │
