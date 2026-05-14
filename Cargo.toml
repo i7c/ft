@@ -24,6 +24,7 @@ tempfile = "3"
 nucleo-matcher = "0.3"
 regex = "1"
 urlencoding = "2"
+minijinja = { version = "2", default-features = false, features = ["builtins", "serde"] }
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

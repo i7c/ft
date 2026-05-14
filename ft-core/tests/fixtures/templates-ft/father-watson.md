@@ -1,0 +1,4 @@
+- **What do you know? (Understanding)**
+- **Where are you at? (Progress)**
+- **What do you need to know? (Understanding, Approach)**
+- **Where are you going? (Progress, Approach)**

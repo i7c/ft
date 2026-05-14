@@ -16,6 +16,8 @@
 //! the moved sections duplicated rather than lost. Duplication is
 //! recoverable by hand; data loss isn't.
 
+pub mod template;
+
 use std::path::Path;
 
 use crate::error::{Error, Result};

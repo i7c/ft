@@ -1,0 +1,58 @@
+# Checklist
+
+## Essential
+- [ ] RNM / CNH / Passport
+- [ ] Headphones
+- [ ] Wallet
+- [ ] Betablockers
+- [ ] Credit Card
+
+## Clothes
+- [ ] boxershorts
+- [ ] shirts
+- [ ] socks
+- [ ] shorts
+- [ ] swimming trunks
+- [ ] long pants
+- [ ] something decent to go out
+- [ ] sunglasses
+- [ ] shoes
+- [ ] havaianas
+
+## Bathroom
+- [ ] Sunscreen for face
+- [ ] Washbag
+- [ ] Invisalign
+- [ ] Travel tooth brush
+- [ ] Lactase
+- [ ] Pomada
+- [ ] QTips
+
+## Electronics
+- [ ] Iphone charger
+- [ ] Apple Watch Charger
+- [ ] Macbook
+- [ ] Macbook charger
+- [ ] Usb C lightning
+- [ ] Powerbank(?)
+
+## One Day Before
+- [ ] Charge headphones
+- [ ] Charge Macbooks
+- [ ] Change sand in litter box
+
+## On the day of departure
+- [ ] Wash dishes
+- [ ] Take out trash
+- [ ] Close water faucets
+- [ ] Turn on cams
+- [ ] Close windows
+- [ ] Close doors to bedroom and office
+- [ ] Enough food in bowl for cats?
+- [ ] Close gas
+- [ ] Turn on a light for cats
+- [ ] Unplug PC
+- [ ] Put the keys in the laundry room
+- [ ] Enough food for cats??
+- [ ] Close Door Properly
+

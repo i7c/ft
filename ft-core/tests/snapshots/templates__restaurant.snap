@@ -1,0 +1,6 @@
+---
+source: ft-core/tests/templates.rs
+expression: rendered
+---
+#Restaurant #SaoPaulo #WhereToTakeGuests 
+# Test Restaurant

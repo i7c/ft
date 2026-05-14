@@ -1,0 +1,9 @@
+---
+source: ft-core/tests/templates.rs
+expression: rendered
+---
+```tasks
+(not done) AND (path includes Tasks Here)
+show tree
+group by filename
+```

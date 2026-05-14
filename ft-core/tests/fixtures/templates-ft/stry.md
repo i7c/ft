@@ -1,0 +1,25 @@
+# {{ title }}
+Definition of **strategy**:
+> A strategy is a comprehensive (although potentially complex) plan of action designed to achieve specific long-term goals or objectives by effectively utilizing available resources and addressing potential challenges under conditions of uncertainty and within a competitive or dynamic environment.
+
+(REPLACE ME: Summary: *What is the gist of this strategy?*)
+## Diagnosis
+- Current Situation: Problem Description
+- Goal (Specific long-term Goal)
+- Why? Motivation: Why is it worth solving this problem
+- Time Requirements
+- General Requirements (God-given constraints)
+### Problem Analysis
+- What are key Challenges to the solution
+- Stakeholders and Partners
+- Required Resources (Efficient Use)
+### Risks
+## Guiding Policy
+- What are the principles to follow?
+- Success: What does it look like?
+- Metrics: How to accompany progress?
+- How to recognize failure?
+## Action
+- Plan of actions
+    - deliverables
+    - which metrics are affected by those deliverables

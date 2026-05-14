@@ -1,0 +1,10 @@
+---
+source: ft-core/tests/templates.rs
+expression: rendered
+---
+---
+tags:
+  - Quarterly
+---
+# 2026 Q2
+1. ...

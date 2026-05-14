@@ -1,0 +1,13 @@
+---
+source: ft-core/tests/templates.rs
+expression: rendered
+---
+- **What am I proud of accomplishing recently?**
+- **Where there significant changes that affect my life?**
+- **Are the immediate goals clear?**
+- **Which goals or executions have unknowns or need consideration?**
+- **What tasks or goals have I been putting off? Why?**
+- **How aligned is my daily work with my overall life goals?**
+- **What challenges or obstacles are holding me back?**
+- **Am I managing my time effectively?**
+- **What skills or resources do I need to move forward?**

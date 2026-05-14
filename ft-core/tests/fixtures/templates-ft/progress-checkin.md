@@ -1,0 +1,5 @@
+- Progress Checkin
+    - **Which work streams had recent progress?**
+    - **Which work streams did not?**
+    - **Which work streams have approaching deadlines?**
+    - **What are resulting priorities and why?**

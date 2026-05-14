@@ -1,0 +1,15 @@
+---
+source: ft-core/tests/templates.rs
+expression: rendered
+---
+---
+tags:
+  - Created-2026-05-13
+  - Project
+  - WORKLOG
+---
+# Test Worklog
+-Link to Project-
+## Temporary Notes
+## Log
+### 2026-05-13
