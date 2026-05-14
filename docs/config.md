@@ -1,0 +1,260 @@
+# Configuration
+
+`ft` reads configuration from two TOML files and merges them. The vault
+file wins over the user file for every key.
+
+## File locations
+
+| Layer | Path                                          | Purpose                          |
+|-------|-----------------------------------------------|----------------------------------|
+| User  | `$XDG_CONFIG_HOME/ft/config.toml` (defaults to `~/.config/ft/config.toml`) | Defaults that span every vault.  |
+| Vault | `<vault>/.ft/config.toml`                     | Vault-specific overrides.        |
+
+Both files are optional. Missing files are silently skipped. Unknown
+keys are rejected with an error — typos surface immediately rather than
+silently default.
+
+## Top-level keys
+
+| Key                     | Type                              | Where         | Notes                                                  |
+|-------------------------|-----------------------------------|---------------|--------------------------------------------------------|
+| `default_vault`         | string (path)                     | user only     | Fallback vault when none of the discovery paths match. |
+| `default_task_location` | string (vault-relative path)      | either        | File used by `ft tasks create` when `--file` is unset and `[periodic_notes.daily]` isn't configured. |
+| `ignored_paths`         | array of glob strings             | either        | Folders/files excluded from the vault scan.            |
+| `[notes]`               | table                             | either        | Note-creation settings (template folder).              |
+| `[periodic_notes.*]`    | table per period                  | either        | Daily/weekly/monthly/quarterly/yearly note layout.     |
+| `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](query-dsl.md) presets.               |
+
+`default_vault` is only honored in the user config; setting it in a
+vault config does nothing (the vault has already been chosen by the
+time that config is read).
+
+## `default_task_location`
+
+Vault-relative path to the file that receives new tasks when neither
+`--file` is passed nor `[periodic_notes.daily]` is configured.
+
+```toml
+default_task_location = "Inbox.md"
+```
+
+If unset and no daily note is configured, `ft tasks create` errors with
+a hint pointing at this key.
+
+## `ignored_paths`
+
+Globs (relative to the vault root) excluded from scanning. Always
+combined with the built-in defaults `.obsidian/`, `.git/`,
+`attachments/`, and any `.gitignore` rules in the vault.
+
+```toml
+ignored_paths = ["archive/", "drafts/**", "*.tmp.md"]
+```
+
+## `[notes]`
+
+```toml
+[notes]
+templates_dir = "templates-ft"   # vault-relative; default: "templates-ft"
+```
+
+| Key             | Type   | Default          | Notes                                                              |
+|-----------------|--------|------------------|--------------------------------------------------------------------|
+| `templates_dir` | string | `"templates-ft"` | Folder holding the ft template set used by `ft notes create` and the TUI `C`/`c` flows. Missing folder is fine — pickers just show an empty list. |
+
+The template engine and its variable surface are documented next to the
+templates themselves (see `templates-ft/README.md` in the vault, written
+by plan 009).
+
+## `[periodic_notes.*]`
+
+Per-period configuration for periodic notes — daily, weekly, monthly,
+quarterly, yearly. Each period is independent; only the periods you
+configure are reachable from `ft notes periodic <period>` and the TUI
+chord.
+
+```toml
+[periodic_notes.daily]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+template = "daily"
+
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%G-W%V"
+template = "weeks"
+
+[periodic_notes.monthly]
+path = "journal/%Y"
+format = "%Y-%m"
+
+[periodic_notes.quarterly]
+path = "journal/%Y"
+format = "%Y-Q%q"
+template = "quarterly"
+
+[periodic_notes.yearly]
+path = "journal"
+format = "%Y"
+```
+
+| Key        | Type             | Required | Notes                                                                    |
+|------------|------------------|----------|--------------------------------------------------------------------------|
+| `path`     | string (pattern) | yes      | Folder pattern, vault-relative. Empty string means "vault root."         |
+| `format`   | string (pattern) | yes      | Filename pattern, **without `.md`**.                                     |
+| `template` | string           | no       | Template name resolved under `[notes].templates_dir`; absolute paths (starting with `/`) used as-is. When unset, new notes get a blank `# <title>\n\n` body. |
+
+`path` and `format` both accept the chrono-strftime tokens listed below.
+`ft` resolves them against the target date — `today` by default, or the
+date supplied via `--date`/`--offset`.
+
+The `daily` period is special: it's also consulted by `ft tasks create`
+(and the TUI quickline) when no `--file` is supplied, so most users
+will at least want a `[periodic_notes.daily]` block.
+
+### Token surface
+
+Standard chrono [strftime] tokens are supported. The ones you're likely
+to use:
+
+| Token  | Meaning                                         | Example output for 2026-05-14 |
+|--------|-------------------------------------------------|-------------------------------|
+| `%Y`   | 4-digit year                                    | `2026`                        |
+| `%y`   | 2-digit year                                    | `26`                          |
+| `%m`   | Zero-padded month (01..12)                      | `05`                          |
+| `%-m`  | Month with no padding                           | `5`                           |
+| `%d`   | Zero-padded day of month (01..31)               | `14`                          |
+| `%-d`  | Day of month, no padding                        | `14`                          |
+| `%B`   | Full month name                                 | `May`                         |
+| `%b`   | Abbreviated month name                          | `May`                         |
+| `%A`   | Full weekday name                               | `Thursday`                    |
+| `%a`   | Abbreviated weekday name                        | `Thu`                         |
+| `%j`   | Day of year (001..366)                          | `134`                         |
+| `%G`   | ISO-week-numbering year                         | `2026`                        |
+| `%V`   | ISO week number (01..53)                        | `20`                          |
+| `%u`   | ISO weekday (1=Mon..7=Sun)                      | `4`                           |
+| `%H`   | Zero-padded hour, 24h                           | `00`                          |
+| `%M`   | Zero-padded minute                              | `00`                          |
+| `%%`   | Literal `%`                                     | `%`                           |
+
+Non-`%` characters in `path` and `format` are passed through literally
+— `journal/%Y` resolves to `journal/2026/`, no escaping needed.
+
+#### Quarter tokens (ft extension)
+
+chrono's strftime has no quarter token, so `ft` pre-processes two of
+its own before delegating to chrono:
+
+| Token | Meaning                | Example output (2026-05-14) |
+|-------|------------------------|-----------------------------|
+| `%q`  | Quarter digit (1..=4)  | `2`                         |
+| `%Q`  | Quarter prefixed with `Q` | `Q2`                     |
+
+`%%q` and `%%Q` escape the tokens to literal text.
+
+### `path` and `format` together
+
+The final on-disk path is `<vault>/<path>/<format>.md`. Empty `path`
+means the note lives at the vault root. Both fields are templated
+independently against the same date, so you can split year out of the
+folder and keep the rest in the filename:
+
+```toml
+[periodic_notes.daily]
+path = "journal/%Y"    # → journal/2026
+format = "%Y-%m-%d"    # → 2026-05-14
+# resolved file: journal/2026/2026-05-14.md
+```
+
+### Templates
+
+When `template` is set, `ft` reads that file under
+`<vault>/<templates_dir>/<template>.md` (the `.md` is added when
+missing) and renders it through the MiniJinja engine. The `title`
+variable inside the template is the filename stem — e.g. `2026-05-14`
+for the daily example above, `2026-W20` for the weekly. See
+`templates-ft/README.md` in your vault for the full template surface
+(filters, variables, gotchas).
+
+## `[presets]`
+
+Map of preset names to query strings. Use a preset from the CLI with
+`ft tasks list --preset <name>`.
+
+```toml
+[presets]
+work = "tag is #work and not done"
+today = "due on today"
+overdue = "due before today and not done"
+```
+
+The query syntax is documented in [query-dsl.md](query-dsl.md).
+
+## Discovery and merge
+
+For each invocation, `ft`:
+
+1. Locates the vault (`--vault` flag → `$FT_VAULT` → walk up for
+   `.obsidian/` → `default_vault` from the user config).
+2. Reads `<user_config_dir>/ft/config.toml` if present.
+3. Reads `<vault>/.ft/config.toml` if present.
+4. Merges them — vault wins per-key.
+
+Vault discovery uses `default_vault` from the user config; nothing from
+the vault config can affect discovery (the vault has been chosen by
+then).
+
+## Environment variables
+
+These influence `ft` at runtime but are not config keys:
+
+| Variable               | Purpose                                                                                       |
+|------------------------|-----------------------------------------------------------------------------------------------|
+| `FT_VAULT`             | Vault path. Higher priority than `default_vault`; lower than `--vault`.                       |
+| `FT_TODAY`             | Override "today" for date-aware commands (`YYYY-MM-DD`). Used heavily by tests; safe in scripts that want determinism. |
+| `EDITOR` / `VISUAL`    | Editor binary for the open-in-editor flow. `VISUAL` wins when set; falls back to `vi`.        |
+| `XDG_CONFIG_HOME`      | Where to look for the user config (defaults to `~/.config`).                                  |
+| `FT_OBSIDIAN_DRY_RUN`  | When set to `1`, the `--obsidian` flag prints the `obsidian://` URL instead of opening it.    |
+| `FT_PERF_TESTS`        | When set to `1`, the perf-tagged unit tests run; otherwise they're skipped.                   |
+
+## A small worked example
+
+```toml
+# ~/.config/ft/config.toml
+default_vault = "~/notes"
+default_task_location = "Inbox.md"
+
+[notes]
+templates_dir = "templates-ft"
+
+[periodic_notes.daily]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+template = "daily"
+
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%G-W%V"
+
+[presets]
+today = "due on today and not done"
+work = "tag is #work and not done"
+```
+
+```toml
+# ~/notes/.ft/config.toml
+ignored_paths = ["archive/"]
+
+# Override the user-level daily template just for this vault.
+[periodic_notes.daily]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+template = "minimal-daily"
+```
+
+Result: `ft notes today` writes
+`~/notes/journal/2026/2026-05-14.md` (created from the
+`minimal-daily` template), and `archive/` is excluded from every
+vault scan.
+
+[strftime]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html

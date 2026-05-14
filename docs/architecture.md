@@ -27,7 +27,7 @@ ft/
         ├── lib.rs
         ├── vault.rs            # discovery + scan
         ├── config.rs           # layered config (user + vault)
-        ├── daily.rs            # daily-notes resolution
+        ├── periodic.rs         # periodic-note path + template resolution
         ├── dates.rs            # ISO / keyword / relative / NL parsing
         ├── fs.rs               # write_atomic
         ├── selector.rs         # id / file:line / fuzzy
