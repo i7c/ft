@@ -38,6 +38,9 @@ pub struct Config {
     /// Note-creation settings.
     #[serde(default)]
     pub notes: Notes,
+    /// Editor handoff strategy and popup geometry. See [`Editor`].
+    #[serde(default)]
+    pub editor: Editor,
 }
 
 /// Settings for `ft notes create` and the TUI create flows.
@@ -79,6 +82,93 @@ pub struct PeriodicPeriod {
     /// Template name resolved under `[notes].templates_dir` (or an
     /// absolute path). When unset, the new note's body is `# <title>\n\n`.
     pub template: Option<String>,
+}
+
+/// Editor handoff configuration — how the TUI launches `$EDITOR` when
+/// a tab raises `OpenInEditor`.
+///
+/// The `tmux-*` strategies require ft to be running inside tmux
+/// (`$TMUX` env var set); when ft is invoked outside tmux, any
+/// `tmux-*` value collapses to [`EditorStrategy::Suspend`] at use time
+/// via [`EditorStrategy::resolve`].
+///
+/// Default: `tmux-popup`. Outside tmux this resolves to `suspend`, so
+/// users who don't use tmux see no behavior change versus pre-plan-011.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Editor {
+    #[serde(default)]
+    pub strategy: EditorStrategy,
+    /// Popup width passed to `tmux display-popup -w` when
+    /// `strategy = tmux-popup`. Accepts tmux geometry syntax:
+    /// percentages (`"90%"`) or cell counts (`"120"`).
+    #[serde(default = "default_popup_width")]
+    pub popup_width: String,
+    /// Popup height — same syntax as [`Self::popup_width`].
+    #[serde(default = "default_popup_height")]
+    pub popup_height: String,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            strategy: EditorStrategy::default(),
+            popup_width: default_popup_width(),
+            popup_height: default_popup_height(),
+        }
+    }
+}
+
+fn default_popup_width() -> String {
+    "90%".into()
+}
+fn default_popup_height() -> String {
+    "90%".into()
+}
+
+/// How to launch `$EDITOR` from the TUI. See [`Editor`] for the
+/// `$TMUX`-fallback rule and the geometry knobs that apply only to
+/// `TmuxPopup`.
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditorStrategy {
+    /// `tmux display-popup -E -- <editor> +N <path>`. The popup's
+    /// lifetime is bound to the editor; ESC and other keys forward
+    /// through to the editor, the popup closes when the editor exits.
+    /// Requires tmux ≥ 3.2.
+    #[default]
+    TmuxPopup,
+    /// `tmux new-window -- <editor> +N <path>`. Editor lands in a new
+    /// tmux window; ft stays visible in the original window. ft
+    /// blocks via a `tmux wait-for` handshake so the post-edit
+    /// refresh runs when the editor closes.
+    TmuxWindow,
+    /// `tmux split-window -- <editor> +N <path>`. Editor lands in a
+    /// split of the current pane. Same `wait-for` handshake as
+    /// `TmuxWindow`.
+    TmuxSplit,
+    /// Current behavior — suspend ft's alt-screen, run the editor
+    /// inline, restore the alt-screen on exit. The `tmux-*`
+    /// strategies all fall back to this when `$TMUX` is unset.
+    Suspend,
+}
+
+impl EditorStrategy {
+    /// Returns the effective strategy after applying the `$TMUX`
+    /// fallback rule. When ft is not running inside tmux, every
+    /// `tmux-*` value collapses to `Suspend`. `Suspend` is the
+    /// identity.
+    ///
+    /// Pure modulo the env-var read; tests toggle `$TMUX` to drive
+    /// both branches.
+    pub fn resolve(self) -> Self {
+        let in_tmux = std::env::var_os("TMUX").is_some_and(|v| !v.is_empty());
+        match self {
+            Self::Suspend => Self::Suspend,
+            Self::TmuxPopup | Self::TmuxWindow | Self::TmuxSplit if !in_tmux => Self::Suspend,
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -359,5 +449,130 @@ work = "tag is #work and not done"
             lc.config.presets.get("work").map(|s| s.as_str()),
             Some("tag is #work and not done")
         );
+    }
+
+    // ── [editor] block (plan 011 session 1) ──────────────────────────────
+
+    /// Shared mutex so the `$TMUX`-toggling tests don't race each other
+    /// (or other tests that read env vars). Local to the editor tests
+    /// because `vault.rs` has its own copy for its own env-var tests.
+    static EDITOR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn editor_defaults_when_block_absent() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert_eq!(lc.config.editor.strategy, EditorStrategy::TmuxPopup);
+        assert_eq!(lc.config.editor.popup_width, "90%");
+        assert_eq!(lc.config.editor.popup_height, "90%");
+    }
+
+    #[test]
+    fn editor_strategy_kebab_case_variants_parse() {
+        for (s, expected) in [
+            ("tmux-popup", EditorStrategy::TmuxPopup),
+            ("tmux-window", EditorStrategy::TmuxWindow),
+            ("tmux-split", EditorStrategy::TmuxSplit),
+            ("suspend", EditorStrategy::Suspend),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let vault = tmp.child("vault.toml");
+            vault
+                .write_str(&format!("[editor]\nstrategy = \"{s}\"\n"))
+                .unwrap();
+            let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+            assert_eq!(
+                lc.config.editor.strategy, expected,
+                "strategy={s:?} should parse to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_unknown_strategy_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[editor]\nstrategy = \"vsplit\"\n")
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "unknown strategy must be rejected");
+    }
+
+    #[test]
+    fn editor_unknown_field_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[editor]\nstrategy = \"suspend\"\ntypo_field = 1\n")
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "deny_unknown_fields should reject typos");
+    }
+
+    #[test]
+    fn editor_popup_geometry_overrides_apply() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[editor]
+strategy = "tmux-popup"
+popup_width = "80"
+popup_height = "50%"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        assert_eq!(lc.config.editor.popup_width, "80");
+        assert_eq!(lc.config.editor.popup_height, "50%");
+    }
+
+    #[test]
+    fn editor_strategy_resolve_passes_through_when_in_tmux() {
+        let _guard = EDITOR_ENV_LOCK.lock().unwrap();
+        std::env::set_var("TMUX", "/tmp/tmux-1000/default,1234,0");
+        assert_eq!(
+            EditorStrategy::TmuxPopup.resolve(),
+            EditorStrategy::TmuxPopup
+        );
+        assert_eq!(
+            EditorStrategy::TmuxWindow.resolve(),
+            EditorStrategy::TmuxWindow
+        );
+        assert_eq!(
+            EditorStrategy::TmuxSplit.resolve(),
+            EditorStrategy::TmuxSplit
+        );
+        assert_eq!(EditorStrategy::Suspend.resolve(), EditorStrategy::Suspend);
+        std::env::remove_var("TMUX");
+    }
+
+    #[test]
+    fn editor_strategy_resolve_falls_back_to_suspend_outside_tmux() {
+        let _guard = EDITOR_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TMUX");
+        assert_eq!(EditorStrategy::TmuxPopup.resolve(), EditorStrategy::Suspend);
+        assert_eq!(
+            EditorStrategy::TmuxWindow.resolve(),
+            EditorStrategy::Suspend
+        );
+        assert_eq!(EditorStrategy::TmuxSplit.resolve(), EditorStrategy::Suspend);
+        assert_eq!(EditorStrategy::Suspend.resolve(), EditorStrategy::Suspend);
+    }
+
+    #[test]
+    fn editor_strategy_resolve_treats_empty_tmux_as_unset() {
+        // tmux unsets TMUX inside `tmux detach` and a few other paths;
+        // an empty value should be treated like "not in tmux".
+        let _guard = EDITOR_ENV_LOCK.lock().unwrap();
+        std::env::set_var("TMUX", "");
+        assert_eq!(EditorStrategy::TmuxPopup.resolve(), EditorStrategy::Suspend);
+        std::env::remove_var("TMUX");
     }
 }

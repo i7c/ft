@@ -18,7 +18,10 @@ use ratatui::Frame;
 
 #[cfg(test)]
 use crate::tui::tabs::tasks::ClockFn;
+use ft_core::config::EditorStrategy;
+
 use crate::tui::{
+    editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
     event::{Event, EventStream},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{notes::NotesTab, tasks::TasksTab, welcome::WelcomeTab},
@@ -282,29 +285,7 @@ impl App {
     ) -> Result<()> {
         match req {
             AppRequest::OpenInEditor { path, line } => {
-                suspend_terminal(terminal).context("could not suspend terminal for $EDITOR")?;
-                let status = spawn_editor(&path, line);
-                restore_terminal(terminal).context("could not restore terminal after $EDITOR")?;
-                // Terminals often emit response sequences (DA1, DCS replies
-                // for XTGETTCAP) when raw mode flips back on, and the user
-                // may have typed during the editor session. Drain so the
-                // next `events.next()` returns a genuine keypress and not
-                // a `/` from a DCS reply that puts us into query-edit mode.
-                events.drain(Duration::from_millis(120));
-                terminal.clear()?;
-                // Whatever the editor did, force a refresh so the row reflects
-                // the on-disk state.
-                {
-                    let mut ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                    };
-                    self.tabs[self.active].refresh(&mut ctx)?;
-                }
-                status?;
+                self.dispatch_open_in_editor(terminal, events, &path, line)?;
                 Ok(())
             }
             AppRequest::OpenInObsidian { url } => {
@@ -322,6 +303,163 @@ impl App {
             }
         }
     }
+
+    /// Strategy-aware editor handoff (plan 011). Resolves the
+    /// configured [`EditorStrategy`] against `$TMUX`, builds the
+    /// matching invocation, and dispatches:
+    ///
+    /// - [`EditorStrategy::Suspend`] — suspend the alt-screen, run
+    ///   the editor inline, restore on exit, drain spurious DCS/DA
+    ///   replies, then refresh.
+    /// - [`EditorStrategy::TmuxPopup`] — run
+    ///   `tmux display-popup -E -- <editor>`; the popup blocks until
+    ///   the editor exits and ft keeps drawing behind it. No suspend.
+    /// - [`EditorStrategy::TmuxWindow`] / [`EditorStrategy::TmuxSplit`]
+    ///   — spawn the editor in a sibling pane wrapped in `sh -c
+    ///   '<editor>; tmux wait-for -S <sig>'`, then block on `tmux
+    ///   wait-for <sig>` so the post-edit refresh sees on-disk
+    ///   state. No suspend.
+    ///
+    /// When the strategy is `Tmux*` but `tmux` isn't on `PATH`, falls
+    /// back to `Suspend` and surfaces an error toast so the user knows
+    /// why their popup didn't appear.
+    fn dispatch_open_in_editor(
+        &mut self,
+        terminal: &mut Tui,
+        events: &EventStream,
+        path: &Path,
+        line: usize,
+    ) -> Result<()> {
+        let cfg_editor = self.vault.config.config.editor.clone();
+        let strategy = cfg_editor.strategy.resolve();
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| "vi".to_string());
+
+        let status = match strategy {
+            EditorStrategy::Suspend => {
+                self.run_editor_suspended(terminal, events, &editor, path, line)
+            }
+            EditorStrategy::TmuxPopup => {
+                let inv = build_invocation(
+                    strategy,
+                    &editor,
+                    path,
+                    line,
+                    &cfg_editor.popup_width,
+                    &cfg_editor.popup_height,
+                );
+                let outcome = run_invocation(&inv);
+                self.fall_back_to_suspend_on_missing_tmux(
+                    terminal, events, &editor, path, line, outcome,
+                )
+            }
+            EditorStrategy::TmuxWindow | EditorStrategy::TmuxSplit => {
+                let signal = unique_signal_name();
+                let inv = build_wait_for_invocation(strategy, &editor, path, line, &signal);
+                let spawn_outcome = run_invocation(&inv);
+                if spawn_outcome.is_ok() {
+                    // Block on the wait-for handshake so the post-edit
+                    // refresh runs against on-disk state. tmux signal
+                    // delivery is best-effort; if `wait-for` fails
+                    // (server killed, signal name collision), we just
+                    // proceed — worst case the user `r`-refreshes.
+                    let _ = Command::new("tmux").args(["wait-for", &signal]).status();
+                }
+                self.fall_back_to_suspend_on_missing_tmux(
+                    terminal,
+                    events,
+                    &editor,
+                    path,
+                    line,
+                    spawn_outcome,
+                )
+            }
+        };
+
+        // Whatever the editor did, force a refresh so the active tab
+        // reflects on-disk state. Mirrors the pre-plan-011 behavior.
+        {
+            let mut ctx = TabCtx {
+                vault: &self.vault,
+                recents: &self.recents,
+                today: self.today,
+                last_refresh: &self.last_refresh,
+                pending_request: &self.pending_request,
+            };
+            self.tabs[self.active].refresh(&mut ctx)?;
+        }
+        status?;
+        Ok(())
+    }
+
+    /// Suspend the alt-screen, run the inline-editor invocation, then
+    /// restore. Used directly by the `Suspend` strategy and as the
+    /// fallback when a `Tmux*` strategy can't find tmux on `PATH`.
+    fn run_editor_suspended(
+        &mut self,
+        terminal: &mut Tui,
+        events: &EventStream,
+        editor: &str,
+        path: &Path,
+        line: usize,
+    ) -> io::Result<()> {
+        suspend_terminal(terminal)
+            .map_err(|e| io::Error::other(format!("suspend_terminal: {e}")))?;
+        let inv = build_invocation(EditorStrategy::Suspend, editor, path, line, "", "");
+        let status = run_invocation(&inv);
+        restore_terminal(terminal)
+            .map_err(|e| io::Error::other(format!("restore_terminal: {e}")))?;
+        // Terminals often emit response sequences (DA1, DCS replies for
+        // XTGETTCAP) when raw mode flips back on, and the user may have
+        // typed during the editor session. Drain so the next
+        // `events.next()` returns a genuine keypress and not a `/` from
+        // a DCS reply that puts us into query-edit mode.
+        events.drain(Duration::from_millis(120));
+        let _ = terminal.clear();
+        status
+    }
+
+    /// If `outcome` is `NotFound`, surface an error toast saying tmux
+    /// is missing and re-run the editor under the suspend strategy.
+    /// Other errors pass through unchanged.
+    fn fall_back_to_suspend_on_missing_tmux(
+        &mut self,
+        terminal: &mut Tui,
+        events: &EventStream,
+        editor: &str,
+        path: &Path,
+        line: usize,
+        outcome: io::Result<()>,
+    ) -> io::Result<()> {
+        match outcome {
+            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+                *self.toast.borrow_mut() = Some(Toast {
+                    text: "tmux not found — opening editor inline".into(),
+                    style: ToastStyle::Error,
+                    deadline: std::time::Instant::now() + TOAST_DURATION,
+                });
+                self.run_editor_suspended(terminal, events, editor, path, line)
+            }
+            other => other,
+        }
+    }
+}
+
+/// Spawn `invocation` and wait for it to exit. Returns `Ok(())` on
+/// successful exit, `Err(io::Error)` on spawn failure or non-zero exit.
+/// The non-zero exit case is preserved as an `io::Error::other` so the
+/// suspend-fallback logic can distinguish "tmux not found"
+/// (`NotFound`) from "editor returned non-zero" (other).
+fn run_invocation(inv: &EditorInvocation) -> io::Result<()> {
+    let status = Command::new(&inv.program).args(&inv.args).status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "editor `{}` exited non-zero: {status}",
+            inv.program
+        )));
+    }
+    Ok(())
 }
 
 /// Resolve "today" for the current run. Honors `FT_TODAY=YYYY-MM-DD` to keep
@@ -370,34 +508,6 @@ fn spawn_url_opener(url: &str) -> Result<()> {
         .arg(url)
         .spawn()
         .with_context(|| format!("failed to launch `{program}`"))?;
-    Ok(())
-}
-
-/// Spawn `$EDITOR` (or `$VISUAL`, falling back to `vi`) on `path`, jumping to
-/// `line` if the editor supports the `+N` flag (vim/nvim/nano/emacs all do).
-fn spawn_editor(path: &Path, line: usize) -> Result<()> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-
-    // Best-effort split for "editor with args" (e.g. EDITOR="code -w").
-    let mut parts = editor.split_whitespace();
-    let program = parts.next().unwrap_or("vi");
-    let extra_args: Vec<&str> = parts.collect();
-
-    let line_arg = format!("+{line}");
-    let mut cmd = Command::new(program);
-    cmd.args(&extra_args).arg(&line_arg).arg(path);
-
-    let status = cmd.status().with_context(|| {
-        format!("failed to launch $EDITOR ({program}); set EDITOR or VISUAL to a working editor")
-    })?;
-    if !status.success() {
-        // Editor exited non-zero — surface as warning via the `last_refresh`
-        // log... actually we can't log to TUI yet. Just write to stderr; main
-        // routes that to a sink so it's harmless. Future: a status toast.
-        let _ = io::Write::write_all(&mut io::stderr(), b"editor exited non-zero\n");
-    }
     Ok(())
 }
 

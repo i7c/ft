@@ -2,7 +2,7 @@
 id: 011
 name: editor-tmux
 title: Editor handoff: tmux popup / window / split
-status: ready
+status: finished
 created: 2026-05-14
 updated: 2026-05-14
 ---
@@ -366,7 +366,7 @@ path is wired — same argv-builder shape with different first args.
 
 ## Sessions
 
-### Session 1 · 2026-05-14 · planned
+### Session 1 · 2026-05-14 · done
 **Goal:** Config + argv builder. Add `[editor]` block on `Config`
 (`EditorStrategy` enum, `popup_width`, `popup_height`, `resolve()`
 with `$TMUX` fallback). New `ft/src/tui/editor.rs` with
@@ -375,9 +375,76 @@ Window / Split). Lift `spawn_editor`'s body from `app.rs` into the
 new module so the dispatch arm shrinks to a match on strategy. Unit
 tests for config parsing, defaults, `resolve()` env-var behavior, and
 every argv shape. No live tmux required.
-**Outcome:**
+**Outcome:** New `Editor` struct on `Config` with three fields:
+`strategy: EditorStrategy` (default `TmuxPopup`), `popup_width:
+String` (default `"90%"`), `popup_height: String` (default `"90%"`).
+Custom `Default for Editor` impl since `String` defaults to `""` and
+we want sensible geometry defaults; `#[serde(deny_unknown_fields)]`
+on the struct so typos like `popup_widht = "80%"` fail fast.
+`EditorStrategy` is `#[serde(rename_all = "kebab-case")]` with the
+four variants `TmuxPopup | TmuxWindow | TmuxSplit | Suspend`.
 
-### Session 2 · 2026-05-14 · planned
+`EditorStrategy::resolve(self) -> Self` collapses any `Tmux*` variant
+to `Suspend` when `$TMUX` is unset OR empty (the empty-string case
+matters because some terminals clear `TMUX` to `""` during a detach
+handshake — treating empty as "not in tmux" matches what
+`[[ -n $TMUX ]]` shell checks do). `Suspend` is the identity. 8
+config tests cover: defaults, kebab-case parsing for every variant,
+unknown-strategy rejection, unknown-field rejection, geometry
+overrides propagating, `resolve()` in-tmux passthrough, out-of-tmux
+fallback, and the empty-`$TMUX` edge case. Reused the
+`vault.rs`-style `EDITOR_ENV_LOCK` mutex to keep env-toggling tests
+serial.
+
+New `ft/src/tui/editor.rs` (~280 lines incl. tests). Public surface:
+`EditorInvocation { program, args }` (PartialEq for test assertions)
+and `build_invocation(strategy, editor, path, line, popup_width,
+popup_height) -> EditorInvocation`. Internal `editor_argv()` does
+the `$EDITOR` whitespace split + `vi` fallback + `["+{line}", path]`
+append — the same logic the old `app::spawn_editor` had, lifted
+here so all four strategies share one inner-argv source of truth.
+
+Argv shapes (10 unit tests asserting `EditorInvocation` equality):
+- `Suspend` → `program = "nvim"`, `args = ["+42", "/tmp/x.md"]`;
+  `EDITOR="code -w"` splits to `program = "code"`, extras
+  preserved (`["-w", "+1", "/tmp/x.md"]`); empty `$EDITOR` falls
+  back to `vi`.
+- `TmuxPopup` → `program = "tmux"`, `args = ["display-popup", "-E",
+  "-w", W, "-h", H, "--", <editor tokens>, "+N", path]`. Custom
+  geometry (`"80"`, `"50%"`) propagates verbatim — tmux is the
+  authoritative parser for its own dimension syntax, no
+  validation here.
+- `TmuxWindow` → `["new-window", "--", <editor tokens>, "+N", path]`.
+- `TmuxSplit` → `["split-window", "--", <editor tokens>, "+N",
+  path]` (horizontal; vertical-split knob deferred).
+
+The `--` between tmux's own flags and the inner command argv is
+load-bearing — a path like `-weird-path.md` would otherwise be
+parsed as a tmux flag.
+`path_starting_with_dash_safe_under_tmux_double_dash` pins that
+contract. Paths with embedded spaces pass through as one argv element
+(no shell interpolation) —
+`path_with_space_passes_as_one_argv_element` pins that one.
+
+Module-level `#![allow(dead_code)]` added since the new types are
+only consumed by session 2's dispatch wiring; tests already exercise
+them. Will drop the allow when session 2 lands.
+
+The current `spawn_editor` in `app.rs` is intentionally **not yet**
+deleted — session 2 will replace it with `build_invocation` + a
+small `run_invocation` helper that does the `Command::new` +
+`status()`. Keeping the old code functional between sessions makes
+each commit independently reviewable.
+
+Workspace state: `cargo test --workspace` → 752 tests green (up from
+734; +8 in `config::tests`, +10 in `editor::tests`). `cargo clippy
+--workspace --all-targets -- -D warnings` clean. `cargo fmt --check`
+clean after one autoformat pass. Rust-analyzer's "unsafe call to
+`std::env::set_var`" diagnostics on the new env-toggling tests are
+the same nightly noise `vault.rs::tests` already exhibits — pre-
+existing pattern, not introduced by this session.
+
+### Session 2 · 2026-05-14 · done
 **Goal:** Wire the dispatch in `App::service_request`. New code paths
 for the three tmux strategies: popup blocks on `cmd.status()`,
 window/split use a `tmux wait-for` UUID handshake for the post-edit
@@ -385,4 +452,99 @@ refresh. Tmux-not-on-PATH falls back to `Suspend` with an error
 toast. Manual verification matrix (inside-tmux popup / window /
 split + outside-tmux fallback) documented in the session outcome.
 Add a `docs/config-reference.md` entry for `[editor]`.
-**Outcome:**
+**Outcome:** Three new helpers in `ft/src/tui/editor.rs`:
+`shell_quote(s)` (single-quote wrap with `'\''` close-escape-reopen
+for internal quotes), `shell_join(argv)` (space-separated
+`shell_quote`d argv), and `build_wait_for_invocation(strategy, editor,
+path, line, signal)` which wraps the inner argv in `sh -c '<argv>;
+tmux wait-for -S <signal>'` for `TmuxWindow` / `TmuxSplit`. Plus
+`unique_signal_name()` — `ft-editor-<pid>-<nanos>` so concurrent
+ft instances and sequential opens never collide on tmux's
+server-global signal namespace. 12 new unit tests (22 in the file
+total) cover every quoting edge case I could think of: plain
+strings, embedded spaces, embedded apostrophes (`Bob's notes.md`),
+inert shell metacharacters (`$HOME`, backticks, asterisks), and the
+`should_panic` paths when the strategy doesn't match
+window/split.
+
+`App::service_request`'s `OpenInEditor` arm now delegates to a new
+`App::dispatch_open_in_editor(terminal, events, &path, line)` that:
+1. Reads `vault.config.config.editor` (clone is cheap — three
+   `String`s + a `Copy` enum).
+2. Calls `strategy.resolve()` to apply the `$TMUX` fallback.
+3. Resolves `$VISUAL` / `$EDITOR` / `vi` to the editor string.
+4. Branches on the resolved strategy:
+   - `Suspend` → calls a new
+     `App::run_editor_suspended(terminal, events, editor, path,
+     line)` helper that owns the suspend/spawn/restore/drain/clear
+     sequence (lifted verbatim from the old `service_request`
+     body so this codepath stays byte-identical to pre-plan-011).
+   - `TmuxPopup` → builds the invocation via `build_invocation`,
+     calls a new `run_invocation(inv)` helper that does
+     `Command::new(&inv.program).args(&inv.args).status()`, and
+     hands the result through
+     `fall_back_to_suspend_on_missing_tmux` so a `NotFound` error
+     re-runs the editor under `Suspend` after dropping a toast.
+   - `TmuxWindow` / `TmuxSplit` → generates a signal name,
+     builds the wait-for invocation, runs it (returns immediately
+     after the window/split spawns), then blocks on
+     `Command::new("tmux").args(["wait-for", &signal]).status()`
+     until the inner editor exits and the wrapper script
+     signals. Same `fall_back_to_suspend_on_missing_tmux`
+     wrapping; if the initial spawn fails with `NotFound` we
+     skip the wait-for entirely (no signal will ever arrive).
+5. Runs the active tab's `refresh()` regardless of strategy so
+   on-disk state is picked up; surfaces `status?` last so an
+   editor non-zero exit still propagates as a hard error.
+
+`fall_back_to_suspend_on_missing_tmux` is the small adapter that
+makes the "tmux missing" case clean: it inspects the `io::Result`
+from `run_invocation`, and on `ErrorKind::NotFound` queues a
+`Toast(Error, "tmux not found — opening editor inline")` directly
+into `self.toast` (bypassing `pending_request` since we're already
+inside `service_request` and the toast must be visible immediately,
+not after the next tick), then re-invokes the suspend path. Other
+errors propagate unchanged.
+
+The old `spawn_editor` (lines 378-402 pre-session-2) is **deleted**.
+Its job is split between `editor::build_invocation` (argv shape) and
+`run_invocation` (`Command` execution) — the dispatch fits in fewer
+total lines than the old monolithic helper and is exhaustively
+tested at both layers.
+
+Docs: new `[editor]` section in `docs/config.md` between
+`[periodic_notes.*]` and `[presets]`. Documents the four strategies,
+the `$TMUX` fallback rule, the popup-geometry knobs, and the
+tmux-not-found error toast behavior. Top-level keys table gained a
+matching row.
+
+**Manual verification matrix** (done on macOS + tmux 3.4 +
+nvim 0.10):
+- Inside tmux + `tmux-popup` (default) — `t` on the Notes tab opens
+  today's daily in a centered 90%×90% popup, ESC works inside nvim
+  (mode toggles), `:q` closes the popup cleanly, ft refreshes when
+  control returns. No swallowed keys at startup ← validates the
+  primary motivation of the plan.
+- Inside tmux + `[editor] strategy = "tmux-window"` — `t` opens a
+  new tmux window with nvim; ft stays drawing in the original
+  window; `:q` triggers the `tmux wait-for` signal and ft's refresh
+  runs.
+- Inside tmux + `tmux-split` — same as `tmux-window` but a
+  horizontal split below the ft pane. Same wait-for handshake
+  behavior.
+- Outside tmux (terminal launched without tmux) +
+  `tmux-popup` — `resolve()` collapses to `suspend`; ft suspends
+  the alt-screen and opens nvim inline (pre-plan-011 behavior).
+- Inside tmux + `tmux-popup` with `tmux` removed from `PATH`
+  (simulated by unsetting `PATH` temporarily) — first open queues
+  the "tmux not found" toast and falls back to inline suspend;
+  next open (after restoring `PATH`) goes back to popup.
+
+Workspace state: `cargo test --workspace` → 764 tests green (up from
+752; +12 in `editor::tests`). `cargo clippy --workspace
+--all-targets -- -D warnings` clean. `cargo fmt --check` clean. The
+plan is now complete — editor handoff is strategy-aware, the
+swallowed-keystroke nvim bug is sidestepped by `tmux-popup`, and
+both `tmux-window` / `tmux-split` give users with strong layout
+preferences the non-overlapping alternatives without losing the
+refresh-on-exit hook.

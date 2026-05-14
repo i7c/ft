@@ -23,6 +23,7 @@ silently default.
 | `ignored_paths`         | array of glob strings             | either        | Folders/files excluded from the vault scan.            |
 | `[notes]`               | table                             | either        | Note-creation settings (template folder).              |
 | `[periodic_notes.*]`    | table per period                  | either        | Daily/weekly/monthly/quarterly/yearly note layout.     |
+| `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](query-dsl.md) presets.               |
 
 `default_vault` is only honored in the user config; setting it in a
@@ -175,6 +176,67 @@ variable inside the template is the filename stem — e.g. `2026-05-14`
 for the daily example above, `2026-W20` for the weekly. See
 `templates-ft/README.md` in your vault for the full template surface
 (filters, variables, gotchas).
+
+## `[editor]`
+
+Controls how the TUI launches `$EDITOR` when a tab raises an
+"open in editor" request (the Notes-tab `o`/`c`/`C`/`t`/`p<…>` flows,
+the section-move new-target sub-flow, the Tasks-tab `e` edit, …). The
+CLI (`ft notes open` / `create` / `periodic` / `today`) is unaffected —
+it's always a one-shot spawn.
+
+```toml
+[editor]
+strategy = "tmux-popup"   # default; also: tmux-window, tmux-split, suspend
+popup_width = "90%"       # tmux-popup only; tmux geometry syntax
+popup_height = "90%"      # tmux-popup only
+```
+
+| Key            | Type   | Default        | Notes                                                                                          |
+|----------------|--------|----------------|------------------------------------------------------------------------------------------------|
+| `strategy`     | string | `"tmux-popup"` | One of `tmux-popup`, `tmux-window`, `tmux-split`, `suspend`. See below.                        |
+| `popup_width`  | string | `"90%"`        | Width passed to `tmux display-popup -w`. Accepts tmux syntax (`"90%"`, `"120"`). Popup only.   |
+| `popup_height` | string | `"90%"`        | Height passed to `tmux display-popup -h`. Same syntax as width. Popup only.                    |
+
+### Strategies
+
+- **`tmux-popup`** *(default)* — Runs the editor in a centered
+  `tmux display-popup -E` overlay. Requires tmux ≥ 3.2 and ft running
+  inside tmux (`$TMUX` set). The popup forwards every keystroke to the
+  editor (including ESC, so nvim's mode switches work normally) and
+  closes when the editor exits. ft keeps drawing behind the popup —
+  no alt-screen dance, no terminal-mode handshake, no swallowed
+  keystrokes.
+
+- **`tmux-window`** — Opens the editor in a fresh tmux window via
+  `tmux new-window`. ft blocks on a `tmux wait-for` handshake so the
+  post-edit refresh runs against on-disk state.
+
+- **`tmux-split`** — Same as `tmux-window` but `tmux split-window`
+  (horizontal split). ft refreshes via the same `wait-for` handshake.
+
+- **`suspend`** — The pre-plan-011 behavior: ft disables raw mode,
+  leaves the alt-screen, runs the editor inline, and restores the
+  alt-screen on exit. Used when the user is not inside tmux (any
+  `tmux-*` value falls back to `suspend` automatically — see below)
+  or explicitly prefers the inline experience.
+
+### `$TMUX` fallback
+
+The three `tmux-*` strategies all require ft to be running inside a
+tmux session. When `$TMUX` is unset or empty, ft resolves any `tmux-*`
+value to `suspend` at use time — there's no warning, just the inline
+behavior. This means the default of `tmux-popup` does the right thing
+for users who sometimes run ft inside tmux and sometimes don't: same
+config, different terminal contexts.
+
+### Missing `tmux` binary
+
+If the configured strategy is `tmux-*` and ft can't find `tmux` on
+`$PATH`, the dispatch falls back to `suspend` for that one open and
+surfaces an error toast: `"tmux not found — opening editor inline"`.
+Configuration is unchanged; the next open under a tmux strategy will
+re-attempt.
 
 ## `[presets]`
 
