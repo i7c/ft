@@ -15,8 +15,8 @@ use ratatui::{
 
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::{
-    is_implicitly_selected, ClipboardItem, ComposeRow, CreateState, NotesState, RenameBuffer,
-    SectionMoveState,
+    is_implicitly_selected, ClipboardItem, ComposeRow, CreateState, NewTargetState, NotesState,
+    RenameBuffer, SectionMoveState,
 };
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
@@ -50,7 +50,33 @@ const MOVE_STEP_2_KEYS: &[(&str, &str)] = &[
 ];
 
 /// Footer keymap for step 3/4 (target picker).
-const MOVE_STEP_3_KEYS: &[(&str, &str)] = &[("Enter", "use target"), ("Esc", "back to selection")];
+const MOVE_STEP_3_KEYS: &[(&str, &str)] = &[
+    ("Enter", "use target"),
+    ("Ctrl+N", "new target"),
+    ("Esc", "back to selection"),
+];
+
+/// Footer keymaps for the new-target sub-flow (plan 009 session 5).
+const MOVE_NEW_TEMPLATE_KEYS: &[(&str, &str)] =
+    &[("Enter", "use template"), ("Esc", "back to target picker")];
+const MOVE_NEW_FOLDER_KEYS: &[(&str, &str)] =
+    &[("Enter", "use folder"), ("Esc", "back to template")];
+const MOVE_NEW_FILENAME_KEYS: &[(&str, &str)] = &[
+    ("Enter", "next"),
+    ("Esc", "back to folder"),
+    ("Ctrl+W", "delete word"),
+];
+const MOVE_NEW_VAR_KEYS: &[(&str, &str)] = &[
+    ("Enter", "next var / compose"),
+    ("Esc", "cancel new target"),
+];
+const MOVE_NEW_COLLISION_KEYS: &[(&str, &str)] = &[
+    ("o", "overwrite"),
+    ("u", "use existing"),
+    ("c", "cancel"),
+    ("←/→", "focus"),
+    ("Enter", "commit"),
+];
 
 /// Footer keymap for step 4/4 (compose).
 const MOVE_STEP_4_KEYS: &[(&str, &str)] = &[
@@ -506,23 +532,320 @@ fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState)
         }
         SectionMoveState::Composing {
             target_rel,
+            target_is_new,
             clipboard,
             layout,
             focus,
             editing,
             ..
         } => {
+            let label = if *target_is_new {
+                format!("{} (new)", target_rel.display())
+            } else {
+                target_rel.display().to_string()
+            };
             render_compose_popup(
                 frame,
                 area,
-                target_rel.display().to_string(),
+                label,
                 clipboard,
                 layout,
                 *focus,
                 editing.as_ref(),
             );
         }
+        SectionMoveState::NewTargetCreating(nts) => render_new_target_overlay(frame, area, nts),
     }
+}
+
+fn render_new_target_overlay(frame: &mut Frame, area: Rect, nts: &mut NewTargetState) {
+    use std::collections::BTreeMap;
+    match nts {
+        NewTargetState::TemplatePicking { picker, .. } => render_path_picker_popup(
+            frame,
+            area,
+            " move · new target · template ",
+            picker,
+            MOVE_NEW_TEMPLATE_KEYS,
+        ),
+        NewTargetState::FolderPicking {
+            template, picker, ..
+        } => {
+            let title = match template {
+                Some(t) => format!(" move · new target · folder · {} ", t.rel.display()),
+                None => " move · new target · folder · blank ".to_string(),
+            };
+            render_path_picker_popup(frame, area, &title, picker, MOVE_NEW_FOLDER_KEYS);
+        }
+        NewTargetState::FilenamePrompt {
+            template,
+            folder,
+            buf,
+            error,
+            ..
+        } => render_new_target_filename_prompt(
+            frame,
+            area,
+            template.as_ref(),
+            folder,
+            buf,
+            error.as_deref(),
+        ),
+        NewTargetState::VarPrompt {
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            next_idx,
+            buf,
+            ..
+        } => render_new_target_var_prompt(
+            frame,
+            area,
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            *next_idx,
+            buf,
+        ),
+        NewTargetState::CollisionPrompt {
+            template,
+            target_rel,
+            focus,
+            ..
+        } => {
+            let _ = BTreeMap::<String, String>::new();
+            render_new_target_collision_prompt(frame, area, template.as_ref(), target_rel, *focus)
+        }
+    }
+}
+
+fn render_new_target_filename_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    folder: &std::path::Path,
+    buf: &crate::tui::widgets::EditBuffer,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(60, 30, area);
+    frame.render_widget(Clear, popup);
+    let folder_label = if folder.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        folder.display().to_string()
+    };
+    let title = match template {
+        Some(t) => format!(
+            " move · new target · filename · {} → {} ",
+            t.rel.display(),
+            folder_label
+        ),
+        None => format!(" move · new target · filename · {} (blank) ", folder_label),
+    };
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let footer_height = if error.is_some() { 3 } else { 2 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(footer_height),
+        ])
+        .split(inner);
+
+    let input = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("filename: ", Style::default().fg(Color::Gray)),
+        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(input), chunks[0]);
+
+    let mut footer_lines: Vec<Line> = Vec::with_capacity(2);
+    if let Some(msg) = error {
+        footer_lines.push(Line::from(Span::styled(
+            msg.to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
+    footer_lines.push(keymap_line(MOVE_NEW_FILENAME_KEYS));
+    frame.render_widget(
+        Paragraph::new(footer_lines).alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_new_target_var_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    template: &crate::tui::tabs::notes::TemplatePick,
+    folder: &std::path::Path,
+    filename: &str,
+    vars_so_far: &std::collections::BTreeMap<String, String>,
+    next_idx: usize,
+    buf: &crate::tui::widgets::EditBuffer,
+) {
+    let popup = centered_rect(60, 35, area);
+    frame.render_widget(Clear, popup);
+    let folder_label = if folder.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        folder.display().to_string()
+    };
+    let total = template.vars_needed.len();
+    let cur = next_idx + 1;
+    let key_name = template
+        .vars_needed
+        .get(next_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("?");
+    let title = format!(" move · new target · vars · {folder_label}/{filename} · {cur}/{total} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let prompt = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
+        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(prompt), chunks[0]);
+
+    let so_far_label: String = if vars_so_far.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = vars_so_far
+            .iter()
+            .map(|(k, v)| format!("{k}={v:?}"))
+            .collect();
+        format!("set: {}", parts.join(", "))
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            so_far_label,
+            Style::default().fg(Color::DarkGray),
+        ))),
+        chunks[1],
+    );
+
+    let footer = keymap_line(MOVE_NEW_VAR_KEYS);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[3],
+    );
+}
+
+fn render_new_target_collision_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    _template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    target_rel: &std::path::Path,
+    focus: crate::tui::tabs::notes::CollisionChoice,
+) {
+    use crate::tui::tabs::notes::CollisionChoice as CC;
+    let popup = centered_rect(60, 30, area);
+    frame.render_widget(Clear, popup);
+    let title = " move · new target · collision ".to_string();
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("target already exists: {}", target_rel.display()),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Center),
+        chunks[0],
+    );
+
+    let opt_span = |label: &str, choice: CC| {
+        let style = if focus == choice {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        Span::styled(format!(" {label} "), style)
+    };
+    let opts = Line::from(vec![
+        opt_span("[O]verwrite", CC::Overwrite),
+        Span::raw("   "),
+        opt_span("[U]se existing", CC::UseExisting),
+        Span::raw("   "),
+        opt_span("[C]ancel", CC::Cancel),
+    ]);
+    frame.render_widget(Paragraph::new(opts).alignment(Alignment::Center), chunks[2]);
+
+    let footer = keymap_line(MOVE_NEW_COLLISION_KEYS);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), footer]).alignment(Alignment::Center),
+        chunks[4],
+    );
 }
 
 fn render_compose_popup(

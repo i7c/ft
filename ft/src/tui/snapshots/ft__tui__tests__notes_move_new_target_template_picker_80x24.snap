@@ -6,21 +6,21 @@ expression: frame
 ┌ notes ───────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  Notes — Obsidian-flavoured editing                                          │
-│               ┌ move · 3/4 target · 1 from project.md ───────┐               │
+│               ┌ move · new target · template ────────────────┐               │
 │  o     open fi│┌ find ──────────────────────────────────────┐│               │
-│  m     move se││archive│                                    ││               │
+│  m     move se││type to search…                             ││               │
 │  c     create │└────────────────────────────────────────────┘│               │
-│  C     create │┌ results ───────────────────────────────────┐│               │
-│  ?     show th││▶ archive.md                                ││               │
-│  Esc   close o││                                            ││               │
-│               ││                                            ││               │
+│  C     create │┌ recent · type to search ───────────────────┐│               │
+│  ?     show th││▶ (no template / blank)                     ││               │
+│  Esc   close o││  new.md                                    ││               │
+│               ││  proj.md                                   ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               ││                                            ││               │
 │               │└────────────────────────────────────────────┘│               │
-│               │ Enter use target   Ctrl+N new target   Esc ba│               │
 │               │                                              │               │
+│               │ Enter use template   Esc back to target picke│               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │
 │                                                                              │

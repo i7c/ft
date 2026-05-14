@@ -409,11 +409,29 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
 /// On empty input the whole list is returned (capped at the picker's
 /// limit) so the user can browse without typing.
 pub struct PathListPickerSource {
-    items: Vec<std::path::PathBuf>,
+    /// `(label, path)` pairs. Decoupling label from path lets callers
+    /// inject synthetic rows (e.g. a "(no template / blank)" entry with
+    /// an empty `PathBuf` and a human label) without polluting downstream
+    /// path handling.
+    items: Vec<(String, std::path::PathBuf)>,
 }
 
 impl PathListPickerSource {
+    /// Build a source from paths, deriving each label from
+    /// `path.display()`. This is the right constructor for the common
+    /// case (folder picker, template picker without blank option).
     pub fn new(items: Vec<std::path::PathBuf>) -> Self {
+        let items = items
+            .into_iter()
+            .map(|p| (p.display().to_string(), p))
+            .collect();
+        Self { items }
+    }
+
+    /// Build a source with explicit `(label, path)` pairs. Use when the
+    /// label diverges from the path — e.g. a synthetic "(blank)" row
+    /// whose `PathBuf` is empty.
+    pub fn with_labels(items: Vec<(String, std::path::PathBuf)>) -> Self {
         Self { items }
     }
 }
@@ -425,8 +443,8 @@ impl PickerSource for PathListPickerSource {
         self.items
             .iter()
             .take(limit)
-            .map(|p| PickerItem {
-                label: p.display().to_string(),
+            .map(|(label, p)| PickerItem {
+                label: label.clone(),
                 match_indices: Vec::new(),
                 data: p.clone(),
             })
@@ -437,10 +455,10 @@ impl PickerSource for PathListPickerSource {
         let lower = q.to_lowercase();
         self.items
             .iter()
-            .filter(|p| p.display().to_string().to_lowercase().contains(&lower))
+            .filter(|(label, _)| label.to_lowercase().contains(&lower))
             .take(limit)
-            .map(|p| PickerItem {
-                label: p.display().to_string(),
+            .map(|(label, p)| PickerItem {
+                label: label.clone(),
                 match_indices: Vec::new(),
                 data: p.clone(),
             })

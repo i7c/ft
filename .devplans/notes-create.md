@@ -2,9 +2,9 @@
 id: 009
 name: notes-create
 title: Notes: create new notes from templates
-status: implementing
+status: finished
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-14
 ---
 
 # Notes: create new notes from templates
@@ -117,16 +117,18 @@ after that we never write Moment.js parsing code.
 
 ### Library — `ft_core::notes` (section-move integration)
 
-- [ ] `Composing` (the section-move state from plan 003) gains a
-      `target_is_new: bool` field. When true, `commit_move` uses the
-      in-memory `target_content` as input to `move_sections` and skips
-      any "target changed on disk" check; `write_pair` writes the
-      target for the first time. When false, behavior is unchanged.
-- [ ] No new public function on `ft_core::notes` — the section-move
-      integration is purely a state-shape addition. The template render
-      and folder/filename/collision plumbing lives at the call-site
-      layer (CLI module + TUI tab).
-- [ ] Update the `Composing` docstring to spell out the
+- [x] `Composing` (the section-move state from plan 003) gains a
+      `target_is_new: bool` field **and** a `target_content: String`
+      field. When `target_is_new` is true, `commit_move` uses
+      `target_content` as input to `move_sections` and skips the
+      "re-read target from disk" step; `write_pair` writes the target
+      for the first time via `fs::write_atomic`. When false, behavior
+      is unchanged (re-read from disk, like plan 003).
+- [x] No new public function on `ft_core::notes` — the section-move
+      integration is purely a state-shape addition in the TUI layer.
+      The template render and folder/filename/collision plumbing lives
+      at the call-site layer (CLI module + TUI tab).
+- [x] Update the `Composing` docstring to spell out the
       `target_is_new=true` semantics (no target-freshness check;
       `write_pair` creates rather than overwrites).
 
@@ -307,10 +309,11 @@ after that we never write Moment.js parsing code.
 
 ### TUI — section-move flow integration (plan 003 step 3)
 
-- [ ] In `TargetPicking`, register a new keybind **`n`** (mnemonic:
-      *new*) alongside the existing picker keys. When pressed, the
-      flow transitions into a `NewTargetCreating(NewTargetState)`
-      sub-state of `SectionMoveState`:
+- [x] In `TargetPicking`, register a new keybind **`Ctrl+N`** (mnemonic:
+      *new*) alongside the existing picker keys. (Changed from plain
+      `n` so the picker's text-filter still works for queries like
+      "notes".) When pressed, the flow transitions into a
+      `NewTargetCreating(NewTargetState)` sub-state of `SectionMoveState`:
       ```rust
       enum NewTargetState {
           TemplatePicking { clipboard, allow_blank: bool },
@@ -324,14 +327,14 @@ after that we never write Moment.js parsing code.
       every variant — at the end of the sub-flow we land in
       `Composing { ..., target_is_new: <bool>, target_content: <String> }`
       with the in-memory rendered content.
-- [ ] **Template-picking semantics in this sub-flow:** unlike standalone
+- [x] **Template-picking semantics in this sub-flow:** unlike standalone
       `C` (template required), the section-move sub-flow lets the
       user pick "(no template / blank)" as the first row so they can
       drop their clipboard into a fresh file with just `# <title>\n`.
       `allow_blank: true` controls this — keeps the type generic enough
       that we could reuse it for a future `c`-from-idle template
       picker variant if we ever want one.
-- [ ] **No file is written during the sub-flow.** When the user
+- [x] **No file is written during the sub-flow.** When the user
       finishes the filename prompt (and any var prompts), ft renders
       the template into a `target_content: String` and runs the
       collision check by `stat`'ing the path:
@@ -340,35 +343,37 @@ after that we never write Moment.js parsing code.
         `target_headings = extract_headings(&target_content)`.
       - If it does exist → enter `CollisionPrompt`. The three choices:
         - **Overwrite** → `target_content = <rendered>`,
-          `target_is_new = false` (the file exists; `write_pair` will
-          overwrite at commit). Note: `target_is_new` is really a
-          rename of "did we render this from a template?" — the
-          relevant invariant is that the rendered content is the
-          source of truth, not whatever is on disk. We don't read the
-          existing file's content; the user picked Overwrite.
+          `target_is_new = true` (the template render is the source
+          of truth; `write_pair` will replace the file at commit).
+          Implementation note: we keep `target_is_new=true` here
+          (slight deviation from the original plan wording) because
+          the in-memory content is what we want to write — re-reading
+          would discard the render.
         - **Use existing** → set `target_content = fs::read_to_string(path)`,
           `target_is_new = false`. This is the normal target-picker
           path; the template render is discarded.
         - **Cancel** → return to `FilenamePrompt` with the buffer
           preserved.
-- [ ] **Deferred creation invariant:** until `commit_move` fires, no
+- [x] **Deferred creation invariant:** until `commit_move` fires, no
       file is written. If the user cancels (`Esc` out of compose, `Esc`
       back through the sub-flow to the source picker, switching tabs,
       quitting), the filesystem is untouched. The rendered content
-      lives entirely on `Composing.target_content`.
-- [ ] **`commit_move` change:** when `target_is_new` is true, skip the
+      lives entirely on `Composing.target_content`. Verified by a
+      directory-listing-before/after test.
+- [x] **`commit_move` change:** when `target_is_new` is true, skip the
       "read target from disk" step and use the in-memory
       `target_content` as the input to `move_sections`. `write_pair`
       is unchanged — it writes target first via `fs::write_atomic`,
       which creates the file if absent.
-- [ ] Step-3 footer in `TargetPicking` updated to advertise
-      `n new target` alongside the existing keys.
-- [ ] Snapshot tests:
-      - `notes_move_new_target_template_picker.snap`
-      - `notes_move_new_target_filename_prompt.snap`
-      - `notes_move_new_target_collision_prompt.snap`
-      - `notes_move_compose_new_target.snap` — compose view where the
-        target is a freshly-rendered (in-memory) template file.
+- [x] Step-3 footer in `TargetPicking` updated to advertise
+      `Ctrl+N new target` alongside the existing keys.
+- [x] Snapshot tests:
+      - `notes_move_new_target_template_picker_80x24.snap`
+      - `notes_move_new_target_filename_prompt_80x24.snap`
+      - `notes_move_new_target_collision_prompt_80x24.snap`
+      - `notes_move_new_target_compose_80x24.snap` — compose view
+        where the target is a freshly-rendered (in-memory) template
+        file. Title shows "(new)" suffix to make the state visible.
 - [x] Behavior tests in `tui::tests`:
       - `n` from `TargetPicking` enters the new-target sub-flow.
       - End-to-end: source pick → multi-select → `n` → template pick →
@@ -860,7 +865,7 @@ Briefly hit two `ptr_arg` lints on `handle_create_var_key` /
 through that, so they're annotated `#[allow(clippy::ptr_arg)]` with
 the existing too-many-arguments allow.
 
-### Session 5 · 2026-05-13 · planned
+### Session 5 · 2026-05-13 · done
 **Goal:** TUI section-move integration. Add `n` keybind in
 `TargetPicking` that enters `NewTargetState` (template → folder →
 filename → vars → optional collision prompt). At sub-flow completion,
@@ -871,4 +876,88 @@ for the first time. Cancel paths leave the filesystem untouched.
 Snapshots + end-to-end test (source pick → multi-select → `n` →
 template → folder → filename → compose → Enter; assert both files on
 disk). Collision-Overwrite and Collision-UseExisting paths covered.
-**Outcome:** 
+**Outcome:** Section-move integration landed. Plan-level keybind
+deviation: changed `n` → `Ctrl+N` because plain `n` collides with
+the picker's text-filter (typing "notes" would bounce out of the
+picker on every `n`). Footer keymap updated; mnemonic preserved.
+
+State machine: new `SectionMoveState::NewTargetCreating(NewTargetState)`
+variant with five sub-states (`TemplatePicking`, `FolderPicking`,
+`FilenamePrompt`, `VarPrompt`, `CollisionPrompt`). A new `MoveCarry`
+struct bundles the step-3 fields (`source_*`, `headings`, `selected`,
+`focus`, `clipboard`) so every variant threads them through without
+re-listing seven fields each. `take_carry()` helper does the
+`std::mem::replace`-with-default dance at every transition out (the
+fields can't be moved out of `&mut` matches).
+
+Template picker has a synthetic `(no template / blank)` row at the
+top — backed by the new `PathListPickerSource::with_labels` API that
+decouples display label from path. Empty `PathBuf` is the sentinel
+for "no template"; the existing folder picker keeps using
+`PathBuf::from(".")` for "vault root" the same way as before.
+Selecting blank skips template-render at commit time (the source for
+the new file is `# <title>\n`).
+
+`Composing` gained two fields: `target_content: String` (the
+canonical target text — rendered template for new targets, disk read
+for existing) and `target_is_new: bool`. `handle_compose_key`'s
+signature grew by two args; `commit_move` branches: when
+`target_is_new`, use `target_content` directly; else re-read the
+target from disk (existing plan-003 behavior to catch external
+edits). `write_pair` is unchanged — `fs::write_atomic` creates the
+file when absent, so the new-target write happens implicitly.
+
+Three Esc/Cancel paths verified by tests:
+- `Esc` out of any sub-flow step → cascades back via TemplatePicking
+  → FolderPicking → FilenamePrompt, or jumps to TargetPicking
+  directly from VarPrompt (`Esc` there means "cancel the whole
+  new-target attempt", not "back one step", to match how `Esc` from
+  the standalone-`C` flow's VarPrompt works).
+- Collision-Cancel (`c`/`C`/`Esc` in the collision menu) → back to
+  FilenamePrompt with the buffer pre-filled.
+- `Esc` out of Composing → standard TargetPicking (existing plan-003
+  behavior, regardless of `target_is_new`). The
+  `target_content`/`target_is_new` are discarded in this case; the
+  user re-enters `Ctrl+N` to re-create.
+
+Collision-Overwrite path: `target_is_new` stays **true** (slight
+deviation from the plan wording which said "false" for this case).
+Rationale: the in-memory rendered content is what we want to write,
+so re-reading the existing file would discard the render. The end
+state on disk is "the template-rendered content + the moved
+sections" — exactly what the user asked for when they picked
+Overwrite.
+
+Same-file guard: filename prompt rejects a target equal to
+`carry.source_rel` with an inline error ("can't create a new target
+equal to the source file") — `move_sections` already errors on
+same-file moves at the library level, but catching it at the prompt
+saves a confusing trip into compose.
+
+10 new TUI tests added (4 snapshot + 6 behavior):
+- Snapshots: `notes_move_new_target_template_picker_80x24` (shows
+  the synthetic blank row + the two test templates),
+  `notes_move_new_target_filename_prompt_80x24`,
+  `notes_move_new_target_collision_prompt_80x24` (vault-relative
+  path in the message so it's machine-portable),
+  `notes_move_new_target_compose_80x24` (title bar shows
+  `proj/Foo.md (new)` suffix; layout interleaves the rendered
+  template's H1+H2 anchors with the source's pending H1).
+- Behavior: `Ctrl+N` enters the sub-flow; end-to-end blank create
+  writes both source and new target to disk and the moved H1 lands
+  in the target; cancel paths leave the filesystem untouched
+  (verified via directory-listing-before/after); collision-Overwrite
+  replaces the existing file with the rendered content + moved
+  section; collision-UseExisting preserves the existing content and
+  appends the moved section; collision-Cancel returns to filename
+  prompt with buffer preserved.
+
+Two pre-existing snapshots re-accepted for the `Ctrl+N new target`
+addition to the target picker footer
+(`notes_move_target_picker_80x24` snap).
+
+Workspace state: 199 ft binary tests + 349 ft-core unit + every
+other suite all green (one `target_picker` snapshot file shows the
+new `Ctrl+N new target` row). `cargo clippy --workspace
+--all-targets -- -D warnings` clean. `cargo fmt --check` clean
+(one autoformat pass on the new mod.rs blocks).

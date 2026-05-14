@@ -3751,3 +3751,444 @@ fn notes_create_esc_from_folder_picker_template_path_returns_to_template_picker(
     );
     Ok(())
 }
+
+// ── Notes tab · section-move new-target sub-flow (plan 009 · session 5) ───
+
+/// Vault tailored for the new-target sub-flow: a source note with a
+/// movable H2 section, a templates dir with a couple of templates,
+/// plus a pre-existing file that we can collide against.
+fn notes_new_target_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join("proj")).unwrap();
+    std::fs::write(
+        vault_path.join("daily.md"),
+        "# 2026-05-13\n\n## Meeting Notes\n\nDiscussed roadmap.\n\n## Personal\n\nMisc.\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("proj/existing.md"), "# Existing\nbody\n").unwrap();
+
+    let templates_dir = vault_path.join("templates-ft");
+    std::fs::create_dir_all(&templates_dir).unwrap();
+    std::fs::write(
+        templates_dir.join("proj.md"),
+        "---\ntags: [Created-{{ today | date(format=\"%Y-%m-%d\") }}, Project]\n---\n# {{ title }}\n## Status\nProposed\n",
+    )
+    .unwrap();
+    std::fs::write(
+        templates_dir.join("new.md"),
+        "---\ntags: [Created-{{ today | date(format=\"%Y-%m-%d\") }}]\n---\n# {{ title }}\n",
+    )
+    .unwrap();
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+fn enter_target_picker(app: &mut crate::tui::App) -> Result<()> {
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('m'))?;
+    // Pick `daily.md` via prefix filter.
+    for c in "daily".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Multi-select first heading (line 1, # 2026-05-13).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now in TargetPicking.
+    Ok(())
+}
+
+#[test]
+fn notes_move_target_ctrl_n_enters_new_target_flow() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("new target · template"),
+        "Ctrl+N should open new-target template picker:\n{frame}"
+    );
+    assert!(
+        frame.contains("(no template / blank)"),
+        "synthetic blank row should appear:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_template_picker_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_new_target_template_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_filename_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Filter to `proj` template + select.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Select the `proj/` folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now in filename prompt — type a partial name.
+    for c in "Q3-".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_new_target_filename_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_collision_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Pick blank.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Pick proj/ folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename that collides with proj/existing.md.
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_new_target_collision_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_compose_snapshot() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // proj template.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // proj/ folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename.
+    for c in "Foo".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Now in Composing with target_is_new = true. Render.
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_new_target_compose_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_end_to_end_writes_both_files() -> Result<()> {
+    let (dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Blank template (skip render).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // proj/ folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename.
+    for c in "Brand New".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Commit compose.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Source file should have the H1 stripped; the new target file
+    // should exist with the H1 prepended to its stub.
+    let source = std::fs::read_to_string(dir.path().join("test-vault/daily.md"))?;
+    let target = std::fs::read_to_string(dir.path().join("test-vault/proj/Brand New.md"))?;
+    assert!(
+        !source.contains("# 2026-05-13"),
+        "H1 should have moved out of source: {source}"
+    );
+    assert!(
+        target.contains("# 2026-05-13"),
+        "H1 should appear in new target: {target}"
+    );
+    // The blank stub starts with `# Brand New` for the new note's title.
+    assert!(
+        target.contains("# Brand New") || target.starts_with("# 2026-05-13"),
+        "target should include either stub heading or moved H1: {target}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_cancel_leaves_filesystem_untouched() -> Result<()> {
+    let (dir, vault) = notes_new_target_vault();
+    let vault_path = dir.path().join("test-vault");
+    let listing_before: Vec<_> = std::fs::read_dir(vault_path.join("proj"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Pick template.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Pick folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Type filename and commit to enter compose.
+    for c in "WillCancel".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Esc out of compose → TargetPicking → Esc → multiselect → Esc → source
+    // picker. No write should ever happen.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+
+    let listing_after: Vec<_> = std::fs::read_dir(vault_path.join("proj"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(
+        listing_before, listing_after,
+        "no file should have been written before commit"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_collision_overwrite_writes_new_content() -> Result<()> {
+    let (dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Blank template.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // proj/ folder.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename that collides with existing.md.
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // CollisionPrompt visible. Press `o` → Overwrite → compose.
+    app.dispatch(key('o'))?;
+    // Now in Composing. Commit.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let content = std::fs::read_to_string(dir.path().join("test-vault/proj/existing.md"))?;
+    // Old "# Existing" should be gone (overwritten by the stub + moved
+    // section).
+    assert!(
+        !content.contains("# Existing"),
+        "old content should have been overwritten: {content}"
+    );
+    assert!(
+        content.contains("# 2026-05-13"),
+        "moved heading should be in the new target: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_collision_use_existing_preserves_file() -> Result<()> {
+    let (dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    // Blank.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // proj/.
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Filename that collides.
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // `u` → use existing (no template render; existing content kept).
+    app.dispatch(key('u'))?;
+    // Commit.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let content = std::fs::read_to_string(dir.path().join("test-vault/proj/existing.md"))?;
+    // Pre-existing `# Existing` should still be there; moved heading
+    // should be added.
+    assert!(content.contains("# Existing"), "{content}");
+    assert!(content.contains("# 2026-05-13"), "{content}");
+    Ok(())
+}
+
+#[test]
+fn notes_move_new_target_collision_cancel_returns_to_filename() -> Result<()> {
+    let (_dir, vault) = notes_new_target_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    enter_target_picker(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "proj".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "existing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // `c` cancels → back to filename prompt with buffer preserved.
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("filename:") && frame.contains("existing"),
+        "expected filename prompt with buffer pre-filled:\n{frame}"
+    );
+    Ok(())
+}

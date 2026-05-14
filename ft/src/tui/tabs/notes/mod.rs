@@ -55,6 +55,20 @@ pub enum NotesState {
     Creating(CreateState),
 }
 
+/// Step-3 state for the section-move flow, bundled so the
+/// [`NewTargetState`] sub-flow can thread it through without copying
+/// every field name into five enum variants.
+#[derive(Debug)]
+pub struct MoveCarry {
+    pub source_rel: PathBuf,
+    pub source_abs: PathBuf,
+    pub source_content: String,
+    pub headings: Vec<Heading>,
+    pub selected: BTreeSet<usize>,
+    pub focus: usize,
+    pub clipboard: Vec<ClipboardItem>,
+}
+
 /// State machine for the section-move flow. Variants line up 1:1 with
 /// the four steps documented in the plan.
 pub enum SectionMoveState {
@@ -92,6 +106,14 @@ pub enum SectionMoveState {
         picker: FuzzyPicker<VaultFilePickerSource>,
         error: Option<String>,
     },
+    /// Plan 009 session 5 — sub-flow for creating the move's target
+    /// from a template (or blank) before reaching [`Self::Composing`].
+    /// `Ctrl+N` from [`Self::TargetPicking`] enters this sub-flow; on
+    /// successful filename + (optional) var prompts, lands in
+    /// `Composing` with `target_is_new: true` and the rendered content
+    /// held in memory. Cancel paths return to `TargetPicking` with the
+    /// step-3 state preserved — no file is ever written until commit.
+    NewTargetCreating(NewTargetState),
     /// Step 4/4 — compose the move. The layout interleaves the target's
     /// own headings (as `Anchor` rows, immutable) with the clipboard's
     /// pending picks (as `Pending` rows, reorderable + level-shiftable).
@@ -107,6 +129,17 @@ pub enum SectionMoveState {
         target_rel: PathBuf,
         target_abs: PathBuf,
         target_headings: Vec<Heading>,
+        /// Target content used by [`commit_move`] when `target_is_new`
+        /// is true (we never wrote the file, so this is the canonical
+        /// copy). When `target_is_new` is false this still holds the
+        /// content read at compose-entry, but commit re-reads from
+        /// disk to pick up any external edits.
+        target_content: String,
+        /// True when the target was synthesised by the new-target
+        /// sub-flow (template render or blank stub) and hasn't been
+        /// written yet. Commit writes via `write_pair`; cancel paths
+        /// leave the filesystem untouched.
+        target_is_new: bool,
         clipboard: Vec<ClipboardItem>,
         layout: Vec<ComposeRow>,
         focus: usize,
@@ -198,6 +231,51 @@ pub enum CreateState {
         filename: String,
         vars: BTreeMap<String, String>,
         abs_path: PathBuf,
+        focus: CollisionChoice,
+    },
+}
+
+/// Section-move new-target sub-flow (plan 009 session 5). Mirrors
+/// [`CreateState`] but threads a [`MoveCarry`] through every variant so
+/// `Esc` paths can return to [`SectionMoveState::TargetPicking`] with
+/// the user's prior clipboard intact.
+pub enum NewTargetState {
+    TemplatePicking {
+        carry: MoveCarry,
+        /// Picker source includes a synthetic `(no template / blank)`
+        /// row at the top whose `data` is an empty `PathBuf` — picked
+        /// it skips template rendering and uses a `# <title>\n` stub.
+        picker: FuzzyPicker<PathListPickerSource>,
+    },
+    FolderPicking {
+        carry: MoveCarry,
+        template: Option<TemplatePick>,
+        picker: FuzzyPicker<PathListPickerSource>,
+    },
+    FilenamePrompt {
+        carry: MoveCarry,
+        template: Option<TemplatePick>,
+        folder: PathBuf,
+        buf: EditBuffer,
+        error: Option<String>,
+    },
+    VarPrompt {
+        carry: MoveCarry,
+        template: TemplatePick,
+        folder: PathBuf,
+        filename: String,
+        vars_so_far: BTreeMap<String, String>,
+        next_idx: usize,
+        buf: EditBuffer,
+    },
+    CollisionPrompt {
+        carry: MoveCarry,
+        template: Option<TemplatePick>,
+        folder: PathBuf,
+        filename: String,
+        vars: BTreeMap<String, String>,
+        target_abs: PathBuf,
+        target_rel: PathBuf,
         focus: CollisionChoice,
     },
 }
@@ -460,6 +538,7 @@ impl NotesTab {
                 error,
                 ctx,
             ),
+            SectionMoveState::NewTargetCreating(nts) => handle_new_target_key(k, nts, ctx),
             SectionMoveState::Composing {
                 source_rel,
                 source_abs,
@@ -469,6 +548,8 @@ impl NotesTab {
                 target_rel,
                 target_abs,
                 target_headings,
+                target_content,
+                target_is_new,
                 clipboard,
                 layout,
                 focus,
@@ -483,6 +564,8 @@ impl NotesTab {
                 target_rel,
                 target_abs,
                 target_headings,
+                target_content,
+                target_is_new,
                 clipboard,
                 layout,
                 focus,
@@ -624,6 +707,22 @@ fn handle_target_picker_key(
     error: &mut Option<String>,
     ctx: &TabCtx,
 ) -> MoveAction {
+    // Ctrl+N: enter the new-target sub-flow. Intercepted before the
+    // picker so `n` alone still filters normally.
+    if k.code == KeyCode::Char('n') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        let carry = MoveCarry {
+            source_rel: std::mem::take(source_rel),
+            source_abs: std::mem::take(source_abs),
+            source_content: std::mem::take(source_content),
+            headings: std::mem::take(headings),
+            selected: std::mem::take(selected),
+            focus: *focus,
+            clipboard: std::mem::take(clipboard),
+        };
+        return MoveAction::Set(Box::new(NotesState::MoveSection(
+            SectionMoveState::NewTargetCreating(begin_new_target_template_picking(ctx, carry)),
+        )));
+    }
     match picker.handle_key(k) {
         PickerOutcome::Selected(hit) => {
             if hit.path == *source_rel {
@@ -748,6 +847,8 @@ fn advance_to_composing(
         target_rel: target_hit.path,
         target_abs,
         target_headings,
+        target_content,
+        target_is_new: false,
         clipboard,
         layout,
         focus,
@@ -773,6 +874,8 @@ fn handle_compose_key(
     target_rel: &mut PathBuf,
     target_abs: &mut PathBuf,
     _target_headings: &mut Vec<Heading>,
+    target_content: &mut String,
+    target_is_new: &mut bool,
     clipboard: &mut Vec<ClipboardItem>,
     layout: &mut Vec<ComposeRow>,
     focus: &mut usize,
@@ -839,7 +942,15 @@ fn handle_compose_key(
         }
         (KeyCode::Enter, _) => {
             commit_move(
-                ctx, source_rel, source_abs, target_rel, target_abs, clipboard, layout,
+                ctx,
+                source_rel,
+                source_abs,
+                target_rel,
+                target_abs,
+                target_content,
+                *target_is_new,
+                clipboard,
+                layout,
             );
             MoveAction::Set(Box::new(NotesState::Idle))
         }
@@ -1029,6 +1140,10 @@ fn shift_focused_level(
 /// `picks` + `plan` from the current layout, call `move_sections` +
 /// `write_pair`. Emits a success toast on the happy path, an error
 /// toast on any failure. Returning to Idle is the caller's job.
+///
+/// When `target_is_new` is true, `target_content` is the canonical
+/// (in-memory) target — we don't re-read from disk because the file
+/// doesn't exist yet. `write_pair` writes it for the first time.
 #[allow(clippy::too_many_arguments)]
 fn commit_move(
     ctx: &TabCtx,
@@ -1036,6 +1151,8 @@ fn commit_move(
     source_abs: &Path,
     target_rel: &Path,
     target_abs: &Path,
+    target_content: &str,
+    target_is_new: bool,
     clipboard: &[ClipboardItem],
     layout: &[ComposeRow],
 ) {
@@ -1061,15 +1178,22 @@ fn commit_move(
         }
     }
 
-    let fresh_target = match std::fs::read_to_string(target_abs) {
-        Ok(s) => s,
-        Err(e) => {
-            queue_toast(
-                ctx,
-                &format!("could not re-read target: {e}"),
-                ToastStyle::Error,
-            );
-            return;
+    // For new targets, the on-disk file doesn't exist — use the
+    // in-memory rendered content. For existing targets, re-read so we
+    // pick up any external edits since compose-entry.
+    let fresh_target: String = if target_is_new {
+        target_content.to_string()
+    } else {
+        match std::fs::read_to_string(target_abs) {
+            Ok(s) => s,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("could not re-read target: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
         }
     };
 
@@ -1833,4 +1957,674 @@ fn build_template_context(
     let mut ctx = TemplateContext::new(title, today, now);
     ctx.vars = vars;
     ctx
+}
+
+// ── Section-move new-target sub-flow (plan 009 session 5) ────────────────────
+
+/// Build the [`NewTargetState::TemplatePicking`] entry state. The picker
+/// is seeded with a synthetic `(no template / blank)` row followed by
+/// the configured templates dir contents. Empty templates dir is fine:
+/// only the blank option appears.
+fn begin_new_target_template_picking(ctx: &TabCtx, carry: MoveCarry) -> NewTargetState {
+    let templates = enumerate_templates(ctx.vault);
+    let mut items: Vec<(String, PathBuf)> = Vec::with_capacity(templates.len() + 1);
+    items.push(("(no template / blank)".to_string(), PathBuf::new()));
+    for t in templates {
+        let label = t.display().to_string();
+        items.push((label, t));
+    }
+    NewTargetState::TemplatePicking {
+        carry,
+        picker: FuzzyPicker::new(PathListPickerSource::with_labels(items)),
+    }
+}
+
+fn begin_new_target_folder_picking(
+    ctx: &TabCtx,
+    carry: MoveCarry,
+    template: Option<TemplatePick>,
+) -> NewTargetState {
+    let folders = enumerate_vault_folders(ctx.vault);
+    NewTargetState::FolderPicking {
+        carry,
+        template,
+        picker: FuzzyPicker::new(PathListPickerSource::new(folders)),
+    }
+}
+
+/// Top-level dispatcher for the new-target sub-flow. Mirrors
+/// [`NotesTab::handle_create_key`] shape but lives outside the impl so
+/// it can take `&mut NewTargetState` without re-borrowing self.
+fn handle_new_target_key(k: KeyEvent, nts: &mut NewTargetState, ctx: &TabCtx) -> MoveAction {
+    match nts {
+        NewTargetState::TemplatePicking { carry, picker } => {
+            handle_new_target_template_picker_key(k, carry, picker, ctx)
+        }
+        NewTargetState::FolderPicking {
+            carry,
+            template,
+            picker,
+        } => handle_new_target_folder_picker_key(k, carry, template, picker, ctx),
+        NewTargetState::FilenamePrompt {
+            carry,
+            template,
+            folder,
+            buf,
+            error,
+        } => handle_new_target_filename_key(k, carry, template, folder, buf, error, ctx),
+        NewTargetState::VarPrompt {
+            carry,
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            next_idx,
+            buf,
+        } => handle_new_target_var_key(
+            k,
+            carry,
+            template,
+            folder,
+            filename,
+            vars_so_far,
+            next_idx,
+            buf,
+            ctx,
+        ),
+        NewTargetState::CollisionPrompt {
+            carry,
+            template,
+            folder,
+            filename,
+            vars,
+            target_abs,
+            target_rel,
+            focus,
+        } => handle_new_target_collision_key(
+            k, carry, template, folder, filename, vars, target_abs, target_rel, focus, ctx,
+        ),
+    }
+}
+
+/// Rebuild [`SectionMoveState::TargetPicking`] from `carry`. Used by
+/// every cancel path in the new-target sub-flow.
+fn back_to_target_picking(ctx: &TabCtx, carry: MoveCarry) -> NotesState {
+    NotesState::MoveSection(SectionMoveState::TargetPicking {
+        source_rel: carry.source_rel,
+        source_abs: carry.source_abs,
+        source_content: carry.source_content,
+        headings: carry.headings,
+        selected: carry.selected,
+        focus: carry.focus,
+        clipboard: carry.clipboard,
+        picker: NotesTab::new_vault_picker(ctx),
+        error: None,
+    })
+}
+
+fn handle_new_target_template_picker_key(
+    k: KeyEvent,
+    carry: &mut MoveCarry,
+    picker: &mut FuzzyPicker<PathListPickerSource>,
+    ctx: &TabCtx,
+) -> MoveAction {
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(rel) => {
+            let template: Option<TemplatePick> = if rel.as_os_str().is_empty() {
+                None
+            } else {
+                let abs = ctx.vault.templates_dir().join(&rel);
+                let source = match std::fs::read_to_string(&abs) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        queue_toast(
+                            ctx,
+                            &format!("could not read template: {e}"),
+                            ToastStyle::Error,
+                        );
+                        return MoveAction::Set(Box::new(back_to_target_picking(
+                            ctx,
+                            take_carry(carry),
+                        )));
+                    }
+                };
+                let vars_needed = discover_template_vars(&source);
+                Some(TemplatePick {
+                    rel,
+                    source,
+                    vars_needed,
+                })
+            };
+            MoveAction::Set(Box::new(NotesState::MoveSection(
+                SectionMoveState::NewTargetCreating(begin_new_target_folder_picking(
+                    ctx,
+                    take_carry(carry),
+                    template,
+                )),
+            )))
+        }
+        PickerOutcome::Cancelled => {
+            MoveAction::Set(Box::new(back_to_target_picking(ctx, take_carry(carry))))
+        }
+        PickerOutcome::StillOpen => MoveAction::Stay,
+        PickerOutcome::NotHandled => MoveAction::NotHandled,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_new_target_folder_picker_key(
+    k: KeyEvent,
+    carry: &mut MoveCarry,
+    template: &mut Option<TemplatePick>,
+    picker: &mut FuzzyPicker<PathListPickerSource>,
+    ctx: &TabCtx,
+) -> MoveAction {
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(folder) => {
+            let folder = if folder == Path::new(".") {
+                PathBuf::new()
+            } else {
+                folder
+            };
+            MoveAction::Set(Box::new(NotesState::MoveSection(
+                SectionMoveState::NewTargetCreating(NewTargetState::FilenamePrompt {
+                    carry: take_carry(carry),
+                    template: template.take(),
+                    folder,
+                    buf: EditBuffer::default(),
+                    error: None,
+                }),
+            )))
+        }
+        // Esc → back to the template picker (always present in the
+        // sub-flow, since this is the new-target path).
+        PickerOutcome::Cancelled => MoveAction::Set(Box::new(NotesState::MoveSection(
+            SectionMoveState::NewTargetCreating(begin_new_target_template_picking(
+                ctx,
+                take_carry(carry),
+            )),
+        ))),
+        PickerOutcome::StillOpen => MoveAction::Stay,
+        PickerOutcome::NotHandled => MoveAction::NotHandled,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_new_target_filename_key(
+    k: KeyEvent,
+    carry: &mut MoveCarry,
+    template: &mut Option<TemplatePick>,
+    folder: &mut PathBuf,
+    buf: &mut EditBuffer,
+    error: &mut Option<String>,
+    ctx: &TabCtx,
+) -> MoveAction {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match (k.code, ctrl) {
+        (KeyCode::Esc, _) => MoveAction::Set(Box::new(NotesState::MoveSection(
+            SectionMoveState::NewTargetCreating(begin_new_target_folder_picking(
+                ctx,
+                take_carry(carry),
+                template.take(),
+            )),
+        ))),
+        (KeyCode::Enter, _) => {
+            let trimmed = buf.text.trim();
+            if trimmed.is_empty() {
+                *error = Some("filename is required".into());
+                return MoveAction::Stay;
+            }
+            if trimmed.contains('/') || trimmed.contains('\\') {
+                *error = Some("filename can't contain path separators".into());
+                return MoveAction::Stay;
+            }
+            let filename = if trimmed.ends_with(".md") {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}.md")
+            };
+            let abs_path = ctx.vault.path.join(folder.as_path()).join(&filename);
+            let rel_path = if folder.as_os_str().is_empty() {
+                PathBuf::from(&filename)
+            } else {
+                folder.join(&filename)
+            };
+
+            // Same-file collision: the user's source can't also be the
+            // new target.
+            if rel_path == carry.source_rel {
+                *error = Some("can't create a new target equal to the source file".into());
+                return MoveAction::Stay;
+            }
+
+            if abs_path.exists() {
+                return MoveAction::Set(Box::new(NotesState::MoveSection(
+                    SectionMoveState::NewTargetCreating(NewTargetState::CollisionPrompt {
+                        carry: take_carry(carry),
+                        template: template.take(),
+                        folder: std::mem::take(folder),
+                        filename,
+                        vars: BTreeMap::new(),
+                        target_abs: abs_path,
+                        target_rel: rel_path,
+                        focus: CollisionChoice::Overwrite,
+                    }),
+                )));
+            }
+
+            // No collision. Advance to var prompts (if any) or commit
+            // straight into Composing.
+            match template.take() {
+                Some(tpl) if !tpl.vars_needed.is_empty() => {
+                    MoveAction::Set(Box::new(NotesState::MoveSection(
+                        SectionMoveState::NewTargetCreating(NewTargetState::VarPrompt {
+                            carry: take_carry(carry),
+                            template: tpl,
+                            folder: std::mem::take(folder),
+                            filename,
+                            vars_so_far: BTreeMap::new(),
+                            next_idx: 0,
+                            buf: EditBuffer::default(),
+                        }),
+                    )))
+                }
+                tpl => MoveAction::Set(Box::new(advance_new_target_to_composing(
+                    ctx,
+                    take_carry(carry),
+                    tpl.as_ref(),
+                    std::mem::take(folder),
+                    filename,
+                    &BTreeMap::new(),
+                    abs_path,
+                    rel_path,
+                    /*overwrite_existing=*/ false,
+                ))),
+            }
+        }
+        (KeyCode::Char('w'), true) => {
+            buf.delete_word_backward();
+            *error = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Char(c), false) => {
+            buf.insert(c);
+            *error = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Backspace, _) => {
+            buf.backspace();
+            *error = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Delete, _) => {
+            buf.delete();
+            *error = None;
+            MoveAction::Stay
+        }
+        (KeyCode::Left, _) => {
+            buf.left();
+            MoveAction::Stay
+        }
+        (KeyCode::Right, _) => {
+            buf.right();
+            MoveAction::Stay
+        }
+        (KeyCode::Home, _) => {
+            buf.home();
+            MoveAction::Stay
+        }
+        (KeyCode::End, _) => {
+            buf.end();
+            MoveAction::Stay
+        }
+        _ => MoveAction::NotHandled,
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+fn handle_new_target_var_key(
+    k: KeyEvent,
+    carry: &mut MoveCarry,
+    template: &mut TemplatePick,
+    folder: &mut PathBuf,
+    filename: &mut String,
+    vars_so_far: &mut BTreeMap<String, String>,
+    next_idx: &mut usize,
+    buf: &mut EditBuffer,
+    ctx: &TabCtx,
+) -> MoveAction {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match (k.code, ctrl) {
+        // Esc here cancels the entire new-target sub-flow, returning
+        // to TargetPicking with the clipboard preserved. Going "back"
+        // step-by-step is more granular than the user wants here.
+        (KeyCode::Esc, _) => {
+            MoveAction::Set(Box::new(back_to_target_picking(ctx, take_carry(carry))))
+        }
+        (KeyCode::Enter, _) => {
+            let key_name = template
+                .vars_needed
+                .get(*next_idx)
+                .cloned()
+                .unwrap_or_default();
+            vars_so_far.insert(key_name, buf.text.clone());
+            *next_idx += 1;
+            if *next_idx >= template.vars_needed.len() {
+                let abs_path = ctx.vault.path.join(folder.as_path()).join(&*filename);
+                let rel_path = if folder.as_os_str().is_empty() {
+                    PathBuf::from(&*filename)
+                } else {
+                    folder.join(&*filename)
+                };
+                MoveAction::Set(Box::new(advance_new_target_to_composing(
+                    ctx,
+                    take_carry(carry),
+                    Some(template),
+                    std::mem::take(folder),
+                    std::mem::take(filename),
+                    vars_so_far,
+                    abs_path,
+                    rel_path,
+                    /*overwrite_existing=*/ false,
+                )))
+            } else {
+                buf.text.clear();
+                buf.cursor = 0;
+                MoveAction::Stay
+            }
+        }
+        (KeyCode::Char('w'), true) => {
+            buf.delete_word_backward();
+            MoveAction::Stay
+        }
+        (KeyCode::Char(c), false) => {
+            buf.insert(c);
+            MoveAction::Stay
+        }
+        (KeyCode::Backspace, _) => {
+            buf.backspace();
+            MoveAction::Stay
+        }
+        (KeyCode::Delete, _) => {
+            buf.delete();
+            MoveAction::Stay
+        }
+        (KeyCode::Left, _) => {
+            buf.left();
+            MoveAction::Stay
+        }
+        (KeyCode::Right, _) => {
+            buf.right();
+            MoveAction::Stay
+        }
+        (KeyCode::Home, _) => {
+            buf.home();
+            MoveAction::Stay
+        }
+        (KeyCode::End, _) => {
+            buf.end();
+            MoveAction::Stay
+        }
+        _ => MoveAction::NotHandled,
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+fn handle_new_target_collision_key(
+    k: KeyEvent,
+    carry: &mut MoveCarry,
+    template: &mut Option<TemplatePick>,
+    folder: &mut PathBuf,
+    filename: &mut String,
+    vars: &mut BTreeMap<String, String>,
+    target_abs: &mut PathBuf,
+    target_rel: &mut PathBuf,
+    focus: &mut CollisionChoice,
+    ctx: &TabCtx,
+) -> MoveAction {
+    let go = |choice: CollisionChoice,
+              carry: &mut MoveCarry,
+              template: &mut Option<TemplatePick>,
+              folder: &mut PathBuf,
+              filename: &mut String,
+              vars: &mut BTreeMap<String, String>,
+              target_abs: &mut PathBuf,
+              target_rel: &mut PathBuf|
+     -> MoveAction {
+        match choice {
+            CollisionChoice::Overwrite => {
+                MoveAction::Set(Box::new(advance_new_target_to_composing(
+                    ctx,
+                    take_carry(carry),
+                    template.as_ref(),
+                    std::mem::take(folder),
+                    std::mem::take(filename),
+                    vars,
+                    std::mem::take(target_abs),
+                    std::mem::take(target_rel),
+                    /*overwrite_existing=*/ true,
+                )))
+            }
+            CollisionChoice::UseExisting => {
+                // Read the existing file and treat it as the target —
+                // no rendering, no overwrite. This matches the
+                // standalone create flow's "use existing" semantics.
+                let existing = match std::fs::read_to_string(&*target_abs) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        queue_toast(
+                            ctx,
+                            &format!("could not read existing target: {e}"),
+                            ToastStyle::Error,
+                        );
+                        return MoveAction::Set(Box::new(back_to_target_picking(
+                            ctx,
+                            take_carry(carry),
+                        )));
+                    }
+                };
+                MoveAction::Set(Box::new(compose_with_existing_target(
+                    take_carry(carry),
+                    std::mem::take(target_rel),
+                    std::mem::take(target_abs),
+                    existing,
+                )))
+            }
+            CollisionChoice::Cancel => MoveAction::Set(Box::new(NotesState::MoveSection(
+                SectionMoveState::NewTargetCreating(NewTargetState::FilenamePrompt {
+                    carry: take_carry(carry),
+                    template: template.take(),
+                    folder: std::mem::take(folder),
+                    buf: EditBuffer::from(filename),
+                    error: None,
+                }),
+            ))),
+        }
+    };
+
+    match (k.code, k.modifiers) {
+        (KeyCode::Char('o'), KeyModifiers::NONE) | (KeyCode::Char('O'), _) => go(
+            CollisionChoice::Overwrite,
+            carry,
+            template,
+            folder,
+            filename,
+            vars,
+            target_abs,
+            target_rel,
+        ),
+        (KeyCode::Char('u'), KeyModifiers::NONE) | (KeyCode::Char('U'), _) => go(
+            CollisionChoice::UseExisting,
+            carry,
+            template,
+            folder,
+            filename,
+            vars,
+            target_abs,
+            target_rel,
+        ),
+        (KeyCode::Char('c'), KeyModifiers::NONE) | (KeyCode::Char('C'), _) | (KeyCode::Esc, _) => {
+            go(
+                CollisionChoice::Cancel,
+                carry,
+                template,
+                folder,
+                filename,
+                vars,
+                target_abs,
+                target_rel,
+            )
+        }
+        (KeyCode::Enter, _) => go(
+            *focus, carry, template, folder, filename, vars, target_abs, target_rel,
+        ),
+        (KeyCode::Left, _) | (KeyCode::Char('h'), KeyModifiers::NONE) => {
+            *focus = focus.prev();
+            MoveAction::Stay
+        }
+        (KeyCode::Right, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+            *focus = focus.next();
+            MoveAction::Stay
+        }
+        _ => MoveAction::NotHandled,
+    }
+}
+
+/// Render the template (or build a `# <title>\n` stub for blank), then
+/// build the `Composing` state with `target_is_new: true` and the
+/// rendered content in memory. The file is **not** written here —
+/// `commit_move` does that on `Enter`. `overwrite_existing` is kept for
+/// future use (e.g. surface in toast wording); it has no behavioural
+/// effect since the on-disk file is replaced wholesale by `write_pair`.
+#[allow(clippy::too_many_arguments)]
+fn advance_new_target_to_composing(
+    ctx: &TabCtx,
+    carry: MoveCarry,
+    template: Option<&TemplatePick>,
+    _folder: PathBuf,
+    filename: String,
+    vars: &BTreeMap<String, String>,
+    target_abs: PathBuf,
+    target_rel: PathBuf,
+    _overwrite_existing: bool,
+) -> NotesState {
+    let title = std::path::Path::new(&filename)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let target_content = match template {
+        None => format!("# {title}\n"),
+        Some(tpl) => {
+            let tctx = build_template_context(title.clone(), ctx.today, vars.clone());
+            match render_template(&tpl.source, &tctx) {
+                Ok(s) => s,
+                Err(e) => {
+                    queue_toast(
+                        ctx,
+                        &format!("template render failed: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return back_to_target_picking(ctx, carry);
+                }
+            }
+        }
+    };
+    let target_headings = extract_headings(&target_content);
+
+    let mut layout: Vec<ComposeRow> = target_headings
+        .iter()
+        .map(|h| ComposeRow::Anchor {
+            line: h.line,
+            level: h.level,
+            text: h.text.clone(),
+        })
+        .collect();
+    for (idx, item) in carry.clipboard.iter().enumerate() {
+        layout.push(ComposeRow::Pending {
+            clip_idx: idx,
+            level: item.level,
+            rename: None,
+        });
+    }
+    let focus = target_headings.len().min(layout.len().saturating_sub(1));
+
+    NotesState::MoveSection(SectionMoveState::Composing {
+        source_rel: carry.source_rel,
+        source_abs: carry.source_abs,
+        source_content: carry.source_content,
+        headings: carry.headings,
+        selected: carry.selected,
+        target_rel,
+        target_abs,
+        target_headings,
+        target_content,
+        target_is_new: true,
+        clipboard: carry.clipboard,
+        layout,
+        focus,
+        editing: None,
+    })
+}
+
+/// Compose against an existing file (the user chose "Use existing" in
+/// the collision prompt). Behavior matches the regular target-picker
+/// path: we use the on-disk content as-is and treat the file as
+/// non-new (`target_is_new: false`).
+fn compose_with_existing_target(
+    carry: MoveCarry,
+    target_rel: PathBuf,
+    target_abs: PathBuf,
+    target_content: String,
+) -> NotesState {
+    let target_headings = extract_headings(&target_content);
+    let mut layout: Vec<ComposeRow> = target_headings
+        .iter()
+        .map(|h| ComposeRow::Anchor {
+            line: h.line,
+            level: h.level,
+            text: h.text.clone(),
+        })
+        .collect();
+    for (idx, item) in carry.clipboard.iter().enumerate() {
+        layout.push(ComposeRow::Pending {
+            clip_idx: idx,
+            level: item.level,
+            rename: None,
+        });
+    }
+    let focus = target_headings.len().min(layout.len().saturating_sub(1));
+    NotesState::MoveSection(SectionMoveState::Composing {
+        source_rel: carry.source_rel,
+        source_abs: carry.source_abs,
+        source_content: carry.source_content,
+        headings: carry.headings,
+        selected: carry.selected,
+        target_rel,
+        target_abs,
+        target_headings,
+        target_content,
+        target_is_new: false,
+        clipboard: carry.clipboard,
+        layout,
+        focus,
+        editing: None,
+    })
+}
+
+/// Default-replace `*carry` (which sits behind a `&mut`) and return the
+/// owned value. Used by every transition out of the sub-flow because
+/// pattern-matched fields can't be moved directly.
+fn take_carry(carry: &mut MoveCarry) -> MoveCarry {
+    std::mem::replace(
+        carry,
+        MoveCarry {
+            source_rel: PathBuf::new(),
+            source_abs: PathBuf::new(),
+            source_content: String::new(),
+            headings: Vec::new(),
+            selected: BTreeSet::new(),
+            focus: 0,
+            clipboard: Vec::new(),
+        },
+    )
 }

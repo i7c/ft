@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
+┌ notes ───────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Notes — O┌ move · 4/4 compose · 1 pending → proj/Foo.md (new) ──┐           │
+│           │  · H1  Foo                                           │           │
+│  o     ope│  ·   H2  Status                                      │           │
+│  m     mov│▶ + H1  2026-05-13                                    │           │
+│  c     cre│                                                      │           │
+│  C     cre│                                                      │           │
+│  ?     sho│                                                      │           │
+│  Esc   clo│                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │ ↑/↓ focus   Shift+↑/↓ reorder   ←/→ level   r rename │           │
+│           └──────────────────────────────────────────────────────┘           │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Notes           not yet refreshed      mode: normal
