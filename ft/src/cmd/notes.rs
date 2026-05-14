@@ -11,7 +11,9 @@ use std::process::{Command as ProcCommand, ExitCode};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use ft_core::fs::write_atomic;
 use ft_core::markdown::{extract_headings, Heading};
+use ft_core::notes::template::{render as render_template, TemplateContext};
 use ft_core::notes::{
     move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
 };
@@ -33,12 +35,15 @@ pub enum NotesCommand {
     /// Move sections from one note into another.
     #[command(name = "move-section")]
     MoveSection(MoveSectionArgs),
+    /// Create a new note from a template (or a blank `# <title>` stub).
+    Create(CreateArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         NotesCommand::Open(o) => run_open(o, vault_flag),
         NotesCommand::MoveSection(m) => run_move_section(m, vault_flag),
+        NotesCommand::Create(c) => run_create(c, vault_flag),
     }
 }
 
@@ -513,6 +518,251 @@ fn print_diff(path: &Path, original: &str, new: &str) {
         };
         print!("{sign}{change}");
     }
+}
+
+// ── ft notes create ──────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct CreateArgs {
+    /// Destination path. Vault-relative or absolute. `.md` is appended
+    /// when missing; intermediate folders are created as needed.
+    #[arg(value_name = "PATH", required = true)]
+    pub path: PathBuf,
+
+    /// Template source. Resolution order:
+    /// (1) absolute path used as-is,
+    /// (2) path relative to the configured templates folder
+    ///     (default `templates-ft/`),
+    /// (3) path relative to the current working directory.
+    /// `.md` is auto-appended at each step when missing.
+    #[arg(long, value_name = "PATH")]
+    pub template: Option<PathBuf>,
+
+    /// Override the auto-derived title (the destination basename
+    /// without `.md`). Useful when the on-disk filename differs from
+    /// the heading text the template should emit.
+    #[arg(long, value_name = "TEXT")]
+    pub title: Option<String>,
+
+    /// Custom template variable, surfaced as `vars.KEY` inside the
+    /// template. Repeatable.
+    #[arg(long = "var", value_name = "KEY=VAL", value_parser = parse_var_kv)]
+    pub vars: Vec<(String, String)>,
+
+    /// After creating, print (and on macOS, `open`) an
+    /// `obsidian://open?vault=...&file=...` URL. `FT_OBSIDIAN_DRY_RUN=1`
+    /// suppresses the OS handoff and just prints.
+    #[arg(long)]
+    pub obsidian: bool,
+
+    /// Suppress the default behavior of opening the new file in `$EDITOR`.
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Override `$EDITOR` for this invocation.
+    #[arg(long, value_name = "BIN")]
+    pub editor: Option<String>,
+
+    /// Overwrite the destination if it already exists. Without `--force`,
+    /// a collision exits 2 without touching the file.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Override the vault basename used in the `obsidian://` URL.
+    #[arg(long, value_name = "NAME")]
+    pub vault_name: Option<String>,
+}
+
+fn parse_var_kv(s: &str) -> std::result::Result<(String, String), String> {
+    let (k, v) = s
+        .split_once('=')
+        .ok_or_else(|| format!("--var expects KEY=VAL, got {s:?} (no '=' found)"))?;
+    let key = k.trim();
+    if key.is_empty() {
+        return Err(format!("--var KEY is empty in {s:?}"));
+    }
+    Ok((key.to_string(), v.to_string()))
+}
+
+fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    // 1. Resolve destination: vault-relative or absolute, append `.md`.
+    let abs_dest = resolve_create_dest(&vault.path, &args.path);
+
+    // 2. Collision check (before any rendering / I/O).
+    if abs_dest.exists() && !args.force {
+        eprintln!(
+            "error: destination already exists: {} (pass --force to overwrite or `ft notes open` to edit it)",
+            abs_dest.display()
+        );
+        return Ok(ExitCode::from(2));
+    }
+
+    // 3. Derive title.
+    let derived_title = abs_dest
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = args.title.clone().unwrap_or(derived_title);
+
+    // 4. Resolve template path (if any) and render content.
+    let content = match args.template.as_deref() {
+        None => format!("# {title}\n"),
+        Some(tpl) => {
+            let tpl_path = match resolve_template_path(&vault, tpl) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return Ok(ExitCode::from(2));
+                }
+            };
+            let source = std::fs::read_to_string(&tpl_path)
+                .with_context(|| format!("reading template {}", tpl_path.display()))?;
+            let ctx = build_template_context(title.clone(), &args.vars);
+            match render_template(&source, &ctx) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(
+                        "error: template render failed ({}): {e}",
+                        tpl_path.display()
+                    );
+                    return Ok(ExitCode::from(2));
+                }
+            }
+        }
+    };
+
+    // 5. Create intermediate directories.
+    if let Some(parent) = abs_dest.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("mkdir -p {}", parent.display()))?;
+        }
+    }
+
+    // 6. Write atomically.
+    write_atomic(&abs_dest, &content).map_err(|e| anyhow!("write {}: {e}", abs_dest.display()))?;
+
+    // 7. Tell the user what happened.
+    let rel_for_msg = abs_dest
+        .strip_prefix(&vault.path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| abs_dest.display().to_string());
+    eprintln!("created {rel_for_msg}");
+
+    // 8. Post-create handoff: obsidian URL or editor.
+    if args.obsidian {
+        let rel = abs_dest
+            .strip_prefix(&vault.path)
+            .unwrap_or(&abs_dest)
+            .to_path_buf();
+        let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel, None);
+        if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
+            println!("{url}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        open_url(&url)?;
+        println!("{url}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if !args.no_open {
+        let editor = resolve_editor(args.editor.as_deref());
+        spawn_editor(&editor, &abs_dest, 1)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn resolve_create_dest(vault_root: &Path, raw: &Path) -> PathBuf {
+    let with_ext = if raw.extension().is_some_and(|e| e == "md") {
+        raw.to_path_buf()
+    } else {
+        let mut p = raw.as_os_str().to_owned();
+        p.push(".md");
+        PathBuf::from(p)
+    };
+    if with_ext.is_absolute() {
+        with_ext
+    } else {
+        vault_root.join(with_ext)
+    }
+}
+
+/// Resolve a `--template` argument to an absolute path.
+///
+/// Tries: (1) absolute as-is, (2) `<vault>/<templates_dir>/<arg>`,
+/// (3) CWD/<arg>. At each step, also tries the variant with `.md`
+/// appended. Errors with a clear message listing the attempted paths
+/// when none exist.
+fn resolve_template_path(vault: &Vault, arg: &Path) -> Result<PathBuf> {
+    let mut attempts: Vec<PathBuf> = Vec::new();
+
+    let try_candidate = |candidate: PathBuf, out: &mut Vec<PathBuf>| -> Option<PathBuf> {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        out.push(candidate.clone());
+        if candidate.extension().is_none() {
+            let mut with_ext = candidate.clone().into_os_string();
+            with_ext.push(".md");
+            let cand = PathBuf::from(with_ext);
+            if cand.is_file() {
+                return Some(cand);
+            }
+            out.push(cand);
+        }
+        None
+    };
+
+    if arg.is_absolute() {
+        if let Some(p) = try_candidate(arg.to_path_buf(), &mut attempts) {
+            return Ok(p);
+        }
+    } else {
+        if let Some(p) = try_candidate(vault.templates_dir().join(arg), &mut attempts) {
+            return Ok(p);
+        }
+        if let Some(p) = try_candidate(
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(arg),
+            &mut attempts,
+        ) {
+            return Ok(p);
+        }
+    }
+
+    Err(anyhow!(
+        "template not found: {}\ntried:\n  {}",
+        arg.display(),
+        attempts
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    ))
+}
+
+fn build_template_context(title: String, vars: &[(String, String)]) -> TemplateContext {
+    use chrono::{Local, NaiveDate, NaiveTime};
+    let (today, now) = if let Ok(s) = std::env::var("FT_TODAY") {
+        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
+        } else {
+            let local = Local::now();
+            (local.date_naive(), local.naive_local())
+        }
+    } else {
+        let local = Local::now();
+        (local.date_naive(), local.naive_local())
+    };
+    let mut ctx = TemplateContext::new(title, today, now);
+    for (k, v) in vars {
+        ctx.vars.insert(k.clone(), v.clone());
+    }
+    ctx
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

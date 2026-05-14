@@ -137,6 +137,23 @@ impl Vault {
         files
     }
 
+    /// Vault-relative path that holds ft note templates. Defaults to
+    /// `templates-ft/` when `[notes] templates_dir` is unset in the
+    /// vault config. The folder is **not** required to exist — callers
+    /// (TUI template picker, CLI `--template` resolution) tolerate a
+    /// missing dir by showing an empty list or erroring with a clear
+    /// "template not found" message.
+    pub fn templates_dir(&self) -> PathBuf {
+        let dir = self
+            .config
+            .config
+            .notes
+            .templates_dir
+            .as_deref()
+            .unwrap_or("templates-ft");
+        self.path.join(dir)
+    }
+
     /// Resolve the target file for a new task: an explicit override if
     /// supplied (joined against the vault root when relative), otherwise
     /// today's daily note. Returns an absolute path.

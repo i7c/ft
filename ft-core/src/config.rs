@@ -32,6 +32,18 @@ pub struct Config {
     /// Named task queries (presets). Keys are preset names; values are DSL strings.
     #[serde(default)]
     pub presets: HashMap<String, String>,
+    /// Note-creation settings.
+    #[serde(default)]
+    pub notes: Notes,
+}
+
+/// Settings for `ft notes create` and the TUI create flows.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notes {
+    /// Folder (vault-relative) holding ft-compatible templates. Defaults
+    /// to `templates-ft` when unset. See plan 009 for the rationale.
+    pub templates_dir: Option<String>,
 }
 
 /// Where the daily-note path comes from.
@@ -245,6 +257,49 @@ path = "Journal"
 
         let result = load(user.path(), &tmp.path().join("no-vault.toml"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn notes_templates_dir_default_is_none() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.notes.templates_dir.is_none());
+    }
+
+    #[test]
+    fn notes_templates_dir_override() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[notes]
+templates_dir = "_templates"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        assert_eq!(lc.config.notes.templates_dir.as_deref(), Some("_templates"));
+    }
+
+    #[test]
+    fn notes_unknown_key_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[notes]
+typo_field = "oops"
+"#,
+            )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err());
     }
 
     #[test]

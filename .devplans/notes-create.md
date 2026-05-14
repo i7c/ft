@@ -132,70 +132,79 @@ after that we never write Moment.js parsing code.
 
 ### Library — `ft_core::config` (templates folder)
 
-- [ ] Extend the vault config (`ft_core::config::VaultConfig` or
-      equivalent — check current shape) with:
+- [x] Extend the vault config (`ft_core::config::Config`) with a new
+      `Notes` sub-struct:
       ```toml
       [notes]
       templates_dir = "templates-ft"   # default; vault-relative
       ```
-      Resolved against the vault root at read time.
-- [ ] Helper `Vault::templates_dir() -> PathBuf` that joins the vault
+      Resolved against the vault root at read time. Default is
+      `"templates-ft"` when unset.
+- [x] Helper `Vault::templates_dir() -> PathBuf` that joins the vault
       root with the configured (or default) templates dir. Existence
       is **not** required — a missing folder is fine; template pickers
-      just show an empty list.
-- [ ] Unit test for config parsing: default, override, malformed value.
+      just show an empty list, and the CLI's template-resolution path
+      reports "template not found" with the attempted candidates.
+- [x] Unit tests for config parsing: default-when-unset, override,
+      `[notes]` typo-rejection (per the existing `deny_unknown_fields`
+      convention).
 
 ### CLI — `ft notes create`
 
-- [ ] Subcommand `ft notes create <PATH> [...flags]` registered on the
+- [x] Subcommand `ft notes create <PATH> [...flags]` registered on the
       existing `notes` subcommand group.
-- [ ] `<PATH>` is a vault-relative path. If it doesn't end in `.md`,
+- [x] `<PATH>` is a vault-relative path. If it doesn't end in `.md`,
       `.md` is appended. If it contains `/` and intermediate folders
       don't exist, they're created (analogous to `mkdir -p`).
-- [ ] `--template <PATH>` — template source path. Resolution order:
+- [x] `--template <PATH>` — template source path. Resolution order:
       (1) absolute path used as-is, (2) path relative to the configured
-      templates folder, (3) path relative to CWD. Missing template
-      exits 2.
-- [ ] `--title <TEXT>` — overrides the auto-derived title (basename
+      templates folder, (3) path relative to CWD. Each step also tries
+      a `.md`-appended variant. Missing template exits 2 with a "tried:"
+      list of every candidate path.
+- [x] `--title <TEXT>` — overrides the auto-derived title (basename
       without `.md`). Useful when the on-disk filename differs from
       the heading text the template emits.
-- [ ] `--var <KEY=VAL>` — repeatable. Each entry populates
+- [x] `--var <KEY=VAL>` — repeatable. Each entry populates
       `ctx.vars[KEY] = VAL`. Templates that reference an unset var
       error out under strict-undefined mode; that's the intended UX
       ("you forgot to pass `--var name=...`").
-- [ ] `--obsidian` — after creating, also fire the
-      `obsidian://open?vault=...&file=...` URL (reuses
-      `ft_core::notes::obsidian_url`). Honors `FT_OBSIDIAN_DRY_RUN=1`.
-- [ ] `--no-open` — suppress the default behavior of opening the new
-      file in `$EDITOR`. Default is open-after-create (the user
-      confirmed (a) on question 8).
-- [ ] `--editor <BIN>` — overrides `$EDITOR` for this invocation
+- [x] `--obsidian` — after creating, also fire the
+      `obsidian://open?vault=...&file=...` URL. Honors
+      `FT_OBSIDIAN_DRY_RUN=1`.
+- [x] `--no-open` — suppress the default behavior of opening the new
+      file in `$EDITOR`. Default is open-after-create.
+- [x] `--editor <BIN>` — overrides `$EDITOR` for this invocation
       (mirrors `ft notes open --editor`).
-- [ ] Collision handling: if `<PATH>` already exists, exit 2 with a
+- [x] Collision handling: if `<PATH>` already exists, exit 2 with a
       message — the CLI does not prompt. The 3-way prompt
       (overwrite/use-existing/cancel) is a TUI affordance only; in
       script contexts the caller passes `--force` to overwrite or
       uses `ft notes open` to open an existing file.
-- [ ] `--force` — opt-in to overwriting an existing target.
-- [ ] Exit codes: 0 success, 2 bad args / render error / collision
+- [x] `--force` — opt-in to overwriting an existing target.
+- [x] Exit codes: 0 success, 2 bad args / render error / collision
       without `--force` / missing template.
-- [ ] Integration tests (against per-test `assert_fs::TempDir` vaults,
+- [x] Integration tests (against per-test `assert_fs::TempDir` vaults,
       same pattern as `notes_open` / `notes_move_section`):
-      - Blank create (no `--template`): writes a file with just
-        `# <title>\n`, exits 0, opens via shim editor.
-      - Create with `--template templates-ft/proj.md` against a fixture
-        vault that contains the hand-ported template; assert rendered
-        output matches a golden.
-      - `--var name=quick` populates `{{ vars.name }}` in the
-        `quick-add` template.
-      - Template referencing a missing var errors with a useful message
-        and exits 2.
-      - Path normalization: `notes/foo` becomes `notes/foo.md`;
-        intermediate dirs are created.
-      - Collision without `--force` exits 2; with `--force` overwrites.
-      - `--no-open` does not invoke the shim editor; `--obsidian`
-        prints the URL when `FT_OBSIDIAN_DRY_RUN=1`.
-      - Missing `--template` path exits 2 with a clear message.
+      - Blank create writes `# <title>\n`, exits 0, opens via shim
+        editor (`echo` records the args).
+      - Template create renders the `proj` template against the title.
+      - `--var name=...` populates `{{ vars.name }}` in `quick-add`.
+      - Template referencing a missing var exits 2 (strict-undefined
+        render error).
+      - `--var` without `=` rejected by clap (exit 2).
+      - Path normalization: `notes/foo` → `notes/foo.md`; intermediate
+        dirs created; absolute `.md` extension also accepted.
+      - Collision without `--force` exits 2 and leaves the file
+        untouched; `--force` overwrites.
+      - `--no-open` does not invoke the shim editor; default does
+        invoke it.
+      - `--obsidian` with `FT_OBSIDIAN_DRY_RUN=1` prints the URL and
+        does **not** spawn the editor.
+      - `--vault-name MyVault` overrides the vault basename in the URL.
+      - Missing `--template` exits 2 with "tried:" candidates listed.
+      - `[notes] templates_dir = "custom-templates"` in `.ft/config.toml`
+        overrides the default templates folder.
+      - Absolute template path used as-is (skips templates_dir lookup).
 
 ### TUI — Notes tab `c` (blank) and `C` (template) create flows
 
@@ -670,7 +679,7 @@ Workspace state: `cargo test --workspace` → 346 ft-core unit tests
 The original `templates/` folder in `~/git/fortytwo/` is untouched
 (verified by `ls` before and after).
 
-### Session 3 · 2026-05-13 · planned
+### Session 3 · 2026-05-13 · done
 **Goal:** CLI — `ft notes create <PATH> [--template P] [--title T]
 [--var K=V]... [--obsidian] [--no-open] [--editor BIN] [--force]`.
 Vault config gains `[notes] templates_dir`. `Vault::templates_dir()`
@@ -679,7 +688,76 @@ blank create, template create, var prompts (via repeated `--var`),
 collision with and without `--force`, missing template, `--no-open`,
 `--obsidian` dry-run, path normalization (`.md` auto-append +
 intermediate dir creation).
-**Outcome:** 
+**Outcome:** Extended `ft_core::config::Config` with a `Notes` sub-struct
+(`templates_dir: Option<String>`), `#[serde(deny_unknown_fields)]` so
+typos in `[notes]` are rejected the same way the rest of the config
+already handles them. Added `Vault::templates_dir()` returning
+`<vault>/<configured>` (default `templates-ft`). 3 new config unit
+tests (default-unset, override, typo-rejected).
+
+Added `Create(CreateArgs)` to `NotesCommand` in `ft/src/cmd/notes.rs`.
+Flag set: `<PATH>`, `--template`, `--title`, `--var KEY=VAL`
+(repeatable, parsed via a clap `value_parser` so missing `=` is
+rejected at parse time), `--obsidian`, `--no-open`, `--editor`,
+`--force`, `--vault-name`. Implementation flow:
+
+1. Discover vault.
+2. `resolve_create_dest` — appends `.md` when missing, joins against
+   vault root when relative, leaves absolute paths alone.
+3. Collision check — exits 2 (with `eprintln!`) when the destination
+   exists and `--force` isn't set.
+4. Title derivation — `--title` override, else basename without `.md`.
+5. Template resolution via `resolve_template_path`:
+   - absolute → as-is
+   - relative → try `<vault>/<templates_dir>/<arg>`, then `<CWD>/<arg>`
+   - each step also tries the `.md`-appended variant
+   - missing → exits 2 with a `"tried:\n  <path1>\n  <path2>..."`
+     message listing every candidate
+6. Render via `ft_core::notes::template::render`; on render error,
+   exits 2 with the engine's diagnostic.
+7. `std::fs::create_dir_all` for intermediate folders.
+8. `ft_core::fs::write_atomic` for the actual write.
+9. Post-create handoff: `--obsidian` (with `FT_OBSIDIAN_DRY_RUN=1`
+   short-circuit) takes precedence; otherwise, unless `--no-open`,
+   spawn `$EDITOR` at line 1.
+
+Exit codes: 0 success, 2 anything else handled by us (the existing
+anyhow-bubbling path still exits 1 for unexpected I/O — that's not in
+the plan's documented exit-code surface, but matches the rest of the
+CLI). `FT_TODAY=YYYY-MM-DD` is honored in `build_template_context`
+following the existing pattern from `cmd::tasks`; when set, `now` is
+pinned to that date at `00:00:00` so test output is deterministic.
+
+17 integration tests in `ft/tests/notes_create.rs` covering every
+acceptance criterion:
+- Blank create + `.md` auto-append + intermediate dirs.
+- Template create (default folder + custom-folder via config + abs
+  path).
+- `--title` override.
+- `--var` happy path + missing-var (strict-undefined render error) +
+  `--var` without `=` (clap rejection).
+- Collision exit-2 + file untouched + `--force` overwrites.
+- Missing template exit-2 with "tried:" list.
+- `--no-open` skips editor; default invokes it (proved via `echo`
+  shim recording `+1 <path>` to stdout).
+- `--obsidian` with `FT_OBSIDIAN_DRY_RUN=1` prints URL + skips editor.
+- `--vault-name` overrides the URL's `vault=` parameter.
+
+Workspace state: `cargo test --workspace` → 349 ft-core unit + 17
+notes_create + previous notes/tasks/tui suites, all green.
+`cargo clippy --workspace --all-targets -- -D warnings` clean.
+`cargo fmt --check` clean (one autoformat pass on the new config
+test). Quick smoke test against a real TempDir vault confirmed the
+`proj` template renders to `# My Project` with frontmatter and the
+tasks code block, matching the session-2 golden.
+
+Plumbing convenience for session 4: `build_template_context` and
+`resolve_template_path` are colocated in `ft/src/cmd/notes.rs` (the
+CLI module) rather than hoisted into `ft-core`. The TUI's create
+flow (session 4) will need its own context-builder + template
+resolver since it's not anyhow-based and shouldn't shell out to env
+vars the same way — sharing through ft-core is premature until we
+see what shape the TUI needs.
 
 ### Session 4 · 2026-05-13 · planned
 **Goal:** TUI Notes tab — `c` (blank) and `C` (template) flows.
