@@ -1,5 +1,6 @@
 pub mod completions;
 pub mod find;
+pub mod git;
 pub mod man;
 pub mod notes;
 pub mod tasks;

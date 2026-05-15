@@ -24,6 +24,7 @@ silently default.
 | `[notes]`               | table                             | either        | Note-creation settings (template folder).              |
 | `[periodic_notes.*]`    | table per period                  | either        | Daily/weekly/monthly/quarterly/yearly note layout.     |
 | `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
+| `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](query-dsl.md) presets.               |
 
 `default_vault` is only honored in the user config; setting it in a
@@ -237,6 +238,44 @@ If the configured strategy is `tmux-*` and ft can't find `tmux` on
 surfaces an error toast: `"tmux not found — opening editor inline"`.
 Configuration is unchanged; the next open under a tmux strategy will
 re-attempt.
+
+## `[git]`
+
+Settings for `ft git sync` (and the TUI `g s` chord). The repo is
+discovered by walking up from the vault root looking for a `.git/`
+entry — if none exists anywhere up the tree, the feature is
+unavailable.
+
+```toml
+[git]
+pull_strategy = "merge"   # default; also: rebase
+```
+
+| Key             | Type   | Default   | Notes                                                       |
+|-----------------|--------|-----------|-------------------------------------------------------------|
+| `pull_strategy` | string | `"merge"` | `"merge"` → `git pull --no-rebase`; `"rebase"` → `git pull --rebase`. |
+
+### What `ft git sync` does
+
+1. Pre-check the current branch's upstream (`@{u}`). If none, error
+   out **before** touching the tree (no orphan local commit).
+2. Snapshot the working tree. `git add -A` then `git commit -m "ft
+   sync <iso8601-utc>"` if there's anything to stage — modifications,
+   deletions, and untracked files all included. `.gitignore` is
+   honored (git filters ignored entries from staging automatically).
+   Override the auto-generated commit message with `-m / --message`.
+3. `git pull --no-rebase` or `git pull --rebase` per
+   `pull_strategy`.
+4. On conflict (merge or rebase), leave the working tree in its
+   conflicted state — markers stay in the files, the merge/rebase
+   stays in progress. `ft git sync` exits **2** with the conflicted
+   file list on stderr. Resolve manually.
+5. On success, `git push`. Authentication uses your existing
+   credential helper / SSH agent / GPG signing — ft inherits the
+   process environment.
+
+`ft git sync --dry-run` reads `status` + `upstream` and prints the
+plan without writing anything.
 
 ## `[presets]`
 

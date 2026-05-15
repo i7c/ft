@@ -561,7 +561,7 @@ Workspace state: `cargo test --workspace` → 782 tests green
 after one autoformat pass. No new dependencies — chrono,
 tempfile, and serde were already in the workspace.
 
-### Session 2 · 2026-05-14 · planned
+### Session 2 · 2026-05-14 · done
 **Goal:** CLI surface. New `ft/src/cmd/git.rs` with `GitArgs` /
 `GitCommand::Sync` / `SyncArgs` (`--message`, `--dry-run`).
 Dispatch from `ft/src/main.rs`. Map `SyncOutcome` variants to
@@ -574,7 +574,92 @@ documented error, `--message` override applied. Update
 `docs/config.md` (`[git]` section), `docs/architecture.md` (file-
 tree blocks), and `README.md` (Git-sync subsection with the
 `ft git sync` example).
-**Outcome:**
+**Outcome:** New `ft/src/cmd/git.rs` (~160 lines) with the
+documented clap surface: `GitArgs` → `GitCommand::Sync(SyncArgs)`,
+`SyncArgs { message: Option<String>, dry_run: bool }`. `pub mod
+git;` added to `cmd/mod.rs`; `Commands::Git(GitArgs)` variant +
+dispatch arm added to `main.rs`. The arm uses the same
+`Vault::discover` pattern as the other subcommands, then
+`discover_repo(&vault.path)` to find the enclosing repo (error
+out with `"no git repository found at or above vault root: …"`
+if `None`).
+
+`SyncOutcome` mapping:
+- `Clean { pushed: false }` → stdout `"already in sync"`, exit 0.
+- `Clean { pushed: true }` → stdout `"pushed local commits"`, exit 0.
+- `Synced { committed, pulled, pushed }` → three-line stdout
+  (`"committed N file(s)"`, optional `"pulled"`, optional
+  `"pushed"`), exit 0.
+- `MergeConflict { files }` → stderr `"merge conflict in N
+  file(s):"` then each file indented two spaces then `"resolve,
+  commit, and push manually."`, exit **2**.
+- `RebaseConflict { files }` → same shape with rebase wording and
+  a `"git rebase --continue"` hint, exit **2**.
+
+`--dry-run` reads `upstream()` + `status()` and prints a plan
+without any writes — `"upstream: origin/main (merge)"`, working-
+tree summary (`"N change(s) (M modified, U untracked, D deleted)"`
+or `"working tree: clean"`), then `"would commit N file(s)"` /
+`"nothing to commit"`, `"would pull <upstream>"`, `"would push"`.
+A pre-existing conflicted tree under `--dry-run` returns exit 2
+with a "resolve before syncing" hint (so dry-run doesn't paper
+over a tracked half-merged state).
+
+Hard errors (no enclosing `.git/`, no upstream, push rejected,
+network failure) propagate through `anyhow::Error` to main's
+shared error printer — which already honors `--json-errors` from
+plan 001, so scripting users get `{"error": ..., "chain": [...]}`
+on stderr for free. Conflict outcomes do **not** go through the
+error path — they're a defined end state, so they return
+`Ok(ExitCode::from(2))`.
+
+7 integration tests under `ft/tests/git_sync.rs`, all green:
+- `sync_commits_and_pushes_dirty_tree` — happy path
+  (`Synced { committed: 1, pushed: true }`).
+- `sync_uses_custom_message_with_dash_m` — verifies `git log
+  -1 --format=%s` returns the override.
+- `sync_clean_tree_reports_already_in_sync` — bare clone, no
+  local changes, stdout `"already in sync"`.
+- `sync_merge_conflict_exits_two_with_files_in_stderr` — side
+  clone pushes conflicting `seed.md`, local sync exits 2,
+  stderr contains both `"merge conflict"` and `"seed.md"`,
+  conflict markers remain in the on-disk file.
+- `sync_with_no_git_repo_errors_with_documented_message` — vault
+  with `.obsidian/` but no `.git/` anywhere up — fails with the
+  documented `"no git repository"` error on stderr.
+- `sync_dry_run_does_not_commit_or_push` — verifies HEAD
+  unchanged after `--dry-run` and the untracked file remains
+  untracked (not staged or committed).
+- `sync_no_upstream_errors_before_committing` — repo without a
+  configured upstream: fails with `"no upstream"` on stderr,
+  untracked file remains untracked (pre-check before staging).
+
+Tests reuse the same real-git fixture pattern from session 1
+(`init_repo`, `setup_origin_and_vault` with bare origin + clone +
+one seed commit pushed). No tmp HOME override or env locks
+needed.
+
+Docs updated:
+- `docs/config.md`: new `[git]` row in the top-level keys table,
+  and a new `## [git]` section between `[editor]` and
+  `[presets]` documenting `pull_strategy` plus the full
+  five-step `ft git sync` flow.
+- `docs/architecture.md`: `git.rs` added under both the `ft-core`
+  module list (between `periodic.rs` and `dates.rs`) and the
+  `ft/src/cmd/` list (between `vault.rs` and `completions.rs`).
+- `README.md`: new `## Git sync` section between Tasks and Output
+  formats with the three example invocations and a link to the
+  config docs.
+
+Workspace state: `cargo test --workspace` → 793 tests green (up
+from 782: +7 git_sync integration, +4 from earlier rerun
+counting). `cargo clippy --workspace --all-targets -- -D warnings`
+clean after one doc-overindent fix (clippy 1.91 added
+`doc-overindented-list-items`; the module-docs exit-code list
+needed 2-space continuation indent). `cargo fmt --check` clean
+after one autoformat pass. No new dependencies — `assert_cmd`,
+`assert_fs`, and `predicates` were already in workspace
+dev-dependencies.
 
 ### Session 3 · 2026-05-14 · planned
 **Goal:** TUI chord. New `AppRequest::SyncGit { message }`

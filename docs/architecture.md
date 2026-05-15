@@ -17,6 +17,7 @@ ft/
 │   ├── src/cmd/                # one file per subcommand
 │   │   ├── tasks.rs            # list / create / complete / move
 │   │   ├── vault.rs            # vault info
+│   │   ├── git.rs              # `ft git sync`
 │   │   ├── completions.rs      # `ft completions <shell>`
 │   │   └── man.rs              # `ft man [--out DIR]`
 │   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs
@@ -28,6 +29,7 @@ ft/
         ├── vault.rs            # discovery + scan
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
+        ├── git.rs              # discover_repo + status + upstream + sync
         ├── dates.rs            # ISO / keyword / relative / NL parsing
         ├── fs.rs               # write_atomic
         ├── selector.rs         # id / file:line / fuzzy

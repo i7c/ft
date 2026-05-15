@@ -78,6 +78,26 @@ ft tasks move stale-id --to inbox/triage.md
 ft tasks move --query 'tag is legacy' --to inbox/triage.md#Triage --dry-run
 ```
 
+## Git sync
+
+`ft git sync` commits any working-tree changes in the vault repo,
+pulls the configured upstream, and pushes — one shot. The repo is
+discovered by walking up from the vault root; the feature is
+unavailable if no `.git/` exists anywhere up the tree. The same
+operation is available in the TUI via the `g s` chord on the Notes
+and Tasks tabs.
+
+```sh
+ft git sync                     # commit, pull, push
+ft git sync -m "msg override"   # override the auto-generated message
+ft git sync --dry-run           # print the plan, write nothing
+```
+
+Conflicts (merge or rebase) leave markers in the files and exit `2`
+with the conflicted-file list on stderr — resolve manually. The
+pull strategy (`merge` default, `rebase` opt-in) is configured under
+`[git]` in [docs/config.md](docs/config.md).
+
 ## Output formats
 
 `ft tasks list --format <fmt>` accepts:

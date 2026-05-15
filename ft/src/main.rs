@@ -43,6 +43,8 @@ enum Commands {
     Find(cmd::find::FindArgs),
     /// Note operations: open, move-section
     Notes(cmd::notes::NotesArgs),
+    /// Git operations: sync (commit + pull + push)
+    Git(cmd::git::GitArgs),
     /// Launch the interactive terminal UI
     Tui(cmd::tui::TuiArgs),
     /// Generate shell completion script
@@ -85,6 +87,7 @@ fn main() -> ExitCode {
         Commands::Tasks(args) => cmd::tasks::run(args, vault),
         Commands::Find(args) => cmd::find::run(args, vault),
         Commands::Notes(args) => cmd::notes::run(args, vault),
+        Commands::Git(args) => cmd::git::run(args, vault),
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
