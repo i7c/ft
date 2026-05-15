@@ -10,6 +10,7 @@ use figment::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::git::PullStrategy;
 
 /// Top-level `ft` configuration.
 ///
@@ -41,6 +42,19 @@ pub struct Config {
     /// Editor handoff strategy and popup geometry. See [`Editor`].
     #[serde(default)]
     pub editor: Editor,
+    /// Git-sync settings. See [`Git`].
+    #[serde(default)]
+    pub git: Git,
+}
+
+/// `ft git sync` / TUI `g s` configuration. Currently just the pull
+/// strategy — conflict handling is identical for both variants and
+/// not user-tunable (markers in place, abort before push).
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Git {
+    #[serde(default)]
+    pub pull_strategy: PullStrategy,
 }
 
 /// Settings for `ft notes create` and the TUI create flows.
@@ -565,6 +579,62 @@ popup_height = "50%"
         assert_eq!(EditorStrategy::TmuxSplit.resolve(), EditorStrategy::Suspend);
         assert_eq!(EditorStrategy::Suspend.resolve(), EditorStrategy::Suspend);
     }
+
+    // ── [git] block (plan 012 session 1) ─────────────────────────────────
+
+    #[test]
+    fn git_defaults_when_block_absent() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert_eq!(lc.config.git.pull_strategy, PullStrategy::Merge);
+    }
+
+    #[test]
+    fn git_pull_strategy_kebab_case_variants_parse() {
+        for (s, expected) in [
+            ("merge", PullStrategy::Merge),
+            ("rebase", PullStrategy::Rebase),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let vault = tmp.child("vault.toml");
+            vault
+                .write_str(&format!("[git]\npull_strategy = \"{s}\"\n"))
+                .unwrap();
+            let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+            assert_eq!(
+                lc.config.git.pull_strategy, expected,
+                "pull_strategy={s:?} should parse to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn git_unknown_strategy_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[git]\npull_strategy = \"squash\"\n")
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "unknown pull_strategy must be rejected");
+    }
+
+    #[test]
+    fn git_unknown_field_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[git]\npull_strategy = \"merge\"\ntypo_field = 1\n")
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "deny_unknown_fields should reject typos");
+    }
+
+    // ── [editor] block (plan 011 session 1) — continued ──────────────────
 
     #[test]
     fn editor_strategy_resolve_treats_empty_tmux_as_unset() {
