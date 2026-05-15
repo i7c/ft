@@ -4549,3 +4549,138 @@ fn notes_periodic_leader_modal_snapshot() -> Result<()> {
     assert_tui_snapshot!("notes_periodic_leader_80x24", frame);
     Ok(())
 }
+
+// ── plan 012 session 3: TUI `g s` chord ──────────────────────────────────
+
+const TASKS_TAB_INDEX: usize = 1;
+
+fn key_with_mods(c: char, mods: KeyModifiers) -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Char(c), mods))
+}
+
+fn esc_key() -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+}
+
+#[test]
+fn git_chord_g_from_normal_enters_git_leader_mode() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    app.dispatch(key('g'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::GitLeader);
+    Ok(())
+}
+
+#[test]
+fn git_leader_s_queues_sync_request_and_returns_to_normal() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    app.dispatch(key('s'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    let req = app
+        .take_pending_request()
+        .expect("`g s` should queue an AppRequest::SyncGit");
+    match req {
+        AppRequest::SyncGit { message } => {
+            assert!(message.is_none(), "TUI never overrides the commit message");
+        }
+        other => panic!("expected SyncGit, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn git_leader_esc_dismisses_without_queueing() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    app.dispatch(esc_key())?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    assert!(app.take_pending_request().is_none());
+    Ok(())
+}
+
+#[test]
+fn git_leader_unknown_letter_dismisses_without_queueing() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    app.dispatch(key('x'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    assert!(app.take_pending_request().is_none());
+    Ok(())
+}
+
+#[test]
+fn git_leader_q_does_not_quit_via_global_handler() -> Result<()> {
+    // Bug-guard: while the leader is open we must not fall through to
+    // the global keymap. `q` would otherwise quit the app.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    app.dispatch(key('q'))?;
+    assert!(!app.is_quit(), "q from git-leader should dismiss, not quit");
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    Ok(())
+}
+
+#[test]
+fn g_chord_works_from_tasks_tab() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(TASKS_TAB_INDEX)?;
+    app.dispatch(key('g'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::GitLeader);
+    app.dispatch(key('s'))?;
+    let req = app.take_pending_request().expect("SyncGit queued");
+    assert!(matches!(req, AppRequest::SyncGit { .. }));
+    Ok(())
+}
+
+#[test]
+fn g_chord_works_from_notes_tab() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('g'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::GitLeader);
+    app.dispatch(key('s'))?;
+    let req = app.take_pending_request().expect("SyncGit queued");
+    assert!(matches!(req, AppRequest::SyncGit { .. }));
+    Ok(())
+}
+
+#[test]
+fn git_leader_modal_snapshot() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("git_leader_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn git_chord_does_not_trigger_inside_help_overlay() -> Result<()> {
+    // Help mode swallows everything except its own dismiss keys, so
+    // `g` while help is open must not enter the git leader.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.enter_help();
+    app.dispatch(key('g'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Help);
+    Ok(())
+}
+
+#[test]
+fn shift_g_does_not_trigger_leader() -> Result<()> {
+    // Only bare `g` enters the leader — Shift+G (an unrelated capital
+    // letter) should fall through to the active tab or be a no-op.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key_with_mods('G', KeyModifiers::SHIFT))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    Ok(())
+}

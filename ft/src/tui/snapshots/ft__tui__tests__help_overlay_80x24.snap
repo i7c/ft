@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 101
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes                                             
@@ -10,19 +11,19 @@ expression: frame
                 │  ?                 toggle this help          │                
                 │  Tab / Shift+Tab   next / previous tab       │                
          ██╗    │  1 / 2             jump to tab N             │██████╗         
-         ██║    │  /                 edit query                │█╔════╝         
-         ██║ █╗ │  ↑ / ↓ · j / k     select task               │████╗           
-         ██║███╗│  ] / [             due date +1d / -1d        │█╔══╝           
-         ╚███╔██│  } / {             scheduled +1d / -1d       │██████╗         
-          ╚══╝╚═│  t                 set due to today          │══════╝         
+         ██║    │  g s               git sync                  │█╔════╝         
+         ██║ █╗ │  /                 edit query                │████╗           
+         ██║███╗│  ↑ / ↓ · j / k     select task               │█╔══╝           
+         ╚███╔██│  ] / [             due date +1d / -1d        │██████╗         
+          ╚══╝╚═│  } / {             scheduled +1d / -1d       │══════╝         
+                │  t                 set due to today          │                
                 │  p / P             priority cycle fwd / back │                
                 │  x / X             complete / cancel         │                
-                │  e                 open edit popup           │                
-               p│  c / Shift+C       new task (line / form)    │p               
+               p│  e                 open edit popup           │p               
+                │  c / Shift+C       new task (line / form)    │                
                 │  Ctrl+E            expand quickline → form   │                
                 │  Enter (target)    open file/heading picker  │                
                 │  Enter             open task in $EDITOR      │                
                 │  R                 reload vault              │                
-                │  Ctrl+W / Ctrl+⌫   delete previous word      │                
                 └──────────────────────────────────────────────┘                
  vault: test-vault  ·  tab: Welcome         not yet refreshed        mode: help

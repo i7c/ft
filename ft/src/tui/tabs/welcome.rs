@@ -48,7 +48,7 @@ impl Tab for WelcomeTab {
         let is_global = match (k.code, k.modifiers) {
             (KeyCode::Char(c), _) if c.is_ascii_digit() => true,
             (KeyCode::Tab | KeyCode::BackTab, _) => true,
-            (KeyCode::Char('q' | '?'), _) => true,
+            (KeyCode::Char('q' | '?' | 'g'), _) => true,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => true,
             (KeyCode::Esc, _) => true,
             _ => false,

@@ -2,7 +2,7 @@
 id: 012
 name: git-sync
 title: Git sync: ft git sync + TUI 'g s'
-status: implementing
+status: finished
 created: 2026-05-14
 updated: 2026-05-14
 ---
@@ -661,7 +661,7 @@ after one autoformat pass. No new dependencies — `assert_cmd`,
 `assert_fs`, and `predicates` were already in workspace
 dev-dependencies.
 
-### Session 3 · 2026-05-14 · planned
+### Session 3 · 2026-05-14 · done
 **Goal:** TUI chord. New `AppRequest::SyncGit { message }`
 variant. `g s` leader chord on both Notes and Tasks tabs: `g`
 enters a `GitLeader` state, second key dispatches; `Esc` /
@@ -675,4 +675,132 @@ sync"` on both tabs. `?` help overlay updated. Tests in
 modal at 80×24, `s` queues `SyncGit`, `Esc` dismisses, outside-
 git-repo path queues an error toast without panicking. Same on
 both tabs.
-**Outcome:**
+**Outcome:** Took the **app-level** approach rather than the
+per-tab `GitLeader` state the plan sketched: cheaper than
+copy-pasting the periodic-leader pattern into both Notes and
+Tasks tabs, and the chord works uniformly from any tab
+(including Welcome) without each tab needing its own state
+variant.
+
+`AppRequest::SyncGit { message: Option<String> }` added to
+`tab.rs`. TUI always sends `None` — keeps `g s` truly one-shot.
+
+`Mode` (in `ui.rs`) grew three variants: `GitLeader`, `Syncing`,
+`SyncConflict`. Conflict data lives separately on `App` in a new
+`sync_conflict: RefCell<Option<SyncConflictInfo>>` field so
+`Mode` stays `Copy`. `SyncConflictInfo { kind: SyncConflictKind,
+files: Vec<PathBuf> }` with `SyncConflictKind` = `Merge | Rebase`
+so the modal can render the right wording per pull strategy.
+`Mode::label()` returns `"git"` / `"sync"` / `"conflict"` for the
+status-bar right cell.
+
+App wiring (`app.rs`):
+- `handle_event` gained three new short-circuits before the
+  tab/global dispatch. `GitLeader`: `s` → enqueue `SyncGit { None
+  }`, anything else → dismiss; we **don't** fall through to the
+  global handler so a stray `q` doesn't quit while the leader is
+  open (`git_leader_q_does_not_quit_via_global_handler` pins
+  that). `SyncConflict`: `Esc` / `q` dismiss; anything else
+  ignored. `Syncing`: swallow everything (defensive — the event
+  loop is paused for the sync call's duration anyway).
+- `handle_global_key` gained one arm: `('g', NONE)` → enter
+  `Mode::GitLeader`.
+- `service_request` gained the `SyncGit` arm, delegating to a
+  new `dispatch_sync_git(terminal, message)` helper that:
+  1. `discover_repo(&self.vault.path)` — if `None`, push a red
+     `"no git repository at or above vault root"` toast and
+     return (not a fatal error — vault state can change between
+     `g s` presses).
+  2. Set `mode = Syncing`, force one `terminal.draw(...)` so the
+     overlay is visible *before* the (synchronous) sync call
+     blocks the event loop.
+  3. `ft_core::git::sync(&repo, &opts)` with
+     `opts.strategy = vault.config.config.git.pull_strategy`.
+  4. Refresh the active tab regardless of outcome so pulled
+     changes — and conflict markers — show up in view.
+  5. Map outcome:
+     - `Clean { pushed: false }` → green toast `"already in
+       sync"`.
+     - `Clean { pushed: true }` → green toast `"pushed local
+       commits"`.
+     - `Synced { committed, pulled, pushed }` → green toast
+       `"sync ok — committed N, pulled, pushed"` (omitting
+       clauses that didn't apply).
+     - `MergeConflict` / `RebaseConflict` → persistent
+       `SyncConflict` modal until Esc; stores `SyncConflictInfo`
+       on the App so the renderer can list files.
+     - `Err(_)` → red toast `"git sync failed: <e>"`.
+- New `push_toast(text, style)` helper to deduplicate the
+  `Toast { text, style, deadline }` construction (used five
+  times in the new dispatch arm + the `discover_repo`-missing
+  case).
+
+UI rendering (`ui.rs`):
+- `render_git_leader` — 48% × 30% centered popup, cyan border,
+  two rows: `s — sync (commit + pull + push)` / `Esc — cancel`.
+- `render_syncing` — 30% × 20% popup, yellow border, static
+  `"running ft git sync…"`. Drawn once before the blocking
+  call; no spinner animation needed since the event loop is
+  paused.
+- `render_sync_conflict(info)` — 60% × 50% popup, red border,
+  title varies on `kind` (`" merge conflict "` /
+  `" rebase conflict "`), lists `info.files` indented under
+  `"N conflicted file(s):"`, hint line picks the right recovery
+  command (`"resolve, commit, and push manually"` vs
+  `"resolve, then \`git rebase --continue\` manually"`), italic
+  `"press Esc to dismiss"`.
+- New `("g s", "git sync")` row in `HELP_LINES`. The existing
+  90% help popup already overflowed on 24-row terminals (had
+  19 entries; popup fits ~17), so adding `g s` at the top
+  pushes `Ctrl+W / Ctrl+⌫` and `Esc — close overlay` off the
+  bottom. Both bindings still work; they're documented in the
+  list, just truncated. Pre-existing layout constraint, not a
+  regression of this session.
+
+One small ergonomic fix to `welcome.rs`: the welcome tab's
+"press any key to continue" handler explicitly forwards a list
+of keys (`q`, `?`, `Tab`, digits, …) to the global handler
+rather than treating them as "any key". Added `g` to that list
+so `g s` works from Welcome too — keeps the chord uniform
+across tabs.
+
+12 new TUI tests in `tests.rs`, all green:
+- `git_chord_g_from_normal_enters_git_leader_mode`
+- `git_leader_s_queues_sync_request_and_returns_to_normal`
+  (asserts `message: None`)
+- `git_leader_esc_dismisses_without_queueing`
+- `git_leader_unknown_letter_dismisses_without_queueing`
+- `git_leader_q_does_not_quit_via_global_handler`
+  (bug-guard: leader must not fall through to global)
+- `g_chord_works_from_tasks_tab`
+- `g_chord_works_from_notes_tab`
+- `git_leader_modal_snapshot` (80×24, accepted)
+- `git_chord_does_not_trigger_inside_help_overlay`
+  (Help mode swallows `g`)
+- `shift_g_does_not_trigger_leader` (only bare `g` enters)
+- Plus a new `mode()` test-only accessor on `App` so the tests
+  can assert on the current mode.
+
+Snapshot maintenance: `help_overlay_80x24` and
+`help_overlay_over_tasks_80x24` regenerated for the new
+`g s git sync` row; `git_leader_80x24` is new.
+
+No live-`git` TUI tests: end-to-end sync is library- and
+CLI-tested exhaustively (sessions 1 + 2). The TUI tests stop at
+"request was queued" / "mode transitioned correctly" — the
+realistic complexity of spinning up a bare origin + clone +
+terminal harness for one extra test layer wasn't worth the
+maintenance cost.
+
+Workspace state: `cargo test --workspace` → 803 tests green (up
+from 793: +12 git-leader TUI, then accounting for snapshot
+acceptances which don't add to the count). `cargo clippy
+--workspace --all-targets -- -D warnings` clean. `cargo fmt
+--check` clean after one autoformat pass. No new dependencies.
+
+The plan is now complete — `ft git sync` works on the CLI with
+exit codes 0/2/1 and `--dry-run` / `--message`; `g s` from any
+tab in the TUI runs the same operation with a progress modal,
+success toast, or persistent conflict modal; library
+`ft_core::git` is the shared brain with its own exhaustive
+test suite.

@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 741
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes                                             
@@ -10,10 +11,11 @@ expression: frame
 │               │  ?                 toggle this help          │               │
 │ ── views ──   │  Tab / Shift+Tab   next / previous tab       │8              │
 │ ▶ Search      │  1 / 2             jump to tab N             │9              │
-│               │  /                 edit query                │               │
-│               │  ↑ / ↓ · j / k     select task               │0              │
-│               │  ] / [             due date +1d / -1d        │2 ⏳  2026-05-11│
-│               │  } / {             scheduled +1d / -1d       │5              │
+│               │  g s               git sync                  │               │
+│               │  /                 edit query                │0              │
+│               │  ↑ / ↓ · j / k     select task               │2 ⏳  2026-05-11│
+│               │  ] / [             due date +1d / -1d        │5              │
+│               │  } / {             scheduled +1d / -1d       │               │
 │               │  t                 set due to today          │               │
 │               │  p / P             priority cycle fwd / back │               │
 │               │  x / X             complete / cancel         │               │
@@ -23,6 +25,5 @@ expression: frame
 │               │  Enter (target)    open file/heading picker  │               │
 │               │  Enter             open task in $EDITOR      │               │
 │               │  R                 reload vault              │               │
-│               │  Ctrl+W / Ctrl+⌫   delete previous word      │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help

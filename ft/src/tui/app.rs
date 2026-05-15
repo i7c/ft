@@ -25,9 +25,10 @@ use crate::tui::{
     event::{Event, EventStream},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{notes::NotesTab, tasks::TasksTab, welcome::WelcomeTab},
-    ui::{self, Mode},
+    ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
+use ft_core::git::{discover_repo, sync, SyncOptions, SyncOutcome};
 
 /// A transient status-bar message. The center cell of the status bar
 /// shows the toast text in place of `refreshed HH:MM:SS` until the
@@ -62,6 +63,9 @@ pub struct App {
     pending_request: RefCell<Option<AppRequest>>,
     /// Active toast, if any. `RefCell` because `Toast` is `!Copy`.
     toast: RefCell<Option<Toast>>,
+    /// Set when sync surfaces a conflict; rendered by
+    /// `render_sync_conflict` while `mode == Mode::SyncConflict`.
+    sync_conflict: RefCell<Option<SyncConflictInfo>>,
     should_quit: bool,
 }
 
@@ -101,6 +105,7 @@ impl App {
             last_refresh: Cell::new(None),
             pending_request: RefCell::new(None),
             toast: RefCell::new(None),
+            sync_conflict: RefCell::new(None),
             should_quit: false,
         }
     }
@@ -180,8 +185,16 @@ impl App {
             self.mode,
         );
 
-        if self.mode == Mode::Help {
-            ui::render_help_overlay(frame, frame.area());
+        match self.mode {
+            Mode::Help => ui::render_help_overlay(frame, frame.area()),
+            Mode::GitLeader => ui::render_git_leader(frame, frame.area()),
+            Mode::Syncing => ui::render_syncing(frame, frame.area()),
+            Mode::SyncConflict => {
+                if let Some(info) = self.sync_conflict.borrow().as_ref() {
+                    ui::render_sync_conflict(frame, frame.area(), info);
+                }
+            }
+            Mode::Normal => {}
         }
     }
 
@@ -196,6 +209,40 @@ impl App {
                     self.mode = Mode::Normal;
                 }
             }
+            return Ok(());
+        }
+
+        // Git-leader: `s` fires sync, `Esc` (and any other key) dismisses.
+        // We never fall through to the tab/global handler so a stray
+        // global key (q) doesn't quit while the leader is open.
+        if self.mode == Mode::GitLeader {
+            if let Event::Key(k) = ev {
+                self.mode = Mode::Normal;
+                if matches!(
+                    (k.code, k.modifiers),
+                    (KeyCode::Char('s'), KeyModifiers::NONE)
+                ) {
+                    *self.pending_request.borrow_mut() =
+                        Some(AppRequest::SyncGit { message: None });
+                }
+            }
+            return Ok(());
+        }
+
+        // Conflict modal stays up until Esc or `q` dismisses it.
+        if self.mode == Mode::SyncConflict {
+            if let Event::Key(k) = ev {
+                if matches!(k.code, KeyCode::Esc | KeyCode::Char('q')) {
+                    self.mode = Mode::Normal;
+                    *self.sync_conflict.borrow_mut() = None;
+                }
+            }
+            return Ok(());
+        }
+
+        // Syncing modal is drawn once and the event loop is paused for
+        // the duration; if a stray event does arrive (rare), ignore it.
+        if self.mode == Mode::Syncing {
             return Ok(());
         }
 
@@ -240,6 +287,9 @@ impl App {
             }
             (KeyCode::Char('?'), _) => {
                 self.mode = Mode::Help;
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.mode = Mode::GitLeader;
             }
             (KeyCode::Tab, _) => {
                 let next = (self.active + 1) % self.tabs.len();
@@ -301,7 +351,121 @@ impl App {
                 });
                 Ok(())
             }
+            AppRequest::SyncGit { message } => {
+                self.dispatch_sync_git(terminal, message)?;
+                Ok(())
+            }
         }
+    }
+
+    /// Run `ft_core::git::sync` synchronously while a "Syncing…"
+    /// overlay is on screen. The event loop is paused for the
+    /// duration, which is fine for repos of typical vault size — push
+    /// over a slow link is the worst case and a static label is
+    /// readable enough.
+    ///
+    /// Outcome rendering:
+    /// - `Clean { pushed: false }` → green toast `"already in sync"`.
+    /// - `Clean { pushed: true }` → green toast `"pushed local commits"`.
+    /// - `Synced { committed, pulled, pushed }` → green toast
+    ///   `"sync ok — committed N, pulled, pushed"` (omitting clauses
+    ///   that didn't happen).
+    /// - `MergeConflict` / `RebaseConflict` → persistent modal until
+    ///   Esc; the active tab still refreshes so on-disk markers show
+    ///   up on the next render of the underlying tab.
+    fn dispatch_sync_git(&mut self, terminal: &mut Tui, message: Option<String>) -> Result<()> {
+        // Discover the repo first — if there's no `.git/` up the tree,
+        // there's nothing to sync. Surface as an error toast, not a
+        // hard fatal error: vault state can change under us between
+        // `g s` presses, so it's a "feature unavailable here" signal.
+        let repo = match discover_repo(&self.vault.path) {
+            Some(r) => r,
+            None => {
+                self.push_toast(
+                    "no git repository at or above vault root",
+                    ToastStyle::Error,
+                );
+                return Ok(());
+            }
+        };
+
+        let strategy = self.vault.config.config.git.pull_strategy;
+        let opts = SyncOptions { strategy, message };
+
+        // Draw the modal once so the user sees we're working. The
+        // sync call below blocks the event loop until it returns.
+        self.mode = Mode::Syncing;
+        terminal.draw(|f| self.draw(f))?;
+
+        let outcome = sync(&repo, &opts);
+
+        // Refresh the active tab regardless of outcome — pulled
+        // changes (or partial conflict markers) belong in view.
+        {
+            let mut ctx = TabCtx {
+                vault: &self.vault,
+                recents: &self.recents,
+                today: self.today,
+                last_refresh: &self.last_refresh,
+                pending_request: &self.pending_request,
+            };
+            let _ = self.tabs[self.active].refresh(&mut ctx);
+        }
+
+        match outcome {
+            Ok(SyncOutcome::Clean { pushed: false }) => {
+                self.mode = Mode::Normal;
+                self.push_toast("already in sync", ToastStyle::Success);
+            }
+            Ok(SyncOutcome::Clean { pushed: true }) => {
+                self.mode = Mode::Normal;
+                self.push_toast("pushed local commits", ToastStyle::Success);
+            }
+            Ok(SyncOutcome::Synced {
+                committed,
+                pulled,
+                pushed,
+            }) => {
+                self.mode = Mode::Normal;
+                let mut parts = vec![format!("committed {committed}")];
+                if pulled {
+                    parts.push("pulled".to_string());
+                }
+                if pushed {
+                    parts.push("pushed".to_string());
+                }
+                let text = format!("sync ok — {}", parts.join(", "));
+                self.push_toast(text, ToastStyle::Success);
+            }
+            Ok(SyncOutcome::MergeConflict { files }) => {
+                *self.sync_conflict.borrow_mut() = Some(SyncConflictInfo {
+                    kind: SyncConflictKind::Merge,
+                    files,
+                });
+                self.mode = Mode::SyncConflict;
+            }
+            Ok(SyncOutcome::RebaseConflict { files }) => {
+                *self.sync_conflict.borrow_mut() = Some(SyncConflictInfo {
+                    kind: SyncConflictKind::Rebase,
+                    files,
+                });
+                self.mode = Mode::SyncConflict;
+            }
+            Err(e) => {
+                self.mode = Mode::Normal;
+                self.push_toast(format!("git sync failed: {e}"), ToastStyle::Error);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn push_toast(&self, text: impl Into<String>, style: ToastStyle) {
+        *self.toast.borrow_mut() = Some(Toast {
+            text: text.into(),
+            style,
+            deadline: std::time::Instant::now() + TOAST_DURATION,
+        });
     }
 
     /// Strategy-aware editor handoff (plan 011). Resolves the
@@ -580,6 +744,11 @@ impl App {
 
     pub fn enter_help(&mut self) {
         self.mode = Mode::Help;
+    }
+
+    /// Test-only inspection of the App's current mode.
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     pub fn switch_to(&mut self, idx: usize) -> Result<()> {

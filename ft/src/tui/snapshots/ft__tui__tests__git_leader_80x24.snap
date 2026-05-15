@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 4661
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+         ██╗    ██╗███████╗██╗      ██████╗ ██████╗ ███╗   ███╗███████╗         
+         ██║    ██║██┌ git · pick an action ──────────────┐███║██╔════╝         
+         ██║ █╗ ██║██│                                    │╔██║█████╗           
+         ██║███╗██║██│  s     sync (commit + pull + push) │╝██║██╔══╝           
+         ╚███╔███╔╝██│  Esc   cancel                      │ ██║███████╗         
+          ╚══╝╚══╝ ╚═│                                    │ ╚═╝╚══════╝         
+                     │                                    │                     
+                  to │                                    │ian                  
+                     └────────────────────────────────────┘                     
+               press any key to continue · q to quit · ? for help               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ vault: test-vault  ·  tab: Welcome         not yet refreshed         mode: git

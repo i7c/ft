@@ -31,6 +31,13 @@ pub enum AppRequest {
         text: String,
         style: ToastStyle,
     },
+    /// Run `ft_core::git::sync` against the vault's enclosing repo.
+    /// V1 always sends `None` from the TUI (the chord is one-shot,
+    /// the message is auto-generated); the field is kept for parity
+    /// with the CLI surface and future per-tab overrides.
+    SyncGit {
+        message: Option<String>,
+    },
 }
 
 /// Visual styling for a [`Toast`]. Green for success (create, save),
