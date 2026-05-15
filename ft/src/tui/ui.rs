@@ -7,10 +7,20 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::tab::{Tab, TabCtx};
+use crate::tui::{
+    jobs::JobKind,
+    tab::{Tab, TabCtx},
+};
 
 /// Whether the help overlay is open and which mode tag to render in the
 /// status bar's right cell.
+///
+/// Note: there is no `Syncing` mode — git sync runs on a background
+/// worker thread (plan 014). The "a sync is in flight" indicator is
+/// rendered as a separate cell in the status bar driven off
+/// `App.jobs`, not off `Mode`, so the user can drop into help, switch
+/// tabs, or even open the git leader again while a sync is running
+/// without the indicator disappearing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -18,10 +28,6 @@ pub enum Mode {
     /// `g` leader pressed; waiting for the second key (`s` → sync,
     /// any other key → dismiss).
     GitLeader,
-    /// `ft_core::git::sync` is running. The overlay is drawn once
-    /// before the (blocking) call; the event loop is paused for the
-    /// duration so no further keys are processed.
-    Syncing,
     /// Sync surfaced a merge or rebase conflict. The conflict-detail
     /// modal stays up until the user presses Esc.
     SyncConflict,
@@ -33,7 +39,6 @@ impl Mode {
             Mode::Normal => "normal",
             Mode::Help => "help",
             Mode::GitLeader => "git",
-            Mode::Syncing => "sync",
             Mode::SyncConflict => "conflict",
         }
     }
@@ -86,15 +91,29 @@ pub fn render_tab_bar(frame: &mut Frame, area: Rect, titles: &[&str], selected: 
     frame.render_widget(widget, area);
 }
 
-pub fn render_status_bar(
-    frame: &mut Frame,
-    area: Rect,
-    vault_name: &str,
-    tab_title: &str,
-    last_refresh: Option<chrono::DateTime<Local>>,
-    toast: Option<&crate::tui::app::Toast>,
-    mode: Mode,
-) {
+/// Inputs to [`render_status_bar`]. Grouped into a struct so the
+/// function stays under clippy's `too_many_arguments` threshold as
+/// the cell composition grows. All fields are `Copy` so the caller
+/// can hand the struct over by value without cloning.
+#[derive(Clone, Copy)]
+pub struct StatusBarState<'a> {
+    pub vault_name: &'a str,
+    pub tab_title: &'a str,
+    pub last_refresh: Option<chrono::DateTime<Local>>,
+    pub toast: Option<&'a crate::tui::app::Toast>,
+    pub mode: Mode,
+    pub in_flight: Option<JobKind>,
+}
+
+pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_>) {
+    let StatusBarState {
+        vault_name,
+        tab_title,
+        last_refresh,
+        toast,
+        mode,
+        in_flight,
+    } = state;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -118,6 +137,7 @@ pub fn render_status_bar(
         let color = match t.style {
             crate::tui::tab::ToastStyle::Success => Color::Green,
             crate::tui::tab::ToastStyle::Error => Color::Red,
+            crate::tui::tab::ToastStyle::Info => Color::Cyan,
         };
         Line::from(Span::styled(
             t.text.clone(),
@@ -136,16 +156,41 @@ pub fn render_status_bar(
         .alignment(Alignment::Center)
     };
 
-    let right = Line::from(vec![
-        Span::styled("mode: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            mode.label(),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-    ])
+    // Right cell composes either `mode: <label>` (default) or
+    // `⟳ <job> · <label>` (in-flight). The "mode:" prefix is dropped
+    // when an indicator is present so the line still fits the 16-char
+    // right cell at 80 cols. The indicator is orthogonal to mode —
+    // it persists across help, git leader, and conflict modes so the
+    // user always knows a sync is running.
+    let right = if let Some(kind) = in_flight {
+        Line::from(vec![
+            Span::styled(
+                format!("⟳ {}", kind.indicator_label()),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                mode.label(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("mode: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                mode.label(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    }
     .alignment(Alignment::Right);
 
     let bg = Style::default().bg(Color::Rgb(28, 28, 32));
@@ -259,34 +304,6 @@ pub fn render_git_leader(frame: &mut Frame, area: Rect) {
             ),
             Span::styled("cancel", Style::default().fg(Color::White)),
         ]),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines.to_vec()).alignment(Alignment::Left),
-        inner,
-    );
-}
-
-/// Blocking "Syncing…" overlay drawn once before the (synchronous)
-/// `ft_core::git::sync` call. The event loop is paused for the
-/// duration, so this is a static label — no spinner animation needed.
-pub fn render_syncing(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(30, 20, area);
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" syncing ")
-        .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let lines = [
-        Line::from(""),
-        Line::from(Span::styled(
-            "  running ft git sync…",
-            Style::default().fg(Color::White),
-        )),
     ];
     frame.render_widget(
         Paragraph::new(lines.to_vec()).alignment(Alignment::Left),

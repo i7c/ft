@@ -1,6 +1,7 @@
 mod app;
 mod editor;
 mod event;
+mod jobs;
 mod tab;
 mod tabs;
 #[cfg(test)]

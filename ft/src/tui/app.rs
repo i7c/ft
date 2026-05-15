@@ -22,7 +22,8 @@ use ft_core::config::EditorStrategy;
 
 use crate::tui::{
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
-    event::{Event, EventStream},
+    event::{BgEvent, Event, EventStream, SyncJobResult},
+    jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{notes::NotesTab, tasks::TasksTab, welcome::WelcomeTab},
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
@@ -66,6 +67,11 @@ pub struct App {
     /// Set when sync surfaces a conflict; rendered by
     /// `render_sync_conflict` while `mode == Mode::SyncConflict`.
     sync_conflict: RefCell<Option<SyncConflictInfo>>,
+    /// Single-slot tracker for background work spawned off the main
+    /// event loop (plan 014). When `Some`, the right cell of the
+    /// status bar renders an in-flight indicator and re-entrant
+    /// submissions are rejected with a toast.
+    jobs: RefCell<Option<JobHandle>>,
     should_quit: bool,
 }
 
@@ -106,6 +112,7 @@ impl App {
             pending_request: RefCell::new(None),
             toast: RefCell::new(None),
             sync_conflict: RefCell::new(None),
+            jobs: RefCell::new(None),
             should_quit: false,
         }
     }
@@ -138,6 +145,13 @@ impl App {
                 self.service_request(terminal, &events, req)?;
             }
         }
+    }
+
+    /// Snapshot of the in-flight job kind for the status bar renderer.
+    /// Returned `Copy` so the borrow on `self.jobs` is short-lived and
+    /// doesn't outlive the draw call.
+    fn in_flight_job(&self) -> Option<JobKind> {
+        self.jobs.borrow().as_ref().map(|h| h.kind)
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -178,17 +192,19 @@ impl App {
         ui::render_status_bar(
             frame,
             status_bar,
-            &vault_name,
-            self.tabs[self.active].title(),
-            self.last_refresh.get(),
-            active_toast.as_ref(),
-            self.mode,
+            ui::StatusBarState {
+                vault_name: &vault_name,
+                tab_title: self.tabs[self.active].title(),
+                last_refresh: self.last_refresh.get(),
+                toast: active_toast.as_ref(),
+                mode: self.mode,
+                in_flight: self.in_flight_job(),
+            },
         );
 
         match self.mode {
             Mode::Help => ui::render_help_overlay(frame, frame.area()),
             Mode::GitLeader => ui::render_git_leader(frame, frame.area()),
-            Mode::Syncing => ui::render_syncing(frame, frame.area()),
             Mode::SyncConflict => {
                 if let Some(info) = self.sync_conflict.borrow().as_ref() {
                     ui::render_sync_conflict(frame, frame.area(), info);
@@ -199,6 +215,14 @@ impl App {
     }
 
     fn handle_event(&mut self, ev: Event) -> Result<()> {
+        // Background completion messages from worker threads. Handled
+        // before any mode short-circuit so a sync that finishes while
+        // the help overlay is up still toasts/transitions correctly.
+        if let Event::Background(bg) = ev {
+            self.handle_background(bg)?;
+            return Ok(());
+        }
+
         // Help overlay swallows everything except its own dismiss keys.
         if self.mode == Mode::Help {
             if let Event::Key(k) = ev {
@@ -237,12 +261,6 @@ impl App {
                     *self.sync_conflict.borrow_mut() = None;
                 }
             }
-            return Ok(());
-        }
-
-        // Syncing modal is drawn once and the event loop is paused for
-        // the duration; if a stray event does arrive (rare), ignore it.
-        if self.mode == Mode::Syncing {
             return Ok(());
         }
 
@@ -352,32 +370,32 @@ impl App {
                 Ok(())
             }
             AppRequest::SyncGit { message } => {
-                self.dispatch_sync_git(terminal, message)?;
+                self.dispatch_sync_git(events, message)?;
                 Ok(())
             }
         }
     }
 
-    /// Run `ft_core::git::sync` synchronously while a "Syncing…"
-    /// overlay is on screen. The event loop is paused for the
-    /// duration, which is fine for repos of typical vault size — push
-    /// over a slow link is the worst case and a static label is
-    /// readable enough.
+    /// Submit a git sync to a background worker thread. Returns
+    /// immediately; the worker posts an [`Event::Background(BgEvent::SyncCompleted)`]
+    /// back into the shared event channel when done, and
+    /// [`Self::handle_background`] renders the outcome.
     ///
-    /// Outcome rendering:
-    /// - `Clean { pushed: false }` → green toast `"already in sync"`.
-    /// - `Clean { pushed: true }` → green toast `"pushed local commits"`.
-    /// - `Synced { committed, pulled, pushed }` → green toast
-    ///   `"sync ok — committed N, pulled, pushed"` (omitting clauses
-    ///   that didn't happen).
-    /// - `MergeConflict` / `RebaseConflict` → persistent modal until
-    ///   Esc; the active tab still refreshes so on-disk markers show
-    ///   up on the next render of the underlying tab.
-    fn dispatch_sync_git(&mut self, terminal: &mut Tui, message: Option<String>) -> Result<()> {
-        // Discover the repo first — if there's no `.git/` up the tree,
-        // there's nothing to sync. Surface as an error toast, not a
-        // hard fatal error: vault state can change under us between
-        // `g s` presses, so it's a "feature unavailable here" signal.
+    /// Re-entrancy: if a sync is already in flight (`self.jobs` is
+    /// `Some`), surface a toast and do nothing — a second sync would
+    /// be redundant (the first will pick up everything the second
+    /// would have pushed) and queueing them serves no purpose.
+    ///
+    /// `discover_repo` is checked at submission time so the user gets
+    /// an immediate "no git repository" toast instead of a delayed
+    /// completion error. The strategy is read from config the same
+    /// way the synchronous v1 did.
+    fn dispatch_sync_git(&mut self, events: &EventStream, message: Option<String>) -> Result<()> {
+        if self.jobs.borrow().is_some() {
+            self.push_toast("sync already in progress", ToastStyle::Info);
+            return Ok(());
+        }
+
         let repo = match discover_repo(&self.vault.path) {
             Some(r) => r,
             None => {
@@ -392,15 +410,38 @@ impl App {
         let strategy = self.vault.config.config.git.pull_strategy;
         let opts = SyncOptions { strategy, message };
 
-        // Draw the modal once so the user sees we're working. The
-        // sync call below blocks the event loop until it returns.
-        self.mode = Mode::Syncing;
-        terminal.draw(|f| self.draw(f))?;
+        // Take a sender clone for the worker and mark the slot busy
+        // *before* spawning so a fast-completing job can't race us into
+        // an inconsistent state (worker posts → main loop matches →
+        // `jobs.take()` finds None and the indicator never lit).
+        let tx = events.sender();
+        *self.jobs.borrow_mut() = Some(JobHandle::new(JobKind::Sync));
+        self.push_toast("syncing in background…", ToastStyle::Info);
 
-        let outcome = sync(&repo, &opts);
+        std::thread::spawn(move || run_sync_job(repo, opts, tx));
 
-        // Refresh the active tab regardless of outcome — pulled
-        // changes (or partial conflict markers) belong in view.
+        Ok(())
+    }
+
+    /// Apply a background event to the App state. Currently the only
+    /// variant is [`BgEvent::SyncCompleted`]; future plans add more.
+    fn handle_background(&mut self, bg: BgEvent) -> Result<()> {
+        match bg {
+            BgEvent::SyncCompleted(result) => self.apply_sync_result(result),
+        }
+    }
+
+    /// Map a finished sync's outcome onto the user-facing surface —
+    /// toast for clean / synced, modal for conflict, error toast for
+    /// hard failure — and refresh the *currently active* tab so the
+    /// pulled-in changes (or conflict markers) are reflected. We use
+    /// `self.active` at completion time, not at submission time:
+    /// tab-switching during a background sync is allowed, and the
+    /// most useful tab to refresh is the one the user is looking at
+    /// now.
+    fn apply_sync_result(&mut self, result: SyncJobResult) -> Result<()> {
+        *self.jobs.borrow_mut() = None;
+
         {
             let mut ctx = TabCtx {
                 vault: &self.vault,
@@ -412,13 +453,11 @@ impl App {
             let _ = self.tabs[self.active].refresh(&mut ctx);
         }
 
-        match outcome {
+        match result.outcome {
             Ok(SyncOutcome::Clean { pushed: false }) => {
-                self.mode = Mode::Normal;
                 self.push_toast("already in sync", ToastStyle::Success);
             }
             Ok(SyncOutcome::Clean { pushed: true }) => {
-                self.mode = Mode::Normal;
                 self.push_toast("pushed local commits", ToastStyle::Success);
             }
             Ok(SyncOutcome::Synced {
@@ -426,7 +465,6 @@ impl App {
                 pulled,
                 pushed,
             }) => {
-                self.mode = Mode::Normal;
                 let mut parts = vec![format!("committed {committed}")];
                 if pulled {
                     parts.push("pulled".to_string());
@@ -451,12 +489,10 @@ impl App {
                 });
                 self.mode = Mode::SyncConflict;
             }
-            Err(e) => {
-                self.mode = Mode::Normal;
-                self.push_toast(format!("git sync failed: {e}"), ToastStyle::Error);
+            Err(msg) => {
+                self.push_toast(format!("git sync failed: {msg}"), ToastStyle::Error);
             }
         }
-
         Ok(())
     }
 
@@ -635,6 +671,48 @@ fn resolve_today() -> NaiveDate {
         .unwrap_or_else(|| Local::now().date_naive())
 }
 
+// --- background workers ------------------------------------------------------
+
+/// Body of the `g s` worker thread (plan 014). Owns all its inputs
+/// (`repo`, `opts`, `tx`) so no borrows cross the thread boundary;
+/// `Send` makes that a compile-time guarantee. Runs the synchronous
+/// `ft_core::git::sync` call to completion, then posts exactly one
+/// [`BgEvent::SyncCompleted`] back into the main loop.
+///
+/// Panics are caught and converted into `Err` payloads so a bug in
+/// the sync chain doesn't strand the in-flight indicator forever.
+/// Send failures (channel closed because the app is tearing down)
+/// are swallowed — there's nothing left to render the result to.
+fn run_sync_job(repo: std::path::PathBuf, opts: SyncOptions, tx: std::sync::mpsc::Sender<Event>) {
+    let outcome =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync(&repo, &opts))) {
+            Ok(Ok(o)) => Ok(o),
+            Ok(Err(e)) => Err(format!("{e:#}")),
+            Err(panic) => {
+                let msg = panic_message(&panic);
+                Err(format!("internal panic in sync worker: {msg}"))
+            }
+        };
+
+    let _ = tx.send(Event::Background(BgEvent::SyncCompleted(SyncJobResult {
+        outcome,
+        repo,
+    })));
+}
+
+/// Extract a human-readable message from `catch_unwind`'s payload.
+/// Panic payloads are typed `Box<dyn Any + Send>`; the standard payload
+/// from `panic!("...")` is either `&'static str` or `String`.
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = panic.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
 // --- editor handoff ----------------------------------------------------------
 
 fn suspend_terminal(terminal: &mut Tui) -> Result<()> {
@@ -805,5 +883,29 @@ impl App {
     /// post-create UX.
     pub fn current_toast(&self) -> Option<Toast> {
         self.toast.borrow().clone()
+    }
+
+    /// In-flight job kind for the renderer, if any. Used by tests to
+    /// assert the re-entrancy guard and the status-bar indicator.
+    pub fn in_flight_job_for_test(&self) -> Option<JobKind> {
+        self.in_flight_job()
+    }
+
+    /// Pretend a job is in flight without actually spawning a worker.
+    /// Used by re-entrancy / indicator tests that don't care about the
+    /// thread side of things.
+    pub fn set_in_flight_for_test(&self, kind: JobKind) {
+        *self.jobs.borrow_mut() = Some(JobHandle::new(kind));
+    }
+
+    /// Drive the real `dispatch_sync_git` against a test-provided event
+    /// channel. Used by the one end-to-end integration test that walks
+    /// a real bare-origin / clone handshake through the worker thread.
+    pub fn submit_sync_for_test(
+        &mut self,
+        events: &EventStream,
+        message: Option<String>,
+    ) -> Result<()> {
+        self.dispatch_sync_git(events, message)
     }
 }

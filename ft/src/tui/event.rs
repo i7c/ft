@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
@@ -6,11 +7,19 @@ use std::{
 
 use anyhow::Result;
 use crossterm::event::{self, Event as CtEvent, KeyEvent, KeyEventKind, MouseEvent};
+use ft_core::git::SyncOutcome;
 
 /// Events flowing through the TUI loop. `Tick` fires once per second so the
 /// sidebar clock can update without forcing a full redraw on every keystroke.
 /// `Mouse` and `Resize` payloads are routed but not consumed in session 1;
 /// later sessions will drive layout caches off `Resize`.
+///
+/// [`Event::Background`] carries results posted by worker threads spawned
+/// off the main loop (plan 014). Background work uses the *same* `mpsc`
+/// channel as user input: the worker holds a clone of the sender vended
+/// by [`EventStream::sender`] and sends a single completion message when
+/// done. The main loop then matches the new variant just like a
+/// keystroke — no second receiver, no `select!`, no polling.
 #[derive(Debug, Clone)]
 pub enum Event {
     Key(KeyEvent),
@@ -19,13 +28,41 @@ pub enum Event {
     #[allow(dead_code)] // routed but not consumed yet; reserved for future sessions
     Resize(u16, u16),
     Tick,
+    Background(BgEvent),
+}
+
+/// Completion messages from worker threads. One variant per concurrent
+/// job kind. Future plans (file watching, fuzzy-index rebuilds) add
+/// variants here without touching the event-loop shape.
+#[derive(Debug, Clone)]
+pub enum BgEvent {
+    SyncCompleted(SyncJobResult),
+}
+
+/// Result of a single `ft_core::git::sync` job spawned by the TUI.
+///
+/// `outcome` is `Ok` for any defined `SyncOutcome` (clean, synced, or
+/// conflicted) and `Err` for hard failures (no upstream, push rejected,
+/// network error). Errors are stringified at the worker boundary
+/// (`format!("{e:#}")`) so the on-wire `Event` enum stays `Clone` and
+/// the renderer needs only a flat message.
+///
+/// `repo` is the discovered toplevel at submission time; carried for
+/// completeness even though v1's single-slot handler doesn't disambiguate.
+#[derive(Debug, Clone)]
+pub struct SyncJobResult {
+    pub outcome: Result<SyncOutcome, String>,
+    /// Carried for future plans (multi-repo, job-id disambiguation).
+    /// Unread for v1's single-slot handler.
+    #[allow(dead_code)]
+    pub repo: PathBuf,
 }
 
 /// Channel-backed event source: a background thread polls crossterm and sends
 /// `Event::Tick` on a 1s cadence; the main loop drains via `next()`.
 pub struct EventStream {
     rx: Receiver<Event>,
-    _tx: Sender<Event>,
+    tx: Sender<Event>,
 }
 
 impl EventStream {
@@ -33,12 +70,20 @@ impl EventStream {
         let (tx, rx) = mpsc::channel();
         let crossterm_tx = tx.clone();
         thread::spawn(move || crossterm_loop(crossterm_tx, tick_rate));
-        Self { rx, _tx: tx }
+        Self { rx, tx }
     }
 
     /// Block until the next event arrives. Errors only on channel teardown.
     pub fn next(&self) -> Result<Event> {
         self.rx.recv().map_err(Into::into)
+    }
+
+    /// Clone of the internal sender, for worker threads that post
+    /// `Event::Background(_)` results back into the main loop. Dropping
+    /// the receiver (app teardown) makes subsequent `send` calls return
+    /// `Err`, which the worker treats as "give up silently."
+    pub fn sender(&self) -> Sender<Event> {
+        self.tx.clone()
     }
 
     /// Discard every event received during `window`. Used after returning

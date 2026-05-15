@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 4869
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+         ██╗    ██╗███████╗██╗      ██████╗ ██████╗ ███╗   ███╗███████╗         
+         ██║    ██║██╔════╝██║     ██╔════╝██╔═══██╗████╗ ████║██╔════╝         
+         ██║ █╗ ██║█████╗  ██║     ██║     ██║   ██║██╔████╔██║█████╗           
+         ██║███╗██║██╔══╝  ██║     ██║     ██║   ██║██║╚██╔╝██║██╔══╝           
+         ╚███╔███╔╝███████╗███████╗╚██████╗╚██████╔╝██║ ╚═╝ ██║███████╗         
+          ╚══╝╚══╝ ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝         
+                                                                                
+                  to ft — your terminal companion for Obsidian                  
+                                vault: test-vault                               
+               press any key to continue · q to quit · ? for help               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ vault: test-vault  ·  tab: Welcome         not yet refreshed   ⟳ sync · normal

@@ -123,6 +123,58 @@ DSL with flag filters by AND-ing the parsed expression with a typed
 2. Add a variant to `output::Format`.
 3. Wire it into the match in `ft/src/cmd/tasks.rs::run_list`.
 
+## Concurrency model
+
+The codebase is deliberately single-threaded everywhere except for two
+producer threads that feed the TUI event channel. There is no async
+runtime — no tokio, no `async fn`. The main event loop blocks on
+`mpsc::Receiver::recv()`, processes one event, redraws, and loops.
+
+### Producers
+
+1. **Crossterm input thread** (`ft/src/tui/event.rs::crossterm_loop`)
+   reads stdin and sends `Event::{Key,Mouse,Resize,Tick}` onto a shared
+   `mpsc::channel`. Owns no app state.
+2. **Background workers** (`ft/src/tui/app.rs::run_sync_job` and any
+   future siblings) own their inputs (`Arc<Vault>` clones, `PathBuf`,
+   options) moved into a `move ||` closure, do synchronous work, and
+   send exactly one `Event::Background(BgEvent)` back into the same
+   channel before exiting.
+
+The main loop is single-receiver: there is no `select!`, no second
+channel, no polling. Background completions are just another event
+variant the main loop matches on.
+
+### Shared state
+
+- **`Arc<T>` for read-only sharing** — `Arc<Vault>`, `Arc<RecentsLog>`.
+  These are *not* `Mutex`-protected; they're cloned read handles.
+- **`RefCell<Option<T>>` for single-threaded "slot" state** —
+  `pending_request`, `toast`, `sync_conflict`, `jobs`. Single-threaded
+  so no lock contention.
+- **No `Arc<Mutex<AppState>>` anywhere.** Background workers do not
+  reach into App state — they post a message and let the main loop
+  apply it.
+
+### Pattern for adding off-thread work
+
+When a future feature needs to run something off the main loop (file
+watching, fuzzy-index rebuilds, schedule-driven autosync, HTTP fetch):
+
+1. Worker thread owns its inputs (move them into the closure).
+2. Result goes back via `EventStream::sender()` as a new
+   `BgEvent::*` variant.
+3. In-flight state lives on `App` as a typed slot
+   (`RefCell<Option<JobHandle>>` for v1; promote to `HashMap<JobId,
+   JobHandle>` once concurrent jobs of different kinds are needed).
+4. Cancellation is cooperative — share an `Arc<AtomicBool>` flag the
+   worker checks between phases. Never kill the thread.
+5. Quit doesn't `join()`. The OS reaps orphaned workers; their
+   `send()` calls return `Err` after the receiver drops.
+
+The plan-014 git-sync background worker is the reference
+implementation.
+
 ## Testing strategy
 
 - **Unit tests** live with the modules (`#[cfg(test)] mod tests`)

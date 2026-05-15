@@ -41,13 +41,15 @@ pub enum AppRequest {
 }
 
 /// Visual styling for a [`Toast`]. Green for success (create, save),
-/// red for errors (IO failures, validation fallout). The middle of the
-/// status bar runs all toasts through one renderer, so adding a new
-/// shade later is a single match arm.
+/// red for errors (IO failures, validation fallout), cyan for
+/// informational notices (background-job heads-ups). The middle of
+/// the status bar runs all toasts through one renderer, so adding a
+/// new shade later is a single match arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastStyle {
     Success,
     Error,
+    Info,
 }
 
 /// What the App should do after a tab handles an event. `Consumed` and `Quit`

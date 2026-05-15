@@ -461,7 +461,9 @@ the operation completes.
 - **Auto-sync on a schedule.** A `[git] auto_sync_every = "5m"`
   config knob that fires a background sync. Real ergonomic value
   but it interacts with the TUI's event loop, conflict UX, and
-  notification surface in non-trivial ways — own plan.
+  notification surface in non-trivial ways — own plan. (The
+  background worker pattern was added in plan 014, removing one
+  of the blockers.)
 - **Conflict resolution UI in the TUI.** A modal that lists
   conflicted files and lets the user pick "open in editor" for
   each. v1 sends the user to their normal editor / shell to

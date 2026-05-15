@@ -134,8 +134,9 @@ stays correct.
 pulls the configured upstream, and pushes — one shot. The repo is
 discovered by walking up from the vault root; the feature is
 unavailable if no `.git/` exists anywhere up the tree. The same
-operation is available in the TUI via the `g s` chord on the Notes
-and Tasks tabs.
+operation is available in the TUI via the `g s` chord — it runs on
+a background thread so you can keep working while it completes, with
+a `⟳ sync` indicator in the status bar.
 
 ```sh
 ft git sync                     # commit, pull, push
