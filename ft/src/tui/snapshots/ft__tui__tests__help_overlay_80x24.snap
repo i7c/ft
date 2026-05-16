@@ -3,7 +3,7 @@ source: ft/src/tui/tests.rs
 assertion_line: 101
 expression: frame
 ---
-  1 Welcome  │  2 Tasks  │  3 Notes                                             
+  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks                            
                 ┌ help ────────────────────────────────────────┐                
                 │Keybindings                                   │                
                 │                                              │                

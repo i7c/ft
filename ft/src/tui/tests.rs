@@ -221,6 +221,189 @@ fn enter_on_dropdown_is_consumed_by_tasks_tab() -> Result<()> {
     Ok(())
 }
 
+// ── Timeblocks tab (plan 015 session 4) ─────────────────────────────────────
+
+/// Vault wired up so `Vault::resolve_target(date, None)` finds a daily
+/// note at `journal/YYYY-MM-DD.md`. Anchored to the fixed clock
+/// (Sun 2026-05-10), so "today" = 2026-05-10 and "tomorrow" = 2026-05-11.
+fn timeblocks_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(vault_path.join("journal")).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+fn seed_day(vault: &Vault, date: &str, body: &str) {
+    let p = vault.path.join(format!("journal/{date}.md"));
+    std::fs::write(p, body).unwrap();
+}
+
+#[test]
+fn timeblocks_tab_empty_renders_placeholders() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    let frame = render(&mut app, 100, 24);
+    assert_tui_snapshot!("timeblocks_tab_empty_100x24", frame);
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_populated_today_renders_blocks_and_totals() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 standup @work\n- 10:00 - 10:30 review @work/code\n- 11:00 - 11:15 coffee @break\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    let frame = render(&mut app, 100, 24);
+    assert_tui_snapshot!("timeblocks_tab_populated_today_100x24", frame);
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_populated_today_missing_tomorrow_shows_placeholder() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 standup @work\n",
+    );
+    // Don't seed 2026-05-11 — tomorrow's pane should show the placeholder.
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame.contains("no daily note yet"),
+        "tomorrow placeholder should appear: {frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_both_days_populated_renders_two_lists() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 today-a @work\n",
+    );
+    seed_day(
+        &vault,
+        "2026-05-11",
+        "## Time Blocks\n- 09:00 - 10:00 tomorrow-a @personal\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("today-a"));
+    assert!(frame.contains("tomorrow-a"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_l_shifts_focus_to_tomorrow() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 today-a @work\n",
+    );
+    seed_day(
+        &vault,
+        "2026-05-11",
+        "## Time Blocks\n- 09:00 - 10:00 tomorrow-a @personal\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Initial frame: focus indicator says "today".
+    let initial = render(&mut app, 100, 24);
+    assert!(initial.contains("▶ today"));
+    // After `l`: focus should be on tomorrow.
+    app.dispatch(key('l'))?;
+    let after = render(&mut app, 100, 24);
+    assert!(after.contains("▶ tomorrow"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_j_k_move_selection_in_focused_pane() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 first\n- 10:00 - 11:00 second\n- 11:00 - 12:00 third\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    let after_two_j = render(&mut app, 100, 24);
+    // The selection symbol "▶" appears next to the focused row; with two
+    // `j`s on a focused list of length 3, "third" should be selected.
+    // We assert the third row has the highlight prefix in the rendered
+    // frame by looking for the row text immediately after a "▶" symbol.
+    assert!(
+        after_two_j
+            .lines()
+            .any(|l| l.contains("▶") && l.contains("third")),
+        "expected third row highlighted: {after_two_j}"
+    );
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_g_and_capital_g_jump_to_ends() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 first\n- 10:00 - 11:00 second\n- 11:00 - 12:00 third\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('G'))?;
+    let last = render(&mut app, 100, 24);
+    assert!(last.lines().any(|l| l.contains("▶") && l.contains("third")));
+    app.dispatch(key('g'))?;
+    let first = render(&mut app, 100, 24);
+    assert!(first
+        .lines()
+        .any(|l| l.contains("▶") && l.contains("first")));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_r_refreshes_from_disk() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    // Start empty.
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    let initial = render(&mut app, 100, 24);
+    assert!(initial.contains("no daily note yet"));
+    // Drop a file on disk and press `r`.
+    std::fs::write(
+        vault_path.join("journal/2026-05-10.md"),
+        "## Time Blocks\n- 09:00 - 10:00 fresh @work\n",
+    )
+    .unwrap();
+    app.dispatch(key('r'))?;
+    let after = render(&mut app, 100, 24);
+    assert!(after.contains("fresh"));
+    Ok(())
+}
+
 #[test]
 fn welcome_any_key_switches_to_tasks() -> Result<()> {
     let (_dir, vault) = test_vault();
@@ -284,6 +467,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     let tab_ev = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Notes");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Timeblocks");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Welcome");
     app.dispatch(tab_ev)?;

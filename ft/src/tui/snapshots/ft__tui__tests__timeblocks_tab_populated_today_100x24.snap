@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 270
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks                                                
+┌ sidebar ─────────────┐┌ Today  2026-05-10 ─────────────────┐┌ Tomorrow  2026-05-11 ──────────────┐
+│                      ││▶   1  09:00 - 10:00  standup @work ││                                    │
+│ Sun 10 May           ││    2  10:00 - 10:30  review @work/c││  no daily note yet.                │
+│ 14:32:05             ││    3  11:00 - 11:15  coffee @break ││  press `c` to create (session 5)   │
+│                      ││                                    ││                                    │
+│ ── totals (today) ── ││                                    ││                                    │
+│ total 01:30          ││                                    ││                                    │
+│ @work  01:30         ││                                    ││                                    │
+│ @break  00:15        ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│ ── focus ──          ││                                    ││                                    │
+│ ▶ today              ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+│                      ││                                    ││                                    │
+└──────────────────────┘└────────────────────────────────────┘└────────────────────────────────────┘
+ vault: test-vault  ·  tab: Timeblocks                   not yet refreshed             mode: normal

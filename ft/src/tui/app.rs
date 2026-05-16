@@ -25,7 +25,7 @@ use crate::tui::{
     event::{BgEvent, Event, EventStream, SyncJobResult},
     jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    tabs::{notes::NotesTab, tasks::TasksTab, welcome::WelcomeTab},
+    tabs::{notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab, welcome::WelcomeTab},
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
@@ -91,6 +91,7 @@ impl App {
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
+            Box::new(TimeblocksTab::new()),
         ];
         Self::with_tabs(vault, recents, today, tabs)
     }
@@ -781,6 +782,9 @@ impl App {
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::with_clock(clock)),
             Box::new(NotesTab::new()),
+            // TimeblocksTab shares the same ClockFn type alias as
+            // TasksTab so the same fixture-clock can drive both panes.
+            Box::new(TimeblocksTab::with_clock(clock)),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
@@ -807,6 +811,9 @@ impl App {
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::with_clock(clock)),
             Box::new(NotesTab::new()),
+            // TimeblocksTab shares the same ClockFn type alias as
+            // TasksTab so the same fixture-clock can drive both panes.
+            Box::new(TimeblocksTab::with_clock(clock)),
         ];
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
     }

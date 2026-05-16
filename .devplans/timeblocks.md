@@ -291,21 +291,21 @@ Why ship CLI before TUI:
 
 ### TUI — Timeblocks tab
 
-- [ ] New tab `TimeblocksTab` registered after `NotesTab` in `App::new`
+- [x] New tab `TimeblocksTab` registered after `NotesTab` in `App::new`
       (plan 002 framework). Tab title `"Timeblocks"`.
-- [ ] **Layout**: sidebar (24 cols) + main split horizontally between
+- [x] **Layout**: sidebar (24 cols) + main split horizontally between
       "Today" and "Tomorrow" panes (50/50). When tomorrow's daily note
       doesn't exist, its pane renders a placeholder
       (`"Tomorrow (YYYY-MM-DD) — no daily note yet. Press 'c' to
       create."`) and the `c` chord (only when tomorrow pane has focus)
       triggers `create_or_get_periodic_path`.
-- [ ] **Sidebar**: live clock (1-second tick), today's date, blank
+- [x] **Sidebar**: live clock (1-second tick), today's date, blank
       line, "── totals (today) ──" header, hierarchical totals from
       `time_per_tag` for today's blocks (top-level only, indented
       sub-levels collapsed), then the active-focus indicator.
-- [ ] **Selection**: each pane has its own selected-index. Focus
+- [x] **Selection**: each pane has its own selected-index. Focus
       toggles between panes with `Tab` / `Shift+Tab` (or `h`/`l`).
-- [ ] **Movement**: `j`/`k` or `↓`/`↑` move selection within the
+- [x] **Movement**: `j`/`k` or `↓`/`↑` move selection within the
       focused pane. `g` / `G` jump first/last (vim convention,
       already used in other tabs).
 - [ ] **Create — quickline** (`a`): bottom-line edit buffer (port the
@@ -336,7 +336,7 @@ Why ship CLI before TUI:
       tags and a quickline for adding/removing (`+@tag`/`-@tag`
       syntax). Defer multi-modal interaction to a later session if
       complex.
-- [ ] **Refresh** (`r`): re-read both daily notes from disk and rebuild.
+- [x] **Refresh** (`r`): re-read both daily notes from disk and rebuild.
 - [ ] **Sync compatibility**: writes go through `fs::write_atomic` and
       `Document::write`, so the TUI never corrupts a daily note even
       when the user has the file open in Obsidian (matching plan
@@ -697,7 +697,7 @@ multi-day aggregation with missing files skipped, missing
 `[periodic_notes.daily]` remedy hint. Full workspace: ~810 tests
 passing, clippy + fmt clean.
 
-### Session 4 · planned
+### Session 4 · 2026-05-16 · done
 **Goal:** Read-only TUI Timeblocks tab — today + tomorrow split,
 sidebar, navigation, refresh; no mutations yet.
 
@@ -714,6 +714,37 @@ sidebar, navigation, refresh; no mutations yet.
   Criteria (TUI)
 
 **Done means:** can read both days at a glance; no mutations.
+
+**Outcome:** Added `ft/src/tui/tabs/timeblocks/{mod.rs, view.rs}`
+with a `TimeblocksTab` registered at index 3 in `App::new` (after
+NotesTab). Layout: sidebar (24 cols) + horizontal split between
+Today and Tomorrow panes (50/50). Sidebar shows the live clock,
+"Sun 10 May"-style date, a per-top-level-tag totals block driven
+by `report::time_per_tag` + `report::total_minutes` (with the
+non-break total on top), and an `▶ today` / `▶ tomorrow` focus
+indicator. Each pane shows `line / HH:MM - HH:MM / desc` rows
+with a highlight cursor; the focused pane gets a cyan border and
+the unfocused pane stays dim grey. Tomorrow renders a placeholder
+when the daily-note file doesn't yet exist on disk
+(`"no daily note yet. press `c` to create (session 5)"`). Keys:
+`j`/`k`/`↓`/`↑` move selection in focused pane; `g`/`G` jump
+first/last; `h`/`l` (or `←`/`→`) toggle pane focus; `r`
+re-reads both days from disk via `Document::read`.
+
+**Deviation from spec:** the spec listed `Tab`/`Shift+Tab` as
+focus-toggle keys, but those collide with the App's global
+tab-cycle binding — consuming them would trap the user inside
+the Timeblocks tab. Pane focus uses `h`/`l` (or arrow keys)
+only; documented inline.
+
+8 new TUI tests (2 insta snapshots for empty + populated, 6
+behaviour assertions for missing-tomorrow placeholder, both-days
+populated, `l` focus shift, `j`/`k` selection, `g`/`G` jumps,
+`r` refresh re-reading after a file is created on disk). All
+pre-existing TUI snapshots updated for the new tab-bar entry
+(`1 Welcome | 2 Tasks | 3 Notes | 4 Timeblocks`). `tab_key_cycles_tabs`
+test extended to include the new tab in the cycle. Full
+workspace test, clippy, fmt clean.
 
 ### Session 5 · planned
 **Goal:** TUI mutations — quickline (`a`), form (`A`), description
