@@ -192,6 +192,28 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    // If the resolved path is the configured daily note AND it doesn't
+    // exist yet, render the daily template first so the file matches
+    // what `ft notes today` would produce. Without this, `ft timeblocks
+    // add --date tomorrow` against a brand-new day would leave a bare
+    // `## Time Blocks`-only file, breaking the user's daily layout.
+    // Skipped when `--file` was passed (the user picked an explicit
+    // path, not a daily note) or when the file already exists.
+    if args.file.is_none() && !path.exists() {
+        if let Some(daily_cfg) = vault.config.config.periodic_notes.daily.as_ref() {
+            let (today_n, now_n) = today_now_from_env();
+            ft_core::periodic::create_or_get_periodic_path(
+                &vault.path,
+                &vault.templates_dir(),
+                daily_cfg,
+                date,
+                today_n,
+                now_n,
+            )
+            .map_err(|e| anyhow!("{e}"))?;
+        }
+    }
+
     let block_summary = format!(
         "+ {} - {} {}",
         fmt_hhmm(block.start),
@@ -607,6 +629,21 @@ fn today_from_env() -> NaiveDate {
         .ok()
         .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
         .unwrap_or_else(|| Local::now().date_naive())
+}
+
+/// `(today, now)` pair for template rendering, honoring the `FT_TODAY`
+/// override so tests get a stable clock. Mirrors the helper in
+/// `cmd/notes.rs` — kept local rather than shared because the two CLI
+/// modules don't otherwise depend on each other.
+fn today_now_from_env() -> (NaiveDate, chrono::NaiveDateTime) {
+    use chrono::NaiveTime;
+    if let Ok(s) = std::env::var("FT_TODAY") {
+        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
+        }
+    }
+    let local = Local::now();
+    (local.date_naive(), local.naive_local())
 }
 
 fn parse_date_arg(s: Option<&str>, today: NaiveDate) -> Result<NaiveDate> {

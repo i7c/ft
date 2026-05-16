@@ -15,14 +15,20 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveTime, Timelike};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ft_core::timeblock::{doc::Document, Timeblock};
+use ft_core::timeblock::{
+    self,
+    doc::Document,
+    ops::{self, AddOptions, EditMutation, Selector, TimeChange},
+    Timeblock,
+};
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
     event::Event,
-    tab::{EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
+    widgets::EditBuffer,
 };
 
 mod view;
@@ -73,11 +79,53 @@ impl PaneState {
     }
 }
 
+/// Editing mode the tab is currently in. `Idle` is the default; the
+/// other variants own the buffers / focus targets the corresponding
+/// keymaps need. `DeleteConfirm` is a two-stroke chord: first `d`
+/// transitions Idle → DeleteConfirm, second `d` commits and returns to
+/// Idle.
+pub(crate) enum Mode {
+    Idle,
+    /// First `d` of the `d d` delete chord. Holds the pane + selected
+    /// block index captured at chord start so the commit isn't shifted
+    /// by an intervening selection move.
+    DeleteConfirm {
+        pane: Pane,
+        block_idx: usize,
+    },
+    /// `a` quickline open. Buffer captures a blockstring to parse.
+    Quickline(EditBuffer),
+    /// `e` inline description edit. The pane + block index identify which
+    /// block is being edited; the buffer holds the new desc.
+    EditDesc {
+        pane: Pane,
+        block_idx: usize,
+        buf: EditBuffer,
+    },
+    /// `A` modal form for entering a block via three rows.
+    Form(FormState),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormField {
+    Start,
+    End,
+    Desc,
+}
+
+pub(crate) struct FormState {
+    pub start: EditBuffer,
+    pub end: EditBuffer,
+    pub desc: EditBuffer,
+    pub focus: FormField,
+}
+
 pub struct TimeblocksTab {
     pub(crate) clock: ClockFn,
     pub(crate) today: PaneState,
     pub(crate) tomorrow: PaneState,
     pub(crate) focus: Pane,
+    pub(crate) mode: Mode,
     /// Heading the panes were last loaded under. Refresh is cheap so we
     /// could read this from `ctx.vault.config` every render, but caching
     /// it removes an allocation on the hot path.
@@ -101,6 +149,7 @@ impl TimeblocksTab {
             today: PaneState::empty(now),
             tomorrow: PaneState::empty(now + chrono::Duration::days(1)),
             focus: Pane::Today,
+            mode: Mode::Idle,
             heading: "Time Blocks".into(),
             last_error: None,
         }
@@ -235,6 +284,561 @@ impl TimeblocksTab {
             _ => EventOutcome::NotHandled,
         }
     }
+
+    // ── mutation chord handlers ────────────────────────────────────────
+
+    fn selected_block_idx(&self, pane: Pane) -> Option<usize> {
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        if p.blocks.is_empty() {
+            None
+        } else {
+            Some(p.selection)
+        }
+    }
+
+    fn pane_path(&self, pane: Pane) -> Option<PathBuf> {
+        match pane {
+            Pane::Today => self.today.path.clone(),
+            Pane::Tomorrow => self.tomorrow.path.clone(),
+        }
+    }
+
+    /// Run a time-shift edit on the focused pane's selected block.
+    /// `which == 'start'` → shifts start; otherwise shifts end. Negative
+    /// values move earlier. Library clamps at 00:00 / 23:59 and enforces
+    /// `end > start`.
+    fn shift_block_time(&mut self, ctx: &mut TabCtx, shift_minutes: i32, on_end: bool) {
+        let pane = self.focus;
+        let Some(idx) = self.selected_block_idx(pane) else {
+            return;
+        };
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        let block = &p.blocks[idx];
+        let mutation = if on_end {
+            EditMutation {
+                end: Some(TimeChange::ShiftMinutes(shift_minutes)),
+                ..Default::default()
+            }
+        } else {
+            EditMutation {
+                start: Some(TimeChange::ShiftMinutes(shift_minutes)),
+                ..Default::default()
+            }
+        };
+        let selector = Selector::Time(block.start);
+        match ops::edit_block(&path, &self.heading, &selector, mutation) {
+            Ok(_) => {
+                self.reload(ctx);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
+
+    fn shift_end(&mut self, ctx: &mut TabCtx, m: i32) {
+        self.shift_block_time(ctx, m, true);
+    }
+
+    fn shift_start(&mut self, ctx: &mut TabCtx, m: i32) {
+        self.shift_block_time(ctx, m, false);
+    }
+
+    /// `c` chord — when the focused pane's daily note doesn't yet exist,
+    /// create it via `create_or_get_periodic_path` and re-read. Otherwise
+    /// toast "already exists".
+    fn handle_create_daily(&mut self, ctx: &mut TabCtx) {
+        let pane = self.focus;
+        let date = match pane {
+            Pane::Today => self.today.date,
+            Pane::Tomorrow => self.tomorrow.date,
+        };
+        let already_present = match pane {
+            Pane::Today => self.today.present,
+            Pane::Tomorrow => self.tomorrow.present,
+        };
+        if already_present {
+            queue_toast(ctx, "daily note already exists", ToastStyle::Info);
+            return;
+        }
+        let Some(daily_cfg) = ctx.vault.config.config.periodic_notes.daily.as_ref() else {
+            queue_toast(
+                ctx,
+                "no `[periodic_notes.daily]` configured",
+                ToastStyle::Error,
+            );
+            return;
+        };
+        let (today_n, now_n) = today_now_for_template(ctx, self.clock);
+        match ft_core::periodic::create_or_get_periodic_path(
+            &ctx.vault.path,
+            &ctx.vault.templates_dir(),
+            daily_cfg,
+            date,
+            today_n,
+            now_n,
+        ) {
+            Ok((_path, _created)) => {
+                queue_toast(
+                    ctx,
+                    &format!("created daily note for {date}"),
+                    ToastStyle::Success,
+                );
+                self.reload(ctx);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
+
+    /// First `d` of the `d d` chord. Captures the focused selection so
+    /// subsequent navigation doesn't shift the delete target. Toasts
+    /// the inter-stroke hint.
+    fn start_delete_confirm(&mut self, ctx: &mut TabCtx) {
+        let pane = self.focus;
+        let Some(idx) = self.selected_block_idx(pane) else {
+            queue_toast(ctx, "nothing to delete", ToastStyle::Info);
+            return;
+        };
+        self.mode = Mode::DeleteConfirm {
+            pane,
+            block_idx: idx,
+        };
+        queue_toast(
+            ctx,
+            "press `d` again to delete, Esc to cancel",
+            ToastStyle::Info,
+        );
+    }
+
+    fn handle_delete_confirm(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        let Mode::DeleteConfirm { pane, block_idx } = self.mode else {
+            return EventOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Char('d') if k.modifiers == KeyModifiers::NONE => {
+                self.mode = Mode::Idle;
+                self.commit_delete(ctx, pane, block_idx);
+                EventOutcome::Consumed
+            }
+            KeyCode::Esc => {
+                self.mode = Mode::Idle;
+                queue_toast(ctx, "delete cancelled", ToastStyle::Info);
+                EventOutcome::Consumed
+            }
+            _ => {
+                // Any other key cancels the chord — matches the
+                // tasks-tab convention so an accidental `j`/`k` doesn't
+                // silently arm the deletion.
+                self.mode = Mode::Idle;
+                EventOutcome::Consumed
+            }
+        }
+    }
+
+    fn commit_delete(&mut self, ctx: &mut TabCtx, pane: Pane, block_idx: usize) {
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        if block_idx >= p.blocks.len() {
+            queue_toast(ctx, "block no longer exists", ToastStyle::Error);
+            return;
+        }
+        let target = p.blocks[block_idx].clone();
+        let selector = Selector::Time(target.start);
+        match ops::delete_block(&path, &self.heading, &selector) {
+            Ok(_) => {
+                queue_toast(
+                    ctx,
+                    &format!(
+                        "deleted {} - {} {}",
+                        fmt_hhmm(target.start),
+                        fmt_hhmm(target.end),
+                        target.desc
+                    ),
+                    ToastStyle::Success,
+                );
+                self.reload(ctx);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
+
+    // ── quickline (`a`) ────────────────────────────────────────────────
+
+    fn handle_quickline(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        let Mode::Quickline(buf) = &mut self.mode else {
+            return EventOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Idle;
+                EventOutcome::Consumed
+            }
+            KeyCode::Enter => {
+                let input = buf.text.clone();
+                self.commit_quickline(ctx, &input);
+                EventOutcome::Consumed
+            }
+            KeyCode::Backspace => {
+                buf.backspace();
+                EventOutcome::Consumed
+            }
+            KeyCode::Delete => {
+                buf.delete();
+                EventOutcome::Consumed
+            }
+            KeyCode::Left => {
+                buf.left();
+                EventOutcome::Consumed
+            }
+            KeyCode::Right => {
+                buf.right();
+                EventOutcome::Consumed
+            }
+            KeyCode::Home => {
+                buf.home();
+                EventOutcome::Consumed
+            }
+            KeyCode::End => {
+                buf.end();
+                EventOutcome::Consumed
+            }
+            KeyCode::Char(c) => {
+                buf.insert(c);
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    fn commit_quickline(&mut self, ctx: &mut TabCtx, input: &str) {
+        let pane = self.focus;
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let block = match timeblock::parse_line(input) {
+            Ok(b) => b,
+            Err(e) => {
+                // Keep the buffer populated so the user can fix the input.
+                queue_toast(ctx, &format!("parse: {e}"), ToastStyle::Error);
+                return;
+            }
+        };
+        let summary = format!(
+            "+ {} - {} {}",
+            fmt_hhmm(block.start),
+            fmt_hhmm(block.end),
+            block.desc.trim()
+        );
+        // The daily note might be missing on disk — same behavior as
+        // CLI `ft timeblocks add`: render the template first.
+        if let Err(e) = self.ensure_pane_file(ctx, pane) {
+            queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+            return;
+        }
+        match ops::add_block(&path, &self.heading, block, AddOptions::default()) {
+            Ok(_) => {
+                self.mode = Mode::Idle;
+                queue_toast(ctx, &summary, ToastStyle::Success);
+                self.reload(ctx);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
+
+    /// Render the daily-note template for the focused pane's date when
+    /// the file is missing. No-op when the file already exists or when
+    /// `[periodic_notes.daily]` isn't configured (the subsequent write
+    /// will create the file with just the section heading — same as the
+    /// pre-session-5 behavior, surfaced via the existing remedy hint).
+    fn ensure_pane_file(&self, ctx: &mut TabCtx, pane: Pane) -> Result<()> {
+        let (date, present, path) = match pane {
+            Pane::Today => (self.today.date, self.today.present, self.today.path.clone()),
+            Pane::Tomorrow => (
+                self.tomorrow.date,
+                self.tomorrow.present,
+                self.tomorrow.path.clone(),
+            ),
+        };
+        if present {
+            return Ok(());
+        }
+        let Some(_path) = path else { return Ok(()) };
+        let Some(daily_cfg) = ctx.vault.config.config.periodic_notes.daily.as_ref() else {
+            return Ok(());
+        };
+        let (today_n, now_n) = today_now_for_template(ctx, self.clock);
+        ft_core::periodic::create_or_get_periodic_path(
+            &ctx.vault.path,
+            &ctx.vault.templates_dir(),
+            daily_cfg,
+            date,
+            today_n,
+            now_n,
+        )
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    // ── edit description (`e`) ─────────────────────────────────────────
+
+    fn start_edit_desc(&mut self, ctx: &mut TabCtx) {
+        let pane = self.focus;
+        let Some(idx) = self.selected_block_idx(pane) else {
+            queue_toast(ctx, "nothing to edit", ToastStyle::Info);
+            return;
+        };
+        let block = match pane {
+            Pane::Today => &self.today.blocks[idx],
+            Pane::Tomorrow => &self.tomorrow.blocks[idx],
+        };
+        self.mode = Mode::EditDesc {
+            pane,
+            block_idx: idx,
+            buf: EditBuffer::from(&block.desc),
+        };
+    }
+
+    fn handle_edit_desc(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        let Mode::EditDesc {
+            pane,
+            block_idx,
+            buf,
+        } = &mut self.mode
+        else {
+            return EventOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Idle;
+                EventOutcome::Consumed
+            }
+            KeyCode::Enter => {
+                let new_desc = buf.text.clone();
+                let pane = *pane;
+                let block_idx = *block_idx;
+                self.commit_edit_desc(ctx, pane, block_idx, new_desc);
+                EventOutcome::Consumed
+            }
+            KeyCode::Backspace => {
+                buf.backspace();
+                EventOutcome::Consumed
+            }
+            KeyCode::Delete => {
+                buf.delete();
+                EventOutcome::Consumed
+            }
+            KeyCode::Left => {
+                buf.left();
+                EventOutcome::Consumed
+            }
+            KeyCode::Right => {
+                buf.right();
+                EventOutcome::Consumed
+            }
+            KeyCode::Home => {
+                buf.home();
+                EventOutcome::Consumed
+            }
+            KeyCode::End => {
+                buf.end();
+                EventOutcome::Consumed
+            }
+            KeyCode::Char(c) => {
+                buf.insert(c);
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    fn commit_edit_desc(
+        &mut self,
+        ctx: &mut TabCtx,
+        pane: Pane,
+        block_idx: usize,
+        new_desc: String,
+    ) {
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        if block_idx >= p.blocks.len() {
+            queue_toast(ctx, "block no longer exists", ToastStyle::Error);
+            return;
+        }
+        let target = p.blocks[block_idx].clone();
+        let selector = Selector::Time(target.start);
+        let mutation = EditMutation {
+            desc: Some(new_desc),
+            ..Default::default()
+        };
+        match ops::edit_block(&path, &self.heading, &selector, mutation) {
+            Ok(_) => {
+                self.mode = Mode::Idle;
+                self.reload(ctx);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
+
+    // ── form (`A`) ─────────────────────────────────────────────────────
+
+    fn default_form(&self) -> FormState {
+        let now = (self.clock)();
+        // Snap clock time to the nearest 5-minute boundary.
+        let total = now.hour() * 60 + now.minute();
+        let snapped = (total / 5) * 5;
+        let start = NaiveTime::from_hms_opt(snapped / 60, snapped % 60, 0).unwrap();
+        let end = start + chrono::Duration::minutes(30);
+        FormState {
+            start: EditBuffer::from(&fmt_hhmm(start)),
+            end: EditBuffer::from(&fmt_hhmm(end)),
+            desc: EditBuffer::default(),
+            focus: FormField::Start,
+        }
+    }
+
+    fn handle_form(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        let Mode::Form(state) = &mut self.mode else {
+            return EventOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Idle;
+                EventOutcome::Consumed
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                state.focus = next_field(state.focus);
+                EventOutcome::Consumed
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                state.focus = prev_field(state.focus);
+                EventOutcome::Consumed
+            }
+            KeyCode::Enter => {
+                if state.focus == FormField::Desc {
+                    let start_text = state.start.text.clone();
+                    let end_text = state.end.text.clone();
+                    let desc = state.desc.text.clone();
+                    self.commit_form(ctx, &start_text, &end_text, &desc);
+                } else {
+                    state.focus = next_field(state.focus);
+                }
+                EventOutcome::Consumed
+            }
+            KeyCode::Backspace => {
+                form_buf_mut(state).backspace();
+                EventOutcome::Consumed
+            }
+            KeyCode::Delete => {
+                form_buf_mut(state).delete();
+                EventOutcome::Consumed
+            }
+            KeyCode::Left => {
+                form_buf_mut(state).left();
+                EventOutcome::Consumed
+            }
+            KeyCode::Right => {
+                form_buf_mut(state).right();
+                EventOutcome::Consumed
+            }
+            KeyCode::Home => {
+                form_buf_mut(state).home();
+                EventOutcome::Consumed
+            }
+            KeyCode::End => {
+                form_buf_mut(state).end();
+                EventOutcome::Consumed
+            }
+            KeyCode::Char(c) => {
+                form_buf_mut(state).insert(c);
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    fn commit_form(&mut self, ctx: &mut TabCtx, start: &str, end: &str, desc: &str) {
+        // Build a blockstring and reuse the quickline parser so the
+        // grammar and error messages stay in one place.
+        let blockstring = if desc.trim().is_empty() {
+            format!("{} - {}", start, end)
+        } else {
+            format!("{} - {} {}", start, end, desc)
+        };
+        self.commit_quickline(ctx, &blockstring);
+    }
+}
+
+fn next_field(f: FormField) -> FormField {
+    match f {
+        FormField::Start => FormField::End,
+        FormField::End => FormField::Desc,
+        FormField::Desc => FormField::Start,
+    }
+}
+
+fn prev_field(f: FormField) -> FormField {
+    match f {
+        FormField::Start => FormField::Desc,
+        FormField::End => FormField::Start,
+        FormField::Desc => FormField::End,
+    }
+}
+
+fn form_buf_mut(s: &mut FormState) -> &mut EditBuffer {
+    match s.focus {
+        FormField::Start => &mut s.start,
+        FormField::End => &mut s.end,
+        FormField::Desc => &mut s.desc,
+    }
+}
+
+fn fmt_hhmm(t: NaiveTime) -> String {
+    format!("{:02}:{:02}", t.hour(), t.minute())
+}
+
+fn queue_toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
+    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+        text: text.to_string(),
+        style,
+    });
+}
+
+/// `(today, now)` for template rendering — honors `FT_TODAY` for tests
+/// and falls back to the tab's clock for production. Mirrors the CLI
+/// helper so both surfaces stay in lockstep on template variables.
+fn today_now_for_template(
+    ctx: &TabCtx,
+    clock: ClockFn,
+) -> (chrono::NaiveDate, chrono::NaiveDateTime) {
+    if let Ok(s) = std::env::var("FT_TODAY") {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
+        }
+    }
+    let now = (clock)();
+    let _ = ctx; // ctx kept in signature for future use (e.g. real-clock-from-app)
+    (now.date_naive(), now.naive_local())
 }
 
 impl Default for TimeblocksTab {
@@ -257,12 +861,76 @@ impl Tab for TimeblocksTab {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
-        // `r` needs ctx access for the reload; handle it here before
-        // delegating to the keymap.
-        if matches!(k.code, KeyCode::Char('r')) && k.modifiers == KeyModifiers::NONE {
-            self.reload(ctx);
-            return Ok(EventOutcome::Consumed);
+
+        // Modal input (quickline / edit-desc / form) eats everything
+        // except its own commit / cancel keys. The two-stroke `d d`
+        // chord is also handled at the top so the inter-stroke window
+        // can short-circuit before the navigation keymap runs.
+        match &mut self.mode {
+            Mode::Idle => {}
+            Mode::DeleteConfirm { .. } => {
+                return Ok(self.handle_delete_confirm(k, ctx));
+            }
+            Mode::Quickline(_) => {
+                return Ok(self.handle_quickline(k, ctx));
+            }
+            Mode::EditDesc { .. } => {
+                return Ok(self.handle_edit_desc(k, ctx));
+            }
+            Mode::Form(_) => {
+                return Ok(self.handle_form(k, ctx));
+            }
         }
+
+        // Idle keymap. `r` and the mutation chords need ctx for I/O
+        // so they're handled here before delegating to the
+        // navigation-only keymap.
+        if k.modifiers == KeyModifiers::NONE || k.modifiers == KeyModifiers::SHIFT {
+            match k.code {
+                KeyCode::Char('r') => {
+                    self.reload(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('c') => {
+                    self.handle_create_daily(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('a') => {
+                    self.mode = Mode::Quickline(EditBuffer::default());
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('A') => {
+                    self.mode = Mode::Form(self.default_form());
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('e') => {
+                    self.start_edit_desc(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('d') => {
+                    self.start_delete_confirm(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char(']') => {
+                    self.shift_end(ctx, 5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('[') => {
+                    self.shift_end(ctx, -5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('}') => {
+                    self.shift_start(ctx, 5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('{') => {
+                    self.shift_start(ctx, -5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                _ => {}
+            }
+        }
+
         Ok(self.handle_key(k))
     }
 

@@ -404,6 +404,248 @@ fn timeblocks_tab_r_refreshes_from_disk() -> Result<()> {
     Ok(())
 }
 
+// ── session 5: mutation chords ──────────────────────────────────────────────
+
+/// Vault wired up with a `[periodic_notes.daily]` block AND a template,
+/// so the `c` chord and `ft timeblocks add` create the daily note from
+/// the same template `ft notes today` uses.
+fn timeblocks_vault_with_template() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::create_dir_all(vault_path.join("templates-ft")).unwrap();
+    std::fs::write(
+        vault_path.join("templates-ft/daily.md"),
+        "# {{ title }}\n\n## Notes\n\n## Time Blocks\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\ntemplate = \"daily\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(vault_path.join("journal")).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn timeblocks_tab_close_bracket_extends_end_by_5m() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key(']'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:05 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_open_bracket_shrinks_end_by_5m() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('['))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 09:55 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_close_brace_shifts_start_by_5m() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('}'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:05 - 10:00 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_open_brace_pulls_start_5m_earlier() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('{'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 08:55 - 10:00 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_dd_deletes_focused_block() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 a\n- 10:00 - 11:00 b\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // First `d` arms the chord; second `d` commits.
+    app.dispatch(key('d'))?;
+    app.service_pending_for_test()?;
+    let after_first = render(&mut app, 100, 24);
+    assert!(
+        after_first.contains("d again = delete"),
+        "armed-state indicator missing"
+    );
+    app.dispatch(key('d'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(!body.contains("- 09:00 - 10:00 a"), "deleted: {body}");
+    assert!(body.contains("- 10:00 - 11:00 b"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_dd_esc_cancels() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('d'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:00 a"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_quickline_a_adds_block() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('a'))?;
+    for c in "09:00 - 10:00 standup".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:00 standup"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_quickline_parse_error_keeps_buffer() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('a'))?;
+    for c in "garbage".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Frame should still show the quickline strip with the bad text.
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("garbage"), "buffer preserved: {frame}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_edit_desc_e_chord() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 old\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('e'))?;
+    // EditBuffer prefilled with "old"; clear and type "new".
+    for _ in 0..3 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "new".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:00 new"), "got: {body}");
+    assert!(!body.contains("old"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_form_capital_a_commits_on_desc_enter() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('A'),
+        KeyModifiers::SHIFT,
+    )))?;
+    // Start field is prefilled with the snapped clock; cycle to Desc.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    for c in "from form".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("from form"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault_with_template();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Initial frame: today's file doesn't exist yet.
+    let initial = render(&mut app, 100, 24);
+    assert!(initial.contains("no daily note yet"));
+    app.dispatch(key('c'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    // Template's title + Notes section must be present.
+    assert!(body.contains("# 2026-05-10"), "title missing: {body}");
+    assert!(body.contains("## Notes"));
+    assert!(body.contains("## Time Blocks"));
+    Ok(())
+}
+
 #[test]
 fn welcome_any_key_switches_to_tasks() -> Result<()> {
     let (_dir, vault) = test_vault();

@@ -247,7 +247,7 @@ Why ship CLI before TUI:
       blockstring (clap mutual exclusion).
 - [x] Refuses exact duplicates (same start, end, desc) unless `--force`.
 - [x] Creates the configured heading at file end when missing.
-- [ ] When the daily-note **file** itself is missing on disk, `ft
+- [x] When the daily-note **file** itself is missing on disk, `ft
       timeblocks add` first creates it via
       `ft_core::periodic::create_or_get_periodic_path` (which renders
       the `[periodic_notes.daily].template` if configured) and only
@@ -308,7 +308,7 @@ Why ship CLI before TUI:
       "Today" and "Tomorrow" panes (50/50). When tomorrow's daily note
       doesn't exist, its pane renders a placeholder (`"no daily note
       yet. press 'c' to create"`).
-- [ ] **Create daily note** (`c`): when the focused pane's daily note
+- [x] **Create daily note** (`c`): when the focused pane's daily note
       doesn't yet exist on disk, the `c` chord calls
       `ft_core::periodic::create_or_get_periodic_path` so the
       configured `[periodic_notes.daily].template` is rendered into
@@ -324,19 +324,19 @@ Why ship CLI before TUI:
 - [x] **Movement**: `j`/`k` or `↓`/`↑` move selection within the
       focused pane. `g` / `G` jump first/last (vim convention,
       already used in other tabs).
-- [ ] **Create — quickline** (`a`): bottom-line edit buffer (port the
+- [x] **Create — quickline** (`a`): bottom-line edit buffer (port the
       tasks-tab `quickline.rs` pattern). Parses input as a blockstring
       on `Enter`; errors render in the status bar as a toast for 3s
       and the buffer is preserved so the user can fix it. Escape
       cancels. Successful create toasts `"+ HH:MM - HH:MM <desc>"`.
-- [ ] **Create — form** (`A`): modal popup with three rows
+- [x] **Create — form** (`A`): modal popup with three rows
       (Start, End, Desc) plus optional Tags row. Arrow keys cycle
       fields; `Tab` advances; `Enter` on the last field commits;
       `Esc` cancels. Defaults: start = nearest 5-minute boundary
       from clock; end = start + 30m.
-- [ ] **Edit description** (`e`): opens an inline edit buffer
+- [x] **Edit description** (`e`): opens an inline edit buffer
       pre-filled with the current description.
-- [ ] **Time adjustment chords**:
+- [x] **Time adjustment chords**:
       - `]` — extend end-time by 5 minutes (clamps at 23:59).
       - `[` — shrink end-time by 5 minutes (clamps at start + 5m).
       - `}` — push start-time by +5 minutes (clamps at end - 5m).
@@ -345,7 +345,7 @@ Why ship CLI before TUI:
       collisions are allowed (blockary doesn't enforce non-overlap;
       neither do we — overlap is sometimes useful for "called away
       mid-task" entries).
-- [ ] **Delete** (`d d`): two-stroke chord (status-bar prompt
+- [x] **Delete** (`d d`): two-stroke chord (status-bar prompt
       `"press d again to delete, Esc to cancel"`); commits on the
       second `d`. `Esc` cancels.
 - [ ] **Tag management**: `t` opens a small modal showing the current
@@ -762,7 +762,7 @@ pre-existing TUI snapshots updated for the new tab-bar entry
 test extended to include the new tab in the cycle. Full
 workspace test, clippy, fmt clean.
 
-### Session 5 · planned
+### Session 5 · 2026-05-16 · done
 **Goal:** TUI mutations — quickline (`a`), form (`A`), description
 edit (`e`), time chords (`]`/`[`/`}`/`{`), delete (`d d`),
 create-tomorrow (`c`).
@@ -794,6 +794,60 @@ create-tomorrow (`c`).
 
 **Done means:** every mutation specified in the Acceptance Criteria
 (TUI) is reachable from the keyboard, with success/error feedback.
+
+**Outcome:** Shipped the mutation layer on top of the
+session-4 read-only tab plus the carried-over CLI fix.
+
+CLI (`ft timeblocks add`): when the daily-note file is missing
+on disk AND the user didn't pass `--file`, run
+`create_or_get_periodic_path` first so the configured
+`[periodic_notes.daily].template` is rendered, then append the
+timeblock section. `--file` still opts out so explicit paths
+aren't tampered with. Two new integration tests cover the
+template-applied + explicit-file-untouched paths.
+
+TUI: extended `TimeblocksTab` with a `Mode` enum (`Idle`,
+`DeleteConfirm`, `Quickline`, `EditDesc`, `Form`) so each
+modal flow owns its buffer / capture state without polluting
+the base struct. Mutation chords:
+- `]` / `[` extend / shrink end by 5m via
+  `ops::edit_block` with `TimeChange::ShiftMinutes`. Library
+  clamps at 23:59 and rejects `end <= start`.
+- `}` / `{` shift start by ±5m (clamps at 00:00).
+- `c` calls `create_or_get_periodic_path` against the focused
+  pane's date when the file is missing — same helper as
+  `ft notes today` and CLI `add`, so the template is honored
+  on every surface. Toasts "already exists" when the file is
+  present, "no `[periodic_notes.daily]` configured" when the
+  config is missing.
+- `d d` two-stroke delete. First `d` captures pane + idx and
+  surfaces a sidebar hint (`" d again = delete"` in red);
+  second `d` commits via `ops::delete_block`; `Esc` cancels.
+- `a` quickline (bottom-line `EditBuffer`) parses input via
+  `timeblock::parse_line`; on parse error, toasts the message
+  for 3s and keeps the buffer so the user can fix the input.
+  When the daily-note file is missing, the same
+  `create_or_get_periodic_path` flow runs before the add.
+- `e` opens an inline edit-buffer pre-filled with the
+  selected block's desc; Enter commits via `edit_block`.
+- `A` opens a centered modal form (Start/End/Desc rows);
+  Start defaults to the clock snapped to the nearest 5-min
+  boundary, End to start + 30m. Tab / ↑↓ cycle fields,
+  Enter on Desc commits (reuses the quickline parser so the
+  grammar stays in one place), Esc cancels.
+
+Every mutation queues an `AppRequest::Toast` for
+success/failure feedback. Tag modal `t` is the only
+acceptance-criterion item still open in this section — the
+spec explicitly defers it ("Defer multi-modal interaction to a
+later session if complex"), so it carries into session 6.
+
+11 new TUI tests under `tui::tests` covering each chord,
+`d d` confirm + cancel paths, quickline error preservation,
+the `c`-creates-via-template integration, and the form
+commit path. 2 new CLI integration tests for the
+template-applied / `--file`-opts-out behavior. Full
+workspace: ~830 tests passing, clippy + fmt clean.
 
 ### Session 6 · planned
 **Goal:** Polish — `t` tag modal, `--json-errors` coverage check,

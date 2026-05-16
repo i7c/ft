@@ -11,14 +11,30 @@ use ratatui::{
 };
 
 use crate::tui::tab::TabCtx;
+use ratatui::widgets::Clear;
 
-use super::{Pane, TimeblocksTab, SIDEBAR_WIDTH};
+use super::{FormField, Mode, Pane, TimeblocksTab, SIDEBAR_WIDTH};
 
-pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
+pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+    // Split off a single-row quickline strip from the bottom when the
+    // tab is in Quickline / EditDesc mode. The form (`A`) renders as a
+    // centered overlay instead.
+    let bottom_strip = matches!(tab.mode, Mode::Quickline(_) | Mode::EditDesc { .. });
+    let body_area = if bottom_strip {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        render_quickline_strip(tab, frame, split[1]);
+        split[0]
+    } else {
+        area
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
-        .split(area);
+        .split(body_area);
 
     render_sidebar(tab, frame, chunks[0]);
 
@@ -29,9 +45,101 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, ctx
 
     render_pane(tab, frame, panes[0], Pane::Today);
     render_pane(tab, frame, panes[1], Pane::Tomorrow);
-    // Suppress unused-warning in the no-render path; `ctx` is part of the
-    // contract and will be used by session 5's mutation flows.
-    let _ = ctx;
+
+    if let Mode::Form(_) = &tab.mode {
+        render_form_modal(tab, frame, area);
+    }
+}
+
+fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
+    let (prefix, text, cursor) = match &tab.mode {
+        Mode::Quickline(buf) => (" + ", buf.text.as_str(), buf.cursor),
+        Mode::EditDesc { buf, .. } => (" edit desc ▸ ", buf.text.as_str(), buf.cursor),
+        _ => return,
+    };
+    let line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::raw(text),
+    ]);
+    let para = Paragraph::new(line);
+    frame.render_widget(para, area);
+    // Place the cursor immediately after `prefix + chars[..cursor]`.
+    let col = area.x + (prefix.chars().count() as u16) + (cursor as u16);
+    let col = col.min(area.x + area.width.saturating_sub(1));
+    frame.set_cursor_position((col, area.y));
+}
+
+fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
+    let Mode::Form(state) = &tab.mode else {
+        return;
+    };
+
+    // Center a 50x10 modal inside the tab body area.
+    let w = 50u16.min(area.width.saturating_sub(2));
+    let h = 9u16.min(area.height.saturating_sub(2));
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let modal = Rect::new(x, y, w, h);
+
+    frame.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" New timeblock ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(modal);
+    frame.render_widget(block, modal);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Start row
+            Constraint::Length(1), // End row
+            Constraint::Length(1), // Desc row
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // help
+        ])
+        .split(inner);
+
+    let row = |label: &str, buf_text: &str, focused: bool| -> Paragraph<'_> {
+        let arrow = if focused { "▸" } else { " " };
+        let style = if focused {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{arrow} {label:<6}"), style),
+            Span::raw(buf_text.to_string()),
+        ]))
+    };
+
+    let start_row = row("start", &state.start.text, state.focus == FormField::Start);
+    let end_row = row("end", &state.end.text, state.focus == FormField::End);
+    let desc_row = row("desc", &state.desc.text, state.focus == FormField::Desc);
+
+    frame.render_widget(start_row, rows[0]);
+    frame.render_widget(end_row, rows[1]);
+    frame.render_widget(desc_row, rows[2]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Tab / ↑↓ to cycle  ·  Enter on desc to commit  ·  Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+        rows[4],
+    );
+
+    // Position the cursor inside whichever buffer has focus. Layout: at
+    // column inner.x + 9 (arrow + space + label + space) + cursor offset.
+    let (buf_cursor, row_idx) = match state.focus {
+        FormField::Start => (state.start.cursor, 0),
+        FormField::End => (state.end.cursor, 1),
+        FormField::Desc => (state.desc.cursor, 2),
+    };
+    let col = rows[row_idx].x + 9 + buf_cursor as u16;
+    let col = col.min(rows[row_idx].x + rows[row_idx].width.saturating_sub(1));
+    frame.set_cursor_position((col, rows[row_idx].y));
 }
 
 fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
@@ -92,6 +200,13 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
+    if matches!(tab.mode, Mode::DeleteConfirm { .. }) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " d again = delete",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)

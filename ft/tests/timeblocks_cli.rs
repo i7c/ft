@@ -299,6 +299,73 @@ fn add_creates_daily_note_directory_when_missing() {
     assert!(body.contains("- 09:00 - 10:00 first"));
 }
 
+#[test]
+fn add_renders_daily_template_when_creating_new_file() {
+    // When the daily note doesn't exist yet, `ft timeblocks add` must
+    // first render the `[periodic_notes.daily].template` so the new
+    // file matches what `ft notes today` would produce — not a bare
+    // `## Time Blocks`-only file. Regression test for the plan 015
+    // "spell out daily-note template behaviour" clarification.
+    let dir = assert_fs::TempDir::new().unwrap();
+    dir.child(".obsidian").create_dir_all().unwrap();
+    dir.child("templates-ft/daily.md")
+        .write_str("# {{ title }}\n\n## Notes\n\n## Time Blocks\n")
+        .unwrap();
+    dir.child(".ft/config.toml")
+        .write_str(
+            "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\ntemplate = \"daily\"\n",
+        )
+        .unwrap();
+
+    Command::cargo_bin("ft")
+        .unwrap()
+        .env("FT_TODAY", "2026-05-16")
+        .args([
+            "--vault",
+            dir.path().to_str().unwrap(),
+            "timeblocks",
+            "add",
+            "09:00 - 10:00 first",
+        ])
+        .assert()
+        .success();
+    let body = std::fs::read_to_string(day_path(dir.path(), "2026-05-16")).unwrap();
+    // Template's other sections must survive…
+    assert!(
+        body.contains("# 2026-05-16"),
+        "template title missing: {body}"
+    );
+    assert!(body.contains("## Notes"), "template Notes missing: {body}");
+    // …and the new block must be inserted under the existing Time Blocks heading.
+    assert!(body.contains("## Time Blocks"));
+    assert!(body.contains("- 09:00 - 10:00 first"));
+    // Exactly one "## Time Blocks" heading — the section-replace should
+    // splice into the template's existing heading, not append a second one.
+    assert_eq!(
+        body.matches("## Time Blocks").count(),
+        1,
+        "should not duplicate the heading: {body}"
+    );
+}
+
+#[test]
+fn add_with_explicit_file_does_not_render_daily_template() {
+    // `--file <PATH>` opts out of daily-note resolution, so the template
+    // must NOT be applied — we just append blocks to whatever file the
+    // user named.
+    let dir = vault_with_daily();
+    let custom = dir.child("custom.md");
+    custom.write_str("# Custom\n\nprose\n").unwrap();
+    run(
+        dir.path(),
+        &["add", "--file", "custom.md", "09:00 - 10:00 first"],
+    )
+    .success();
+    let body = std::fs::read_to_string(custom.path()).unwrap();
+    assert!(body.starts_with("# Custom\n\nprose\n"));
+    assert!(body.contains("- 09:00 - 10:00 first"));
+}
+
 // ── edit ─────────────────────────────────────────────────────────────────────
 
 #[test]
