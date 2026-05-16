@@ -19,6 +19,10 @@
 //! full-width view. In single-day mode, `h`/`l` flip which day is
 //! shown (same key that shifts focus in split mode).
 //!
+//! Date navigation (move the visible window away from today):
+//! - `H` / `L` — slide the anchor day back / forward by one day
+//! - `T` — jump back to actual today
+//!
 //! Mutations land in session 5 — this session is read-only, so the tab
 //! never writes to disk.
 
@@ -150,6 +154,12 @@ pub struct TimeblocksTab {
     pub(crate) focus: Pane,
     pub(crate) mode: Mode,
     pub(crate) view: ViewMode,
+    /// The date shown in the LEFT pane (the RIGHT pane is `anchor + 1`).
+    /// `None` until the first `reload` lifts `ctx.today` into it — that
+    /// way the tab's notion of "today" stays aligned with the App's
+    /// (`ctx.today` honors `FT_TODAY`, the tab's own clock doesn't).
+    /// `H`/`L` shift it by ±1 day; `T` resets it to `ctx.today`.
+    pub(crate) anchor: Option<chrono::NaiveDate>,
     /// Heading the panes were last loaded under. Refresh is cheap so we
     /// could read this from `ctx.vault.config` every render, but caching
     /// it removes an allocation on the hot path.
@@ -175,6 +185,7 @@ impl TimeblocksTab {
             focus: Pane::Today,
             mode: Mode::Idle,
             view: ViewMode::Split,
+            anchor: None,
             heading: "Time Blocks".into(),
             last_error: None,
         }
@@ -190,12 +201,15 @@ impl TimeblocksTab {
     /// start time via [`Self::select_by_start`] after this call.
     fn reload(&mut self, ctx: &mut TabCtx) {
         self.heading = ctx.vault.config.config.timeblocks_heading().to_string();
-        let today = ctx.today;
-        let tomorrow = today + chrono::Duration::days(1);
+        // Lazy-init the anchor to `ctx.today` on first reload so the
+        // tab's notion of "today" honors `FT_TODAY` like the rest of
+        // the App. Subsequent `H`/`L`/`T` chords mutate it directly.
+        let anchor = *self.anchor.get_or_insert(ctx.today);
+        let next = anchor + chrono::Duration::days(1);
         let prev_today_sel = self.today.selection;
         let prev_tomorrow_sel = self.tomorrow.selection;
-        self.today = self.load_pane(ctx, today);
-        self.tomorrow = self.load_pane(ctx, tomorrow);
+        self.today = self.load_pane(ctx, anchor);
+        self.tomorrow = self.load_pane(ctx, next);
         self.today.selection = prev_today_sel;
         self.tomorrow.selection = prev_tomorrow_sel;
         self.clamp_selection();
@@ -413,6 +427,21 @@ impl TimeblocksTab {
 
     fn shift_start(&mut self, ctx: &mut TabCtx, m: i32) {
         self.shift_block_time(ctx, m, false);
+    }
+
+    /// Move the date window by `delta_days` (positive = forward in
+    /// time, negative = back). Re-reads both panes from disk for the
+    /// new anchor; per-pane selection indices reset to 0 because the
+    /// block lists belong to different days.
+    fn shift_anchor(&mut self, ctx: &mut TabCtx, delta_days: i64) {
+        let base = self.anchor.unwrap_or(ctx.today);
+        let new = base + chrono::Duration::days(delta_days);
+        self.anchor = Some(new);
+        // Selections from the previous window don't apply to the new
+        // day; reset them so the cursor lands at the top of each pane.
+        self.today.selection = 0;
+        self.tomorrow.selection = 0;
+        self.reload(ctx);
     }
 
     /// Shift both start and end by the same delta, moving the whole
@@ -1076,6 +1105,19 @@ impl Tab for TimeblocksTab {
                         ViewMode::Split => ViewMode::Single,
                         ViewMode::Single => ViewMode::Split,
                     };
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('H') => {
+                    self.shift_anchor(ctx, -1);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('L') => {
+                    self.shift_anchor(ctx, 1);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('T') => {
+                    self.anchor = Some(ctx.today);
+                    self.reload(ctx);
                     return Ok(EventOutcome::Consumed);
                 }
                 _ => {}

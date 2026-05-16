@@ -4,18 +4,18 @@ assertion_line: 270
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks                                                
-┌ sidebar ─────────────┐┌ Today  2026-05-10 ─────────────────┐┌ Tomorrow  2026-05-11 ──────────────┐
+┌ sidebar ─────────────┐┌ Sun 2026-05-10 (today) ────────────┐┌ Mon 2026-05-11 (tomorrow) ─────────┐
 │                      ││▶   1  09:00 - 10:00  standup @work ││                                    │
 │ Sun 10 May           ││    2  10:00 - 10:30  review @work/c││  no daily note yet.                │
-│ 14:32:05             ││    3  11:00 - 11:15  coffee @break ││  press `c` to create (session 5)   │
+│ 14:32:05             ││    3  11:00 - 11:15  coffee @break ││  press `c` to create from template │
 │                      ││                                    ││                                    │
-│ ── totals (today) ── ││                                    ││                                    │
+│ ── totals · 2026-05-1││                                    ││                                    │
 │ total 01:30          ││                                    ││                                    │
 │ @work  01:30         ││                                    ││                                    │
 │ @break  00:15        ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │ ── focus ──          ││                                    ││                                    │
-│ ▶ today              ││                                    ││                                    │
+│ ▶ 2026-05-10         ││                                    ││                                    │
 │ view: split          ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │                      ││                                    ││                                    │

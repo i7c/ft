@@ -4,16 +4,16 @@ assertion_line: 255
 expression: frame
 ---
   1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks                                                
-┌ sidebar ─────────────┐┌ Today  2026-05-10 ─────────────────┐┌ Tomorrow  2026-05-11 ──────────────┐
+┌ sidebar ─────────────┐┌ Sun 2026-05-10 (today) ────────────┐┌ Mon 2026-05-11 (tomorrow) ─────────┐
 │                      ││                                    ││                                    │
 │ Sun 10 May           ││  no daily note yet.                ││  no daily note yet.                │
-│ 14:32:05             ││  press `c` to create (session 5)   ││  press `c` to create (session 5)   │
+│ 14:32:05             ││  press `c` to create from template ││  press `c` to create from template │
 │                      ││                                    ││                                    │
-│ ── totals (today) ── ││                                    ││                                    │
+│ ── totals · 2026-05-1││                                    ││                                    │
 │ total 00:00          ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │ ── focus ──          ││                                    ││                                    │
-│ ▶ today              ││                                    ││                                    │
+│ ▶ 2026-05-10         ││                                    ││                                    │
 │ view: split          ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │                      ││                                    ││                                    │

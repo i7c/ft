@@ -326,13 +326,13 @@ fn timeblocks_tab_l_shifts_focus_to_tomorrow() -> Result<()> {
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
-    // Initial frame: focus indicator says "today".
+    // Initial frame: focus indicator points at today's date.
     let initial = render(&mut app, 100, 24);
-    assert!(initial.contains("▶ today"));
-    // After `l`: focus should be on tomorrow.
+    assert!(initial.contains("▶ 2026-05-10"), "got: {initial}");
+    // After `l`: focus should jump to the next pane (tomorrow's date).
     app.dispatch(key('l'))?;
     let after = render(&mut app, 100, 24);
-    assert!(after.contains("▶ tomorrow"));
+    assert!(after.contains("▶ 2026-05-11"), "got: {after}");
     Ok(())
 }
 
@@ -785,6 +785,91 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(!body.contains("first"), "first deleted: {body}");
     assert!(body.contains("- 09:00 - 10:35 renamed"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_capital_l_slides_anchor_to_next_day() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 today-block\n",
+    );
+    seed_day(
+        &vault,
+        "2026-05-12",
+        "## Time Blocks\n- 14:00 - 15:00 day-plus-2\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Slide forward twice — left pane should now be 2026-05-12.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('L'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('L'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("2026-05-12"), "got: {frame}");
+    assert!(frame.contains("day-plus-2"), "got: {frame}");
+    assert!(!frame.contains("today-block"), "got: {frame}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_capital_h_slides_anchor_to_previous_day() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-09",
+        "## Time Blocks\n- 09:00 - 10:00 yblk\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('H'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("2026-05-09"), "got: {frame}");
+    assert!(frame.contains("yblk"), "got: {frame}");
+    // Left pane's title should carry the (yesterday) badge since
+    // 2026-05-09 is one day before the fixed clock's 2026-05-10.
+    assert!(frame.contains("(yesterday)"), "got: {frame}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_capital_t_jumps_anchor_back_to_today() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 home-block\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Wander 5 days into the future.
+    for _ in 0..5 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char('L'),
+            KeyModifiers::SHIFT,
+        )))?;
+    }
+    let wandered = render(&mut app, 100, 24);
+    assert!(!wandered.contains("home-block"));
+    assert!(!wandered.contains("(today)"));
+    // T resets the anchor to ctx.today (2026-05-10).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('T'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("home-block"), "got: {frame}");
+    assert!(frame.contains("(today)"), "got: {frame}");
     Ok(())
 }
 

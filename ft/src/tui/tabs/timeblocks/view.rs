@@ -15,7 +15,7 @@ use ratatui::widgets::Clear;
 
 use super::{FormField, Mode, Pane, TimeblocksTab, ViewMode, SIDEBAR_WIDTH};
 
-pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
     // Split off a single-row quickline strip from the bottom when the
     // tab is in Quickline / EditDesc mode. The form (`A`) renders as a
     // centered overlay instead.
@@ -44,13 +44,13 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ct
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(chunks[1]);
-            render_pane(tab, frame, panes[0], Pane::Today);
-            render_pane(tab, frame, panes[1], Pane::Tomorrow);
+            render_pane(tab, frame, ctx, panes[0], Pane::Today);
+            render_pane(tab, frame, ctx, panes[1], Pane::Tomorrow);
         }
         ViewMode::Single => {
             // Full-width single pane shows whichever day currently has
             // focus. `h`/`l` flip focus → flips which day is on screen.
-            render_pane(tab, frame, chunks[1], tab.focus);
+            render_pane(tab, frame, ctx, chunks[1], tab.focus);
         }
     }
 
@@ -177,7 +177,10 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            " ── totals (today) ──",
+            // Totals always summarize the LEFT (anchor) pane — that's
+            // the day the user is steering toward with H/L. Label by
+            // date so the relationship is unambiguous.
+            format!(" ── totals · {} ──", tab.today.date),
             Style::default().fg(Color::DarkGray),
         )),
     ];
@@ -207,11 +210,12 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         " ── focus ──",
         Style::default().fg(Color::DarkGray),
     )));
+    let focused_date = match tab.focus {
+        Pane::Today => tab.today.date,
+        Pane::Tomorrow => tab.tomorrow.date,
+    };
     lines.push(Line::from(Span::styled(
-        match tab.focus {
-            Pane::Today => " ▶ today",
-            Pane::Tomorrow => " ▶ tomorrow",
-        },
+        format!(" ▶ {focused_date}"),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -241,16 +245,13 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
-fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, area: Rect, which: Pane) {
+fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, ctx: &TabCtx, area: Rect, which: Pane) {
     let pane = match which {
         Pane::Today => &tab.today,
         Pane::Tomorrow => &tab.tomorrow,
     };
     let focused = tab.focus == which;
-    let title_text = match which {
-        Pane::Today => format!(" Today  {} ", pane.date),
-        Pane::Tomorrow => format!(" Tomorrow  {} ", pane.date),
-    };
+    let title_text = format!(" {} ", pane_title(pane.date, ctx.today));
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -262,9 +263,8 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, area: Rect, which: Pane) 
         .border_style(border_style);
 
     if !pane.present {
-        // Tomorrow pane (or today) with no daily-note file on disk yet.
-        // Session 5 binds `c` to create the file via the daily-template;
-        // for now we just surface the placeholder.
+        // No daily-note file on disk yet. `c` creates it via the
+        // configured `[periodic_notes.daily].template`.
         let body = vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -272,7 +272,7 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, area: Rect, which: Pane) 
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                "  press `c` to create (session 5)",
+                "  press `c` to create from template",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -355,6 +355,21 @@ fn build_block_item(b: &ft_core::timeblock::Timeblock) -> ListItem<'static> {
         )));
     }
     ListItem::new(lines)
+}
+
+/// Friendly pane title for `date` relative to `today`. Always includes
+/// the day-of-week + ISO date; when the date IS today/tomorrow/yesterday
+/// (the three the user steers by most often), a parenthetical badge
+/// makes that obvious.
+fn pane_title(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    let dow = date.format("%a").to_string();
+    let badge = match (date - today).num_days() {
+        0 => " (today)",
+        1 => " (tomorrow)",
+        -1 => " (yesterday)",
+        _ => "",
+    };
+    format!("{dow} {date}{badge}")
 }
 
 fn period_str(b: &ft_core::timeblock::Timeblock) -> String {
