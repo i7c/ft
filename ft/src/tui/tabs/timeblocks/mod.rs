@@ -348,6 +348,7 @@ impl TimeblocksTab {
         };
         let block = &p.blocks[idx];
         let old_start = block.start;
+        let source_line = block.source_line;
         let mutation = if on_end {
             EditMutation {
                 end: Some(TimeChange::ShiftMinutes(shift_minutes)),
@@ -359,7 +360,11 @@ impl TimeblocksTab {
                 ..Default::default()
             }
         };
-        let selector = Selector::Time(old_start);
+        // Use the 1-indexed display line as the selector so blocks with
+        // identical start times can still be edited individually.
+        // `Selector::Time(start)` would match every block sharing this
+        // start and fail with `ambiguous selector`.
+        let selector = Selector::Line(source_line);
         match ops::edit_block(&path, &self.heading, &selector, mutation) {
             Ok(_) => {
                 self.reload(ctx);
@@ -368,12 +373,10 @@ impl TimeblocksTab {
                 // block. A start-shift can move the block in the sorted
                 // list — re-anchor by the new start time so the cursor
                 // tracks the user's intent across the re-sort.
-                let new_start = if on_end {
-                    old_start
-                } else {
-                    shift_clamped(old_start, shift_minutes)
-                };
-                self.select_by_start(pane, new_start);
+                if !on_end {
+                    let new_start = shift_clamped(old_start, shift_minutes);
+                    self.select_by_start(pane, new_start);
+                }
             }
             Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
         }
@@ -492,7 +495,10 @@ impl TimeblocksTab {
             return;
         }
         let target = p.blocks[block_idx].clone();
-        let selector = Selector::Time(target.start);
+        // Selector::Line keeps the operation unambiguous when two
+        // blocks share a start time. `source_line` is set by
+        // `Document::read` to the 1-indexed display order.
+        let selector = Selector::Line(target.source_line);
         match ops::delete_block(&path, &self.heading, &selector) {
             Ok(_) => {
                 queue_toast(
@@ -733,7 +739,8 @@ impl TimeblocksTab {
             return;
         }
         let target = p.blocks[block_idx].clone();
-        let selector = Selector::Time(target.start);
+        // Use the display-order line to disambiguate equal-start blocks.
+        let selector = Selector::Line(target.source_line);
         let mutation = EditMutation {
             desc: Some(new_desc),
             ..Default::default()

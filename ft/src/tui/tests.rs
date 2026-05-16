@@ -664,6 +664,77 @@ fn timeblocks_tab_time_chord_keeps_selection_on_non_first_block() -> Result<()> 
 }
 
 #[test]
+fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
+    // Regression: when two blocks share a start time, every TUI
+    // mutation chord must still work — Selector::Time would match
+    // both and fail with "ambiguous selector". Selector::Line on the
+    // display-order line disambiguates.
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 first\n- 09:00 - 10:30 second\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+
+    // Time-shift on the first block (line 1, 09:00 - 10:00).
+    app.dispatch(key(']'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:05 first"), "got: {body}");
+    assert!(
+        body.contains("- 09:00 - 10:30 second"),
+        "second untouched: {body}"
+    );
+
+    // Time-shift on the second block (line 2).
+    app.dispatch(key('j'))?;
+    app.dispatch(key(']'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(
+        body.contains("- 09:00 - 10:05 first"),
+        "first untouched: {body}"
+    );
+    assert!(body.contains("- 09:00 - 10:35 second"), "got: {body}");
+
+    // Edit-desc on the second block (still focused).
+    app.dispatch(key('e'))?;
+    for _ in 0..6 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "renamed".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:00 - 10:35 renamed"), "got: {body}");
+    assert!(
+        body.contains("- 09:00 - 10:05 first"),
+        "first untouched: {body}"
+    );
+
+    // Delete the first block (move cursor up and run `d d`).
+    app.dispatch(key('k'))?;
+    app.dispatch(key('d'))?;
+    app.service_pending_for_test()?;
+    app.dispatch(key('d'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(!body.contains("first"), "first deleted: {body}");
+    assert!(body.contains("- 09:00 - 10:35 renamed"));
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();
