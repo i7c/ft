@@ -247,6 +247,17 @@ Why ship CLI before TUI:
       blockstring (clap mutual exclusion).
 - [x] Refuses exact duplicates (same start, end, desc) unless `--force`.
 - [x] Creates the configured heading at file end when missing.
+- [ ] When the daily-note **file** itself is missing on disk, `ft
+      timeblocks add` first creates it via
+      `ft_core::periodic::create_or_get_periodic_path` (which renders
+      the `[periodic_notes.daily].template` if configured) and only
+      then appends the timeblock section. This keeps daily notes
+      consistent with `ft notes today` / TUI `t` chord — without it,
+      `ft timeblocks add --date tomorrow` would leave a bare file
+      containing only a `## Time Blocks` heading, breaking the user's
+      template-driven daily-note layout. (Bug fix for session 2; lands
+      in session 5 alongside the TUI `c` chord that uses the same
+      helper.)
 - [x] `--dry-run` prints the resulting file diff via `similar` (same
       formatter as `ft tasks move`).
 - [x] Edits via `fs::write_atomic`.
@@ -295,10 +306,15 @@ Why ship CLI before TUI:
       (plan 002 framework). Tab title `"Timeblocks"`.
 - [x] **Layout**: sidebar (24 cols) + main split horizontally between
       "Today" and "Tomorrow" panes (50/50). When tomorrow's daily note
-      doesn't exist, its pane renders a placeholder
-      (`"Tomorrow (YYYY-MM-DD) — no daily note yet. Press 'c' to
-      create."`) and the `c` chord (only when tomorrow pane has focus)
-      triggers `create_or_get_periodic_path`.
+      doesn't exist, its pane renders a placeholder (`"no daily note
+      yet. press 'c' to create"`).
+- [ ] **Create daily note** (`c`): when the focused pane's daily note
+      doesn't yet exist on disk, the `c` chord calls
+      `ft_core::periodic::create_or_get_periodic_path` so the
+      configured `[periodic_notes.daily].template` is rendered into
+      the file before the pane re-reads. Same helper as
+      `ft notes today` / TUI `t` chord, so template behavior matches
+      across surfaces.
 - [x] **Sidebar**: live clock (1-second tick), today's date, blank
       line, "── totals (today) ──" header, hierarchical totals from
       `time_per_tag` for today's blocks (top-level only, indented
@@ -758,9 +774,17 @@ create-tomorrow (`c`).
 - Description edit via inline `EditBuffer`
 - Time adjustment chords (5-minute steps, clamping rules)
 - Two-stroke `d d` delete with status-bar prompt
-- `c` chord in the tomorrow pane: invokes `create_or_get_periodic_path`
-  and re-reads
+- `c` chord on either pane (when the daily note is missing):
+  invokes `create_or_get_periodic_path` and re-reads
 - Toasts on every success/failure
+- **Bug fix carried over from session 2:** `ft timeblocks add`
+  must run `create_or_get_periodic_path` when the daily note
+  file is missing on disk, so the configured daily-note template
+  is rendered into the new file before the timeblock section is
+  appended. Otherwise creating a block on a date with no daily
+  note yet produces a bare `## Time Blocks`-only file, breaking
+  the user's template-driven layout. Same helper as the TUI `c`
+  chord, so the two surfaces stay in lockstep.
 
 **Tests:**
 - Snapshot tests for each modal state and post-mutation render
