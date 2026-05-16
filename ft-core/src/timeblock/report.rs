@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use chrono::{Datelike, Duration, NaiveDate};
+
 use super::Timeblock;
 
 /// One row of the per-tag time summary.
@@ -90,6 +92,54 @@ fn is_break(b: &Timeblock) -> bool {
     b.tags
         .iter()
         .any(|t| t.levels.first().map(String::as_str) == Some("break"))
+}
+
+// ── period bounds ─────────────────────────────────────────────────────────
+//
+// Inclusive `(from, to)` ranges for the `ft timeblocks spent` presets.
+// Mirrors blockary's `cli::get_*_bounds` so the same daily notes
+// aggregate to the same period totals on either tool.
+
+/// `(today, today)` — the trivial single-day range.
+pub fn today_bounds(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    (today, today)
+}
+
+/// Monday-anchored week containing `date`, inclusive on both ends.
+/// Weeks are Mon-Sun to match blockary and ISO 8601.
+pub fn week_bounds(date: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let days_from_monday = date.weekday().number_from_monday() - 1;
+    let start = date - Duration::days(days_from_monday as i64);
+    let end = start + Duration::days(6);
+    (start, end)
+}
+
+/// Calendar month containing `date`, inclusive on both ends.
+pub fn month_bounds(date: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let start = NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap();
+    let (next_year, next_month) = if date.month() == 12 {
+        (date.year() + 1, 1)
+    } else {
+        (date.year(), date.month() + 1)
+    };
+    let first_of_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).unwrap();
+    let end = first_of_next - Duration::days(1);
+    (start, end)
+}
+
+/// Calendar year containing `date`, inclusive on both ends.
+pub fn year_bounds(date: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let year = date.year();
+    let start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+    let end = NaiveDate::from_ymd_opt(year, 12, 31).unwrap();
+    (start, end)
+}
+
+/// The Mon-Sun week immediately before `date`'s week, inclusive on both
+/// ends. Computed by shifting back 7 days and re-anchoring to Monday so
+/// the result is stable regardless of which weekday `date` is.
+pub fn last_week_bounds(date: NaiveDate) -> (NaiveDate, NaiveDate) {
+    week_bounds(date - Duration::days(7))
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
@@ -183,5 +233,95 @@ mod tests {
         assert_eq!(minutes_to_hours_minutes(59), (0, 59));
         assert_eq!(minutes_to_hours_minutes(60), (1, 0));
         assert_eq!(minutes_to_hours_minutes(125), (2, 5));
+    }
+
+    // ── period bounds ────────────────────────────────────────────────────
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn today_bounds_is_single_day() {
+        assert_eq!(
+            today_bounds(d(2026, 5, 16)),
+            (d(2026, 5, 16), d(2026, 5, 16))
+        );
+    }
+
+    #[test]
+    fn week_bounds_from_mid_week() {
+        // 2026-05-13 is a Wednesday → week is 2026-05-11..2026-05-17.
+        assert_eq!(
+            week_bounds(d(2026, 5, 13)),
+            (d(2026, 5, 11), d(2026, 5, 17))
+        );
+    }
+
+    #[test]
+    fn week_bounds_from_monday_returns_same_monday() {
+        // 2026-05-11 is itself a Monday.
+        assert_eq!(
+            week_bounds(d(2026, 5, 11)),
+            (d(2026, 5, 11), d(2026, 5, 17))
+        );
+    }
+
+    #[test]
+    fn week_bounds_from_sunday_anchors_to_previous_monday() {
+        // 2026-05-17 is a Sunday → still belongs to the 05-11..05-17 week.
+        assert_eq!(
+            week_bounds(d(2026, 5, 17)),
+            (d(2026, 5, 11), d(2026, 5, 17))
+        );
+    }
+
+    #[test]
+    fn last_week_bounds_anchors_to_previous_monday_run() {
+        // From any day in the 05-11..05-17 week, last_week is 05-04..05-10.
+        assert_eq!(
+            last_week_bounds(d(2026, 5, 13)),
+            (d(2026, 5, 4), d(2026, 5, 10))
+        );
+        assert_eq!(
+            last_week_bounds(d(2026, 5, 17)),
+            (d(2026, 5, 4), d(2026, 5, 10))
+        );
+    }
+
+    #[test]
+    fn month_bounds_handles_non_december() {
+        assert_eq!(
+            month_bounds(d(2026, 5, 15)),
+            (d(2026, 5, 1), d(2026, 5, 31))
+        );
+        assert_eq!(
+            month_bounds(d(2026, 2, 14)),
+            (d(2026, 2, 1), d(2026, 2, 28))
+        );
+    }
+
+    #[test]
+    fn month_bounds_rolls_over_december() {
+        assert_eq!(
+            month_bounds(d(2026, 12, 15)),
+            (d(2026, 12, 1), d(2026, 12, 31))
+        );
+    }
+
+    #[test]
+    fn month_bounds_handles_leap_february() {
+        assert_eq!(
+            month_bounds(d(2024, 2, 14)),
+            (d(2024, 2, 1), d(2024, 2, 29))
+        );
+    }
+
+    #[test]
+    fn year_bounds_spans_jan_to_dec() {
+        assert_eq!(
+            year_bounds(d(2026, 5, 15)),
+            (d(2026, 1, 1), d(2026, 12, 31))
+        );
     }
 }

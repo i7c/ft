@@ -275,18 +275,18 @@ Why ship CLI before TUI:
 
 ### CLI — `ft timeblocks spent`
 
-- [ ] `ft timeblocks spent [PERIOD] [--format text|json] [--tag X]`
+- [x] `ft timeblocks spent [PERIOD] [--format text|json] [--tag X]`
       where `PERIOD` is one of `today` (default), `this-week`,
       `this-month`, `this-year`, `last-week`, or `--from YYYY-MM-DD
       --to YYYY-MM-DD`.
-- [ ] Walks every daily-note path resolvable from `periodic_notes.daily`
+- [x] Walks every daily-note path resolvable from `periodic_notes.daily`
       within the period (skipping missing files); aggregates per-tag
       via `report::time_per_tag`.
-- [ ] `--tag` filter restricts the input set to blocks containing the
+- [x] `--tag` filter restricts the input set to blocks containing the
       tag prefix.
-- [ ] `text` format prints the hierarchical tree with `Hh MMm` formatting
+- [x] `text` format prints the hierarchical tree with `Hh MMm` formatting
       and a "total" row matching blockary's UX.
-- [ ] `json` format emits `{ "total_minutes": N, "tags": [ { "tag":
+- [x] `json` format emits `{ "total_minutes": N, "tags": [ { "tag":
       "...", "minutes": N, "children": [...] } ] }`.
 
 ### TUI — Timeblocks tab
@@ -649,7 +649,7 @@ in-library `apply_mutation` is private — flagged in a comment to
 keep them in sync; session 6 polish can promote it to
 `pub(crate)` for true single-source-of-truth.
 
-### Session 3 · planned
+### Session 3 · 2026-05-16 · done
 **Goal:** `ft timeblocks spent` reporting across configurable date
 ranges, with hierarchical tag breakdown.
 
@@ -669,6 +669,33 @@ ranges, with hierarchical tag breakdown.
 
 **Done means:** the user can replace `blockary spent` invocations with
 `ft timeblocks spent` against the same vault.
+
+**Outcome:** Added period-bounds helpers to
+`ft_core::timeblock::report` (`today_bounds`, `week_bounds`,
+`month_bounds`, `year_bounds`, `last_week_bounds`), all returning
+inclusive `(from, to)` ranges — port of blockary's `cli::get_*`
+helpers covering Mon-Sun anchoring, December rollover, and leap
+Februaries. 9 new unit tests in ft-core covering the corner cases.
+Added `ft timeblocks spent` subcommand with positional PERIOD
+(`today` default / `this-week` / `this-month` / `this-year` /
+`last-week`), `--from/--to` explicit-range form (mutually
+exclusive with PERIOD), `--tag` prefix filter (repeatable, OR
+semantics), `--format text|json`, and `--allow-empty`. The
+implementation walks every day in the resolved range, calls
+`resolve_periodic_path` to find each daily note, silently skips
+missing files, then aggregates via `report::time_per_tag` +
+`report::total_minutes`. Text output uses a comfy-table with
+`Tag/../../Time/%` columns matching blockary's UX (hierarchical
+rows via leading empty cells); the percentage column is computed
+against the non-break total so `@break` rows show no `%` and
+don't distort the others. JSON output is the spec-defined
+`{ from, to, total_minutes, tags: [{tag, minutes, children: […]}] }`
+shape. 16 integration tests under `tests/timeblocks_spent.rs`:
+each preset period, `--from/--to`, mutual-exclusion errors,
+`--tag` filter, text-format total row, hierarchical render,
+multi-day aggregation with missing files skipped, missing
+`[periodic_notes.daily]` remedy hint. Full workspace: ~810 tests
+passing, clippy + fmt clean.
 
 ### Session 4 · planned
 **Goal:** Read-only TUI Timeblocks tab — today + tomorrow split,

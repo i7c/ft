@@ -40,6 +40,8 @@ pub enum TimeblocksCommand {
     Edit(EditArgs),
     /// Delete a timeblock.
     Delete(DeleteArgs),
+    /// Report time spent per tag over a date range.
+    Spent(SpentArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -50,12 +52,19 @@ pub enum OutputFormat {
     Markdown,
 }
 
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum SpentFormat {
+    Text,
+    Json,
+}
+
 pub fn run(args: TimeblocksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         TimeblocksCommand::List(a) => run_list(a, vault_flag),
         TimeblocksCommand::Add(a) => run_add(a, vault_flag),
         TimeblocksCommand::Edit(a) => run_edit(a, vault_flag),
         TimeblocksCommand::Delete(a) => run_delete(a, vault_flag),
+        TimeblocksCommand::Spent(a) => run_spent(a, vault_flag),
     }
 }
 
@@ -446,6 +455,151 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     Ok(ExitCode::SUCCESS)
 }
 
+// ── ft timeblocks spent ──────────────────────────────────────────────────────
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpentPeriod {
+    Today,
+    #[value(name = "this-week")]
+    ThisWeek,
+    #[value(name = "this-month")]
+    ThisMonth,
+    #[value(name = "this-year")]
+    ThisYear,
+    #[value(name = "last-week")]
+    LastWeek,
+}
+
+#[derive(Args, Debug)]
+pub struct SpentArgs {
+    /// Preset period. Mutually exclusive with `--from`/`--to`.
+    #[arg(value_enum, value_name = "PERIOD", default_value_t = SpentPeriod::Today, conflicts_with_all = ["from", "to"])]
+    pub period: SpentPeriod,
+
+    /// Range start (YYYY-MM-DD), inclusive. Requires `--to`.
+    #[arg(long, value_name = "DATE")]
+    pub from: Option<String>,
+
+    /// Range end (YYYY-MM-DD), inclusive. Requires `--from`.
+    #[arg(long, value_name = "DATE")]
+    pub to: Option<String>,
+
+    /// Filter blocks by tag prefix (repeatable; multiple compose as OR).
+    /// `--tag work` matches `@work` and `@work/meeting`.
+    #[arg(long)]
+    pub tag: Vec<String>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = SpentFormat::Text)]
+    pub format: SpentFormat,
+
+    /// Treat an empty result as a successful run.
+    #[arg(long)]
+    pub allow_empty: bool,
+}
+
+fn run_spent(args: SpentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    use ft_core::timeblock::report;
+
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let today = today_from_env();
+    let (from, to) = resolve_period(&args, today)?;
+    if from > to {
+        return Err(anyhow!("--from {} must not be after --to {}", from, to));
+    }
+
+    let daily_cfg = vault
+        .config
+        .config
+        .periodic_notes
+        .daily
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow!(
+                "no `[periodic_notes.daily]` configured — add it to your config to use `ft timeblocks spent`"
+            )
+        })?;
+    let heading = vault.config.config.timeblocks_heading().to_string();
+
+    // Walk every date in [from, to], resolve its daily-note path, and
+    // read any blocks that exist. Missing files are silently skipped.
+    let mut all_blocks: Vec<Timeblock> = Vec::new();
+    let mut cur = from;
+    while cur <= to {
+        let path = ft_core::periodic::resolve_periodic_path(&vault.path, daily_cfg, cur)
+            .map_err(|e| anyhow!("{e}"))?;
+        if path.exists() {
+            let doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+            all_blocks.extend(doc.blocks);
+        }
+        cur = cur.succ_opt().ok_or_else(|| anyhow!("date overflow"))?;
+    }
+
+    // Apply tag prefix filter (same OR semantics as `list`).
+    let filtered: Vec<Timeblock> = if args.tag.is_empty() {
+        all_blocks
+    } else {
+        let needles: Result<Vec<_>> = args
+            .tag
+            .iter()
+            .map(|s| timeblock::parse_tag_string(s).map_err(parse_error_to_anyhow))
+            .collect();
+        let needles = needles?;
+        all_blocks
+            .into_iter()
+            .filter(|b| {
+                b.tags
+                    .iter()
+                    .any(|t| needles.iter().any(|n| is_prefix(n, t)))
+            })
+            .collect()
+    };
+
+    let total = report::total_minutes(&filtered);
+    let tags = report::time_per_tag(&filtered);
+
+    match args.format {
+        SpentFormat::Text => render_spent_text(from, to, total, &tags),
+        SpentFormat::Json => render_spent_json(from, to, total, &tags)?,
+    }
+
+    let exit = if filtered.is_empty() && !args.allow_empty {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    };
+    Ok(exit)
+}
+
+fn resolve_period(args: &SpentArgs, today: NaiveDate) -> Result<(NaiveDate, NaiveDate)> {
+    use ft_core::timeblock::report::{
+        last_week_bounds, month_bounds, today_bounds, week_bounds, year_bounds,
+    };
+
+    if args.from.is_some() || args.to.is_some() {
+        let from = args
+            .from
+            .as_deref()
+            .ok_or_else(|| anyhow!("--to requires --from"))?;
+        let to = args
+            .to
+            .as_deref()
+            .ok_or_else(|| anyhow!("--from requires --to"))?;
+        let from = NaiveDate::parse_from_str(from, "%Y-%m-%d")
+            .map_err(|_| anyhow!("--from must be YYYY-MM-DD, got `{from}`"))?;
+        let to = NaiveDate::parse_from_str(to, "%Y-%m-%d")
+            .map_err(|_| anyhow!("--to must be YYYY-MM-DD, got `{to}`"))?;
+        return Ok((from, to));
+    }
+    Ok(match args.period {
+        SpentPeriod::Today => today_bounds(today),
+        SpentPeriod::ThisWeek => week_bounds(today),
+        SpentPeriod::ThisMonth => month_bounds(today),
+        SpentPeriod::ThisYear => year_bounds(today),
+        SpentPeriod::LastWeek => last_week_bounds(today),
+    })
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn today_from_env() -> NaiveDate {
@@ -707,6 +861,95 @@ fn duration_minutes(b: &Timeblock) -> u32 {
     let s = b.start.hour() * 60 + b.start.minute();
     let e = b.end.hour() * 60 + b.end.minute();
     e.saturating_sub(s)
+}
+
+fn render_spent_text(
+    from: NaiveDate,
+    to: NaiveDate,
+    total: u32,
+    tags: &[ft_core::timeblock::report::TagTime],
+) {
+    use comfy_table::{presets, ContentArrangement, Table};
+    use ft_core::timeblock::report::minutes_to_hours_minutes;
+
+    let summable: u32 = tags
+        .iter()
+        .filter(|t| t.tag != "break")
+        .map(|t| t.minutes)
+        .sum();
+
+    let mut table = Table::new();
+    table
+        .load_preset(presets::UTF8_FULL_CONDENSED)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec!["Tag", "..", "..", "Time", "%"]);
+
+    add_tag_rows(&mut table, tags, 0, summable);
+
+    if from == to {
+        println!("Time spent on {from}");
+    } else {
+        println!("Time spent {from} → {to}");
+    }
+    println!("{table}");
+    let (h, m) = minutes_to_hours_minutes(total);
+    println!("{h:02}:{m:02}  total (excluding @break)");
+}
+
+fn add_tag_rows(
+    table: &mut comfy_table::Table,
+    tags: &[ft_core::timeblock::report::TagTime],
+    level: usize,
+    total_for_pct: u32,
+) {
+    use ft_core::timeblock::report::minutes_to_hours_minutes;
+
+    for tt in tags {
+        let mut row: Vec<String> = Vec::with_capacity(5);
+        for _ in 0..level {
+            row.push(String::new());
+        }
+        row.push(tt.tag.clone());
+        for _ in level..2 {
+            row.push(String::new());
+        }
+        let (h, m) = minutes_to_hours_minutes(tt.minutes);
+        row.push(format!("{h:02}:{m:02}"));
+        // Percentages are computed against the non-break total so they
+        // remain comparable across reports that include vs exclude breaks.
+        let pct = if total_for_pct > 0 && tt.tag != "break" {
+            format!("{:3}%", tt.minutes * 100 / total_for_pct)
+        } else {
+            String::new()
+        };
+        row.push(pct);
+        table.add_row(row);
+        add_tag_rows(table, &tt.children, level + 1, total_for_pct);
+    }
+}
+
+fn render_spent_json(
+    from: NaiveDate,
+    to: NaiveDate,
+    total: u32,
+    tags: &[ft_core::timeblock::report::TagTime],
+) -> Result<()> {
+    let body = serde_json::json!({
+        "from": from.to_string(),
+        "to": to.to_string(),
+        "total_minutes": total,
+        "tags": tags.iter().map(tag_time_to_json).collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&body)?);
+    Ok(())
+}
+
+fn tag_time_to_json(tt: &ft_core::timeblock::report::TagTime) -> serde_json::Value {
+    serde_json::json!({
+        "tag": tt.tag,
+        "minutes": tt.minutes,
+        "children": tt.children.iter().map(tag_time_to_json).collect::<Vec<_>>(),
+    })
 }
 
 fn print_diff(path: &Path, original: &str, new: &str) {
