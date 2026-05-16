@@ -39,6 +39,8 @@ enum Commands {
     Vault(cmd::vault::VaultArgs),
     /// Task operations: list, create, complete, move
     Tasks(cmd::tasks::TasksArgs),
+    /// Timeblock operations: list, add, edit, delete
+    Timeblocks(cmd::timeblocks::TimeblocksArgs),
     /// Fuzzy-find notes and headings (`text` or `text#heading`)
     Find(cmd::find::FindArgs),
     /// Note operations: open, move-section
@@ -85,6 +87,7 @@ fn main() -> ExitCode {
     let result: Result<ExitCode> = match cli.command {
         Commands::Vault(args) => cmd::vault::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Tasks(args) => cmd::tasks::run(args, vault),
+        Commands::Timeblocks(args) => cmd::timeblocks::run(args, vault),
         Commands::Find(args) => cmd::find::run(args, vault),
         Commands::Notes(args) => cmd::notes::run(args, vault),
         Commands::Git(args) => cmd::git::run(args, vault),

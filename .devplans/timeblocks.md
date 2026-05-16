@@ -217,7 +217,7 @@ Why ship CLI before TUI:
       with `#[serde(deny_unknown_fields)]`. Accessor
       `Config::timeblocks_heading(&self) -> &str` returns
       `"Time Blocks"` when unset.
-- [ ] Daily-note path resolution piggybacks on the existing
+- [x] Daily-note path resolution piggybacks on the existing
       `periodic_notes.daily` config (plan 010). When that block is
       missing, `ft timeblocks` errors with the same remedy hint the
       tasks CLI already shows (configure `periodic_notes.daily` or
@@ -225,51 +225,51 @@ Why ship CLI before TUI:
 
 ### CLI — `ft timeblocks list`
 
-- [ ] `ft timeblocks list [--date YYYY-MM-DD] [--tag X] [--format F] [--file PATH]`
-- [ ] Date parsing reuses `ft_core::dates::parse` (ISO, `+3d`,
+- [x] `ft timeblocks list [--date YYYY-MM-DD] [--tag X] [--format F] [--file PATH]`
+- [x] Date parsing reuses `ft_core::dates::parse` (ISO, `+3d`,
       `tomorrow`, `yesterday`, etc.); default is today.
-- [ ] `--tag` filter matches any block whose tag list contains a tag
+- [x] `--tag` filter matches any block whose tag list contains a tag
       with `@<X>` as a prefix path (so `--tag work` matches
       `@work/meeting` and `@work`). Repeatable; multiple tags
       compose as `or`.
-- [ ] `--format table|json|ndjson|markdown` — `markdown` emits source
+- [x] `--format table|json|ndjson|markdown` — `markdown` emits source
       lines so output is round-trippable through `ft timeblocks add`.
-- [ ] Default exit code 1 on no matches, configurable via
+- [x] Default exit code 1 on no matches, configurable via
       `--allow-empty` (matching `ft tasks list`).
 
 ### CLI — `ft timeblocks add`
 
-- [ ] `ft timeblocks add "<blockstring>" [--date YYYY-MM-DD] [--file PATH] [--force]`
+- [x] `ft timeblocks add "<blockstring>" [--date YYYY-MM-DD] [--file PATH] [--force]`
       where blockstring is `HH:MM - HH:MM <desc> [@tag...]` or the
       short form `HH:MM <desc>` (end derived as start + 30m).
-- [ ] Alternative form: `ft timeblocks add --start HH:MM --end HH:MM --desc "..." [--tag X]...`
+- [x] Alternative form: `ft timeblocks add --start HH:MM --end HH:MM --desc "..." [--tag X]...`
       flags compose with each other but **not** with the positional
       blockstring (clap mutual exclusion).
-- [ ] Refuses exact duplicates (same start, end, desc) unless `--force`.
-- [ ] Creates the configured heading at file end when missing.
-- [ ] `--dry-run` prints the resulting file diff via `similar` (same
+- [x] Refuses exact duplicates (same start, end, desc) unless `--force`.
+- [x] Creates the configured heading at file end when missing.
+- [x] `--dry-run` prints the resulting file diff via `similar` (same
       formatter as `ft tasks move`).
-- [ ] Edits via `fs::write_atomic`.
+- [x] Edits via `fs::write_atomic`.
 
 ### CLI — `ft timeblocks edit`
 
-- [ ] `ft timeblocks edit <selector> [--date ...] [--start ...] [--end ...] [--desc ...] [--add-tag X] [--remove-tag X] [--file PATH] [--dry-run]`
-- [ ] Selector forms: `<N>` (1-indexed line in the section),
+- [x] `ft timeblocks edit <selector> [--date ...] [--start ...] [--end ...] [--desc ...] [--add-tag X] [--remove-tag X] [--file PATH] [--dry-run]`
+- [x] Selector forms: `<N>` (1-indexed line in the section),
       `<HH:MM>` (exact start match), or a free-text fuzzy match
       against descriptions. Fuzzy ambiguous error lists up to 5
       candidates with line numbers + descriptions.
-- [ ] `--start` / `--end` accept absolute (`HH:MM`) or relative
+- [x] `--start` / `--end` accept absolute (`HH:MM`) or relative
       (`+15m`, `-5m`); relative values shift the existing time.
       Validation: `end > start`.
-- [ ] `--add-tag` and `--remove-tag` are repeatable; preserve tag
+- [x] `--add-tag` and `--remove-tag` are repeatable; preserve tag
       order; dedupe.
-- [ ] `--dry-run` semantics identical to `add`.
+- [x] `--dry-run` semantics identical to `add`.
 
 ### CLI — `ft timeblocks delete`
 
-- [ ] `ft timeblocks delete <selector> [--date ...] [--file PATH] [--yes] [--dry-run]`
-- [ ] Same selector grammar as `edit`.
-- [ ] Prompts for confirmation unless `--yes` (matches the bulk-move
+- [x] `ft timeblocks delete <selector> [--date ...] [--file PATH] [--yes] [--dry-run]`
+- [x] Same selector grammar as `edit`.
+- [x] Prompts for confirmation unless `--yes` (matches the bulk-move
       confirmation pattern from plan 001 session 7); non-TTY without
       `--yes` errors with a hint.
 
@@ -597,7 +597,7 @@ is cheap polish), and vault-relative paths in ops error messages
 (ops doesn't see the vault root yet; CLI layer in session 2 will
 wrap with vault-relative formatting).
 
-### Session 2 · planned
+### Session 2 · 2026-05-16 · done
 **Goal:** `ft timeblocks list|add|edit|delete` CLI on top of the
 library, with `--dry-run`, selectors, formats, integration tests.
 
@@ -621,6 +621,33 @@ library, with `--dry-run`, selectors, formats, integration tests.
 **Done means:** every mutation is scriptable from the shell; CLI
 verified against a temp vault end-to-end. Real-vault smoke optional
 here (full smoke in session 6).
+
+**Outcome:** Added `ft::cmd::timeblocks` with all four subcommands
+(`list`, `add`, `edit`, `delete`) wired into `main.rs` and
+`cmd/mod.rs`. Daily-note resolution piggybacks on
+`Vault::resolve_target(date, --file)`; missing
+`[periodic_notes.daily]` surfaces a remedy hint pointing the user
+to either the config block or `--file`. `--date` accepts every form
+`ft_core::dates::parse` supports (ISO / today / tomorrow / +3d).
+Output formats: `table` (comfy-table), `json` (pretty array),
+`ndjson`, `markdown` (round-trippable through `add`). `add` accepts
+both the positional blockstring and the
+`--start/--end/--desc/--tag` flag form via clap mutual exclusion;
+duplicates rejected without `--force`; section heading created at
+file end when missing. `edit` selectors classify as `Line(N)`,
+`Time(HH:MM)`, or `Fuzzy(rest)`; `--start`/`--end` accept absolute
+`HH:MM` or relative `±Nm` (uses `allow_hyphen_values` so `-15m`
+parses without `--`); ambiguous fuzzy matches list up to 5
+candidates. `delete` prompts via dialoguer when stdin is a TTY,
+errors with a `--yes` hint when non-TTY. `--dry-run` on every
+mutation prints a unified diff via `similar` and leaves the file
+untouched. 36 integration tests under `tests/timeblocks_cli.rs`
+covering every flag combination; full workspace: 762 + 36 tests
+green, clippy + fmt clean. Note: the dry-run for `edit` had to
+inline a copy of the library's mutation logic because the
+in-library `apply_mutation` is private — flagged in a comment to
+keep them in sync; session 6 polish can promote it to
+`pub(crate)` for true single-source-of-truth.
 
 ### Session 3 · planned
 **Goal:** `ft timeblocks spent` reporting across configurable date

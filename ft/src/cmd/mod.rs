@@ -4,5 +4,6 @@ pub mod git;
 pub mod man;
 pub mod notes;
 pub mod tasks;
+pub mod timeblocks;
 pub mod tui;
 pub mod vault;
