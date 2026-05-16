@@ -294,14 +294,7 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, area: Rect, which: Pane) 
         return;
     }
 
-    let items: Vec<ListItem> = pane
-        .blocks
-        .iter()
-        .map(|b| {
-            let line_text = format!("{:>3}  {}  {}", b.source_line, period_str(b), b.desc.trim());
-            ListItem::new(line_text)
-        })
-        .collect();
+    let items: Vec<ListItem> = pane.blocks.iter().map(build_block_item).collect();
 
     let mut state = ListState::default();
     state.select(Some(pane.selection));
@@ -320,6 +313,48 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, area: Rect, which: Pane) 
         .highlight_symbol(if focused { "▶ " } else { "  " });
 
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Number of display lines a block occupies. Mirrors the spec:
+/// 1–60 min → 1 line, 61–120 min → 2 lines, 121–180 min → 3 lines, …
+/// (`ceil(duration / 60)`, with a saturating floor of 1 for safety).
+fn block_lines(b: &ft_core::timeblock::Timeblock) -> usize {
+    let mins = duration_minutes(b);
+    if mins == 0 {
+        1
+    } else {
+        ((mins - 1) / 60 + 1) as usize
+    }
+}
+
+fn duration_minutes(b: &ft_core::timeblock::Timeblock) -> u32 {
+    let s = b.start.hour() * 60 + b.start.minute();
+    let e = b.end.hour() * 60 + b.end.minute();
+    e.saturating_sub(s)
+}
+
+/// Build a `ListItem` whose visible height scales with the block's
+/// duration. The first line carries the timing + description; each
+/// extra line draws a `│` continuation marker under the time column so
+/// the block reads as one visually tall row.
+fn build_block_item(b: &ft_core::timeblock::Timeblock) -> ListItem<'static> {
+    let n = block_lines(b);
+    let header = format!("{:>3}  {}  {}", b.source_line, period_str(b), b.desc.trim());
+    // Continuation lines indent past the "NN  " column (3 + 2 = 5
+    // cells) and place a `│` where the time would otherwise be.
+    // Indent matches the highlight_symbol's "▶ " prefix width (2) so
+    // the bar lines up cleanly under the header in both focused and
+    // unfocused states.
+    let cont = "        │";
+    let mut lines: Vec<Line> = Vec::with_capacity(n);
+    lines.push(Line::from(header));
+    for _ in 1..n {
+        lines.push(Line::from(Span::styled(
+            cont.to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    ListItem::new(lines)
 }
 
 fn period_str(b: &ft_core::timeblock::Timeblock) -> String {

@@ -855,6 +855,46 @@ fn timeblocks_tab_form_cursor_lands_after_visible_prefix() -> Result<()> {
 }
 
 #[test]
+fn timeblocks_tab_block_height_scales_with_duration() -> Result<()> {
+    // 30-min block → 1 line. 90-min block → 2 lines. 150-min block → 3.
+    // A `│` continuation marker should appear on extra lines so the
+    // total row count for three blocks is 1 + 2 + 3 = 6 rendered rows.
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n\
+         - 09:00 - 09:30 thirty\n\
+         - 10:00 - 11:30 ninety\n\
+         - 12:00 - 14:30 onefifty\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('f'))?; // fullscreen so the column is wide enough
+    let frame = render(&mut app, 100, 40);
+    // Each header still shows once.
+    assert_eq!(frame.matches("thirty").count(), 1);
+    assert_eq!(frame.matches("ninety").count(), 1);
+    assert_eq!(frame.matches("onefifty").count(), 1);
+    // 90-min block contributes 1 continuation row, 150-min contributes 2
+    // — so there are at least 3 `│` markers under headers.
+    let bar_rows = frame
+        .lines()
+        .filter(|l| {
+            l.contains('│')
+                && !l.contains("thirty")
+                && !l.contains("ninety")
+                && !l.contains("onefifty")
+        })
+        .count();
+    assert!(
+        bar_rows >= 3,
+        "expected 3+ continuation bars, got {bar_rows}: {frame}"
+    );
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();
