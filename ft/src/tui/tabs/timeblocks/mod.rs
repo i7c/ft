@@ -23,6 +23,11 @@
 //! - `H` / `L` — slide the anchor day back / forward by one day
 //! - `T` — jump back to actual today
 //!
+//! Block editing:
+//! - `a` quickline, `A` form, `e` edit description, `d d` delete
+//! - `t` tag modal (add `+@tag` / remove `-@tag`, space-separated)
+//! - `c` creates a missing daily note via the configured template
+//!
 //! Mutations land in session 5 — this session is read-only, so the tab
 //! never writes to disk.
 
@@ -35,7 +40,7 @@ use ft_core::timeblock::{
     self,
     doc::Document,
     ops::{self, AddOptions, EditMutation, Selector, TimeChange},
-    Timeblock,
+    Tag, Timeblock,
 };
 use ratatui::{layout::Rect, Frame};
 
@@ -118,6 +123,13 @@ pub(crate) enum Mode {
     },
     /// `A` modal form for entering a block via three rows.
     Form(FormState),
+    /// `t` tag-management modal. Shows the focused block's current tags
+    /// and a quickline accepting `+@tag` / `-@tag` tokens.
+    Tagging {
+        pane: Pane,
+        block_idx: usize,
+        buf: EditBuffer,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -941,6 +953,143 @@ impl TimeblocksTab {
         };
         self.commit_quickline(ctx, &blockstring);
     }
+
+    // ── tag modal (`t`) ────────────────────────────────────────────────
+
+    fn start_tagging(&mut self, ctx: &mut TabCtx) {
+        let pane = self.focus;
+        let Some(idx) = self.selected_block_idx(pane) else {
+            queue_toast(ctx, "nothing to tag", ToastStyle::Info);
+            return;
+        };
+        self.mode = Mode::Tagging {
+            pane,
+            block_idx: idx,
+            buf: EditBuffer::default(),
+        };
+    }
+
+    fn handle_tagging(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        let Mode::Tagging {
+            pane,
+            block_idx,
+            buf,
+        } = &mut self.mode
+        else {
+            return EventOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Idle;
+                EventOutcome::Consumed
+            }
+            KeyCode::Enter => {
+                let input = buf.text.clone();
+                let pane = *pane;
+                let block_idx = *block_idx;
+                self.commit_tagging(ctx, pane, block_idx, &input);
+                EventOutcome::Consumed
+            }
+            KeyCode::Backspace => {
+                buf.backspace();
+                EventOutcome::Consumed
+            }
+            KeyCode::Delete => {
+                buf.delete();
+                EventOutcome::Consumed
+            }
+            KeyCode::Left => {
+                buf.left();
+                EventOutcome::Consumed
+            }
+            KeyCode::Right => {
+                buf.right();
+                EventOutcome::Consumed
+            }
+            KeyCode::Home => {
+                buf.home();
+                EventOutcome::Consumed
+            }
+            KeyCode::End => {
+                buf.end();
+                EventOutcome::Consumed
+            }
+            KeyCode::Char(c) => {
+                buf.insert(c);
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    /// Parse a whitespace-separated list of `+@tag` / `-@tag` tokens
+    /// and apply them via a single `ops::edit_block` call. Empty input
+    /// closes the modal without writing.
+    fn commit_tagging(&mut self, ctx: &mut TabCtx, pane: Pane, block_idx: usize, input: &str) {
+        if input.trim().is_empty() {
+            self.mode = Mode::Idle;
+            return;
+        }
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        if block_idx >= p.blocks.len() {
+            queue_toast(ctx, "block no longer exists", ToastStyle::Error);
+            return;
+        }
+        let target = p.blocks[block_idx].clone();
+
+        let mut add_tags: Vec<Tag> = Vec::new();
+        let mut remove_tags: Vec<Tag> = Vec::new();
+        for tok in input.split_whitespace() {
+            let (sign, rest) = match tok.chars().next() {
+                Some('+') => ('+', &tok[1..]),
+                Some('-') => ('-', &tok[1..]),
+                _ => {
+                    queue_toast(
+                        ctx,
+                        &format!("tag token must start with `+` or `-`, got `{tok}`"),
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            };
+            match timeblock::parse_tag_string(rest) {
+                Ok(tag) => {
+                    if sign == '+' {
+                        add_tags.push(tag);
+                    } else {
+                        remove_tags.push(tag);
+                    }
+                }
+                Err(e) => {
+                    queue_toast(ctx, &format!("bad tag `{tok}`: {e}"), ToastStyle::Error);
+                    return;
+                }
+            }
+        }
+
+        let selector = Selector::Line(target.source_line);
+        let mutation = EditMutation {
+            add_tags,
+            remove_tags,
+            ..Default::default()
+        };
+        match ops::edit_block(&path, &self.heading, &selector, mutation) {
+            Ok(_) => {
+                self.mode = Mode::Idle;
+                queue_toast(ctx, "tags updated", ToastStyle::Success);
+                self.reload(ctx);
+                self.select_by_start(pane, target.start);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
+    }
 }
 
 fn next_field(f: FormField) -> FormField {
@@ -1045,6 +1194,9 @@ impl Tab for TimeblocksTab {
             Mode::Form(_) => {
                 return Ok(self.handle_form(k, ctx));
             }
+            Mode::Tagging { .. } => {
+                return Ok(self.handle_tagging(k, ctx));
+            }
         }
 
         // Idle keymap. `r` and the mutation chords need ctx for I/O
@@ -1118,6 +1270,10 @@ impl Tab for TimeblocksTab {
                 KeyCode::Char('T') => {
                     self.anchor = Some(ctx.today);
                     self.reload(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('t') => {
+                    self.start_tagging(ctx);
                     return Ok(EventOutcome::Consumed);
                 }
                 _ => {}

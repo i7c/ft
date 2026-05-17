@@ -90,6 +90,48 @@ and writes via `crate::fs::write_atomic`:
 The CLI binary calls these directly. The TUI (plan 002) will compose
 them at finer granularity.
 
+### Timeblocks (`timeblock`)
+
+`ft-core::timeblock` is the day-planner block layer. It mirrors the
+task module's library / CLI / TUI seam pattern: a parser + serializer +
+ops layer in `ft-core`, a thin clap shell in `ft::cmd::timeblocks`,
+and a TUI tab in `ft::tui::tabs::timeblocks`.
+
+```rust
+pub fn parse_line(s: &str) -> Result<Timeblock, ParseError>;
+pub fn serialize_line(b: &Timeblock) -> String;
+pub fn parse_tags(desc: &str) -> Vec<Tag>;            // lenient inline
+pub fn parse_tag_string(s: &str) -> Result<Tag, ParseError>;  // strict
+
+doc::Document::read(path, heading)  -> Result<Document>;
+doc::Document::write(&self)         -> Result<()>;   // atomic, section-replace
+
+ops::add_block(path, heading, new, AddOptions)            -> Result<Document>;
+ops::edit_block(path, heading, &Selector, EditMutation)   -> Result<Document>;
+ops::delete_block(path, heading, &Selector)               -> Result<Document>;
+
+report::time_per_tag(&[Timeblock])    -> Vec<TagTime>;
+report::total_minutes(&[Timeblock])   -> u32;          // excludes @break
+```
+
+`Selector` mirrors the task one: `Line(N)` (1-indexed display order,
+unique per block), `Time(NaiveTime)` (matches by start; can be
+ambiguous when two blocks share a start — the TUI uses `Line` to
+avoid that), or `Fuzzy(String)` (substring match on desc, the CLI
+default).
+
+Tag grammar: max 3 levels, each `[A-Za-z0-9_-]+`. The inline parser
+(`parse_tags`) is lenient — malformed `@…` tokens stay in `desc` but
+don't surface as tags, so legacy blockary notes still read. The
+strict variant is for `--add-tag X` / `--tag X` CLI flags.
+
+Daily-note resolution piggybacks on `periodic_notes::resolve_periodic_path`.
+When a write targets a daily note whose file is missing on disk, both
+the CLI's `add` and the TUI's `c` / `a` chords run
+`create_or_get_periodic_path` first so the configured
+`[periodic_notes.daily].template` is rendered before the section gets
+spliced in.
+
 ### Query language (`query::dsl`)
 
 `dsl::parse(src, today)` returns a `Query { expr, sort_keys, limit }`.

@@ -57,6 +57,9 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, ctx
     if let Mode::Form(_) = &tab.mode {
         render_form_modal(tab, frame, area);
     }
+    if let Mode::Tagging { .. } = &tab.mode {
+        render_tag_modal(tab, frame, area);
+    }
 }
 
 fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
@@ -355,6 +358,108 @@ fn build_block_item(b: &ft_core::timeblock::Timeblock) -> ListItem<'static> {
         )));
     }
     ListItem::new(lines)
+}
+
+fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
+    let Mode::Tagging {
+        pane,
+        block_idx,
+        buf,
+    } = &tab.mode
+    else {
+        return;
+    };
+
+    let target = {
+        let p = match *pane {
+            Pane::Today => &tab.today,
+            Pane::Tomorrow => &tab.tomorrow,
+        };
+        p.blocks.get(*block_idx).cloned()
+    };
+
+    let w = 60u16.min(area.width.saturating_sub(2));
+    let h = 9u16.min(area.height.saturating_sub(2));
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let modal = Rect::new(x, y, w, h);
+
+    frame.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Tags ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(modal);
+    frame.render_widget(block, modal);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // block summary
+            Constraint::Length(1), // current tags
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // input prompt
+            Constraint::Length(1), // help
+        ])
+        .split(inner);
+
+    let summary = target
+        .as_ref()
+        .map(|b| format!("Block: {} - {} {}", period_str(b), "", b.desc.trim()))
+        .unwrap_or_else(|| "Block: (gone)".to_string());
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            summary,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        rows[0],
+    );
+
+    let tags_text = target
+        .as_ref()
+        .map(|b| {
+            if b.tags.is_empty() {
+                "Current: (none)".to_string()
+            } else {
+                let s = b
+                    .tags
+                    .iter()
+                    .map(|t| t.to_string_form())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("Current: {s}")
+            }
+        })
+        .unwrap_or_default();
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            tags_text,
+            Style::default().fg(Color::DarkGray),
+        )),
+        rows[1],
+    );
+
+    let prefix = "> ";
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::Cyan)),
+            Span::raw(buf.text.clone()),
+        ])),
+        rows[3],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "+@tag to add, -@tag to remove (space-separated)  ·  Enter commits, Esc cancels",
+            Style::default().fg(Color::DarkGray),
+        )),
+        rows[4],
+    );
+
+    let col = rows[3].x + (prefix.chars().count() as u16) + buf.cursor as u16;
+    let col = col.min(rows[3].x + rows[3].width.saturating_sub(1));
+    frame.set_cursor_position((col, rows[3].y));
 }
 
 /// Friendly pane title for `date` relative to `today`. Always includes

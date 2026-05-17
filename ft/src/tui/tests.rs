@@ -980,6 +980,56 @@ fn timeblocks_tab_block_height_scales_with_duration() -> Result<()> {
 }
 
 #[test]
+fn timeblocks_tab_t_modal_adds_and_removes_tags() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 standup @work\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('t'))?;
+    for c in "+@meeting -@work".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("@meeting"), "added tag missing: {body}");
+    assert!(!body.contains("@work"), "removed tag still present: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_t_modal_rejects_invalid_token() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 standup\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('t'))?;
+    // Tokens without `+` / `-` prefix should be rejected; file untouched.
+    for c in "work".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(!body.contains("@work"), "should not have applied: {body}");
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();

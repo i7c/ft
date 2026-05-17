@@ -3,6 +3,7 @@
 //! Run with:  FT_REAL_VAULT_TESTS=1 cargo test -p ft --test real_vault_cli
 
 use assert_cmd::Command;
+use chrono::Local;
 
 const REAL_VAULT: &str = "/Users/cmw/git/fortytwo";
 
@@ -73,6 +74,79 @@ fn real_vault_overdue_preset_runs() {
         "--allow-empty",
     ])
     .env("FT_TODAY", "2026-05-10")
+    .assert()
+    .success();
+}
+
+// ── ft timeblocks against the real vault ────────────────────────────────────
+
+#[test]
+fn real_vault_timeblocks_list_today_succeeds() {
+    if !gated() {
+        return;
+    }
+    // The real vault may legitimately have an empty `## Time Blocks`
+    // section today (or none at all), so allow empty results.
+    ft().args([
+        "--vault",
+        REAL_VAULT,
+        "timeblocks",
+        "list",
+        "--allow-empty",
+        "--format",
+        "json",
+    ])
+    .assert()
+    .success();
+}
+
+#[test]
+fn real_vault_timeblocks_add_dry_run_does_not_modify() {
+    if !gated() {
+        return;
+    }
+    // Compute the daily-note path the same way `[periodic_notes.daily]`
+    // resolves it (path = "journal/%Y", format = "%Y-%m-%d"), then
+    // hash the file before + after to assert --dry-run never writes.
+    let today = Local::now().date_naive();
+    let path = std::path::Path::new(REAL_VAULT)
+        .join(format!("journal/{}", today.format("%Y")))
+        .join(format!("{}.md", today.format("%Y-%m-%d")));
+    let before = std::fs::read(&path).ok();
+    ft().args([
+        "--vault",
+        REAL_VAULT,
+        "timeblocks",
+        "add",
+        "23:50 - 23:55 __ft_smoke_dry_run__",
+        "--dry-run",
+    ])
+    .assert()
+    .success();
+    let after = std::fs::read(&path).ok();
+    assert_eq!(
+        before,
+        after,
+        "--dry-run must not modify {} — content changed",
+        path.display()
+    );
+}
+
+#[test]
+fn real_vault_timeblocks_spent_this_week_runs() {
+    if !gated() {
+        return;
+    }
+    ft().args([
+        "--vault",
+        REAL_VAULT,
+        "timeblocks",
+        "spent",
+        "this-week",
+        "--format",
+        "json",
+        "--allow-empty",
+    ])
     .assert()
     .success();
 }

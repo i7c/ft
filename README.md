@@ -78,6 +78,34 @@ ft tasks move stale-id --to inbox/triage.md
 ft tasks move --query 'tag is legacy' --to inbox/triage.md#Triage --dry-run
 ```
 
+## Timeblocks
+
+`ft timeblocks` manages the day-planner block list inside each daily
+note — the `- HH:MM - HH:MM <desc> @tag` format Obsidian's Day Planner
+plugin and [blockary](https://github.com/cweisser/blockary) both read.
+
+```sh
+# Read today's block list
+ft timeblocks list
+
+# Add a block (positional blockstring or --start/--end/--desc flag form)
+ft timeblocks add "09:00 - 10:00 standup @work"
+ft timeblocks add --start 14:00 --end 14:30 --desc "1on1 with Hans" --tag work
+
+# Shift an existing block 15 minutes later via relative end-time shift
+ft timeblocks edit standup --end +15m
+
+# Time spent per tag across a date range
+ft timeblocks spent this-week --format json
+```
+
+The TUI gains a "Timeblocks" tab with a today + tomorrow split (or
+single-day full-width via `f`), one-key time chords (`]`/`[`/`}`/`{`
+for ±5-minute edge shifts, `<`/`>` to shift the whole block), `H`/`L`
+to slide the date window, and `T` to jump back to today. See
+[docs/timeblocks.md](docs/timeblocks.md) for the block format, tag
+grammar, full CLI reference, and TUI keymap.
+
 ## Note links
 
 `ft notes backlinks <note>` lists every other note that links *to* the
@@ -183,6 +211,8 @@ ft --json-errors tasks list overdue --format ndjson \
   emoji fields are supported, with examples and the deferred list
 - [docs/query-dsl.md](docs/query-dsl.md) — supported subset of the plugin's
   query language with grammar, examples, and an error catalog
+- [docs/timeblocks.md](docs/timeblocks.md) — day-planner block format,
+  tag grammar, full CLI reference, and TUI keymap
 
 ## Status
 
