@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 5942
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Graph                
+▶ D /                                                                           
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+> node where kind = Directory and path = ""; expand where from.kind = Directory 
+ vault: vault  ·  tab: Graph                not yet refreshed      mode: normal

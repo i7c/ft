@@ -1,0 +1,149 @@
+//! `ft graph query` — run a graph DSL query against the vault and
+//! render the walked subtree.
+//!
+//! The CLI's mental model is *static traversal*: pass a single DSL
+//! expression plus a depth bound, get the full subtree printed at
+//! once. Depth defaults to unlimited with cycle-stop semantics — the
+//! same default as `tree(1)` — so a typical invocation prints the
+//! whole reachable subgraph without configuration.
+//!
+//! Exit codes:
+//! - `0` — happy path.
+//! - `2` — DSL parse error (matches the task DSL convention).
+//! - `1` — every other error (vault not found, IO failure, etc.),
+//!   surfaced through the top-level anyhow path.
+
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use anyhow::{anyhow, bail, Context, Result};
+use clap::{Args, Subcommand, ValueEnum};
+use ft_core::graph::query::{parse, CyclePolicy, WalkOptions};
+use ft_core::graph::Graph;
+use ft_core::vault::Vault;
+
+use crate::output::graph::{render, Format};
+
+#[derive(Args)]
+pub struct GraphArgs {
+    #[command(subcommand)]
+    pub command: GraphCommand,
+}
+
+#[derive(Subcommand)]
+pub enum GraphCommand {
+    /// Parse a DSL query, walk the graph, and print the result.
+    Query(QueryArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct QueryArgs {
+    /// DSL source. Mutually exclusive with `--query` / `--from-file`.
+    /// Exactly one of the three must be supplied.
+    #[arg(value_name = "QUERY", conflicts_with_all = ["query_opt", "from_file"])]
+    pub query: Option<String>,
+
+    /// DSL source as a flag (alternative to the positional form).
+    #[arg(
+        short = 'q',
+        long = "query",
+        value_name = "QUERY",
+        conflicts_with = "from_file"
+    )]
+    pub query_opt: Option<String>,
+
+    /// Read DSL source from a file. Useful when the query grows past
+    /// comfortable shell-quoting length.
+    #[arg(long = "from-file", value_name = "PATH")]
+    pub from_file: Option<PathBuf>,
+
+    /// Maximum depth to walk. Default unlimited. `0` returns roots only.
+    #[arg(long)]
+    pub depth: Option<usize>,
+
+    /// How to handle back-edges that would re-visit an ancestor.
+    /// `stop` (default) emits the cycle marker and halts that branch;
+    /// `allow` requires `--depth` to bound the traversal.
+    #[arg(long, value_enum, default_value_t = CycleArg::Stop)]
+    pub cycle_policy: CycleArg,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Tree)]
+    pub format: Format,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CycleArg {
+    Stop,
+    Allow,
+}
+
+impl From<CycleArg> for CyclePolicy {
+    fn from(v: CycleArg) -> Self {
+        match v {
+            CycleArg::Stop => CyclePolicy::Stop,
+            CycleArg::Allow => CyclePolicy::Allow,
+        }
+    }
+}
+
+pub fn run(args: GraphArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    match args.command {
+        GraphCommand::Query(q) => run_query(q, vault_flag),
+    }
+}
+
+fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let src = read_query_source(&args)?;
+
+    let query = match parse(&src) {
+        Ok(q) => q,
+        Err(e) => {
+            // Parse failure is a user-input error, not an exec error —
+            // print straight to stderr, skip the `Error:` chain prefix,
+            // and exit 2 to match the task DSL convention.
+            eprintln!("{e}");
+            return Ok(ExitCode::from(2));
+        }
+    };
+
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let graph = Graph::build(&vault).context("could not build graph for vault")?;
+
+    let opts = WalkOptions {
+        max_depth: args.depth,
+        cycle_policy: args.cycle_policy.into(),
+    };
+
+    if matches!(opts.cycle_policy, CyclePolicy::Allow) && opts.max_depth.is_none() {
+        bail!("--cycle-policy allow requires --depth (otherwise a cyclic query loops forever)");
+    }
+
+    let tree = query.walk(&graph, &opts);
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    render(&mut out, &tree, &graph, args.format)?;
+    out.flush().ok();
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn read_query_source(args: &QueryArgs) -> Result<String> {
+    match (
+        args.query.as_deref(),
+        args.query_opt.as_deref(),
+        args.from_file.as_deref(),
+    ) {
+        (Some(s), None, None) | (None, Some(s), None) => Ok(s.to_string()),
+        (None, None, Some(p)) => std::fs::read_to_string(p)
+            .with_context(|| format!("could not read query from {}", p.display())),
+        (None, None, None) => Err(anyhow!(
+            "no query supplied — pass a positional QUERY, `--query`, or `--from-file PATH`"
+        )),
+        _ => Err(anyhow!(
+            "QUERY, --query, and --from-file are mutually exclusive — pass exactly one"
+        )),
+    }
+}

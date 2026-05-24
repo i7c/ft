@@ -24,6 +24,18 @@ use crate::tui::{
 
 // ── GraphTab ──────────────────────────────────────────────────────────
 
+/// Fallback query the graph tab seeds itself with on first focus when
+/// `[graph].default_query` isn't set in config. Shows the vault root
+/// as a single directory line — pressing Enter / `l` expands one hop.
+/// Kept here (and not in `ft-core`) because it's a TUI-presentation
+/// default, not an engine concern.
+const BUILTIN_DEFAULT_QUERY: &str = concat!(
+    "node where kind = Directory and path = \"\"; ",
+    "expand where from.kind = Directory ",
+    "and edge.kind = directory-contains ",
+    "and to.kind in {Note, Directory};",
+);
+
 pub struct GraphTab {
     graph: Option<Graph>,
     query: Option<GraphQuery>,
@@ -176,7 +188,23 @@ impl Tab for GraphTab {
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
         if self.graph.is_none() {
             self.graph = Some(Graph::build(ctx.vault)?);
-            if self.query.is_some() {
+            // First focus: seed from [graph].default_query if set,
+            // otherwise from the built-in fallback — but only when the
+            // user hasn't typed anything yet. This guarantees the tab
+            // is never blank on first open.
+            if self.query_text.trim().is_empty() {
+                let seed = ctx
+                    .vault
+                    .config
+                    .config
+                    .graph
+                    .default_query
+                    .clone()
+                    .unwrap_or_else(|| BUILTIN_DEFAULT_QUERY.to_string());
+                self.query_text = seed;
+                self.input_cursor = self.query_text.len();
+                self.apply_query();
+            } else if self.query.is_some() {
                 let roots = self
                     .query
                     .as_ref()
@@ -345,17 +373,51 @@ impl Tab for GraphTab {
         let list = List::new(items);
         frame.render_widget(list, tree_area);
 
-        // Input bar
-        let input_text = format!("> {}", self.query_text);
-        let input_style = if self.input_mode {
+        // Empty-state hint: shown when the tree has no navigable
+        // content (≤ 1 row — either truly empty or just the seeded
+        // root) and the user isn't actively typing. Disappears as
+        // soon as the user expands anything or enters input mode.
+        if self.tree.len() <= 1 && !self.input_mode && tree_area.height >= 2 {
+            let hint_rect = Rect {
+                y: tree_area.y + 1,
+                height: 1,
+                ..tree_area
+            };
+            let hint = Span::styled(
+                "press / to edit query",
+                Style::default().fg(Color::DarkGray),
+            );
+            frame.render_widget(Paragraph::new(Line::from(hint)), hint_rect);
+        }
+
+        // Input bar prompt — brighter when inactive so the `> ` is
+        // visible on standard terminals (DarkGray fades into the
+        // background on many color schemes).
+        let prompt_style = if self.input_mode {
             Style::default().fg(Color::Yellow)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::Gray)
         };
+        let input_text = format!("> {}", self.query_text);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(input_text, input_style))),
+            Paragraph::new(Line::from(Span::styled(input_text, prompt_style))),
             input_area,
         );
+
+        // Insertion cursor when in input mode. `set_cursor_position`
+        // is the canonical ratatui idiom — the OS-level cursor is the
+        // one terminals expect for text input.
+        if self.input_mode {
+            // 2 = width of the "> " prompt.
+            let x = input_area
+                .x
+                .saturating_add(2)
+                .saturating_add(self.input_cursor as u16);
+            frame.set_cursor_position((
+                x.min(input_area.x + input_area.width.saturating_sub(1)),
+                input_area.y,
+            ));
+        }
 
         // Error line overlays bottom of tree area
         if let Some(ref err) = self.parse_error {

@@ -55,6 +55,15 @@ use crate::vault::Vault;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NoteId(pub(crate) NodeIndex);
 
+impl NoteId {
+    /// Stable numeric handle for this id within its [`Graph`]. Cross-
+    /// references in serialized output (e.g. ndjson `parent_id`) use
+    /// this to point from one row to another.
+    pub fn index(self) -> usize {
+        self.0.index()
+    }
+}
+
 /// Per-node payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {

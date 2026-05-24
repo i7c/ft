@@ -789,6 +789,7 @@ impl App {
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
+            Box::new(GraphTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
@@ -818,6 +819,7 @@ impl App {
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
+            Box::new(GraphTab::new()),
         ];
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
     }

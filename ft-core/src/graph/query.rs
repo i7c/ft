@@ -129,6 +129,55 @@ pub enum Literal {
     Int(i64),
 }
 
+// ── Walk types ───────────────────────────────────────────────────────
+
+/// Control how [`GraphQuery::walk`] handles back-edges that would cause
+/// the same node to appear in its own ancestor chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CyclePolicy {
+    /// When a candidate child is already on the ancestor path, emit it
+    /// with [`WalkNode::cycle`] set to `true` and don't descend into it.
+    /// Default.
+    #[default]
+    Stop,
+    /// Don't detect cycles. The traversal only terminates via
+    /// [`WalkOptions::max_depth`]; combining `Allow` with an unbounded
+    /// depth over a cyclic subgraph will loop forever.
+    Allow,
+}
+
+/// Knobs for [`GraphQuery::walk`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WalkOptions {
+    /// Maximum tree depth. `None` means unlimited. `Some(0)` returns
+    /// roots only — every child list is empty.
+    pub max_depth: Option<usize>,
+    pub cycle_policy: CyclePolicy,
+}
+
+impl WalkOptions {
+    /// Unlimited depth with cycle detection — the `tree(1)` default.
+    pub fn unlimited() -> Self {
+        Self::default()
+    }
+}
+
+/// One node in the materialized walk tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkNode {
+    pub id: NoteId,
+    /// Depth of this node from the nearest root in the walk (root = 0).
+    pub depth: usize,
+    /// Edge kind that led from the immediate parent to this node.
+    /// `None` for roots returned from [`GraphQuery::select`].
+    pub edge_to_parent: Option<EdgeKind>,
+    /// `true` when this node's id appeared in its own ancestor chain
+    /// under [`CyclePolicy::Stop`]. The node is still emitted (so the
+    /// user can see the cycle close) but `children` is always empty.
+    pub cycle: bool,
+    pub children: Vec<WalkNode>,
+}
+
 // ── Parse context ─────────────────────────────────────────────────────
 
 /// Which grammar scope a condition is being parsed in. Determines which
@@ -1094,6 +1143,91 @@ impl GraphQuery {
         }
         Some(children)
     }
+
+    /// Materialize the full reachable subtree from each root returned by
+    /// [`GraphQuery::select`] by repeatedly applying [`GraphQuery::expand`].
+    ///
+    /// The shape of the result is bounded by `opts`:
+    ///
+    /// - `opts.max_depth = None` is unlimited; `Some(0)` returns roots
+    ///   only; `Some(n)` returns at most n hops below each root.
+    /// - `opts.cycle_policy = Stop` (default) emits a node whose id
+    ///   appears in its own ancestor chain with `cycle: true` and does
+    ///   not descend into it. `Allow` performs no cycle check — the
+    ///   caller is responsible for bounding via `max_depth`.
+    ///
+    /// When the query has no `expand` block, the returned `WalkNode`s
+    /// have empty `children`, matching the `None` return from
+    /// [`GraphQuery::expand`].
+    pub fn walk(&self, graph: &Graph, opts: &WalkOptions) -> Vec<WalkNode> {
+        let roots = self.select(graph);
+        let mut ancestors: Vec<NoteId> = Vec::new();
+        roots
+            .into_iter()
+            .map(|id| self.walk_node(graph, id, 0, None, opts, &mut ancestors))
+            .collect()
+    }
+
+    fn walk_node(
+        &self,
+        graph: &Graph,
+        id: NoteId,
+        depth: usize,
+        edge_to_parent: Option<EdgeKind>,
+        opts: &WalkOptions,
+        ancestors: &mut Vec<NoteId>,
+    ) -> WalkNode {
+        let is_cycle = matches!(opts.cycle_policy, CyclePolicy::Stop) && ancestors.contains(&id);
+
+        let at_depth_limit = opts.max_depth == Some(depth);
+
+        let children = if is_cycle || at_depth_limit {
+            Vec::new()
+        } else {
+            // Walk one hop using the expand policy; this returns None
+            // when there is no expand block, which we map to no children.
+            let child_ids = self.expand(graph, id).unwrap_or_default();
+            if child_ids.is_empty() {
+                Vec::new()
+            } else {
+                ancestors.push(id);
+                let mut out = Vec::with_capacity(child_ids.len());
+                for child_id in child_ids {
+                    let edge_kind = edge_kind_between(graph, id, child_id);
+                    out.push(self.walk_node(
+                        graph,
+                        child_id,
+                        depth + 1,
+                        edge_kind,
+                        opts,
+                        ancestors,
+                    ));
+                }
+                ancestors.pop();
+                out
+            }
+        };
+
+        WalkNode {
+            id,
+            depth,
+            edge_to_parent,
+            cycle: is_cycle,
+            children,
+        }
+    }
+}
+
+/// Find the edge kind on the first outgoing edge from `src` that lands
+/// on `dst`. Used by `walk` to label the parent → child relationship in
+/// each [`WalkNode`]. Multiple parallel edges (e.g. two wikilinks from
+/// the same source to the same target) are collapsed to the first
+/// match — `walk` is a tree view, not an edge enumeration.
+fn edge_kind_between(graph: &Graph, src: NoteId, dst: NoteId) -> Option<EdgeKind> {
+    graph
+        .outgoing(src)
+        .find(|(d, _)| *d == dst)
+        .map(|(_, e)| e.clone())
 }
 
 fn push_unique(v: &mut Vec<NoteId>, id: NoteId) {
@@ -1973,6 +2107,248 @@ mod tests {
             for id in &ids {
                 assert!(matches!(g.node(*id), NodeKind::Note(_)));
             }
+        }
+    }
+
+    // ── Walk tests ───────────────────────────────────────────────────
+
+    mod walk {
+        use std::path::PathBuf;
+
+        use assert_fs::prelude::*;
+
+        use crate::graph::{EdgeKind, Graph};
+        use crate::vault::Vault;
+
+        use super::*;
+
+        fn dirs_graph() -> Graph {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("tests/fixtures/dirs");
+            let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
+            Graph::build(&v).unwrap()
+        }
+
+        fn dirs_query() -> GraphQuery {
+            parse(
+                "node where kind = Directory and path = \"\"; \
+                 expand where from.kind = Directory \
+                          and edge.kind = directory-contains \
+                          and to.kind in {Note, Directory};",
+            )
+            .unwrap()
+        }
+
+        fn count_nodes(tree: &[WalkNode]) -> usize {
+            tree.iter().map(|n| 1 + count_nodes(&n.children)).sum()
+        }
+
+        fn max_depth(tree: &[WalkNode]) -> usize {
+            tree.iter()
+                .map(|n| {
+                    if n.children.is_empty() {
+                        n.depth
+                    } else {
+                        max_depth(&n.children)
+                    }
+                })
+                .max()
+                .unwrap_or(0)
+        }
+
+        #[test]
+        fn walk_unbounded_dirs_returns_full_tree() {
+            let g = dirs_graph();
+            let q = dirs_query();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            assert_eq!(tree.len(), 1, "exactly one root: the vault root");
+            assert_eq!(tree[0].depth, 0);
+            assert!(tree[0].edge_to_parent.is_none(), "roots carry no edge");
+            // 4 dirs (root + Projects + Areas + Areas/operations) + 4 notes
+            // = 8 nodes reachable from the root. The walk visits every
+            // node exactly once.
+            assert_eq!(count_nodes(&tree), 8);
+            // The deepest path is root → Areas → operations → shifts.md
+            assert_eq!(max_depth(&tree), 3);
+        }
+
+        #[test]
+        fn walk_depth_zero_returns_roots_only() {
+            let g = dirs_graph();
+            let q = dirs_query();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: Some(0),
+                    cycle_policy: CyclePolicy::Stop,
+                },
+            );
+            assert_eq!(tree.len(), 1);
+            for root in &tree {
+                assert!(root.children.is_empty(), "depth=0 means no descent at all");
+            }
+        }
+
+        #[test]
+        fn walk_depth_one_returns_immediate_children() {
+            let g = dirs_graph();
+            let q = dirs_query();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: Some(1),
+                    cycle_policy: CyclePolicy::Stop,
+                },
+            );
+            assert_eq!(tree.len(), 1);
+            // Root's immediate children: Projects/, Areas/, root.md = 3
+            assert_eq!(tree[0].children.len(), 3);
+            for child in &tree[0].children {
+                assert_eq!(child.depth, 1);
+                assert!(child.children.is_empty(), "depth=1 means no grandchildren");
+                assert!(matches!(child.edge_to_parent, Some(EdgeKind::Contains)));
+            }
+        }
+
+        #[test]
+        fn walk_edge_to_parent_is_populated_for_non_roots() {
+            let g = dirs_graph();
+            let q = dirs_query();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+
+            fn check(n: &WalkNode) {
+                if n.depth == 0 {
+                    assert!(n.edge_to_parent.is_none());
+                } else {
+                    assert!(
+                        n.edge_to_parent.is_some(),
+                        "non-root must carry its edge to parent"
+                    );
+                }
+                for c in &n.children {
+                    check(c);
+                }
+            }
+            for root in &tree {
+                check(root);
+            }
+        }
+
+        /// Build an inline graph where `a.md` links to `b.md` which links
+        /// back to `a.md` — a simple 2-cycle reachable from a.md.
+        fn cyclic_graph() -> (assert_fs::TempDir, Graph) {
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("a.md").write_str("[[b]]\n").unwrap();
+            tmp.child("b.md").write_str("[[a]]\n").unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v).unwrap();
+            (tmp, g)
+        }
+
+        #[test]
+        fn walk_stops_on_cycle_when_policy_stop() {
+            let (_tmp, g) = cyclic_graph();
+            let q = parse(
+                "node where path = \"a.md\"; \
+                 expand where edge.kind = link;",
+            )
+            .unwrap();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: None,
+                    cycle_policy: CyclePolicy::Stop,
+                },
+            );
+            // a → b → a(cycle)
+            assert_eq!(tree.len(), 1);
+            assert!(!tree[0].cycle);
+            assert_eq!(tree[0].children.len(), 1, "a has one child b");
+            let b = &tree[0].children[0];
+            assert!(!b.cycle);
+            assert_eq!(b.children.len(), 1, "b expands once to a-cycle");
+            let a_cycle = &b.children[0];
+            assert!(a_cycle.cycle, "the re-entered a is a cycle marker");
+            assert!(
+                a_cycle.children.is_empty(),
+                "cycle markers have no children"
+            );
+            assert_eq!(a_cycle.id, tree[0].id, "same node id as the root a");
+        }
+
+        #[test]
+        fn walk_allows_cycle_when_policy_allow_under_depth_bound() {
+            let (_tmp, g) = cyclic_graph();
+            let q = parse(
+                "node where path = \"a.md\"; \
+                 expand where edge.kind = link;",
+            )
+            .unwrap();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: Some(3),
+                    cycle_policy: CyclePolicy::Allow,
+                },
+            );
+            // No cycle detection — a → b → a → b, terminating at depth 3.
+            assert_eq!(tree.len(), 1);
+            let mut current = &tree[0];
+            let mut visited_depths = vec![current.depth];
+            while let Some(child) = current.children.first() {
+                assert!(!child.cycle, "Allow policy never sets the cycle marker");
+                visited_depths.push(child.depth);
+                current = child;
+            }
+            assert_eq!(visited_depths, vec![0, 1, 2, 3]);
+            assert!(
+                current.children.is_empty(),
+                "depth bound is what terminates the walk"
+            );
+        }
+
+        #[test]
+        fn walk_no_expand_block_returns_flat_roots() {
+            let g = dirs_graph();
+            // Selector only — no expand block.
+            let q = parse("node where kind = Directory;").unwrap();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            assert!(!tree.is_empty(), "the dirs fixture has directories");
+            for root in &tree {
+                assert!(
+                    root.children.is_empty(),
+                    "no expand block means no children regardless of max_depth"
+                );
+                assert!(!root.cycle);
+                assert!(root.edge_to_parent.is_none());
+            }
+            // depth_zero with a None max_depth still returns nothing
+            // below the roots — same as Some(_) — so the assertion above
+            // is true for any max_depth value.
+        }
+
+        #[test]
+        fn walk_empty_select_returns_empty_tree() {
+            let g = dirs_graph();
+            // Query that matches nothing — there are no notes whose
+            // path starts with "nope/".
+            let q = parse("node where path starts_with \"nope/\";").unwrap();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            assert!(tree.is_empty());
+        }
+
+        #[test]
+        fn walk_unlimited_terminates_on_cyclic_graph() {
+            // Sanity: Stop policy + unlimited depth must terminate on a
+            // cycle (otherwise this test would hang).
+            let (_tmp, g) = cyclic_graph();
+            let q = parse("node where path = \"a.md\"; expand where edge.kind = link;").unwrap();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            // a(root) + b + a(cycle) = 3 nodes total
+            assert_eq!(count_nodes(&tree), 3);
         }
     }
 

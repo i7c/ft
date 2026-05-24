@@ -2,7 +2,7 @@
 id: 019
 name: graph-cli
 title: "Graph: CLI surface (ft graph query) + TUI initial-state fixes"
-status: ready
+status: finished
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -65,169 +65,90 @@ default-query seed path share semantics.
 
 ### Library: `GraphQuery::walk` (ft-core/src/graph/query.rs)
 
-- [ ] New `WalkOptions { max_depth: Option<usize>, cycle_policy: CyclePolicy }`.
-      `max_depth = None` means unlimited. Cycle policy enum:
-      `CyclePolicy::Stop` (default — when a node would re-appear in
-      its own ancestor chain, mark it and don't expand) or
-      `CyclePolicy::Allow` (no detection; the user accepts that an
-      unbounded query over a cyclic subgraph will only terminate via
-      `max_depth`).
-- [ ] New `WalkNode { id: NoteId, depth: usize, edge_to_parent: Option<EdgeKind>, cycle: bool, children: Vec<WalkNode> }`.
-      `edge_to_parent` is `None` for roots returned from `select()`.
-      `cycle: true` marks a node whose `id` appeared in the ancestor
-      chain — it's still emitted (so the user sees the cycle close)
-      but its `children` is empty.
-- [ ] `GraphQuery::walk(&self, graph: &Graph, opts: &WalkOptions) -> Vec<WalkNode>`:
-      run `select()` to get roots; for each root, recursively call
-      `expand()` and build the `WalkNode` subtree, tracking the
-      ancestor path on the stack. Stop descending when
-      `depth == max_depth` or when `cycle_policy = Stop` and the
-      candidate child is in the ancestor path.
-- [ ] No allocation on the per-node hot path beyond the children
-      `Vec` — the ancestor path is a single `Vec<NoteId>` reused
-      across the traversal (push on descend, pop on ascend).
-- [ ] Existing `select()` / `expand()` signatures unchanged — `walk`
-      composes them.
+- [x] New `WalkOptions { max_depth: Option<usize>, cycle_policy: CyclePolicy }`.
+- [x] New `WalkNode { id, depth, edge_to_parent, cycle, children }`.
+- [x] `GraphQuery::walk(&self, graph, opts) -> Vec<WalkNode>`.
+- [x] Single ancestor `Vec<NoteId>` reused via push/pop.
+- [x] Existing `select()` / `expand()` signatures unchanged.
 
 ### Library: tests
 
-- [ ] Unit tests in `ft-core/src/graph/query.rs` using the existing
-      `tests/fixtures/dirs` vault:
-  - `walk_unbounded_dirs_returns_full_tree`: full subtree of every
-    directory and note under root.
-  - `walk_depth_zero_returns_roots_only`: every `WalkNode.children`
-    is empty when `max_depth = Some(0)`.
-  - `walk_depth_one_returns_immediate_children`: root + first
-    level only.
-  - `walk_stops_on_cycle_when_policy_stop`: build a tiny graph
-    where A → B → A; the second A appears with `cycle: true` and
-    no children. (Use an inline test vault, not the dirs
-    fixture — wikilinks suffice.)
-  - `walk_allows_cycle_when_policy_allow_under_depth_bound`:
-    same graph, `CyclePolicy::Allow` + `max_depth = Some(3)`
-    terminates and reproduces A multiple times without the
-    `cycle` flag.
-  - `walk_no_expand_block_returns_flat_roots`: a DSL with only
-    `node` blocks (no `expand` block) returns roots with empty
-    children regardless of `max_depth`.
+- [x] Unit tests in `ft-core/src/graph/query.rs`:
+  - `walk_unbounded_dirs_returns_full_tree`
+  - `walk_depth_zero_returns_roots_only`
+  - `walk_depth_one_returns_immediate_children`
+  - `walk_stops_on_cycle_when_policy_stop` (inline A↔B vault)
+  - `walk_allows_cycle_when_policy_allow_under_depth_bound`
+  - `walk_no_expand_block_returns_flat_roots`
+  - (plus `walk_edge_to_parent_is_populated_for_non_roots`,
+     `walk_empty_select_returns_empty_tree`,
+     `walk_unlimited_terminates_on_cyclic_graph` for coverage)
 
 ### CLI: `ft graph query` (ft/src/cmd/graph.rs — new file)
 
-- [ ] New subcommand module `ft/src/cmd/graph.rs`. `GraphArgs` with
-      a clap subcommand enum `GraphCommand::Query(QueryArgs)`.
-      Future siblings (e.g. `ft graph stats`) reuse the same module.
-- [ ] Wired in `ft/src/main.rs`: new `Commands::Graph(args)` variant
-      + dispatch, and `pub mod graph;` in `ft/src/cmd/mod.rs`.
-- [ ] `QueryArgs` flags:
-  - `<QUERY>` positional or `--query <STRING>` — the DSL source.
-    Exactly one required.
-  - `--from-file <PATH>` — alternative source; mutually exclusive
-    with the positional/`--query`.
-  - `--depth <N>` — max depth; default unlimited. `0` returns
-    roots only.
-  - `--cycle-policy <stop|allow>` — default `stop`.
-  - `--format <tree|json|ndjson|edges|markdown>` — default `tree`.
-  - `--vault <PATH>` — standard, same shape as other subcommands.
-- [ ] Parse the DSL with `parse_query`; on parse error, write the
-      `DslError` to stderr with the same `expected X, found Y`
-      format the TUI uses, and exit with status 2 (matching the
-      task DSL convention).
-- [ ] Build the graph via `Graph::build(&vault)`. Call
-      `query.walk(&graph, &opts)`. Pass the resulting
-      `Vec<WalkNode>` to the format-specific renderer.
+- [x] New subcommand module `ft/src/cmd/graph.rs`. `GraphArgs` /
+      `GraphCommand::Query(QueryArgs)`.
+- [x] Wired into `ft/src/main.rs` + `ft/src/cmd/mod.rs`.
+- [x] `QueryArgs` flags: positional `QUERY`, `-q/--query`,
+      `--from-file`, `--depth`, `--cycle-policy`, `--format`,
+      `--vault` (global).
+- [x] Parse-error path writes to stderr and exits 2.
+- [x] Uses `query.walk(&graph, &opts)`.
 
 ### CLI: output formatters (ft/src/output/graph.rs — new file)
 
-- [ ] `tree` format (default for TTY): indented ASCII tree matching
-      the TUI style — `  ▶ N stem` for collapsible (any node with
-      `children` non-empty), `  · N stem` for leaves,
-      `  ↺ N stem` for cycle markers. Two-space indent per depth.
-- [ ] `json` format: a single JSON document — array of root
-      objects, each shaped `{ "id": "<note-id>", "kind": "Note"|"Directory"|"Ghost",
-      "path": "...", "title": "...", "depth": 0, "cycle": false,
-      "edge_to_parent": null, "children": [ ... ] }`. Stable key
-      order via `serde_json::to_string_pretty` on a typed struct.
-- [ ] `ndjson` format: one JSON object per line, in depth-first
-      pre-order, with `parent_id` instead of nesting. Same fields
-      otherwise.
-- [ ] `edges` format: tabular `src \t edge_kind \t dst` over all
-      edges traversed, deduplicated, in pre-order discovery. Useful
-      for piping into graphviz or csvkit.
-- [ ] `markdown` format: bulleted list (`- ` per level, two-space
-      indent per depth). Filename stems as link text (vault-relative
-      path in parens). Cycle nodes get `(↺)` suffix.
-- [ ] All formats accept the `Vec<WalkNode>` directly — no
-      format-specific traversal logic. Cycle nodes are emitted
-      with no children regardless of format.
+- [x] `tree` format with `▶`/`·`/`↺` glyphs and two-space indent.
+- [x] `json` format — pretty-printed array of nested root objects.
+- [x] `ndjson` format — pre-order with `parent_id`.
+- [x] `edges` format — `src\tlabel\tdst`, deduplicated.
+- [x] `markdown` format — bullets with two-space indent and `(↺)`
+      suffix for cycle nodes.
+- [x] All formats consume `&[WalkNode]` directly.
 
 ### CLI: integration tests (ft/tests/graph_query.rs — new file)
 
-- [ ] `assert_cmd` + `assert_fs` + the `tests/fixtures/dirs` vault.
-- [ ] Tests:
-  - `ft graph query "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;" --depth 1`
-    prints the root directory and its immediate children.
-  - `--format json` produces valid JSON parseable by `serde_json`
-    and includes the expected node count.
-  - `--depth 0` returns roots with no children in every format.
-  - Parse-error path: a malformed query exits non-zero with the
-    error on stderr.
-  - `--from-file` path: query read from a temp file behaves
-    identically to inline.
-- [ ] Snapshot test (insta) for the `tree` format against the
-      `dirs` fixture so the on-screen shape is locked in.
+- [x] `assert_cmd` + `assert_fs` + the `tests/fixtures/dirs` vault.
+- [x] 14 tests including: tree depth-1, tree unbounded (8 nodes),
+      depth=0 for every format, JSON valid + 8 nodes, JSON cycle
+      marker, NDJSON pre-order + parent_id chain, edges TSV (7
+      rows), markdown indent, parse error → exit 2, missing query
+      errors, --from-file == inline, --from-file missing path errors,
+      cycle allow without depth rejected.
+- [x] Insta snapshot of the `tree` format against the dirs fixture.
 
 ### TUI: graph tab initial state (ft/src/tui/tabs/graph.rs)
 
-- [ ] `[graph].default_query` field in the config struct
-      (`ft-core/src/config.rs`). Optional string. Loaded from
-      `.ft/config.toml`; no env var.
-- [ ] `GraphTab::on_focus`: after `Graph::build`, if the in-memory
-      `query_text` is empty *and* the config has a default query,
-      seed both `query_text` and `query` from it and run `select`
-      + `build_from`. The default query is also seeded into the
-      input bar text so the user can see + edit it.
-- [ ] Built-in fallback default (used when no config-provided
-      default exists): `node where kind = Directory and path = ""; expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};`
-      — shows the vault root, expandable to any child. Keeps the
-      tab non-empty out of the box for anyone with notes.
-- [ ] Render an insertion cursor when in input mode via
-      `frame.set_cursor_position((x, y))` at the column matching
-      `input_cursor` plus the prompt offset. Remove no other
-      styling; the existing yellow-prompt cue stays.
-- [ ] Brighten the inactive prompt: replace `Color::DarkGray` with
-      `Color::Gray` so the `> ` is visible on standard terminals.
-- [ ] Add a single-line hint rendered above the input bar **only**
-      when the tree is empty *and* the input is not focused —
-      `press / to edit query` in `Color::DarkGray`. Disappears once
-      the tree is populated.
-- [ ] Insta snapshot tests in `ft/src/tui/tests.rs`:
-  - `graph_tab_empty_default_query_renders`: switch to graph tab
-    on a vault with no notes — shows root directory only + hint.
-  - `graph_tab_populated_default_query_renders`: dirs fixture —
-    shows root + a child node.
-  - `graph_tab_input_mode_shows_cursor`: after `/`, prompt is
-    yellow and cursor is positioned past the prompt.
+- [x] `[graph].default_query` field in the config struct.
+- [x] `GraphTab::on_focus` seeds from config or built-in fallback.
+- [x] Built-in fallback default (vault root + directory-contains
+      expansion).
+- [x] Insertion cursor via `frame.set_cursor_position`.
+- [x] Brighter inactive prompt (DarkGray → Gray).
+- [x] `press / to edit query` hint when tree.len() ≤ 1 and not
+      in input mode.
+- [x] Three insta tests: `graph_tab_empty_default_query_renders`,
+      `graph_tab_populated_default_query_renders`,
+      `graph_tab_input_mode_shows_cursor` (cursor asserted via
+      `Backend::get_cursor_position` since TestBackend stores cursor
+      state separately from the cell buffer).
 
 ### Documentation (docs/architecture.md)
 
-- [ ] Add `graph/query.rs` (plan 017) to the workspace layout
-      listing under `ft-core/src/graph/`. It's missing today.
-- [ ] Add `cmd/graph.rs` to the binary's `cmd/` listing.
-- [ ] Add `output/graph.rs` to the binary's `output/` listing.
-- [ ] Add a short "Graph query DSL" subsection under "Key traits
-      and seams" — three sentences pointing at `query::parse`,
-      `select/expand/walk`, and the CLI vs. TUI consumers.
+- [x] `graph/query.rs` already listed (added by plan 020).
+- [x] `cmd/graph.rs` added to binary listing.
+- [x] `output/graph.rs` added to binary listing.
+- [x] "Graph query DSL" subsection expanded to name `walk`, the CLI
+      subcommand, and its output formats.
 
 ### Build invariants
 
-- [ ] `cargo test --workspace` — all existing + new tests pass.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] `cargo fmt --check` clean.
-- [ ] No new dependencies. No crate additions to the workspace.
-- [ ] Man page + completions regenerated (`ft completions` and
-      `ft man` pick up the new subcommand automatically because
-      both walk clap's derived schema — no manual updates needed,
-      but verify by diffing the generated output).
+- [x] `cargo test --workspace` — all tests pass.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `cargo fmt --check` clean.
+- [x] No new dependencies.
+- [x] Man page (`ft-graph.1`, `ft-graph-query.1`) and bash/zsh/fish
+      completions pick up the new subcommand via clap's derived
+      schema (verified manually).
 
 ## Technical Notes
 
@@ -321,19 +242,92 @@ freely. Config loading goes through the existing layered loader in
 
 ## Sessions
 
-### Session 1 · planned
+### Session 1 · 2026-05-24 · done
 **Goal:** Library: `GraphQuery::walk` + `WalkOptions` + `WalkNode`,
 with unit tests covering depth bound, cycle stop, cycle allow, and
 no-expansion-rule. Pure ft-core change; no CLI or TUI surface yet.
+**Outcome:** Added `WalkOptions { max_depth, cycle_policy }`,
+`CyclePolicy { Stop, Allow }`, and `WalkNode { id, depth,
+edge_to_parent, cycle, children }` to `ft-core/src/graph/query.rs`.
+Implemented `GraphQuery::walk(&graph, &opts) -> Vec<WalkNode>` as a
+recursive driver over `select` + `expand`, with a single
+`ancestors: Vec<NoteId>` reused via push/pop on descend/ascend.
+Cycle nodes are emitted with `cycle: true` and `children: []`.
+9 new walk-module tests against the `dirs` fixture and an inline
+2-cycle graph: unbounded full-tree shape (8 nodes, depth 3),
+depth=0 returns roots only, depth=1 returns roots + immediate
+children, edge-to-parent is `Some` for non-roots and `None` for
+roots, cycle Stop emits the cycle marker once and stops, cycle
+Allow descends to the depth bound without setting `cycle`, no
+expand block → empty children, empty select → empty tree, Stop +
+unlimited terminates on a cyclic graph. Full workspace test suite
+(~1100 tests) green; clippy clean.
 
-### Session 2 · planned
+### Session 2 · 2026-05-24 · done
 **Goal:** CLI: `ft graph query` subcommand. New `cmd/graph.rs`,
 `output/graph.rs` (all five formats), integration tests under
 `ft/tests/graph_query.rs` using the `dirs` fixture. Verify man page
 and completions pick it up.
+**Outcome:** New `ft/src/cmd/graph.rs` with `GraphArgs` /
+`GraphCommand::Query(QueryArgs)`; positional `QUERY` plus `-q/--query`
+plus `--from-file PATH` (mutually exclusive via clap `conflicts_with`),
+`--depth N` (unlimited when absent), `--cycle-policy stop|allow`
+(default stop), `--format tree|json|ndjson|edges|markdown` (default
+tree). Wired through `Commands::Graph(...)` in `ft/src/main.rs`.
+Parse errors print to stderr and exit 2 (matching the task DSL
+convention). `--cycle-policy allow` without `--depth` is rejected
+to prevent infinite loops on cyclic graphs. New
+`ft/src/output/graph.rs` with all five formatters; cycle nodes are
+emitted in tree/markdown with `↺` glyph / `(↺)` suffix and in
+json/ndjson with `cycle: true`; ndjson uses pre-order with
+`parent_id`; edges format deduplicates by (src, label, dst). Made
+`NoteId::index()` public to give serialized output a stable per-build
+handle. New `ft/tests/graph_query.rs` with 14 integration tests
+covering: tree depth-1 immediate children, tree unbounded full walk
+(8 nodes), depth=0 → roots-only for every format, JSON parses + node
+count == 8, JSON cycle marker round-trips, NDJSON pre-order +
+parent-id chain, edges TSV format (7 contains-edges), markdown
+bullet + indent, parse-error exits 2 with message on stderr, missing
+query errors out, --from-file output matches inline byte-for-byte,
+--from-file missing path errors out, --cycle-policy allow without
+--depth is rejected, insta snapshot of the dirs-fixture tree shape.
+Help + completions + man pages picked up the new subcommand
+automatically via clap's derived schema (verified
+`ft-graph.1` + `ft-graph-query.1` generated). Full workspace test
+suite (~1100 tests) green; clippy + fmt clean. No new deps.
 
-### Session 3 · planned
+### Session 3 · 2026-05-24 · done
 **Goal:** TUI initial-state fixes. `[graph].default_query` config
 field + built-in fallback, on_focus seeding, insertion cursor,
 brighter prompt, empty-state hint. Insta snapshot tests for empty,
 populated, and input-mode states. Update `docs/architecture.md`.
+**Outcome:** New `[graph]` config block with `default_query:
+Option<String>` in `ft-core/src/config.rs` (+ 3 unit tests: absent,
+round-trip, deny_unknown_fields). `GraphTab::on_focus` now seeds
+`query_text` from `[graph].default_query` (or the built-in
+`BUILTIN_DEFAULT_QUERY` fallback, which shows the vault root with
+directory-contains expansion) on first focus when the text is empty,
+and immediately calls `apply_query` so the tree is populated before
+the first render. Render now: (a) shows a single-line
+`press / to edit query` hint in DarkGray on the second row when
+`tree.len() <= 1 && !input_mode` — visible on first open with the
+seeded default, disappears as soon as the user expands or focuses
+input; (b) uses `Color::Gray` (was `DarkGray`) for the inactive
+prompt; (c) calls `frame.set_cursor_position` when in input mode to
+position the OS-level cursor past the `> ` prompt. Added
+`GraphTab::new()` to `App::for_test_with_clock` and
+`for_test_with_clock_and_recents` so test snapshots see the same
+tab layout as production. Three new tui snapshot tests:
+`graph_tab_empty_default_query_renders` (empty vault → root row +
+hint), `graph_tab_populated_default_query_renders` (dirs fixture →
+root row + hint; children expand on demand), and
+`graph_tab_input_mode_shows_cursor` (asserts cursor lives at
+input-bar row past the prompt via `Backend::get_cursor_position` —
+the TestBackend stores cursor state separately from the cell
+buffer). Mass-updated 37 pre-existing TUI snapshots to include the
+new `│ 5 Graph` tab in the tab bar header (only delta verified by
+diff scan before accepting). Updated `docs/architecture.md`:
+added `cmd/graph.rs` + `output/graph.rs` to the workspace layout,
+expanded the "Graph query DSL" subsection to name `walk`, the CLI
+subcommand, and its output formats. Full workspace test suite
+green (1100+ tests); clippy + fmt clean. No new deps.

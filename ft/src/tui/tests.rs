@@ -6,7 +6,10 @@ use chrono::{DateTime, Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::recents::RecentsLog;
 use ft_core::vault::Vault;
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{
+    backend::{Backend, TestBackend},
+    Terminal,
+};
 
 use crate::tui::{event::Event, tab::AppRequest, App};
 
@@ -5847,6 +5850,96 @@ fn e2e_background_sync_dirty_tree_dispatches_event_and_renders_toast() -> Result
         "expected 'sync ok …' toast, got: {}",
         toast.text
     );
+    Ok(())
+}
+
+// ── Graph tab (plan 019) ─────────────────────────────────────────────
+
+fn dirs_vault_for_graph() -> (TempDir, Vault) {
+    // Copy the workspace dirs fixture into a TempDir so the Vault
+    // points at a writable path with the same shape (and so test
+    // ordering doesn't matter).
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/dirs");
+    let dir = TempDir::new().unwrap();
+    let dst = dir.path().join("vault");
+    copy_dir_recursive(&src, &dst).unwrap();
+    let vault = Vault::discover(Some(dst)).unwrap();
+    (dir, vault)
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dst_child = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_child)?;
+        } else if ty.is_file() {
+            std::fs::copy(entry.path(), &dst_child)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_tab_empty_default_query_renders() -> Result<()> {
+    // Vault with no notes — directory-contains expansion finds nothing
+    // below the root, so the tree is just the root.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(4)?; // Graph tab is 5th (index 4)
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_empty_default_query_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_tab_populated_default_query_renders() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(4)?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_populated_default_query_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_tab_input_mode_shows_cursor() -> Result<()> {
+    // Cursor position lives on the backend, not in the rendered cells —
+    // assert against `get_cursor_position` directly. Also snapshot the
+    // rendered frame to lock in the yellow prompt + hidden-hint state
+    // for input mode.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(4)?;
+    app.dispatch(key('/'))?;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render_to(f)).unwrap();
+    let cursor = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("input mode should position the cursor");
+    // The default query is pre-seeded; cursor sits at end of text +
+    // 2 (the "> " prompt offset). The test just asserts the cursor is
+    // on the input bar (last row) and past the prompt. Exact column
+    // depends on default-query length which is intentional UI state.
+    // The 80×24 frame's bottom row is the status bar (row 23); the
+    // graph tab's input bar sits on row 22 just above it.
+    assert_eq!(cursor.y, 22, "cursor must be on the input bar row");
+    assert!(
+        cursor.x >= 2,
+        "cursor must be past the `> ` prompt (got x={})",
+        cursor.x
+    );
+    let buf = terminal.backend().buffer().clone();
+    let frame = buffer_to_string(&buf);
+    assert_tui_snapshot!("graph_tab_input_mode_80x24", frame);
     Ok(())
 }
 

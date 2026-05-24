@@ -45,6 +45,8 @@ enum Commands {
     Find(cmd::find::FindArgs),
     /// Note operations: open, move-section
     Notes(cmd::notes::NotesArgs),
+    /// Graph operations: query (walk DSL-selected subgraph)
+    Graph(cmd::graph::GraphArgs),
     /// Git operations: sync (commit + pull + push)
     Git(cmd::git::GitArgs),
     /// Launch the interactive terminal UI
@@ -90,6 +92,7 @@ fn main() -> ExitCode {
         Commands::Timeblocks(args) => cmd::timeblocks::run(args, vault),
         Commands::Find(args) => cmd::find::run(args, vault),
         Commands::Notes(args) => cmd::notes::run(args, vault),
+        Commands::Graph(args) => cmd::graph::run(args, vault),
         Commands::Git(args) => cmd::git::run(args, vault),
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),

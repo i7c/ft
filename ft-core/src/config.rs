@@ -48,6 +48,9 @@ pub struct Config {
     /// Timeblocks settings. See [`Timeblocks`].
     #[serde(default)]
     pub timeblocks: Timeblocks,
+    /// Graph-tab settings. See [`GraphCfg`].
+    #[serde(default)]
+    pub graph: GraphCfg,
 }
 
 impl Config {
@@ -66,6 +69,17 @@ impl Config {
 pub struct Timeblocks {
     /// Heading under which timeblocks live. Defaults to `"Time Blocks"`.
     pub heading: Option<String>,
+}
+
+/// TUI graph-tab configuration. Currently just the seed query the tab
+/// runs the first time it gains focus; when unset, the tab falls back
+/// to a built-in default that shows the vault root.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphCfg {
+    /// Optional DSL query that seeds the graph tab on first focus. When
+    /// unset, the tab falls back to a built-in default.
+    pub default_query: Option<String>,
 }
 
 /// `ft git sync` / TUI `g s` configuration. Currently just the pull
@@ -699,6 +713,44 @@ heading = "Time Blocks"
 typo_field = "oops"
 "#,
             )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "deny_unknown_fields should reject typos");
+    }
+
+    // ── [graph] block (plan 019 session 3) ──────────────────────────────
+
+    #[test]
+    fn graph_default_query_unset_when_block_absent() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.graph.default_query.is_none());
+    }
+
+    #[test]
+    fn graph_default_query_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[graph]\ndefault_query = \"node where kind = Directory;\"\n")
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        assert_eq!(
+            lc.config.graph.default_query.as_deref(),
+            Some("node where kind = Directory;")
+        );
+    }
+
+    #[test]
+    fn graph_unknown_field_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[graph]\ndefault_query = \"node;\"\ntypo_field = 1\n")
             .unwrap();
         let r = load(&tmp.path().join("no-user.toml"), vault.path());
         assert!(r.is_err(), "deny_unknown_fields should reject typos");

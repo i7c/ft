@@ -18,9 +18,10 @@ ft/
 │   │   ├── tasks.rs            # list / create / complete / move
 │   │   ├── vault.rs            # vault info
 │   │   ├── git.rs              # `ft git sync`
+│   │   ├── graph.rs            # `ft graph query`
 │   │   ├── completions.rs      # `ft completions <shell>`
 │   │   └── man.rs              # `ft man [--out DIR]`
-│   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs, links.rs
+│   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs, links.rs, graph.rs
 │   └── tests/                  # integration tests with assert_cmd
 └── ft-core/                    # library crate (the brain)
     ├── Cargo.toml
@@ -139,9 +140,14 @@ spliced in.
 expansion }`. The DSL describes a navigation *policy*, not a result
 subgraph: `GraphQuery::select(&graph)` returns the initial set of
 `NoteId`s; `GraphQuery::expand(&graph, parent)` returns the children
-for one hop. Consumers (the TUI graph tab and the `ft graph query`
-CLI) compose those with their own depth and cycle handling — the
-canonical materializer is `GraphQuery::walk(&graph, &WalkOptions)`.
+for one hop; `GraphQuery::walk(&graph, &WalkOptions)` materializes
+the full reachable subtree as `Vec<WalkNode>` with depth + cycle
+bounds (Stop emits a cycle marker and halts that branch; Allow
+needs `max_depth`). Consumers compose these to taste: the TUI
+graph tab (`ft/src/tui/tabs/graph.rs`) drives `select` + `expand`
+one hop per keystroke; the CLI subcommand `ft graph query`
+(`ft/src/cmd/graph.rs` + `ft/src/output/graph.rs`) calls `walk`
+once and renders the result in tree/json/ndjson/edges/markdown.
 The parser is hand-rolled recursive-descent, mirroring `query::dsl`,
 and rejects op/value type mismatches and scope errors at parse time.
 See `docs/graph-query-dsl.md` for the grammar, attribute compatibility

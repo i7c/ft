@@ -1,0 +1,13 @@
+---
+source: ft/tests/graph_query.rs
+assertion_line: 467
+expression: stdout
+---
+▶ D /
+  ▶ D Projects/
+    · N alpha
+  ▶ D Areas/
+    ▶ D operations/
+      · N shifts
+    · N finance
+  · N root

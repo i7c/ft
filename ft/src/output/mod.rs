@@ -1,3 +1,4 @@
+pub mod graph;
 pub mod json;
 pub mod links;
 pub mod markdown;

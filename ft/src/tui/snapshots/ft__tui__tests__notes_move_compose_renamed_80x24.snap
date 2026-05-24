@@ -1,9 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 3105
+assertion_line: 3756
 expression: frame
 ---
-  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks                            
+  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Graph                
 ┌ notes ───────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  Notes — O┌ move · 4/4 compose · 1 pending → archive.md ─────────┐           │
