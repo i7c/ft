@@ -29,20 +29,22 @@ fn note(graph: &Graph, rel: &str) -> NoteId {
 fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
     graph
         .outgoing(src)
-        .map(|(dst, edge)| {
+        .filter_map(|(dst, edge)| {
             let kind_label = match graph.node(dst) {
                 NodeKind::Note(n) => format!("note:{}", n.path.display()),
                 NodeKind::Ghost(g) => format!("ghost:{}", g.raw),
+                NodeKind::Directory(d) => format!("dir:{}", d.path.display()),
             };
             let edge_kind = match edge {
                 EdgeKind::Link(_) => "link",
                 EdgeKind::Embed(_) => "embed",
+                EdgeKind::Contains => "contains",
             };
-            let l = edge.link();
-            format!(
+            let l = edge.link()?;
+            Some(format!(
                 "{kind_label}|{edge_kind}|{:?}|target={}",
                 l.form, l.target_text
-            )
+            ))
         })
         .collect()
 }
@@ -71,19 +73,19 @@ fn hub_outgoing_covers_every_link_shape() {
     // fixture all show up. Exact count below.
     let wiki = edges
         .iter()
-        .filter(|e| e.link().form == LinkForm::WikiLink && matches!(e, EdgeKind::Link(_)))
+        .filter(|e| e.link().unwrap().form == LinkForm::WikiLink && matches!(e, EdgeKind::Link(_)))
         .count();
     let md = edges
         .iter()
-        .filter(|e| e.link().form == LinkForm::MdLink && matches!(e, EdgeKind::Link(_)))
+        .filter(|e| e.link().unwrap().form == LinkForm::MdLink && matches!(e, EdgeKind::Link(_)))
         .count();
     let wiki_embed = edges
         .iter()
-        .filter(|e| e.link().form == LinkForm::WikiLink && matches!(e, EdgeKind::Embed(_)))
+        .filter(|e| e.link().unwrap().form == LinkForm::WikiLink && matches!(e, EdgeKind::Embed(_)))
         .count();
     let md_embed = edges
         .iter()
-        .filter(|e| e.link().form == LinkForm::MdLink && matches!(e, EdgeKind::Embed(_)))
+        .filter(|e| e.link().unwrap().form == LinkForm::MdLink && matches!(e, EdgeKind::Embed(_)))
         .count();
 
     // 8 wikilinks: alpha, beta|alias, gamma#anchor, gamma#anchor|alias,
@@ -107,7 +109,9 @@ fn fenced_and_indented_and_inline_code_are_skipped() {
     // Spot-check: the inline-code `[[alpha]]` doesn't add a 9th wikilink.
     let wiki_count = g
         .outgoing(hub)
-        .filter(|(_, e)| matches!(e, EdgeKind::Link(_)) && e.link().form == LinkForm::WikiLink)
+        .filter(|(_, e)| {
+            matches!(e, EdgeKind::Link(_)) && e.link().unwrap().form == LinkForm::WikiLink
+        })
         .count();
     assert_eq!(wiki_count, 8);
 }
@@ -121,7 +125,7 @@ fn frontmatter_links_are_skipped() {
     // `[[hub]]` in the body. Only `hub` should appear.
     let targets: Vec<&str> = g
         .outgoing(alpha)
-        .map(|(_, e)| e.link().target_text.as_str())
+        .map(|(_, e)| e.link().unwrap().target_text.as_str())
         .collect();
     assert_eq!(targets, vec!["hub"]);
 }
@@ -164,7 +168,7 @@ fn url_encoded_md_link_resolves() {
     // Look for the edge whose raw_text is the URL-encoded form.
     let resolved = g
         .outgoing(hub)
-        .filter(|(_, e)| e.link().raw_text.contains("%20"))
+        .filter(|(_, e)| e.link().unwrap().raw_text.contains("%20"))
         .find_map(|(dst, _)| match g.node(dst) {
             NodeKind::Note(n) => Some(n.path.clone()),
             _ => None,
@@ -182,7 +186,7 @@ fn external_urls_do_not_become_edges() {
     let g = Graph::build(&v).unwrap();
     let hub = note(&g, "notes/hub.md");
     for (_, e) in g.outgoing(hub) {
-        let raw = &e.link().raw_text;
+        let raw = &e.link().unwrap().raw_text;
         assert!(
             !raw.contains("https://") && !raw.contains("mailto:"),
             "external URL leaked as an edge: {raw}"
@@ -198,7 +202,7 @@ fn byte_ranges_round_trip_against_source_files() {
     let abs = v.path.join("notes/hub.md");
     let content = std::fs::read_to_string(&abs).unwrap();
     for (_, edge) in g.outgoing(hub_id) {
-        let l = edge.link();
+        let l = edge.link().unwrap();
         assert_eq!(
             &content[l.byte_range.clone()],
             l.raw_text,
@@ -226,7 +230,11 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     let b = note(&g, "b.md");
     let c = note(&g, "c.md");
     assert_eq!(g.outgoing(a).count(), 2, "a starts with two outgoing");
-    assert_eq!(g.incoming(a).count(), 1, "c links to a");
+    assert_eq!(
+        g.incoming(a).filter(|(_, e)| e.link().is_some()).count(),
+        1,
+        "c links to a"
+    );
 
     // Mutate a.md: remove the [[b]] link, leave the [[c]] link.
     let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
@@ -246,9 +254,9 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     assert_eq!(outgoing, vec![PathBuf::from("c.md")]);
 
     // Incoming to a is untouched (c.md still links to a).
-    assert_eq!(g.incoming(a).count(), 1);
+    assert_eq!(g.incoming(a).filter(|(_, e)| e.link().is_some()).count(), 1);
     // b lost its incoming edge from a.
-    assert_eq!(g.incoming(b).count(), 0);
+    assert_eq!(g.incoming(b).filter(|(_, e)| e.link().is_some()).count(), 0);
     let _ = c;
 }
 
@@ -311,7 +319,11 @@ fn empty_vault_builds_empty_graph() {
     tmp.child(".obsidian").create_dir_all().unwrap();
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
     let g = Graph::build(&v).unwrap();
-    assert_eq!(g.nodes().count(), 0);
+    assert_eq!(
+        g.nodes().count(),
+        1,
+        "root directory node should exist even for empty vault"
+    );
 }
 
 #[test]
@@ -323,4 +335,189 @@ fn outgoing_visible_via_str_helper_for_debugging() {
     let hub = note(&g, "notes/hub.md");
     let dump = outgoing_targets(&g, hub);
     assert!(!dump.is_empty());
+}
+
+// ── Directory node tests ──────────────────────────────────────────────
+
+fn dirs_fixture() -> Vault {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/dirs");
+    Vault::discover(Some(path)).expect("dirs fixture vault must exist")
+}
+
+fn dir_by_path(graph: &Graph, rel: &str) -> NoteId {
+    let id = graph
+        .node_by_path(Path::new(rel))
+        .unwrap_or_else(|| panic!("no node for {rel}"));
+    assert!(
+        matches!(graph.node(id), NodeKind::Directory(_)),
+        "{rel} is not a Directory node"
+    );
+    id
+}
+
+fn note_in_dirs(graph: &Graph, rel: &str) -> NoteId {
+    graph
+        .note_by_path(Path::new(rel))
+        .unwrap_or_else(|| panic!("no note for {rel}"))
+}
+
+#[test]
+fn build_includes_directory_nodes() {
+    let v = dirs_fixture();
+    let g = Graph::build(&v).unwrap();
+
+    let dir_count = g
+        .nodes()
+        .filter(|(_, k)| matches!(k, NodeKind::Directory(_)))
+        .count();
+    // root + Areas + Areas/operations + Projects = 4 directories
+    assert_eq!(dir_count, 4, "expected 4 directory nodes");
+
+    // Spot-check directory names
+    let root_id = dir_by_path(&g, "");
+    let areas_id = dir_by_path(&g, "Areas");
+    let ops_id = dir_by_path(&g, "Areas/operations");
+    let projects_id = dir_by_path(&g, "Projects");
+
+    match g.node(root_id) {
+        NodeKind::Directory(d) => {
+            assert!(d.path.as_os_str().is_empty(), "root path should be empty");
+            assert!(d.name.is_empty(), "root name should be empty");
+        }
+        _ => panic!("expected Directory"),
+    }
+    match g.node(areas_id) {
+        NodeKind::Directory(d) => {
+            assert_eq!(d.path, PathBuf::from("Areas"));
+            assert_eq!(d.name, "Areas");
+        }
+        _ => panic!("expected Directory"),
+    }
+    match g.node(ops_id) {
+        NodeKind::Directory(d) => {
+            assert_eq!(d.path, PathBuf::from("Areas/operations"));
+            assert_eq!(d.name, "operations");
+        }
+        _ => panic!("expected Directory"),
+    }
+    match g.node(projects_id) {
+        NodeKind::Directory(d) => {
+            assert_eq!(d.path, PathBuf::from("Projects"));
+            assert_eq!(d.name, "Projects");
+        }
+        _ => panic!("expected Directory"),
+    }
+}
+
+#[test]
+fn contains_edges_connect_directories_to_immediate_children() {
+    let v = dirs_fixture();
+    let g = Graph::build(&v).unwrap();
+
+    let root = dir_by_path(&g, "");
+    let areas = dir_by_path(&g, "Areas");
+    let ops = dir_by_path(&g, "Areas/operations");
+
+    // Root contains: root.md, Areas, Projects (3 top-level items)
+    let root_children: Vec<PathBuf> = g
+        .outgoing(root)
+        .filter(|(_, e)| matches!(e, EdgeKind::Contains))
+        .map(|(dst, _)| match g.node(dst) {
+            NodeKind::Note(n) => n.path.clone(),
+            NodeKind::Directory(d) => d.path.clone(),
+            _ => PathBuf::new(),
+        })
+        .collect();
+    assert_eq!(root_children.len(), 3);
+    assert!(root_children.contains(&PathBuf::from("root.md")));
+    assert!(root_children.contains(&PathBuf::from("Areas")));
+    assert!(root_children.contains(&PathBuf::from("Projects")));
+
+    // Areas contains: finance.md, Areas/operations (2 children)
+    let areas_children: Vec<PathBuf> = g
+        .outgoing(areas)
+        .filter(|(_, e)| matches!(e, EdgeKind::Contains))
+        .map(|(dst, _)| match g.node(dst) {
+            NodeKind::Note(n) => n.path.clone(),
+            NodeKind::Directory(d) => d.path.clone(),
+            _ => PathBuf::new(),
+        })
+        .collect();
+    assert_eq!(areas_children.len(), 2);
+    assert!(areas_children.contains(&PathBuf::from("Areas/finance.md")));
+    assert!(areas_children.contains(&PathBuf::from("Areas/operations")));
+
+    // Areas/operations contains: shifts.md (1 child)
+    let ops_children: Vec<PathBuf> = g
+        .outgoing(ops)
+        .filter(|(_, e)| matches!(e, EdgeKind::Contains))
+        .map(|(dst, _)| match g.node(dst) {
+            NodeKind::Note(n) => n.path.clone(),
+            NodeKind::Directory(d) => d.path.clone(),
+            _ => PathBuf::new(),
+        })
+        .collect();
+    assert_eq!(
+        ops_children,
+        vec![PathBuf::from("Areas/operations/shifts.md")]
+    );
+}
+
+#[test]
+fn note_incoming_includes_containing_directory() {
+    let v = dirs_fixture();
+    let g = Graph::build(&v).unwrap();
+
+    let finance = note_in_dirs(&g, "Areas/finance.md");
+    let areas = dir_by_path(&g, "Areas");
+
+    let parents: Vec<NoteId> = g
+        .incoming(finance)
+        .filter(|(_, e)| matches!(e, EdgeKind::Contains))
+        .map(|(src, _)| src)
+        .collect();
+    assert_eq!(parents, vec![areas]);
+}
+
+#[test]
+fn note_by_path_does_not_return_directory_nodes() {
+    let v = dirs_fixture();
+    let g = Graph::build(&v).unwrap();
+
+    assert!(g.note_by_path(Path::new("Areas")).is_none());
+    assert!(g.note_by_path(Path::new("")).is_none());
+    assert!(g.note_by_path(Path::new("root.md")).is_some());
+}
+
+#[test]
+fn node_by_path_returns_directory_nodes() {
+    let v = dirs_fixture();
+    let g = Graph::build(&v).unwrap();
+
+    let root_id = g.node_by_path(Path::new(""));
+    assert!(root_id.is_some());
+    assert!(matches!(g.node(root_id.unwrap()), NodeKind::Directory(_)));
+
+    let areas_id = g.node_by_path(Path::new("Areas"));
+    assert!(areas_id.is_some());
+    assert!(matches!(g.node(areas_id.unwrap()), NodeKind::Directory(_)));
+}
+
+#[test]
+fn empty_vault_has_root_directory() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    use assert_fs::prelude::*;
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let g = Graph::build(&v).unwrap();
+
+    // Root directory node is always present, even without any notes.
+    let ids: Vec<_> = g
+        .nodes()
+        .filter(|(_, k)| matches!(k, NodeKind::Directory(_)))
+        .collect();
+    assert_eq!(ids.len(), 1);
 }

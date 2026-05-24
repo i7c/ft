@@ -2,7 +2,7 @@
 id: 016
 name: graph-directory-nodes
 title: Graph: Directory nodes and contains edges
-status: ready
+status: finished
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -181,10 +181,18 @@ addition, only new match arms where exhaustiveness is required.
 
 ## Sessions
 
-### Session 1 · 2026-05-24 · planned
+### Session 1 · 2026-05-24 · done
 **Goal:** Add `NodeKind::Directory` + `EdgeKind::Contains` types,
 `DirData::root()` constructor, build directory nodes and contains
 edges in `Graph::build`, new fixture vault, unit tests, audit
 existing match arms.
-**Outcome:**
-
+**Outcome:** All three new types added. `EdgeKind::link()` changed
+from `&LinkEdge` → `Option<&LinkEdge>`. Build pipeline extended:
+after note nodes, `insert_directory_nodes` collects unique parent
+directories + root, then `insert_contains_edges` pairs each
+directory with its immediate children via `Contains` edges.
+`Graph::node_by_path` added; `note_by_path` now filters to
+`NodeKind::Note` only. Audited 15+ match arms across 5 files —
+rename skips `Contains`, backlinks filter `.link().is_some()`, all
+arms compile exhaustively. New fixture `tests/fixtures/dirs/` with
+6 unit tests. 549 tests green, clippy + fmt clean. No new deps.

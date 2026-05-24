@@ -165,19 +165,29 @@ pub fn plan_rename(
             // they want. Allow it.
             (None, None)
         }
+        NodeKind::Directory(_) => {
+            return Err(Error::Notes(format!(
+                "renaming directory nodes is not yet supported: {}",
+                new_path.display()
+            )));
+        }
     };
 
     let mut edits: Vec<FileEdit> = Vec::new();
     let mut touched_files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
 
     for (linker_id, edge) in graph.incoming(src) {
+        let link = match edge.link() {
+            Some(l) => l,
+            None => continue, // Contains edges — not rewritable
+        };
         let linker_path = match graph.node(linker_id) {
             NodeKind::Note(n) => n.path.clone(),
             NodeKind::Ghost(_) => continue, // ghosts never have outgoing edges
+            NodeKind::Directory(d) => d.path.clone(),
         };
 
         let replacement = build_replacement(edge, &linker_path, &new_path, &new_title);
-        let link = edge.link();
         edits.push(FileEdit {
             path: linker_path.clone(),
             byte_range: link.byte_range.clone(),
@@ -324,7 +334,9 @@ fn build_replacement(
     new_path: &Path,
     new_title: &str,
 ) -> String {
-    let link = edge.link();
+    let link = edge
+        .link()
+        .expect("build_replacement called on Contains edge");
     let is_embed = matches!(edge, EdgeKind::Embed(_));
     match link.form {
         LinkForm::WikiLink => {

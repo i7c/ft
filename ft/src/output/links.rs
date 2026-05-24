@@ -52,12 +52,34 @@ impl LinkRow {
         dst: NoteId,
         edge: &EdgeKind,
     ) -> Self {
-        let link = edge.link();
+        let link = match edge.link() {
+            Some(l) => l,
+            None => {
+                // Contains edges are not link edges; skip the row
+                // gracefully. Currently this path is unreachable
+                // because the links CLI only queries Link/Embed edges.
+                return Self {
+                    src: src_path.to_path_buf(),
+                    src_line: 0,
+                    dst: LinkRowTarget::Resolved {
+                        path: PathBuf::new(),
+                    },
+                    form: "unknown",
+                    embed: false,
+                    display: None,
+                    anchor: None,
+                    raw: String::new(),
+                };
+            }
+        };
         let dst_target = match graph.node(dst) {
             NodeKind::Note(n) => LinkRowTarget::Resolved {
                 path: n.path.clone(),
             },
             NodeKind::Ghost(g) => LinkRowTarget::Unresolved { raw: g.raw.clone() },
+            NodeKind::Directory(d) => LinkRowTarget::Resolved {
+                path: d.path.clone(),
+            },
         };
         Self {
             src: src_path.to_path_buf(),
@@ -81,7 +103,23 @@ impl LinkRow {
         dst_path: &std::path::Path,
         edge: &EdgeKind,
     ) -> Self {
-        let link = edge.link();
+        let link = match edge.link() {
+            Some(l) => l,
+            None => {
+                return Self {
+                    src: PathBuf::from("<directory>"),
+                    src_line: 0,
+                    dst: LinkRowTarget::Resolved {
+                        path: dst_path.to_path_buf(),
+                    },
+                    form: "unknown",
+                    embed: false,
+                    display: None,
+                    anchor: None,
+                    raw: String::new(),
+                };
+            }
+        };
         let src_path = match graph.node(src) {
             NodeKind::Note(n) => n.path.clone(),
             NodeKind::Ghost(_) => {
@@ -90,6 +128,7 @@ impl LinkRow {
                 // back to a placeholder rather than panic.
                 PathBuf::from("<ghost>")
             }
+            NodeKind::Directory(d) => d.path.clone(),
         };
         Self {
             src: src_path,

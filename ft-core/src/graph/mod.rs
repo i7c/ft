@@ -33,7 +33,7 @@ pub mod resolve;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
@@ -62,6 +62,9 @@ pub enum NodeKind {
     /// An unresolved link target with no backing file. Rewritten by
     /// `plan_rename` just like a real note (session 3).
     Ghost(GhostData),
+    /// A vault directory. Contains notes and subdirectories via
+    /// [`EdgeKind::Contains`] edges.
+    Directory(DirData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +83,25 @@ pub struct GhostData {
     pub raw: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirData {
+    /// Vault-relative directory path, e.g. `Areas/finance` (no trailing
+    /// slash). Root directory uses the empty path.
+    pub path: PathBuf,
+    /// Last component of the directory path. Root directory uses the
+    /// empty string.
+    pub name: String,
+}
+
+impl DirData {
+    pub fn root() -> Self {
+        DirData {
+            path: PathBuf::new(),
+            name: String::new(),
+        }
+    }
+}
+
 /// Per-edge payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
@@ -88,12 +110,16 @@ pub enum EdgeKind {
     /// `![[Foo]]`, `![[image.png]]`, `![alt](path.png)` — same data shape
     /// as `Link`, distinct variant so callers can filter.
     Embed(LinkEdge),
+    /// A directory contains a child node (note or subdirectory). Unit
+    /// variant — there is no textual link to rewrite.
+    Contains,
 }
 
 impl EdgeKind {
-    pub fn link(&self) -> &LinkEdge {
+    pub fn link(&self) -> Option<&LinkEdge> {
         match self {
-            EdgeKind::Link(e) | EdgeKind::Embed(e) => e,
+            EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
+            EdgeKind::Contains => None,
         }
     }
 }
@@ -205,7 +231,15 @@ impl Graph {
             graph.insert_note_node(rel.clone());
         }
 
-        // Now resolve and insert edges.
+        // Insert directory nodes (root + every unique parent directory
+        // path across all note files).
+        graph.insert_directory_nodes(&parsed);
+
+        // Insert contains edges from each directory to its immediate
+        // children (subdirectories and notes).
+        graph.insert_contains_edges();
+
+        // Now resolve and insert link edges.
         for (rel, _content, links) in &parsed {
             let src = *graph
                 .path_index
@@ -259,9 +293,17 @@ impl Graph {
         Ok(())
     }
 
-    /// Look up the note backing a vault-relative path.
-    pub fn note_by_path(&self, p: &Path) -> Option<NoteId> {
+    /// Look up any node (note, directory, or ghost — though ghosts
+    /// aren't stored by path) by vault-relative path.
+    pub fn node_by_path(&self, p: &Path) -> Option<NoteId> {
         self.path_index.get(&normalize_path(p)).copied()
+    }
+
+    /// Look up a note backing a vault-relative path. Excludes directory
+    /// nodes (use [`Graph::node_by_path`] for those).
+    pub fn note_by_path(&self, p: &Path) -> Option<NoteId> {
+        let id = self.node_by_path(p)?;
+        matches!(self.node(id), NodeKind::Note(_)).then_some(id)
     }
 
     /// All notes whose filename stem equals `t`. May be empty, one, or
@@ -400,6 +442,83 @@ impl Graph {
             self.g.add_edge(src.0, dst.0, kind);
         }
     }
+
+    fn insert_directory_nodes(&mut self, parsed: &[(PathBuf, String, Vec<parser::RawLink>)]) {
+        let mut dir_paths: BTreeSet<PathBuf> = BTreeSet::new();
+        for (rel, _, _) in parsed {
+            let normalized = normalize_path(rel);
+            let mut current = normalized.parent();
+            while let Some(parent) = current {
+                if !parent.as_os_str().is_empty() {
+                    dir_paths.insert(normalize_path(parent));
+                }
+                current = parent.parent();
+            }
+        }
+
+        self.insert_directory_node(PathBuf::new(), String::new());
+
+        for dir_path in &dir_paths {
+            let name = dir_path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.insert_directory_node(dir_path.clone(), name);
+        }
+    }
+
+    fn insert_directory_node(&mut self, path: PathBuf, name: String) -> NoteId {
+        let normalized = normalize_path(&path);
+        if let Some(id) = self.path_index.get(&normalized) {
+            return *id;
+        }
+        let kind = NodeKind::Directory(DirData {
+            path: normalized.clone(),
+            name,
+        });
+        let idx = self.g.add_node(kind);
+        let id = NoteId(idx);
+        self.path_index.insert(normalized, id);
+        id
+    }
+
+    fn insert_contains_edges(&mut self) {
+        let dirs: Vec<(NoteId, PathBuf)> = self
+            .g
+            .node_indices()
+            .filter_map(|idx| {
+                if let NodeKind::Directory(data) = &self.g[idx] {
+                    Some((NoteId(idx), data.path.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let children: Vec<(NoteId, PathBuf)> = self
+            .g
+            .node_indices()
+            .filter_map(|idx| match &self.g[idx] {
+                NodeKind::Note(data) => Some((NoteId(idx), data.path.clone())),
+                NodeKind::Directory(data) => {
+                    if data.path.as_os_str().is_empty() {
+                        None
+                    } else {
+                        Some((NoteId(idx), data.path.clone()))
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        for (parent_id, parent_path) in &dirs {
+            for (child_id, child_path) in &children {
+                if is_immediate_child(parent_path, child_path) {
+                    self.g.add_edge(parent_id.0, child_id.0, EdgeKind::Contains);
+                }
+            }
+        }
+    }
 }
 
 /// Filename stem (no extension) used as the title for wikilink
@@ -426,4 +545,15 @@ pub(crate) fn normalize_path(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+fn is_immediate_child(parent: &Path, child: &Path) -> bool {
+    if parent.as_os_str().is_empty() {
+        child.components().count() == 1
+    } else {
+        child
+            .parent()
+            .map(|p| normalize_path(p) == normalize_path(parent))
+            .unwrap_or(false)
+    }
 }

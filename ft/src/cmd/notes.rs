@@ -1031,14 +1031,18 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
     let id = resolve_note_query(&graph, &vault, &query)?;
     let queried_path = match graph.node(id) {
         NodeKind::Note(n) => n.path.clone(),
-        // resolve_note_query never returns a ghost id from CLI input.
+        // resolve_note_query never returns a ghost or directory id from CLI input.
         NodeKind::Ghost(_) => unreachable!("ghost nodes are not selectable from the CLI yet"),
+        NodeKind::Directory(_) => {
+            unreachable!("directory nodes are not selectable from the CLI yet")
+        }
     };
 
     let rows: Vec<LinkRow> = match dir {
         Direction::Backlinks => {
             let mut rows: Vec<LinkRow> = graph
                 .incoming(id)
+                .filter(|(_, e)| e.link().is_some())
                 .map(|(src, edge)| LinkRow::from_incoming(&graph, src, &queried_path, edge))
                 .collect();
             // Stable order: linker path, then line.
@@ -1048,6 +1052,7 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
         Direction::Forward => {
             let mut rows: Vec<LinkRow> = graph
                 .outgoing(id)
+                .filter(|(_, e)| e.link().is_some())
                 .map(|(dst, edge)| LinkRow::from_outgoing(&graph, &queried_path, dst, edge))
                 .collect();
             // Outgoing edges are already in document order; sort by
@@ -1214,6 +1219,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     let source_rel: Option<PathBuf> = match graph.node(id) {
         NodeKind::Note(n) => Some(n.path.clone()),
         NodeKind::Ghost(_) => None,
+        NodeKind::Directory(_) => None,
     };
 
     let new_path = parse_new_path(&args.new, source_rel.as_deref())?;
