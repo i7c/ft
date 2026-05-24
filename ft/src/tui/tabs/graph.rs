@@ -1,7 +1,4 @@
 //! Graph tab — infinite-tree viewer for the note-link graph.
-//!
-//! Session 1: TreeState data structure (pure logic, no TUI rendering).
-//! Session 2: GraphTab skeleton + input bar + query parsing.
 
 #![allow(dead_code)]
 
@@ -11,9 +8,9 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 
@@ -36,6 +33,7 @@ pub struct GraphTab {
     input_mode: bool,
     tree: TreeState,
     selected: usize,
+    scroll_offset: usize,
 }
 
 impl GraphTab {
@@ -49,6 +47,7 @@ impl GraphTab {
             input_mode: false,
             tree: TreeState::default(),
             selected: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -58,6 +57,7 @@ impl GraphTab {
             self.query = None;
             self.tree = TreeState::default();
             self.selected = 0;
+            self.scroll_offset = 0;
             return;
         }
 
@@ -68,12 +68,24 @@ impl GraphTab {
                     let roots = self.query.as_ref().unwrap().select(g);
                     self.tree.build_from(&roots, g);
                     self.selected = 0;
+                    self.scroll_offset = 0;
                 }
                 self.parse_error = None;
             }
             Err(e) => {
                 self.parse_error = Some(e.to_string());
             }
+        }
+    }
+
+    fn scroll_to_selection(&mut self, visible_rows: usize) {
+        if visible_rows == 0 || self.tree.is_empty() {
+            return;
+        }
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else if self.selected >= self.scroll_offset + visible_rows {
+            self.scroll_offset = self.selected.saturating_sub(visible_rows - 1);
         }
     }
 
@@ -164,7 +176,6 @@ impl Tab for GraphTab {
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
         if self.graph.is_none() {
             self.graph = Some(Graph::build(ctx.vault)?);
-            // Re-apply current query if one is set
             if self.query.is_some() {
                 let roots = self
                     .query
@@ -178,7 +189,7 @@ impl Tab for GraphTab {
         Ok(())
     }
 
-    fn handle_event(&mut self, ev: Event, _ctx: &mut TabCtx) -> Result<EventOutcome> {
+    fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
@@ -191,44 +202,173 @@ impl Tab for GraphTab {
         }
 
         if self.input_mode {
-            self.handle_input_event(&k)
-        } else {
-            match (k.code, k.modifiers) {
-                (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                    self.input_mode = true;
-                    Ok(EventOutcome::Consumed)
-                }
-                (KeyCode::Esc, _) => Ok(EventOutcome::NotHandled),
-                _ => Ok(EventOutcome::NotHandled),
+            return self.handle_input_event(&k);
+        }
+
+        if self.graph.is_none() || self.tree.is_empty() {
+            if let (KeyCode::Char('/'), KeyModifiers::NONE) = (k.code, k.modifiers) {
+                self.input_mode = true;
+                return Ok(EventOutcome::Consumed);
             }
+            return Ok(EventOutcome::NotHandled);
+        }
+
+        let vis = 20; // approximation; scroll correction in render handles exact
+        match (k.code, k.modifiers) {
+            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                self.input_mode = true;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
+                self.selected = self.tree.move_selection_down(self.selected);
+                self.scroll_to_selection(vis);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
+                self.selected = self.tree.move_selection_up(self.selected);
+                self.scroll_to_selection(vis);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Enter, _) | (KeyCode::Char('l'), _) => {
+                if let Some(ref g) = self.graph {
+                    if let Some(ref q) = self.query {
+                        self.tree.expand_at(self.selected, g, q);
+                        self.scroll_to_selection(vis);
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('h'), _) => {
+                let expanded = self
+                    .tree
+                    .rows()
+                    .get(self.selected)
+                    .is_some_and(|r| r.expanded);
+                if expanded {
+                    self.tree.collapse_at(self.selected);
+                    self.scroll_to_selection(vis);
+                } else {
+                    let depth = self.tree.rows().get(self.selected).map_or(0, |r| r.depth);
+                    if depth > 0 {
+                        let target = depth.saturating_sub(1);
+                        let mut pos = self.selected;
+                        while pos > 0 {
+                            pos -= 1;
+                            if self.tree.rows()[pos].depth == target {
+                                self.selected = pos;
+                                self.scroll_to_selection(vis);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('g'), _) => {
+                self.selected = 0;
+                self.scroll_offset = 0;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('G'), _) => {
+                self.selected = self.tree.len().saturating_sub(1);
+                self.scroll_to_selection(vis);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                let rows = vis.max(1);
+                self.selected = (self.selected + rows / 2).min(self.tree.len().saturating_sub(1));
+                self.scroll_offset =
+                    (self.scroll_offset + rows / 2).min(self.tree.len().saturating_sub(1));
+                self.scroll_to_selection(vis);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                let rows = vis.max(1);
+                self.selected = self.selected.saturating_sub(rows / 2);
+                self.scroll_offset = self.scroll_offset.saturating_sub(rows / 2);
+                self.scroll_to_selection(vis);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('r'), _) => {
+                self.graph = Some(Graph::build(ctx.vault)?);
+                if let Some(ref q) = self.query {
+                    let roots = q.select(self.graph.as_ref().unwrap());
+                    self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+                    self.selected = self.selected.min(self.tree.len().saturating_sub(1));
+                    self.scroll_offset = 0;
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            _ => Ok(EventOutcome::NotHandled),
         }
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
-        // Placeholder: show input bar at bottom, empty tree area above
         let [tree_area, input_area] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
-        // Input bar
-        let prompt = format!("> {}", self.query_text);
-        let styled = Span::styled(prompt, Style::default().fg(Color::White));
-        let widget = Paragraph::new(Line::from(styled));
-        frame.render_widget(widget, input_area);
+        let visible = tree_area.height.saturating_sub(1).max(1) as usize;
 
-        // Placeholder tree area
-        let status = if let Some(ref err) = self.parse_error {
-            Span::styled(err.as_str(), Style::default().fg(Color::Red))
-        } else if self.query.is_some() {
-            Span::styled(
-                format!("query ok — {} root(s)", self.tree.len()),
-                Style::default().fg(Color::Green),
-            )
-        } else if self.graph.is_some() {
-            Span::styled("type a query", Style::default().fg(Color::DarkGray))
+        let items: Vec<ListItem> = self
+            .tree
+            .rows()
+            .iter()
+            .enumerate()
+            .skip(self.scroll_offset)
+            .take(visible)
+            .map(|(i, row)| {
+                let indent = "  ".repeat(row.depth);
+                let indicator = if row.expanded {
+                    '▼'
+                } else if row.expandable {
+                    '▶'
+                } else {
+                    ' '
+                };
+                let line = format!(
+                    "{indent}{indicator} {kind} {display}",
+                    kind = row.kind_char,
+                    display = row.display,
+                );
+                let style = if i == self.selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(Line::from(Span::styled(line, style)))
+            })
+            .collect();
+
+        let list = List::new(items);
+        frame.render_widget(list, tree_area);
+
+        // Input bar
+        let input_text = format!("> {}", self.query_text);
+        let input_style = if self.input_mode {
+            Style::default().fg(Color::Yellow)
         } else {
-            Span::styled("building graph...", Style::default().fg(Color::Yellow))
+            Style::default().fg(Color::DarkGray)
         };
-        frame.render_widget(Paragraph::new(Line::from(status)), tree_area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(input_text, input_style))),
+            input_area,
+        );
+
+        // Error line overlays bottom of tree area
+        if let Some(ref err) = self.parse_error {
+            if tree_area.height > 0 {
+                let err_rect = Rect {
+                    y: tree_area.y + tree_area.height.saturating_sub(1),
+                    height: 1,
+                    ..tree_area
+                };
+                let err_span = Span::styled(err.as_str(), Style::default().fg(Color::Red));
+                frame.render_widget(Paragraph::new(Line::from(err_span)), err_rect);
+            }
+        }
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -236,11 +376,14 @@ impl Tab for GraphTab {
         if let Some(ref q) = self.query {
             let roots = q.select(self.graph.as_ref().unwrap());
             self.tree.build_from(&roots, self.graph.as_ref().unwrap());
-            self.selected = 0;
+            self.selected = self.selected.min(self.tree.len().saturating_sub(1));
+            self.scroll_offset = 0;
         }
         Ok(())
     }
 }
+
+// ── TreeState ─────────────────────────────────────────────────────────
 
 /// One visible row in the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,8 +406,6 @@ pub struct TreeState {
 }
 
 impl TreeState {
-    /// Build the tree from root nodes. Clears any prior state and cache.
-    /// Returns the indices of the root rows (always `0..roots.len()`).
     pub fn build_from(&mut self, roots: &[NoteId], graph: &Graph) {
         self.rows.clear();
         self.expansion_cache.clear();
@@ -273,9 +414,6 @@ impl TreeState {
         }
     }
 
-    /// Toggle expansion at the given row index. If the row is already
-    /// expanded, collapses it. Otherwise, attempts to expand. Returns
-    /// `true` if the tree was modified.
     pub fn expand_at(&mut self, index: usize, graph: &Graph, query: &GraphQuery) -> bool {
         if index >= self.rows.len() {
             return false;
@@ -292,7 +430,6 @@ impl TreeState {
 
         let id = self.rows[index].note_id;
 
-        // Compute or fetch cached children
         let children = self
             .expansion_cache
             .entry(id)
@@ -318,9 +455,6 @@ impl TreeState {
         true
     }
 
-    /// Collapse the row at `index` by removing all descendant rows
-    /// (rows at greater depth between this row and the next row at
-    /// the same or lower depth).
     pub fn collapse_at(&mut self, index: usize) {
         if index >= self.rows.len() || !self.rows[index].expanded {
             return;
@@ -336,7 +470,6 @@ impl TreeState {
         self.rows[index].expanded = false;
     }
 
-    /// Move selection up, wrapping to the last row. Returns new index.
     pub fn move_selection_up(&self, current: usize) -> usize {
         if self.rows.is_empty() {
             return 0;
@@ -348,7 +481,6 @@ impl TreeState {
         }
     }
 
-    /// Move selection down, wrapping to the first row. Returns new index.
     pub fn move_selection_down(&self, current: usize) -> usize {
         if self.rows.is_empty() {
             return 0;
@@ -371,8 +503,6 @@ impl TreeState {
     pub fn len(&self) -> usize {
         self.rows.len()
     }
-
-    // ── helpers ──────────────────────────────────────────────────────
 
     fn make_row(id: NoteId, depth: usize, graph: &Graph) -> TreeRow {
         let (display, kind_char) = match graph.node(id) {
@@ -398,7 +528,7 @@ impl TreeState {
             display,
             kind_char,
             expanded: false,
-            expandable: true, // optimistic; set during expand_at
+            expandable: true,
         }
     }
 }
@@ -436,7 +566,6 @@ mod tree_tests {
 
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
-        // Only root directory is a top-level directory (no parent)
         assert_eq!(state.rows.len(), 1);
         assert_eq!(state.rows[0].depth, 0);
         assert_eq!(state.rows[0].kind_char, 'D');
@@ -450,12 +579,10 @@ mod tree_tests {
 
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
-        assert_eq!(state.rows.len(), 1); // root dir
+        assert_eq!(state.rows.len(), 1);
 
-        // Expand root directory
         let changed = state.expand_at(0, &g, &q);
         assert!(changed);
-        // Root has 3 children: root.md, Areas, Projects
         assert_eq!(state.rows.len(), 4);
         assert!(state.rows[0].expanded);
         assert_eq!(state.rows[0].depth, 0);
@@ -489,12 +616,10 @@ mod tree_tests {
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
 
-        // First expand
         state.expand_at(0, &g, &q);
         assert_eq!(state.rows.len(), 4);
         assert!(state.rows[0].expanded);
 
-        // Second expand toggles to collapsed
         let changed = state.expand_at(0, &g, &q);
         assert!(changed);
         assert_eq!(state.rows.len(), 1);
@@ -510,24 +635,18 @@ mod tree_tests {
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
 
-        // Expand root → children: root.md(N), Areas/(D), Projects/(D)
         state.expand_at(0, &g, &q);
         assert_eq!(state.rows.len(), 4);
 
-        // Find Areas — it's the directory child (kind_char 'D', not root.md which is 'N')
         let areas_idx = state
             .rows
             .iter()
             .position(|r| r.kind_char == 'D' && r.display == "Areas/")
             .unwrap();
 
-        // Expand Areas → children: finance.md(N), operations/(D)
         state.expand_at(areas_idx, &g, &q);
-        // Should have: root (0) + root.md (1) + Areas (2) + Areas/finance.md (3) + Areas/operations/ (4) + Projects (5)
-        // Actually projects was at index 3 before Areas expanded, now it shifted
         assert_eq!(state.rows.len(), 6);
 
-        // Verify Areas/operations/ is present
         let ops = state
             .rows
             .iter()
@@ -539,17 +658,14 @@ mod tree_tests {
     #[test]
     fn expand_unexpandable_node_returns_false() {
         let g = dirs_graph();
-        // Query with NO expansion rule
         let q = parse_query("node n with n.kind = Note;").unwrap();
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
 
-        // All rows are initially expandable=true (optimistic)
-        // First expand on a Note node with no expansion rule in query
         let changed = state.expand_at(0, &g, &q);
-        assert!(!changed); // None returned → expandable set to false
+        assert!(!changed);
         assert!(!state.rows[0].expandable);
     }
 
@@ -567,11 +683,8 @@ mod tree_tests {
         state.build_from(&roots, &g);
         assert_eq!(state.rows.len(), 3);
 
-        // Up from 0 wraps to last
         assert_eq!(state.move_selection_up(0), 2);
-        // Down from last wraps to 0
         assert_eq!(state.move_selection_down(2), 0);
-        // Normal movement
         assert_eq!(state.move_selection_down(0), 1);
         assert_eq!(state.move_selection_up(1), 0);
     }
@@ -592,20 +705,16 @@ mod tree_tests {
         let mut state = TreeState::default();
         state.build_from(&roots, &g);
 
-        // Expand, collapse, expand again — should use cache
         state.expand_at(0, &g, &q);
         let first_len = state.rows.len();
         state.collapse_at(0);
         state.expand_at(0, &g, &q);
-        // Same result from cache
         assert_eq!(state.rows.len(), first_len);
-        // Cache has entry
         assert!(state.expansion_cache.contains_key(&state.rows[0].note_id));
     }
 
     #[test]
     fn expand_empty_children_marks_expandable_false() {
-        // Empty vault: only root directory, no children
         let tmp = assert_fs::TempDir::new().unwrap();
         use assert_fs::prelude::*;
         tmp.child(".obsidian").create_dir_all().unwrap();
@@ -622,9 +731,7 @@ mod tree_tests {
         let mut state = TreeState::default();
         state.build_from(&[root_id], &g);
 
-        // Expanding root with no children
         state.expand_at(0, &g, &q);
-        // Row is expanded but has no children
         assert!(state.rows[0].expanded);
         assert!(!state.rows[0].expandable);
         assert_eq!(state.rows.len(), 1);

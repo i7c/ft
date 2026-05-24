@@ -2,7 +2,7 @@
 id: 018
 name: graph-tui-tree
 title: "Graph: Infinite-tree viewer in the TUI"
-status: ready
+status: finished
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -366,21 +366,38 @@ backspace, left/right, home/end, enter/esc). Query parse → select()
 → build tree. No tree rendering yet — just a placeholder that
 shows the input bar and builds the tree in memory.
 **Outcome:** `GraphTab` struct with graph, query, query_text,
-parse_error, input_cursor, input_mode, tree, selected fields.
-Registered as tab index 4 in `app.rs`. Input bar supports typing,
-Backspace, Delete, Left/Right, Home/End. `/` enters input mode,
-Enter parses and applies query (building tree in memory via
-`TreeState::build_from`), Esc returns to normal mode. Placeholder
-render shows input bar + status line (query ok / parse error /
-prompt). Updated 3 snapshot tests and `tab_key_cycles_tabs` test
-for the 5-tab layout. 583 workspace tests green. Clippy + fmt
-clean.
+parse_error, input_cursor, input_mode, tree, selected, scroll_offset
+fields. Registered as tab index 4 in `app.rs`. Input bar supports
+typing, Backspace, Delete, Left/Right, Home/End. `/` enters
+input mode, Enter parses and applies query (building tree in
+memory via `TreeState::build_from`), Esc returns to normal mode.
+4 snapshot tests + tab-key test updated for 5 tabs. 583 tests
+green. Clippy + fmt clean.
 
-### Session 3 · 2026-05-24 · planned
+### Session 3 · 2026-05-24 · done
+**Goal:** Tree rendering + keyboard navigation. Render the flat
+tree as a scrollable ratatui `List` with indentation, expand
+indicators, kind prefixes, and selection highlight. Wire
+Normal-mode keybindings (j/k, Enter, h, gg, G, Ctrl+d/u, r).
+Expand/collapse integrated. Integration test with a test vault.
+**Outcome:** Full tree rendering with ratatui `List`: 2-space
+indentation per depth, `▶`/`▼`/` ` expand indicators, N/D/G kind
+prefixes, selected row inverted (black-on-white). Scroll offset
+tracks selection visibility. Keybindings: j/k/up/down (move),
+Enter/l (expand/collapse toggle), h (collapse or jump to parent),
+gg/G (top/bottom), Ctrl+d/u (half-page scroll), r (refresh).
+Input bar dims when not active, yellows when active. Parse error
+snackbar overlays bottom of tree area in red. Graph rebuilt on
+refresh or on_focus. 583 tests green. Clippy + fmt clean.
+
+All three plans complete: directory nodes (A), DSL (B), TUI tree
+(C). The graph tab is fully functional — user can type a DSL
+query, see matching nodes, expand/collapse to explore the graph.
+
+### Session 3 · 2026-05-24 · done
 **Goal:** Tree rendering + keyboard navigation. Render the flat tree
 as a scrollable ratatui `List` with indentation, expand indicators,
 kind prefixes, and selection highlight. Wire Normal-mode
 keybindings (j/k, Enter, h, gg, G, Ctrl+d/u, r). Expand/collapse
 integrated. Integration test with a test vault.
 **Outcome:**
-
