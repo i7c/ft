@@ -27,6 +27,7 @@
 //! which is what enables "rename a not-yet-created note" in session 3.
 
 pub mod parser;
+pub mod query;
 pub mod rename;
 pub mod resolve;
 

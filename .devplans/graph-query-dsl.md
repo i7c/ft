@@ -2,7 +2,7 @@
 id: 017
 name: graph-query-dsl
 title: "Graph: Query DSL for subgraph selection and tree expansion"
-status: ready
+status: finished
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -265,22 +265,25 @@ EvalError variants:
 
 ## Sessions
 
-### Session 1 · 2026-05-24 · planned
+### Session 1 · 2026-05-24 · done
 **Goal:** Tokenizer + parser. New `ft-core/src/graph/query.rs`.
 Define all AST types (`GraphQuery`, `NodeSelector`, etc.). Tokenize
 the grammar into `Token` enum. Implement recursive-descent parser
 returning `Result<GraphQuery, DslError>`. Parser unit tests covering
 every node-block shape, edge-expr shape, expand-block shape, error
 cases, and all operators.
-**Outcome:**
-
-### Session 2 · 2026-05-24 · planned
-**Goal:** Evaluator + integration tests. Implement
-`GraphQuery::select` and `GraphQuery::expand` against a `&Graph`.
-Condition evaluation logic (attr lookup, op dispatch, value
-comparison). Integration tests using existing links fixture + new
-dirs fixture covering select and expand paths, edge cases (parent
-mismatch returns None, empty expansion, union). Pipe clean:
-`cargo test --workspace` + clippy + fmt.
-**Outcome:**
-
+**Outcome:** All ~1000 lines written in one pass (both sessions).
+New module `ft-core/src/graph/query.rs` with AST types, Lexer,
+recursive-descent Parser, evaluator (`select` + `expand`), 15 parser
+unit tests, 10 eval integration tests. AST: `GraphQuery`,
+`NodeSelector`, `EdgePattern`, `ExpansionRule`, `Condition`,
+`SrcSpec`, `Attr`/`Op`/`Value`/`Literal` enums. Lexer handles
+keywords, punctuation, identifiers, strings with proper error
+reporting. Parser implements the full grammar (node blocks with
+unioned selectors, without-clause edge patterns, expand-over rules).
+Evaluator: `select()` iterates all nodes, checks conditions per
+selector, handles `without` exclusions, deduplicates results.
+`expand()` checks parent conditions (from_var), then walks outgoing
+edges matching edge conditions (edge_var) and child conditions
+(to_var). Returns `None` when parent doesn't match expansion rule.
+25 total tests. 583 workspace tests green. Clippy + fmt clean.
