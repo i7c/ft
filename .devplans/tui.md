@@ -2,9 +2,9 @@
 id: 002
 name: tui
 title: Interactive TUI for vault management
-status: implementing
+status: finished
 created: 2026-05-09
-updated: 2026-05-10
+updated: 2026-05-24
 ---
 
 # Interactive TUI for vault management
