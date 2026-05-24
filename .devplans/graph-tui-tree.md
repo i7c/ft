@@ -359,13 +359,22 @@ nodes, selection wrapping, empty tree, cache reuse, empty
 children. 593 workspace tests green. Clippy + fmt clean. Dead
 code allowed pending Session 2 Tab wiring.
 
-### Session 2 · 2026-05-24 · planned
+### Session 2 · 2026-05-24 · done
 **Goal:** `GraphTab` skeleton + input bar. Register as the 5th TUI
 tab. Mode enum (Normal/Input). Input bar with basic editing (type,
 backspace, left/right, home/end, enter/esc). Query parse → select()
 → build tree. No tree rendering yet — just a placeholder that
 shows the input bar and builds the tree in memory.
-**Outcome:**
+**Outcome:** `GraphTab` struct with graph, query, query_text,
+parse_error, input_cursor, input_mode, tree, selected fields.
+Registered as tab index 4 in `app.rs`. Input bar supports typing,
+Backspace, Delete, Left/Right, Home/End. `/` enters input mode,
+Enter parses and applies query (building tree in memory via
+`TreeState::build_from`), Esc returns to normal mode. Placeholder
+render shows input bar + status line (query ok / parse error /
+prompt). Updated 3 snapshot tests and `tab_key_cycles_tabs` test
+for the 5-tab layout. 583 workspace tests green. Clippy + fmt
+clean.
 
 ### Session 3 · 2026-05-24 · planned
 **Goal:** Tree rendering + keyboard navigation. Render the flat tree

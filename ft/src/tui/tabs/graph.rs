@@ -1,15 +1,246 @@
 //! Graph tab — infinite-tree viewer for the note-link graph.
 //!
 //! Session 1: TreeState data structure (pure logic, no TUI rendering).
-//! Session 2+ will wire this into the TUI tab; dead_code warnings are
-//! suppressed until then.
+//! Session 2: GraphTab skeleton + input bar + query parsing.
 
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
-use ft_core::graph::query::GraphQuery;
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
+
+use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::{Graph, NodeKind, NoteId};
+
+use crate::tui::{
+    event::Event,
+    tab::{EventOutcome, Tab, TabCtx},
+};
+
+// ── GraphTab ──────────────────────────────────────────────────────────
+
+pub struct GraphTab {
+    graph: Option<Graph>,
+    query: Option<GraphQuery>,
+    query_text: String,
+    parse_error: Option<String>,
+    input_cursor: usize,
+    input_mode: bool,
+    tree: TreeState,
+    selected: usize,
+}
+
+impl GraphTab {
+    pub fn new() -> Self {
+        Self {
+            graph: None,
+            query: None,
+            query_text: String::new(),
+            parse_error: None,
+            input_cursor: 0,
+            input_mode: false,
+            tree: TreeState::default(),
+            selected: 0,
+        }
+    }
+
+    fn apply_query(&mut self) {
+        self.parse_error = None;
+        if self.query_text.trim().is_empty() {
+            self.query = None;
+            self.tree = TreeState::default();
+            self.selected = 0;
+            return;
+        }
+
+        match parse_query(&self.query_text) {
+            Ok(q) => {
+                self.query = Some(q);
+                if let Some(ref g) = self.graph {
+                    let roots = self.query.as_ref().unwrap().select(g);
+                    self.tree.build_from(&roots, g);
+                    self.selected = 0;
+                }
+                self.parse_error = None;
+            }
+            Err(e) => {
+                self.parse_error = Some(e.to_string());
+            }
+        }
+    }
+
+    fn handle_input_event(&mut self, ev: &crossterm::event::KeyEvent) -> Result<EventOutcome> {
+        match (ev.code, ev.modifiers) {
+            (KeyCode::Enter, _) => {
+                self.apply_query();
+                self.input_mode = false;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Esc, _) => {
+                self.input_mode = false;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.query_text.insert(self.input_cursor, c);
+                self.input_cursor += c.len_utf8();
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Backspace, _) => {
+                if self.input_cursor > 0 {
+                    let prev = self
+                        .query_text
+                        .char_indices()
+                        .rev()
+                        .find(|(i, _)| *i < self.input_cursor)
+                        .map(|(i, c)| (i, c.len_utf8()));
+                    if let Some((_, len)) = prev {
+                        let start = self.input_cursor - len;
+                        self.query_text.replace_range(start..self.input_cursor, "");
+                        self.input_cursor = start;
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Delete, _) => {
+                if self.input_cursor < self.query_text.len() {
+                    let ch = self.query_text[self.input_cursor..].chars().next().unwrap();
+                    let end = self.input_cursor + ch.len_utf8();
+                    self.query_text.replace_range(self.input_cursor..end, "");
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Left, _) => {
+                if self.input_cursor > 0 {
+                    let prev = self
+                        .query_text
+                        .char_indices()
+                        .rev()
+                        .find(|(i, _)| *i < self.input_cursor)
+                        .map(|(i, _)| i);
+                    if let Some(i) = prev {
+                        self.input_cursor = i;
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Right, _) => {
+                if self.input_cursor < self.query_text.len() {
+                    let next = self.query_text[self.input_cursor..]
+                        .chars()
+                        .next()
+                        .map(|c| self.input_cursor + c.len_utf8());
+                    if let Some(i) = next {
+                        self.input_cursor = i;
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Home, _) => {
+                self.input_cursor = 0;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::End, _) => {
+                self.input_cursor = self.query_text.len();
+                Ok(EventOutcome::Consumed)
+            }
+            _ => Ok(EventOutcome::NotHandled),
+        }
+    }
+}
+
+impl Tab for GraphTab {
+    fn title(&self) -> &str {
+        "Graph"
+    }
+
+    fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        if self.graph.is_none() {
+            self.graph = Some(Graph::build(ctx.vault)?);
+            // Re-apply current query if one is set
+            if self.query.is_some() {
+                let roots = self
+                    .query
+                    .as_ref()
+                    .unwrap()
+                    .select(self.graph.as_ref().unwrap());
+                self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+                self.selected = 0;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_event(&mut self, ev: Event, _ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Event::Key(k) = ev else {
+            return Ok(EventOutcome::NotHandled);
+        };
+
+        // Tab switching keys pass through
+        if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
+            || (matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit()))
+        {
+            return Ok(EventOutcome::NotHandled);
+        }
+
+        if self.input_mode {
+            self.handle_input_event(&k)
+        } else {
+            match (k.code, k.modifiers) {
+                (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                    self.input_mode = true;
+                    Ok(EventOutcome::Consumed)
+                }
+                (KeyCode::Esc, _) => Ok(EventOutcome::NotHandled),
+                _ => Ok(EventOutcome::NotHandled),
+            }
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        // Placeholder: show input bar at bottom, empty tree area above
+        let [tree_area, input_area] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+
+        // Input bar
+        let prompt = format!("> {}", self.query_text);
+        let styled = Span::styled(prompt, Style::default().fg(Color::White));
+        let widget = Paragraph::new(Line::from(styled));
+        frame.render_widget(widget, input_area);
+
+        // Placeholder tree area
+        let status = if let Some(ref err) = self.parse_error {
+            Span::styled(err.as_str(), Style::default().fg(Color::Red))
+        } else if self.query.is_some() {
+            Span::styled(
+                format!("query ok — {} root(s)", self.tree.len()),
+                Style::default().fg(Color::Green),
+            )
+        } else if self.graph.is_some() {
+            Span::styled("type a query", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled("building graph...", Style::default().fg(Color::Yellow))
+        };
+        frame.render_widget(Paragraph::new(Line::from(status)), tree_area);
+    }
+
+    fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        self.graph = Some(Graph::build(ctx.vault)?);
+        if let Some(ref q) = self.query {
+            let roots = q.select(self.graph.as_ref().unwrap());
+            self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+            self.selected = 0;
+        }
+        Ok(())
+    }
+}
 
 /// One visible row in the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]

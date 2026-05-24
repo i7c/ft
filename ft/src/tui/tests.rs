@@ -1114,6 +1114,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Timeblocks");
     app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Graph");
+    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Welcome");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");

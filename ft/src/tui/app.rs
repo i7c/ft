@@ -25,7 +25,10 @@ use crate::tui::{
     event::{BgEvent, Event, EventStream, SyncJobResult},
     jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    tabs::{notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab, welcome::WelcomeTab},
+    tabs::{
+        graph::GraphTab, notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab,
+        welcome::WelcomeTab,
+    },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
@@ -92,6 +95,7 @@ impl App {
             Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
             Box::new(TimeblocksTab::new()),
+            Box::new(GraphTab::new()),
         ];
         Self::with_tabs(vault, recents, today, tabs)
     }
