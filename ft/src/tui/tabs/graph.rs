@@ -19,7 +19,7 @@ use ft_core::graph::{Graph, NodeKind, NoteId};
 
 use crate::tui::{
     event::Event,
-    tab::{EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx},
 };
 
 // ── GraphTab ──────────────────────────────────────────────────────────
@@ -31,9 +31,7 @@ use crate::tui::{
 /// default, not an engine concern.
 const BUILTIN_DEFAULT_QUERY: &str = concat!(
     "node where kind = Directory and path = \"\"; ",
-    "expand where from.kind = Directory ",
-    "and edge.kind = directory-contains ",
-    "and to.kind in {Note, Directory};",
+    "expand where edge.kind = directory-contains;",
 );
 
 pub struct GraphTab {
@@ -77,8 +75,9 @@ impl GraphTab {
             Ok(q) => {
                 self.query = Some(q);
                 if let Some(ref g) = self.graph {
-                    let roots = self.query.as_ref().unwrap().select(g);
-                    self.tree.build_from(&roots, g);
+                    let q = self.query.as_ref().unwrap();
+                    let roots = q.select(g);
+                    self.tree.build_from(&roots, g, q);
                     self.selected = 0;
                     self.scroll_offset = 0;
                 }
@@ -87,6 +86,44 @@ impl GraphTab {
             Err(e) => {
                 self.parse_error = Some(e.to_string());
             }
+        }
+    }
+
+    /// Resolve the selected row to a Note and queue an editor open.
+    /// Silent no-op on Directory / Ghost rows (no file to open).
+    fn request_open_selected_in_editor(&self, ctx: &TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let Some(row) = self.tree.rows().get(self.selected) else {
+            return;
+        };
+        if let NodeKind::Note(n) = graph.node(row.note_id) {
+            let abs = ctx.vault.path.join(&n.path);
+            ctx.recents.record_open(&n.path);
+            *ctx.pending_request.borrow_mut() =
+                Some(AppRequest::OpenInEditor { path: abs, line: 1 });
+        }
+    }
+
+    /// Resolve the selected row to a Note and queue an Obsidian URL open.
+    fn request_open_selected_in_obsidian(&self, ctx: &TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let Some(row) = self.tree.rows().get(self.selected) else {
+            return;
+        };
+        if let NodeKind::Note(n) = graph.node(row.note_id) {
+            let vault_name = ctx
+                .vault
+                .path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "vault".to_string());
+            let url = ft_core::notes::obsidian_url(&vault_name, &n.path, None);
+            ctx.recents.record_open(&n.path);
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInObsidian { url });
         }
     }
 
@@ -205,12 +242,10 @@ impl Tab for GraphTab {
                 self.input_cursor = self.query_text.len();
                 self.apply_query();
             } else if self.query.is_some() {
-                let roots = self
-                    .query
-                    .as_ref()
-                    .unwrap()
-                    .select(self.graph.as_ref().unwrap());
-                self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+                let q = self.query.as_ref().unwrap();
+                let g = self.graph.as_ref().unwrap();
+                let roots = q.select(g);
+                self.tree.build_from(&roots, g, q);
                 self.selected = 0;
             }
         }
@@ -222,15 +257,18 @@ impl Tab for GraphTab {
             return Ok(EventOutcome::NotHandled);
         };
 
-        // Tab switching keys pass through
+        // Input mode owns the keyboard — digits and every other char
+        // should land as text in the query, not trigger a tab switch.
+        // This must run BEFORE the tab-passthrough check below.
+        if self.input_mode {
+            return self.handle_input_event(&k);
+        }
+
+        // Tab switching keys pass through to the App's dispatcher.
         if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
             || (matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit()))
         {
             return Ok(EventOutcome::NotHandled);
-        }
-
-        if self.input_mode {
-            return self.handle_input_event(&k);
         }
 
         if self.graph.is_none() || self.tree.is_empty() {
@@ -317,11 +355,20 @@ impl Tab for GraphTab {
                 self.scroll_to_selection(vis);
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('o'), KeyModifiers::NONE) => {
+                self.request_open_selected_in_editor(ctx);
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
+                self.request_open_selected_in_obsidian(ctx);
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Char('r'), _) => {
                 self.graph = Some(Graph::build(ctx.vault)?);
                 if let Some(ref q) = self.query {
                     let roots = q.select(self.graph.as_ref().unwrap());
-                    self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+                    let graph_ref = self.graph.as_ref().unwrap();
+                    self.tree.build_from(&roots, graph_ref, q);
                     self.selected = self.selected.min(self.tree.len().saturating_sub(1));
                     self.scroll_offset = 0;
                 }
@@ -436,8 +483,9 @@ impl Tab for GraphTab {
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
         self.graph = Some(Graph::build(ctx.vault)?);
         if let Some(ref q) = self.query {
-            let roots = q.select(self.graph.as_ref().unwrap());
-            self.tree.build_from(&roots, self.graph.as_ref().unwrap());
+            let g = self.graph.as_ref().unwrap();
+            let roots = q.select(g);
+            self.tree.build_from(&roots, g, q);
             self.selected = self.selected.min(self.tree.len().saturating_sub(1));
             self.scroll_offset = 0;
         }
@@ -468,11 +516,11 @@ pub struct TreeState {
 }
 
 impl TreeState {
-    pub fn build_from(&mut self, roots: &[NoteId], graph: &Graph) {
+    pub fn build_from(&mut self, roots: &[NoteId], graph: &Graph, query: &GraphQuery) {
         self.rows.clear();
         self.expansion_cache.clear();
         for id in roots {
-            self.rows.push(Self::make_row(*id, 0, graph));
+            self.rows.push(Self::make_row(*id, 0, graph, query));
         }
     }
 
@@ -508,8 +556,10 @@ impl TreeState {
         let child_depth = self.rows[index].depth + 1;
         let insert_pos = index + 1;
         for child_id in child_ids.iter().rev() {
-            self.rows
-                .insert(insert_pos, Self::make_row(*child_id, child_depth, graph));
+            self.rows.insert(
+                insert_pos,
+                Self::make_row(*child_id, child_depth, graph, query),
+            );
         }
 
         self.rows[index].expanded = true;
@@ -566,7 +616,7 @@ impl TreeState {
         self.rows.len()
     }
 
-    fn make_row(id: NoteId, depth: usize, graph: &Graph) -> TreeRow {
+    fn make_row(id: NoteId, depth: usize, graph: &Graph, query: &GraphQuery) -> TreeRow {
         let (display, kind_char) = match graph.node(id) {
             NodeKind::Note(n) => (
                 n.path
@@ -584,13 +634,19 @@ impl TreeState {
             }
             NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
         };
+        // Compute expandability up-front by asking the policy how many
+        // children this node has. None = no expand block at all (still
+        // not expandable). Some(empty) = policy says zero children.
+        // This avoids the misleading ▶ arrow on leaves that disappears
+        // only after the user tries to expand.
+        let expandable = matches!(query.expand(graph, id), Some(ref v) if !v.is_empty());
         TreeRow {
             depth,
             note_id: id,
             display,
             kind_char,
             expanded: false,
-            expandable: true,
+            expandable,
         }
     }
 }
@@ -627,7 +683,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
         assert_eq!(state.rows.len(), 1);
         assert_eq!(state.rows[0].depth, 0);
         assert_eq!(state.rows[0].kind_char, 'D');
@@ -640,7 +696,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
         assert_eq!(state.rows.len(), 1);
 
         let changed = state.expand_at(0, &g, &q);
@@ -660,7 +716,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
         state.expand_at(0, &g, &q);
         assert_eq!(state.rows.len(), 4);
 
@@ -676,7 +732,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
 
         state.expand_at(0, &g, &q);
         assert_eq!(state.rows.len(), 4);
@@ -695,7 +751,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
 
         state.expand_at(0, &g, &q);
         assert_eq!(state.rows.len(), 4);
@@ -724,7 +780,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
 
         let changed = state.expand_at(0, &g, &q);
         assert!(!changed);
@@ -734,6 +790,7 @@ mod tree_tests {
     #[test]
     fn move_selection_wraps_at_bounds() {
         let g = dirs_graph();
+        let q = dirs_query();
         let roots: Vec<_> = g
             .nodes()
             .filter(|(_, k)| matches!(k, NodeKind::Note(_)))
@@ -742,7 +799,7 @@ mod tree_tests {
             .collect();
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
         assert_eq!(state.rows.len(), 3);
 
         assert_eq!(state.move_selection_up(0), 2);
@@ -765,7 +822,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g);
+        state.build_from(&roots, &g, &q);
 
         state.expand_at(0, &g, &q);
         let first_len = state.rows.len();
@@ -776,7 +833,11 @@ mod tree_tests {
     }
 
     #[test]
-    fn expand_empty_children_marks_expandable_false() {
+    fn build_marks_expandable_false_when_policy_returns_no_children() {
+        // Empty vault → root has no Note children under the
+        // policy. Expandability is now determined up front by
+        // `make_row` asking the query; the row never shows the
+        // ▶ arrow at all.
         let tmp = assert_fs::TempDir::new().unwrap();
         use assert_fs::prelude::*;
         tmp.child(".obsidian").create_dir_all().unwrap();
@@ -791,11 +852,50 @@ mod tree_tests {
         let root_id = g.node_by_path(std::path::Path::new("")).unwrap();
 
         let mut state = TreeState::default();
-        state.build_from(&[root_id], &g);
+        state.build_from(&[root_id], &g, &q);
 
-        state.expand_at(0, &g, &q);
-        assert!(state.rows[0].expanded);
+        // Pre-computed: not expandable, so attempting expand is a
+        // no-op and `expanded` stays false (nothing was opened).
         assert!(!state.rows[0].expandable);
+        let changed = state.expand_at(0, &g, &q);
+        assert!(!changed);
+        assert!(!state.rows[0].expanded);
         assert_eq!(state.rows.len(), 1);
+    }
+
+    #[test]
+    fn build_marks_expandable_true_when_policy_returns_children() {
+        let g = dirs_graph();
+        let q = dirs_query();
+        let roots = q.select(&g);
+
+        let mut state = TreeState::default();
+        state.build_from(&roots, &g, &q);
+        assert_eq!(state.rows.len(), 1);
+        // Root directory has 3 immediate children under the policy →
+        // expandable from the start.
+        assert!(state.rows[0].expandable);
+    }
+
+    #[test]
+    fn build_marks_note_rows_unexpandable_under_directory_contains_policy() {
+        // Notes have no outgoing directory-contains edges, so the
+        // policy yields zero children — rows for notes should not
+        // display the ▶ arrow.
+        let g = dirs_graph();
+        let q = dirs_query();
+        let roots = q.select(&g);
+
+        let mut state = TreeState::default();
+        state.build_from(&roots, &g, &q);
+        state.expand_at(0, &g, &q);
+
+        for row in state.rows().iter().filter(|r| r.kind_char == 'N') {
+            assert!(
+                !row.expandable,
+                "note row {} should be a leaf under the dirs policy",
+                row.display
+            );
+        }
     }
 }

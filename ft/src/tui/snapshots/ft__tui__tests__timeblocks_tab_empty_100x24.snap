@@ -1,9 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 258
+assertion_line: 251
 expression: frame
 ---
-  1 Welcome  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Graph                                    
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                                                  
 ┌ sidebar ─────────────┐┌ Sun 2026-05-10 (today) ────────────┐┌ Mon 2026-05-11 (tomorrow) ─────────┐
 │                      ││                                    ││                                    │
 │ Sun 10 May           ││  no daily note yet.                ││  no daily note yet.                │

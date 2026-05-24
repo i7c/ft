@@ -88,15 +88,8 @@ fn key(c: char) -> Event {
 }
 
 #[test]
-fn welcome_tab_renders_at_minimum_terminal() {
-    let (_dir, vault) = test_vault();
-    let mut app = App::for_test(vault);
-    let frame = render(&mut app, 80, 24);
-    assert_tui_snapshot!("welcome_tab_80x24", frame);
-}
-
-#[test]
-fn help_overlay_renders_over_welcome() {
+fn help_overlay_renders_over_initial_tab() {
+    // GraphTab is the first tab now; help should overlay it cleanly.
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     app.enter_help();
@@ -1052,20 +1045,17 @@ fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
 }
 
 #[test]
-fn welcome_any_key_switches_to_tasks() -> Result<()> {
+fn initial_tab_is_graph() {
+    // WelcomeTab was removed (plan 019 ext); GraphTab is now first.
     let (_dir, vault) = test_vault();
-    let mut app = App::for_test(vault);
+    let app = App::for_test(vault);
     assert_eq!(app.active_index(), 0);
-    app.dispatch(key('x'))?;
-    assert_eq!(app.active_index(), 1);
-    assert_eq!(app.active_title(), "Tasks");
-    Ok(())
+    assert_eq!(app.active_title(), "Graph");
 }
 
 #[test]
-fn welcome_digit_jumps_directly_to_target_tab() -> Result<()> {
-    // `3` from the splash screen should land on Notes in one keypress,
-    // not redirect to Tasks first.
+fn digit_jumps_directly_to_target_tab() -> Result<()> {
+    // `3` should land on Notes in one keypress, even from Graph.
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     assert_eq!(app.active_index(), 0);
@@ -1076,7 +1066,7 @@ fn welcome_digit_jumps_directly_to_target_tab() -> Result<()> {
 }
 
 #[test]
-fn welcome_q_quits_directly() -> Result<()> {
+fn q_quits_from_initial_tab() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     assert_eq!(app.active_index(), 0);
@@ -1110,7 +1100,8 @@ fn ctrl_c_quits() -> Result<()> {
 fn tab_key_cycles_tabs() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(1)?; // start on Tasks so Tab key isn't intercepted by Welcome
+    // Start on Tasks so Tab isn't intercepted by Graph's input mode.
+    app.switch_to(1)?;
     let tab_ev = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Notes");
@@ -1118,8 +1109,6 @@ fn tab_key_cycles_tabs() -> Result<()> {
     assert_eq!(app.active_title(), "Timeblocks");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Graph");
-    app.dispatch(tab_ev.clone())?;
-    assert_eq!(app.active_title(), "Welcome");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");
     Ok(())
@@ -5891,7 +5880,10 @@ fn graph_tab_empty_default_query_renders() -> Result<()> {
     // below the root, so the tree is just the root.
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(4)?; // Graph tab is 5th (index 4)
+    // GraphTab is the active tab from construction; bounce through tab 1
+    // and back so on_focus fires (switch_tab is a no-op when idx == active).
+    app.switch_to(1)?;
+    app.switch_to(0)?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("graph_tab_empty_default_query_80x24", frame);
     Ok(())
@@ -5901,9 +5893,106 @@ fn graph_tab_empty_default_query_renders() -> Result<()> {
 fn graph_tab_populated_default_query_renders() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(4)?;
+    app.switch_to(1)?;
+    app.switch_to(0)?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("graph_tab_populated_default_query_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_tab_o_opens_selected_note_in_editor() -> Result<()> {
+    // dirs fixture has Areas/finance.md, Projects/alpha.md, root.md, and
+    // Areas/operations/shifts.md. Drive: open default → expand root →
+    // walk to a note → press 'o'.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Expand the root directory so the children show up.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Move selection past the root onto its first child. Children are
+    // listed in graph order; the dirs fixture inserts Projects/, Areas/,
+    // root.md (3 children). Walk down until we land on a note (.md).
+    for _ in 0..5 {
+        app.dispatch(key('j'))?;
+        if let Some(AppRequest::OpenInEditor { .. }) = app.take_pending_request() {
+            // Already opened — shouldn't happen, but guard.
+            panic!("open fired before pressing o");
+        }
+        // Try pressing 'o' — silently no-ops on a Directory row.
+        app.dispatch(key('o'))?;
+        if let Some(req) = app.take_pending_request() {
+            match req {
+                AppRequest::OpenInEditor { path, line } => {
+                    let s = path.to_string_lossy();
+                    assert!(s.ends_with(".md"), "expected an .md note path, got {s}");
+                    assert_eq!(line, 1);
+                    return Ok(());
+                }
+                other => panic!("unexpected pending request: {other:?}"),
+            }
+        }
+    }
+    panic!("did not reach a note row after 5 j-presses");
+}
+
+#[test]
+fn graph_tab_ctrl_o_opens_selected_note_in_obsidian() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let ctrl_o = Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    for _ in 0..5 {
+        app.dispatch(key('j'))?;
+        app.dispatch(ctrl_o.clone())?;
+        if let Some(req) = app.take_pending_request() {
+            match req {
+                AppRequest::OpenInObsidian { url } => {
+                    assert!(
+                        url.starts_with("obsidian://"),
+                        "expected obsidian URL, got {url}"
+                    );
+                    return Ok(());
+                }
+                other => panic!("unexpected pending request: {other:?}"),
+            }
+        }
+    }
+    panic!("did not reach a note row after 5 j-presses");
+}
+
+#[test]
+fn graph_tab_input_mode_consumes_digits_instead_of_switching_tabs() -> Result<()> {
+    // Bug repro for ext: pressing a digit while typing a query used to
+    // switch tabs because the digit-passthrough check ran before the
+    // input-mode check.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('/'))?; // Enter input mode.
+                             // Wipe pre-seeded default; type a query containing digits.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "node where indegree = 0;".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Should still be on the Graph tab.
+    assert_eq!(app.active_title(), "Graph");
     Ok(())
 }
 
@@ -5915,7 +6004,8 @@ fn graph_tab_input_mode_shows_cursor() -> Result<()> {
     // for input mode.
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(4)?;
+    app.switch_to(1)?;
+    app.switch_to(0)?;
     app.dispatch(key('/'))?;
 
     let backend = TestBackend::new(80, 24);

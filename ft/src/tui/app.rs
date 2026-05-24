@@ -25,10 +25,7 @@ use crate::tui::{
     event::{BgEvent, Event, EventStream, SyncJobResult},
     jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    tabs::{
-        graph::GraphTab, notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab,
-        welcome::WelcomeTab,
-    },
+    tabs::{graph::GraphTab, notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab},
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
@@ -91,11 +88,10 @@ impl App {
     pub fn new_with_recents(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
         let today = resolve_today();
         let tabs: Vec<Box<dyn Tab>> = vec![
-            Box::new(WelcomeTab::new()),
+            Box::new(GraphTab::new()),
             Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
             Box::new(TimeblocksTab::new()),
-            Box::new(GraphTab::new()),
         ];
         Self::with_tabs(vault, recents, today, tabs)
     }
@@ -783,13 +779,12 @@ impl App {
     pub fn for_test_with_clock(vault: Vault, clock: ClockFn) -> Self {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
-            Box::new(WelcomeTab::new()),
+            Box::new(GraphTab::new()),
             Box::new(TasksTab::with_clock(clock)),
             Box::new(NotesTab::new()),
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
-            Box::new(GraphTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
@@ -813,13 +808,12 @@ impl App {
     ) -> Self {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
-            Box::new(WelcomeTab::new()),
+            Box::new(GraphTab::new()),
             Box::new(TasksTab::with_clock(clock)),
             Box::new(NotesTab::new()),
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
-            Box::new(GraphTab::new()),
         ];
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
     }

@@ -59,6 +59,10 @@ pub enum ToastStyle {
 pub enum EventOutcome {
     Consumed,
     NotHandled,
+    /// Tab signals it wants to switch the active tab. Constructed by no
+    /// current tab — kept so a future tab (e.g. a launcher screen) can
+    /// request a switch without reaching for App state directly.
+    #[allow(dead_code)]
     SwitchTab(usize),
     /// Tab signals the app should exit. Currently unused — `q`/`Ctrl+C` are
     /// handled by the global keymap — but kept so a future tab (e.g. a modal
