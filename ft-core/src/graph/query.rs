@@ -2028,4 +2028,386 @@ mod tests {
             "node; expand over e(n, m) with e.kind = link;"
         );
     }
+
+    // ── Proptest: round-trip + stability + whitespace insensitivity ──
+
+    mod proptests {
+        use super::*;
+        use proptest::collection::vec;
+        use proptest::prelude::*;
+
+        // ── Literal generators (only safe forms — see below) ─────
+
+        // Bare identifiers are used ONLY for known kind/form values
+        // so that Display→parse round-trips can't be tripped up by
+        // accidentally producing an identifier that the lexer treats
+        // as a keyword. Arbitrary user strings always go through
+        // `Literal::Str`, which gets quoted by Display.
+
+        fn arb_node_kind_literal() -> impl Strategy<Value = Literal> {
+            prop_oneof![
+                Just(Literal::Ident("Note".into())),
+                Just(Literal::Ident("Directory".into())),
+                Just(Literal::Ident("Ghost".into())),
+            ]
+        }
+
+        fn arb_edge_kind_literal() -> impl Strategy<Value = Literal> {
+            prop_oneof![
+                Just(Literal::Ident("link".into())),
+                Just(Literal::Ident("embed".into())),
+                Just(Literal::Ident("directory-contains".into())),
+            ]
+        }
+
+        fn arb_form_literal() -> impl Strategy<Value = Literal> {
+            prop_oneof![
+                Just(Literal::Ident("wiki".into())),
+                Just(Literal::Ident("md".into())),
+            ]
+        }
+
+        // Strings used in path/title queries. Restricted to a charset
+        // that survives Display escaping cleanly: no shell weirdness
+        // but enough variety to be meaningful (slashes, dots,
+        // ascii-quotes, spaces).
+        fn arb_user_string_literal() -> impl Strategy<Value = Literal> {
+            proptest::string::string_regex(r#"[a-zA-Z0-9 ./_\-"\\]{0,12}"#)
+                .unwrap()
+                .prop_map(Literal::Str)
+        }
+
+        fn arb_int_literal() -> impl Strategy<Value = Literal> {
+            (0i64..50).prop_map(Literal::Int)
+        }
+
+        // ── Condition shape helpers ──────────────────────────────
+
+        fn op_value_node_kind() -> impl Strategy<Value = (Op, Value)> {
+            prop_oneof![
+                arb_node_kind_literal().prop_map(|l| (Op::Eq, Value::Single(l))),
+                arb_node_kind_literal().prop_map(|l| (Op::NotEq, Value::Single(l))),
+                vec(arb_node_kind_literal(), 1..=3).prop_map(|ls| (Op::In, Value::Set(ls))),
+            ]
+        }
+
+        fn op_value_edge_kind() -> impl Strategy<Value = (Op, Value)> {
+            prop_oneof![
+                arb_edge_kind_literal().prop_map(|l| (Op::Eq, Value::Single(l))),
+                arb_edge_kind_literal().prop_map(|l| (Op::NotEq, Value::Single(l))),
+                vec(arb_edge_kind_literal(), 1..=3).prop_map(|ls| (Op::In, Value::Set(ls))),
+            ]
+        }
+
+        fn op_value_form() -> impl Strategy<Value = (Op, Value)> {
+            prop_oneof![
+                arb_form_literal().prop_map(|l| (Op::Eq, Value::Single(l))),
+                arb_form_literal().prop_map(|l| (Op::NotEq, Value::Single(l))),
+                vec(arb_form_literal(), 1..=2).prop_map(|ls| (Op::In, Value::Set(ls))),
+            ]
+        }
+
+        fn op_value_string_attr() -> impl Strategy<Value = (Op, Value)> {
+            prop_oneof![
+                arb_user_string_literal().prop_map(|l| (Op::Eq, Value::Single(l))),
+                arb_user_string_literal().prop_map(|l| (Op::NotEq, Value::Single(l))),
+                arb_user_string_literal().prop_map(|l| (Op::Includes, Value::Single(l))),
+                arb_user_string_literal().prop_map(|l| (Op::StartsWith, Value::Single(l))),
+                arb_user_string_literal().prop_map(|l| (Op::EndsWith, Value::Single(l))),
+                vec(arb_user_string_literal(), 1..=3).prop_map(|ls| (Op::In, Value::Set(ls))),
+            ]
+        }
+
+        fn op_value_int_attr() -> impl Strategy<Value = (Op, Value)> {
+            prop_oneof![
+                arb_int_literal().prop_map(|l| (Op::Eq, Value::Single(l))),
+                arb_int_literal().prop_map(|l| (Op::NotEq, Value::Single(l))),
+                vec(arb_int_literal(), 1..=3).prop_map(|ls| (Op::In, Value::Set(ls))),
+            ]
+        }
+
+        // ── Condition generators per subject ─────────────────────
+
+        fn arb_self_condition() -> impl Strategy<Value = Condition> {
+            prop_oneof![
+                op_value_node_kind().prop_map(|(op, value)| Condition {
+                    subject: Subject::SelfNode,
+                    attr: Attr::Kind,
+                    op,
+                    value,
+                }),
+                op_value_string_attr().prop_map(|(op, value)| Condition {
+                    subject: Subject::SelfNode,
+                    attr: Attr::Path,
+                    op,
+                    value,
+                }),
+                op_value_string_attr().prop_map(|(op, value)| Condition {
+                    subject: Subject::SelfNode,
+                    attr: Attr::Title,
+                    op,
+                    value,
+                }),
+                op_value_int_attr().prop_map(|(op, value)| Condition {
+                    subject: Subject::SelfNode,
+                    attr: Attr::Indegree,
+                    op,
+                    value,
+                }),
+                op_value_int_attr().prop_map(|(op, value)| Condition {
+                    subject: Subject::SelfNode,
+                    attr: Attr::Outdegree,
+                    op,
+                    value,
+                }),
+            ]
+        }
+
+        fn arb_from_to_condition(subject: Subject) -> impl Strategy<Value = Condition> {
+            prop_oneof![
+                op_value_node_kind().prop_map(move |(op, value)| Condition {
+                    subject,
+                    attr: Attr::Kind,
+                    op,
+                    value,
+                }),
+                op_value_string_attr().prop_map(move |(op, value)| Condition {
+                    subject,
+                    attr: Attr::Path,
+                    op,
+                    value,
+                }),
+                op_value_string_attr().prop_map(move |(op, value)| Condition {
+                    subject,
+                    attr: Attr::Title,
+                    op,
+                    value,
+                }),
+            ]
+        }
+
+        fn arb_edge_condition() -> impl Strategy<Value = Condition> {
+            prop_oneof![
+                op_value_edge_kind().prop_map(|(op, value)| Condition {
+                    subject: Subject::Edge,
+                    attr: Attr::Kind,
+                    op,
+                    value,
+                }),
+                op_value_form().prop_map(|(op, value)| Condition {
+                    subject: Subject::Edge,
+                    attr: Attr::Form,
+                    op,
+                    value,
+                }),
+            ]
+        }
+
+        fn arb_neighbor_filter() -> impl Strategy<Value = NeighborFilter> {
+            (
+                prop_oneof![Just(Direction::Incoming), Just(Direction::Outgoing)],
+                vec(arb_edge_condition(), 0..=2),
+            )
+                .prop_map(|(direction, conditions)| NeighborFilter {
+                    direction,
+                    conditions,
+                })
+        }
+
+        fn arb_node_selector() -> impl Strategy<Value = NodeSelector> {
+            (
+                vec(arb_self_condition(), 0..=3),
+                prop_oneof![Just(None), arb_neighbor_filter().prop_map(Some),],
+            )
+                .prop_map(|(conditions, without)| NodeSelector {
+                    conditions,
+                    without,
+                })
+        }
+
+        fn arb_expand_condition() -> impl Strategy<Value = Condition> {
+            prop_oneof![
+                arb_from_to_condition(Subject::From),
+                arb_from_to_condition(Subject::To),
+                arb_edge_condition(),
+            ]
+        }
+
+        fn arb_edge_policy() -> impl Strategy<Value = EdgePolicy> {
+            vec(arb_expand_condition(), 0..=4).prop_map(|conditions| EdgePolicy { conditions })
+        }
+
+        fn arb_graph_query() -> impl Strategy<Value = GraphQuery> {
+            (
+                vec(arb_node_selector(), 1..=3),
+                prop_oneof![Just(None), arb_edge_policy().prop_map(Some)],
+            )
+                .prop_map(|(initial, expansion)| GraphQuery { initial, expansion })
+        }
+
+        // ── Whitespace injector ──────────────────────────────────
+
+        /// Insert random whitespace at token boundaries. Since the
+        /// canonical Display uses single spaces, this exercises the
+        /// lexer's tolerance. Skips injection inside string literals
+        /// (between `"` opener and `"` closer) so quoted content isn't
+        /// corrupted; respects `\"` escapes.
+        fn inject_whitespace(src: &str, salt: u64) -> String {
+            let mut out = String::with_capacity(src.len() * 2);
+            let mut rng = salt;
+            let mut prev_kind = CharKind::Punct;
+            let mut in_string = false;
+            let mut chars = src.chars().peekable();
+            while let Some(c) = chars.next() {
+                if in_string {
+                    out.push(c);
+                    if c == '\\' {
+                        // Pass through next char unescaped — keep it
+                        // attached to the backslash.
+                        if let Some(next) = chars.next() {
+                            out.push(next);
+                        }
+                    } else if c == '"' {
+                        in_string = false;
+                    }
+                    prev_kind = CharKind::Punct;
+                    continue;
+                }
+                if c == '"' {
+                    out.push(c);
+                    in_string = true;
+                    prev_kind = CharKind::Punct;
+                    continue;
+                }
+                let kind = char_kind(c);
+                if kind != prev_kind && kind != CharKind::Space && prev_kind != CharKind::Space {
+                    let n = (rng % 4) as usize;
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    for i in 0..n {
+                        out.push(match (rng >> (i * 4)) & 3 {
+                            0 => ' ',
+                            1 => '\t',
+                            2 => '\n',
+                            _ => ' ',
+                        });
+                    }
+                }
+                out.push(c);
+                prev_kind = kind;
+            }
+            out
+        }
+
+        #[derive(PartialEq, Eq, Clone, Copy)]
+        enum CharKind {
+            Alpha,
+            Punct,
+            Space,
+        }
+
+        fn char_kind(c: char) -> CharKind {
+            if c.is_whitespace() {
+                CharKind::Space
+            } else if c.is_alphanumeric() || c == '_' || c == '-' {
+                CharKind::Alpha
+            } else {
+                CharKind::Punct
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 256,
+                .. ProptestConfig::default()
+            })]
+
+            /// The core invariant: every AST value the generator can
+            /// produce serializes to text that parses back to itself.
+            #[test]
+            fn prop_round_trip(q in arb_graph_query()) {
+                let s = format!("{q}");
+                let parsed = parse(&s).map_err(|e| {
+                    TestCaseError::fail(format!("re-parse failed for {:?}: {}", s, e))
+                })?;
+                prop_assert_eq!(parsed, q);
+            }
+
+            /// Stability: Display ∘ parse is idempotent. Parsing a
+            /// canonical form and re-displaying yields the same text.
+            #[test]
+            fn prop_stability(q in arb_graph_query()) {
+                let s1 = format!("{q}");
+                let q1 = parse(&s1).map_err(|e| {
+                    TestCaseError::fail(format!("parse failed: {}", e))
+                })?;
+                let s2 = format!("{q1}");
+                prop_assert_eq!(s1, s2);
+            }
+
+            /// Whitespace insensitivity: extra spaces/tabs/newlines
+            /// inserted at token boundaries don't change the parsed
+            /// AST.
+            #[test]
+            fn prop_whitespace_insensitivity(q in arb_graph_query(), salt in any::<u64>()) {
+                let canonical = format!("{q}");
+                let noisy = inject_whitespace(&canonical, salt);
+                let parsed = parse(&noisy).map_err(|e| {
+                    TestCaseError::fail(format!("parse failed on whitespace-noisy form: {} on {:?}", e, noisy))
+                })?;
+                prop_assert_eq!(parsed, q);
+            }
+        }
+
+        // ── Invalid-input variant-coverage tests ─────────────────
+
+        /// For each `DslError` variant, supply a query string that
+        /// triggers exactly that variant. Catches regressions where a
+        /// grammar tweak silently routes an error to a different
+        /// variant.
+        #[test]
+        fn every_dslerror_variant_is_reachable() {
+            let cases: &[(&str, &str)] = &[
+                ("EmptyInput", "   "),
+                ("NoInitialSet", "expand where edge.kind = link;"),
+                ("UnexpectedToken", "node where = Note;"),
+                ("UnknownAttribute", "node where foo = bar;"),
+                ("AmbiguousAttribute", "node; expand where kind = link;"),
+                ("ScopeError", "node where from.kind = Note;"),
+                ("TypeMismatch", "node where kind = {Note};"),
+                ("UnknownKindValue", "node where kind = Notes;"),
+                ("TrailingInput", "node; junk"),
+                ("UnterminatedString", "node where path = \"oops"),
+                ("IllegalCharacter", "node where path = @x;"),
+            ];
+            for (label, src) in cases {
+                let err = match parse(src) {
+                    Err(e) => e,
+                    Ok(_) => panic!("expected {label} parsing {src:?}, but parse succeeded"),
+                };
+                let variant = dslerror_variant(&err);
+                assert_eq!(
+                    variant, *label,
+                    "expected {label} for {src:?}, got {variant} ({err})"
+                );
+            }
+        }
+
+        fn dslerror_variant(e: &DslError) -> &'static str {
+            match e {
+                DslError::EmptyInput => "EmptyInput",
+                DslError::NoInitialSet => "NoInitialSet",
+                DslError::UnexpectedToken { .. } => "UnexpectedToken",
+                DslError::UnknownAttribute { .. } => "UnknownAttribute",
+                DslError::AmbiguousAttribute { .. } => "AmbiguousAttribute",
+                DslError::ScopeError { .. } => "ScopeError",
+                DslError::TypeMismatch { .. } => "TypeMismatch",
+                DslError::UnknownKindValue { .. } => "UnknownKindValue",
+                DslError::TrailingInput { .. } => "TrailingInput",
+                DslError::UnterminatedString { .. } => "UnterminatedString",
+                DslError::IllegalCharacter { .. } => "IllegalCharacter",
+            }
+        }
+    }
 }

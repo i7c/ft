@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8c7ab6752af29d2459e1bd46acea3eccab3e62d53b15c35232d39fa92b4c2a37 # shrinks to q = GraphQuery { initial: [NodeSelector { conditions: [Condition { subject: SelfNode, attr: Path, op: Eq, value: Single(Str("A")) }], without: None }], expansion: None }, salt = 0

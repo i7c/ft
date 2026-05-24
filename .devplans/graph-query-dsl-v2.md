@@ -2,7 +2,7 @@
 id: 020
 name: graph-query-dsl-v2
 title: "Graph: Query DSL v2 — fix language caveats with extensive testing"
-status: implementing
+status: finished
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -233,10 +233,9 @@ node where indegree = 0;                    -- orphans
     would lose author intent and complicate proptest shrinking.
 - [x] `Display` for `Condition`, `NeighborFilter`, `NodeSelector`,
       `EdgePolicy` also implemented, composed into `GraphQuery`.
-- [ ] Round-trip property test: `parse(format!("{}", q)).unwrap() == q`
+- [x] Round-trip property test: `parse(format!("{}", q)).unwrap() == q`
       for every value `q` the proptest generator produces.
-      *(Deferred to session 2 — example-based round-trip tests
-      already in place.)*
+      (Session 2 — see `prop_round_trip` + sibling proptests.)
 
 ### Error type
 
@@ -261,51 +260,45 @@ node where indegree = 0;                    -- orphans
 
 ### Property tests (proptest)
 
-- [ ] Generator: random valid `GraphQuery` AST values with bounded
+- [x] Generator: random valid `GraphQuery` AST values with bounded
       depth (1–3 node blocks, 0–4 conditions each, 0–1 `without`,
       with/without `expand`).
-- [ ] **Round-trip:** `parse(format!("{q}")) == Ok(q)` for every
+- [x] **Round-trip:** `parse(format!("{q}")) == Ok(q)` for every
       generated `q`. This is the central correctness invariant.
-- [ ] **Stability:** `parse(format!("{}", parse(format!("{q}")).unwrap()))`
+- [x] **Stability:** `parse(format!("{}", parse(format!("{q}")).unwrap()))`
       equals the first parse (two passes are idempotent).
-- [ ] **Whitespace insensitivity:** for every generated `q`,
+- [x] **Whitespace insensitivity:** for every generated `q`,
       `parse(canonical)` equals `parse(canonical_with_extra_whitespace)`.
-- [ ] **Invalid-input generator:** generates strings that violate
-      one specific grammar rule each; assert `parse` returns the
-      matching `DslError` variant. (Sanity: error mapping is
-      complete.)
+- [x] **Invalid-input generator:** strings violating one specific
+      grammar rule each; assert `parse` returns the matching
+      `DslError` variant (implemented as
+      `every_dslerror_variant_is_reachable` — table-driven, one
+      assertion per `DslError` variant).
 
 ### Fixture-matrix test runner
 
-- [ ] New `ft-core/tests/graph_query_matrix.rs` integration test.
-- [ ] New `ft-core/tests/fixtures/graph_queries/` directory holding
-      one file per query case:
-  ```
-  graph_queries/
-    01-all-nodes.dsl          (query source)
-    01-all-nodes.expected     (expected NoteId paths, one per line)
-    02-top-level-dirs.dsl
-    02-top-level-dirs.expected
-    ...
-  ```
-- [ ] Test runner reads every `.dsl` file under the directory,
+- [x] New `ft-core/tests/graph_query_matrix.rs` integration test.
+- [x] New `ft-core/tests/fixtures/graph_queries/` directory holding
+      one file per query case (`.dsl` + `.expected` pair).
+- [x] Test runner reads every `.dsl` file under the directory,
       runs `parse → select` against the `dirs` fixture vault, and
-      compares the sorted set of resulting node paths to the
-      `.expected` file. Mismatches print a unified diff.
-- [ ] Initial matrix (≥15 cases) covers:
+      compares the sorted set of resulting node lines to the
+      `.expected` file. Mismatches print a unified-style diff.
+- [x] Initial matrix (18 cases) covers:
   - `node;` → all nodes
   - Every kind individually
-  - Every op × {kind, path, title}
-  - `starts_with` on hierarchical paths
-  - `in` with various set sizes (1, 2, 5)
+  - Every op × {kind, path, title} (=, !=, in, includes,
+    starts_with, ends_with)
+  - `starts_with` on hierarchical paths (strict prefix)
+  - `in` with various set sizes
   - `indegree = 0`, `outdegree = 0`
   - `without incoming(kind = ...)` patterns
   - Multiple node blocks unioned
-  - Expand-block round trip: build tree, assert frontier
   - Edge cases: empty result, single-node result
-- [ ] Adding a new case is one new `.dsl` + one new `.expected`
-      file — no test code change. Onboarding new contributors to
-      "test your case" is a one-line README in the fixtures dir.
+  - `self.X` (explicit) and bare `X` produce same result
+- [x] Adding a new case is one new `.dsl` + one new `.expected`
+      file — no test code change. README in the fixtures dir
+      documents the format and steps.
 
 ### Documentation
 
@@ -333,9 +326,9 @@ node where indegree = 0;                    -- orphans
   - All inline test query strings updated
 - [x] `ft-core/src/graph/query.rs` — replaced v1 grammar entirely;
       no backwards-compat shim.
-- [ ] Plan 019 (`graph-cli`) — update the default-query examples
-      and the TUI fallback default. *(Already done while authoring
-      plan 019 in v2 form; will re-verify in session 2.)*
+- [x] Plan 019 (`graph-cli`) — verified examples and default
+      query use v2 grammar throughout; tweaked one residual
+      reference ("no `expand over`" → "no `expand` block").
 
 ### Build invariants
 
@@ -520,7 +513,7 @@ attribute matrix, op semantics, error catalog, worked examples).
 Updated `docs/architecture.md` to list `graph/query.rs` and added
 a "Graph query DSL" subsection pointing at the reference.
 
-### Session 2 · planned
+### Session 2 · 2026-05-24 · done
 **Goal:** Extensive testing. Proptest round-trip + stability +
 whitespace-insensitivity invariants. Invalid-input generator with
 DslError-variant coverage assertion. Fixture-matrix runner under
@@ -528,4 +521,23 @@ DslError-variant coverage assertion. Fixture-matrix runner under
 data dir holding ≥15 `.dsl` + `.expected` pairs. README in the
 fixtures dir documenting how to add a case. Update plan 019's plan
 file to reference v2 grammar in its examples and default-query
-fallback. 
+fallback.
+**Outcome:** Added proptest module to `ft-core/src/graph/query.rs`
+with a constrained AST generator (only well-typed conditions per
+scope; literal ident values restricted to known kind/form sets so
+round-trip is safe). Three proptest invariants — `prop_round_trip`
+(parse∘format==q), `prop_stability` (format∘parse∘format is fixed),
+`prop_whitespace_insensitivity` (extra whitespace at token
+boundaries doesn't change the AST; respects string-literal
+boundaries). All proptests run 256 cases per invariant.
+`every_dslerror_variant_is_reachable` table-driven test asserts
+that every `DslError` variant has at least one query that triggers
+exactly it — catches future refactors that might silently route
+errors. New integration test `ft-core/tests/graph_query_matrix.rs`
+reads every `.dsl`/`.expected` pair from
+`ft-core/tests/fixtures/graph_queries/` (18 cases) and diffs sorted
+results — diff output makes mismatches readable. README in the
+fixtures dir documents the format and onboarding steps. Re-checked
+plan 019 examples for v2 consistency. Full workspace test suite
+green (1100+ tests including the 4 proptests and 18-case matrix).
+Clippy + fmt clean. 

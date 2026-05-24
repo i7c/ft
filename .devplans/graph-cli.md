@@ -108,7 +108,7 @@ default-query seed path share semantics.
     terminates and reproduces A multiple times without the
     `cycle` flag.
   - `walk_no_expand_block_returns_flat_roots`: a DSL with only
-    `node` blocks (no `expand over`) returns roots with empty
+    `node` blocks (no `expand` block) returns roots with empty
     children regardless of `max_depth`.
 
 ### CLI: `ft graph query` (ft/src/cmd/graph.rs — new file)
