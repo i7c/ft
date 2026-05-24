@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+unknown value `html` for `form` at position 31 (allowed: wiki, md)

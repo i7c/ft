@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+`self` not valid here (position 19): in an `expand` block use `from.<attr>`, `to.<attr>`, or `edge.<attr>`

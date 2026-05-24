@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+unterminated string starting at position 18

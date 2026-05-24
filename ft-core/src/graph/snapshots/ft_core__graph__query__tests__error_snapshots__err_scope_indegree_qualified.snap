@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+`from` not valid here (position 24): `indegree` is only supported on `self` in a node block (selection-time only)

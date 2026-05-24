@@ -34,6 +34,7 @@ ft/
         │   ├── mod.rs          # Graph + NodeKind/EdgeKind/NoteId/LinkEdge
         │   ├── parser.rs       # extract_links: wikilinks, md links, embeds
         │   ├── resolve.rs      # Obsidian shortest-path resolution rules
+        │   ├── query.rs        # graph query DSL (parse / select / expand)
         │   └── rename.rs       # plan_rename / apply_rename_plan
         ├── markdown.rs         # heading extractor + shared LineSkipState
         ├── dates.rs            # ISO / keyword / relative / NL parsing
@@ -131,6 +132,20 @@ the CLI's `add` and the TUI's `c` / `a` chords run
 `create_or_get_periodic_path` first so the configured
 `[periodic_notes.daily].template` is rendered before the section gets
 spliced in.
+
+### Graph query DSL (`graph::query`)
+
+`ft-core::graph::query::parse(src)` returns a `GraphQuery { initial,
+expansion }`. The DSL describes a navigation *policy*, not a result
+subgraph: `GraphQuery::select(&graph)` returns the initial set of
+`NoteId`s; `GraphQuery::expand(&graph, parent)` returns the children
+for one hop. Consumers (the TUI graph tab and the `ft graph query`
+CLI) compose those with their own depth and cycle handling — the
+canonical materializer is `GraphQuery::walk(&graph, &WalkOptions)`.
+The parser is hand-rolled recursive-descent, mirroring `query::dsl`,
+and rejects op/value type mismatches and scope errors at parse time.
+See `docs/graph-query-dsl.md` for the grammar, attribute compatibility
+matrix, worked examples, and error catalog.
 
 ### Query language (`query::dsl`)
 

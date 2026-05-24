@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+unknown attribute `foo` at position 11

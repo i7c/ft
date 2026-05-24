@@ -553,7 +553,7 @@ mod tree_tests {
 
     fn dirs_query() -> GraphQuery {
         parse_query(
-            "node n with n.kind = Directory without (edge e(_, n) with e.kind = directory-contains); expand over e(n, m) with n.kind = Directory with e.kind = directory-contains with m.kind in {Note, Directory};",
+            "node where kind = Directory without incoming(kind = directory-contains); expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};",
         )
         .unwrap()
     }
@@ -658,7 +658,7 @@ mod tree_tests {
     #[test]
     fn expand_unexpandable_node_returns_false() {
         let g = dirs_graph();
-        let q = parse_query("node n with n.kind = Note;").unwrap();
+        let q = parse_query("node where kind = Note;").unwrap();
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
@@ -723,7 +723,7 @@ mod tree_tests {
         let g = Graph::build(&v).unwrap();
 
         let q = parse_query(
-            "expand over e(n, m) with n.kind = Directory with e.kind = directory-contains with m.kind = Note;",
+            "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
         ).unwrap();
 
         let root_id = g.node_by_path(std::path::Path::new("")).unwrap();

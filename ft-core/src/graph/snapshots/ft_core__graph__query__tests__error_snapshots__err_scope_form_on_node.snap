@@ -1,0 +1,5 @@
+---
+source: ft-core/src/graph/query.rs
+expression: "format! (\"{err}\")"
+---
+`self` not valid here (position 11): `form` is an edge attribute — use `edge.form` in an expand block or neighbor filter
