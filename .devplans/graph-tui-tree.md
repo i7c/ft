@@ -338,13 +338,26 @@ When the user refreshes (`r` or `refresh()`):
 
 ## Sessions
 
-### Session 1 · 2026-05-24 · planned
+### Session 1 · 2026-05-24 · done
 **Goal:** `TreeState` data structure + unit tests. Implement
 `TreeRow`, `TreeState`, flat-list manipulation (build_from,
 expand_at, collapse_at), cursor movement, and expansion cache.
 Pure logic — no TUI rendering yet. Unit tests covering all
 operations.
-**Outcome:**
+**Outcome:** New `ft/src/tui/tabs/graph.rs` (~280 lines). `TreeRow`
+{ depth, note_id, display, kind_char, expanded, expandable }.
+`TreeState` with flat `Vec<TreeRow>`, expansion cache
+(`HashMap<NoteId, Option<Vec<NoteId>>>`). Operations:
+`build_from` clears state and creates root rows; `expand_at`
+toggles (collapses if expanded, expands if collapsed via
+`query.expand()` with cache); `collapse_at` removes descendant
+rows by depth; `move_selection_up/down` wrap at bounds.
+`make_row` renders Note (file stem), Directory (name + /), Ghost
+(raw) with N/D/G kind chars. 10 unit tests covering:
+build, expand, collapse, toggle, nested expand, unexpandable
+nodes, selection wrapping, empty tree, cache reuse, empty
+children. 593 workspace tests green. Clippy + fmt clean. Dead
+code allowed pending Session 2 Tab wiring.
 
 ### Session 2 · 2026-05-24 · planned
 **Goal:** `GraphTab` skeleton + input bar. Register as the 5th TUI
