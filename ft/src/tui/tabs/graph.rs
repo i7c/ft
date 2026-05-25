@@ -535,14 +535,13 @@ impl Tab for GraphTab {
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
-                // Create from template: open the template picker. The
-                // folder picker step that normally follows is *also*
-                // shown — the user gets to pick a folder after the
-                // template (matching the Notes-tab flow). We don't seed
-                // the folder here because the template picker hasn't
-                // run yet, and short-circuiting past it would require a
-                // larger surface change.
-                self.create_state = Some(create::begin_template_picking(ctx));
+                // Create from template: open the template picker with
+                // the folder pre-seeded from the current selection.
+                // After the template is chosen, the flow skips the
+                // folder picker and goes straight to the filename
+                // prompt — same selection-driven shape as `c`.
+                let folder = self.create_folder_from_selection();
+                self.create_state = Some(create::begin_template_picking(ctx, Some(folder)));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('r'), _) => {

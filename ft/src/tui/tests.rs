@@ -6186,6 +6186,44 @@ fn graph_capital_c_opens_template_picker() -> Result<()> {
 }
 
 #[test]
+fn graph_capital_c_skips_folder_picker_after_template() -> Result<()> {
+    // Use the notes-create fixture so we have real templates. The graph
+    // tab pre-seeds the folder from selection (vault root `.` here), so
+    // after picking a template the flow must skip `FolderPicking` and
+    // land directly in the filename prompt.
+    let (_dir, vault) = notes_create_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Graph tab is index 0.
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let picker_frame = render(&mut app, 80, 24);
+    assert!(
+        picker_frame.contains("1/4 template"),
+        "template picker should be open:\n{picker_frame}"
+    );
+    // Select the first template (Enter). For the graph-tab path this
+    // must skip the folder picker and land in the filename prompt.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let next_frame = render(&mut app, 80, 24);
+    assert!(
+        next_frame.contains("filename"),
+        "after template pick on graph tab, expected filename prompt — got:\n{next_frame}"
+    );
+    assert!(
+        !next_frame.contains("folder · "),
+        "graph tab must NOT show the folder picker after template — got:\n{next_frame}"
+    );
+    Ok(())
+}
+
+#[test]
 fn graph_create_overlay_captures_keys_before_tree_bindings() -> Result<()> {
     // While the create overlay is up, the tree's `j`/`k` should be
     // inert — keypresses go to the picker / edit buffer. Smoke-check by

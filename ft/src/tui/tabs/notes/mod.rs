@@ -314,7 +314,7 @@ impl NotesTab {
                 EventOutcome::Consumed
             }
             (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
-                self.state = NotesState::Creating(begin_template_picking(ctx));
+                self.state = NotesState::Creating(begin_template_picking(ctx, None));
                 EventOutcome::Consumed
             }
             // `t` is a one-shot synonym for `p` then `d` — opens today's

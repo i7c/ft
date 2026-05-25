@@ -193,7 +193,10 @@ fn render_periodic_leader(frame: &mut Frame, area: Rect) {
 pub(crate) fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
     use crate::tui::notes_actions::create::CreateState as CS;
     match cs {
-        CS::TemplatePicking { picker } => render_path_picker_popup(
+        CS::TemplatePicking {
+            picker,
+            folder_seed: _,
+        } => render_path_picker_popup(
             frame,
             area,
             " create · 1/4 template ",
