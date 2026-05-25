@@ -506,7 +506,7 @@ fn handle_target_picker_key(
     }
 }
 
-fn advance_to_multiselect(ctx: &TabCtx, hit: Hit) -> MoveStep {
+pub fn advance_to_multiselect(ctx: &TabCtx, hit: Hit) -> MoveStep {
     let abs = ctx.vault.path.join(&hit.path);
     let content = match std::fs::read_to_string(&abs) {
         Ok(s) => s,
@@ -1702,7 +1702,7 @@ fn advance_new_target_to_composing(
 /// the collision prompt). Behavior matches the regular target-picker
 /// path: we use the on-disk content as-is and treat the file as
 /// non-new (`target_is_new: false`).
-fn compose_with_existing_target(
+pub fn compose_with_existing_target(
     carry: MoveCarry,
     target_rel: PathBuf,
     target_abs: PathBuf,

@@ -28,16 +28,25 @@ use ratatui::{
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 
+use std::sync::Arc;
+
 use ft_core::periodic::Period;
+use ft_core::search::Hit;
 
 use crate::tui::{
     event::Event,
     notes_actions::{
         create::{self, CreateState, CreateStep},
         periodic::run_periodic_open,
+        queue_toast,
+        section_move::{
+            self, advance_to_multiselect, compose_with_existing_target, MoveCarry, MoveStep,
+            SectionMoveState,
+        },
     },
-    tab::{AppRequest, EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
+    widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
 // ── GraphTab ──────────────────────────────────────────────────────────
@@ -74,6 +83,46 @@ pub struct GraphTab {
     /// Set by `p`; cleared on any subsequent keypress (the period letter
     /// fires the open flow; everything else cancels silently).
     periodic_leader: bool,
+    /// Active move-section flow. `None` outside the flow; `Some` while
+    /// the user is walking the two-phase graph-driven UX or inside a
+    /// shared [`SectionMoveState`] step.
+    move_outer: Option<GraphMoveOuter>,
+}
+
+/// Graph-tab outer wrapper around the shared section-move flow.
+///
+/// The shared module's [`SectionMoveState`] assumes both source and
+/// target are picked via fuzzy pickers. The Graph tab inserts two
+/// tree-driven phases — `SourceFromTree` before the headings step and
+/// `TargetFromTree` after it — and falls back to the shared picker
+/// flow via `t`.
+pub enum GraphMoveOuter {
+    /// `m` pressed once: awaiting `m` again (confirm selected node as
+    /// source), `t` (open fuzzy source picker), or Esc (cancel).
+    SourceFromTree,
+    /// `t` was pressed during phase 1: fuzzy picker open. `Esc` returns
+    /// to `SourceFromTree`; selecting a file transitions to
+    /// `Inner(HeadingMultiSelect)`.
+    SourcePicker {
+        picker: FuzzyPicker<VaultFilePickerSource>,
+    },
+    /// In a shared `SectionMoveState` step (headings multi-select or
+    /// composing). The Graph tab intercepts the headings → target
+    /// transition and swaps to `TargetFromTree` rather than letting the
+    /// shared `TargetPicking` (fuzzy) own the screen.
+    Inner(SectionMoveState),
+    /// Phase 2: target via tree. `m` confirms the selected node, `t`
+    /// falls back to picker, `/` enters input mode for query
+    /// refinement, `Esc` returns to the headings step rebuilt from the
+    /// carry.
+    TargetFromTree { carry: MoveCarry },
+    /// Phase 2 fallback: fuzzy target picker open. `Esc` returns to
+    /// `TargetFromTree`; selecting a target transitions to
+    /// `Inner(Composing)`.
+    TargetPicker {
+        picker: FuzzyPicker<VaultFilePickerSource>,
+        carry: MoveCarry,
+    },
 }
 
 impl GraphTab {
@@ -85,6 +134,293 @@ impl GraphTab {
             input_mode: false,
             create_state: None,
             periodic_leader: false,
+            move_outer: None,
+        }
+    }
+
+    /// Resolve the currently-selected row to a `Hit` that the shared
+    /// section-move flow can consume. Returns `None` for non-Note rows
+    /// (directories, ghosts, empty selection).
+    fn selected_note_hit(&self) -> Option<Hit> {
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let row = v.tree.rows().get(v.selected)?;
+        let NodeKind::Note(n) = graph.node(row.note_id) else {
+            return None;
+        };
+        Some(Hit {
+            path: n.path.clone(),
+            heading: None,
+            file_score: 0,
+            heading_score: None,
+            total_score: 0,
+        })
+    }
+
+    fn open_source_picker(&self, ctx: &TabCtx) -> FuzzyPicker<VaultFilePickerSource> {
+        FuzzyPicker::new(VaultFilePickerSource::new(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+        ))
+    }
+
+    /// Apply a `MoveStep` returned by the shared module while we're in
+    /// `Inner(...)`. The Graph tab intercepts the headings → target
+    /// transition (the shared step yields `TargetPicking { ..., picker, error }`)
+    /// and re-routes to `TargetFromTree`, discarding the picker and
+    /// using a tree-driven target phase instead. All other transitions
+    /// pass through unchanged.
+    fn apply_inner_step(&mut self, step: MoveStep) {
+        match step {
+            MoveStep::Stay | MoveStep::NotHandled => {}
+            MoveStep::Finished => {
+                self.move_outer = None;
+            }
+            MoveStep::Transition(SectionMoveState::TargetPicking {
+                source_rel,
+                source_abs,
+                source_content,
+                headings,
+                selected,
+                focus,
+                clipboard,
+                picker: _,
+                error: _,
+            }) => {
+                let carry = MoveCarry {
+                    source_rel,
+                    source_abs,
+                    source_content,
+                    headings,
+                    selected,
+                    focus,
+                    clipboard,
+                };
+                self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+            }
+            MoveStep::Transition(next) => {
+                self.move_outer = Some(GraphMoveOuter::Inner(next));
+            }
+        }
+    }
+
+    /// Confirm the currently-selected node as move source. Reads the
+    /// file, extracts headings, transitions to `Inner(HeadingMultiSelect)`.
+    /// No-op + toast when the selected row isn't a Note.
+    fn confirm_source_from_tree(&mut self, ctx: &TabCtx) {
+        let Some(hit) = self.selected_note_hit() else {
+            queue_toast(ctx, "select a note row to use as source", ToastStyle::Error);
+            return;
+        };
+        // advance_to_multiselect can yield Finished on IO error / empty
+        // headings — fold it through the same dispatcher as Inner so the
+        // toast surfaces correctly.
+        let step = advance_to_multiselect(ctx, hit);
+        self.apply_inner_step(step);
+    }
+
+    /// Confirm the currently-selected node as move target. Reads the
+    /// target file, builds `Composing`, transitions to `Inner(Composing)`.
+    /// Toasts on non-Note selection or same-file.
+    fn confirm_target_from_tree(&mut self, ctx: &TabCtx) {
+        let Some(hit) = self.selected_note_hit() else {
+            queue_toast(ctx, "select a note row to use as target", ToastStyle::Error);
+            return;
+        };
+        let Some(GraphMoveOuter::TargetFromTree { carry }) = self.move_outer.take() else {
+            return;
+        };
+        if hit.path == carry.source_rel {
+            queue_toast(
+                ctx,
+                "same-file move is out of scope — pick a different target",
+                ToastStyle::Error,
+            );
+            // Restore the outer so the user can pick again.
+            self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+            return;
+        }
+        let target_abs = ctx.vault.path.join(&hit.path);
+        let target_content = match std::fs::read_to_string(&target_abs) {
+            Ok(s) => s,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("could not read target: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        let step = compose_with_existing_target(carry, hit.path, target_abs, target_content);
+        self.apply_inner_step(step);
+    }
+
+    /// Dispatch a keystroke while the move overlay is active. Returns
+    /// `EventOutcome::NotHandled` when no move flow is in progress
+    /// (the caller's regular keymap can run).
+    fn handle_move_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(outer) = self.move_outer.take() else {
+            return EventOutcome::NotHandled;
+        };
+        match outer {
+            GraphMoveOuter::SourceFromTree => match (k.code, k.modifiers) {
+                (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                    self.confirm_source_from_tree(ctx);
+                    // confirm_source_from_tree only transitions the
+                    // outer on success (Note row → headings step). On
+                    // toast paths (non-Note selection, IO error, no
+                    // headings) it leaves move_outer at `None` — but
+                    // the user should stay in the source phase so
+                    // they can navigate to a Note and try again.
+                    if self.move_outer.is_none() {
+                        self.move_outer = Some(GraphMoveOuter::SourceFromTree);
+                    }
+                    EventOutcome::Consumed
+                }
+                (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                    self.move_outer = Some(GraphMoveOuter::SourcePicker {
+                        picker: self.open_source_picker(ctx),
+                    });
+                    EventOutcome::Consumed
+                }
+                (KeyCode::Esc, _) => {
+                    // Drop back to normal mode (move_outer already taken).
+                    EventOutcome::Consumed
+                }
+                _ => {
+                    // Restore and ignore.
+                    self.move_outer = Some(GraphMoveOuter::SourceFromTree);
+                    EventOutcome::NotHandled
+                }
+            },
+            GraphMoveOuter::SourcePicker { mut picker } => match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => {
+                    let step = advance_to_multiselect(ctx, hit);
+                    self.apply_inner_step(step);
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::Cancelled => {
+                    self.move_outer = Some(GraphMoveOuter::SourceFromTree);
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::StillOpen => {
+                    self.move_outer = Some(GraphMoveOuter::SourcePicker { picker });
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::NotHandled => {
+                    self.move_outer = Some(GraphMoveOuter::SourcePicker { picker });
+                    EventOutcome::NotHandled
+                }
+            },
+            GraphMoveOuter::Inner(mut sms) => {
+                let step = section_move::handle_key(&mut sms, k, ctx);
+                // If the step didn't transition away, put the state back
+                // (apply_inner_step handles Transition/Finished by
+                // assigning move_outer itself).
+                match step {
+                    MoveStep::Stay => {
+                        self.move_outer = Some(GraphMoveOuter::Inner(sms));
+                        EventOutcome::Consumed
+                    }
+                    MoveStep::NotHandled => {
+                        self.move_outer = Some(GraphMoveOuter::Inner(sms));
+                        EventOutcome::NotHandled
+                    }
+                    other => {
+                        self.apply_inner_step(other);
+                        EventOutcome::Consumed
+                    }
+                }
+            }
+            GraphMoveOuter::TargetFromTree { carry } => match (k.code, k.modifiers) {
+                (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                    self.confirm_target_from_tree(ctx);
+                    EventOutcome::Consumed
+                }
+                (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                    self.move_outer = Some(GraphMoveOuter::TargetPicker {
+                        picker: self.open_source_picker(ctx),
+                        carry,
+                    });
+                    EventOutcome::Consumed
+                }
+                (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                    // `/` falls back to the tab's query-input mode so
+                    // the user can refine the visible tree. We keep the
+                    // move state alive — exiting input mode returns
+                    // here.
+                    self.input_mode = true;
+                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                    EventOutcome::Consumed
+                }
+                (KeyCode::Esc, _) => {
+                    // Cancel back to the heading-multi-select with the
+                    // same carry data so the user can re-pick headings
+                    // or escape further.
+                    self.move_outer = Some(GraphMoveOuter::Inner(
+                        SectionMoveState::HeadingMultiSelect {
+                            source_rel: carry.source_rel,
+                            source_abs: carry.source_abs,
+                            source_content: carry.source_content,
+                            headings: carry.headings,
+                            selected: carry.selected,
+                            focus: carry.focus,
+                        },
+                    ));
+                    EventOutcome::Consumed
+                }
+                // Pass arrow/jk/Enter through to the tree-navigation
+                // keymap so the user can move selection in the tree.
+                _ => {
+                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                    EventOutcome::NotHandled
+                }
+            },
+            GraphMoveOuter::TargetPicker { mut picker, carry } => match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => {
+                    if hit.path == carry.source_rel {
+                        // Same-file: reopen picker with a fresh inst.
+                        queue_toast(
+                            ctx,
+                            "same-file move is out of scope — pick a different target",
+                            ToastStyle::Error,
+                        );
+                        self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
+                        return EventOutcome::Consumed;
+                    }
+                    let target_abs = ctx.vault.path.join(&hit.path);
+                    let target_content = match std::fs::read_to_string(&target_abs) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            queue_toast(
+                                ctx,
+                                &format!("could not read target: {e}"),
+                                ToastStyle::Error,
+                            );
+                            self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                            return EventOutcome::Consumed;
+                        }
+                    };
+                    let step =
+                        compose_with_existing_target(carry, hit.path, target_abs, target_content);
+                    self.apply_inner_step(step);
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::Cancelled => {
+                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::StillOpen => {
+                    self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
+                    EventOutcome::Consumed
+                }
+                PickerOutcome::NotHandled => {
+                    self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
+                    EventOutcome::NotHandled
+                }
+            },
         }
     }
 
@@ -392,6 +728,20 @@ impl Tab for GraphTab {
             return Ok(self.handle_create_key(k, ctx));
         }
 
+        // Move-section flow: shared and tree-driven phases all funnel
+        // through one dispatcher. Most of them capture the keyboard,
+        // but `TargetFromTree` deliberately returns `NotHandled` for
+        // navigation keys (j/k/g/G/etc.) so the tree-cursor keymap
+        // further down still runs.
+        if self.move_outer.is_some() {
+            let outcome = self.handle_move_key(k, ctx);
+            if matches!(outcome, EventOutcome::Consumed) {
+                return Ok(outcome);
+            }
+            // outcome == NotHandled — fall through to tree-navigation /
+            // input-mode / etc. while keeping move_outer alive.
+        }
+
         // Periodic-leader chord: a single keystroke fires (or cancels)
         // the open flow. Runs ahead of input mode and the outer-tab
         // passthrough so the period letters can't leak through.
@@ -573,6 +923,13 @@ impl Tab for GraphTab {
                 self.create_state = Some(create::begin_filename_prompt(folder, None));
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                // Enter the move-section source phase. A second `m`
+                // confirms the currently-selected node as source; `t`
+                // opens the fuzzy picker; Esc cancels.
+                self.move_outer = Some(GraphMoveOuter::SourceFromTree);
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Char('p'), KeyModifiers::NONE) => {
                 self.periodic_leader = true;
                 Ok(EventOutcome::Consumed)
@@ -600,7 +957,7 @@ impl Tab for GraphTab {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
         let [strip_area, tree_area, input_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(1),
@@ -734,6 +1091,78 @@ impl Tab for GraphTab {
         // centered modal listing the period choices (d/w/m/q/y).
         if self.periodic_leader {
             notes_view::render_periodic_leader(frame, area);
+        }
+
+        // Move-section overlay. Inner(...) defers to the shared Notes
+        // renderer (multiselect / new-target / compose popups). The two
+        // tree-driven phases render a thin status banner over the tab
+        // strip so the user knows what `m`/`t`/Esc do right now.
+        if let Some(outer) = self.move_outer.as_mut() {
+            match outer {
+                GraphMoveOuter::SourceFromTree => {
+                    render_move_banner(
+                        frame,
+                        strip_area,
+                        "MOVE source · m: use selected · t: pick from list · Esc: cancel",
+                    );
+                }
+                GraphMoveOuter::SourcePicker { picker: _ } | GraphMoveOuter::Inner(_) => {
+                    // SourcePicker uses the shared picker; Inner uses
+                    // the shared move overlay. Forward through a
+                    // throwaway SectionMoveState so the existing render
+                    // path can be reused for both.
+                    if let GraphMoveOuter::SourcePicker { picker } = outer {
+                        let mut wrap = SectionMoveState::SourcePicking {
+                            picker: std::mem::replace(
+                                picker,
+                                FuzzyPicker::new(VaultFilePickerSource::new(
+                                    Arc::clone(ctx.vault),
+                                    Arc::clone(ctx.recents),
+                                )),
+                            ),
+                        };
+                        notes_view::render_move_overlay(frame, area, &mut wrap);
+                        // Restore the original picker (we swapped it
+                        // out to satisfy the borrow checker without
+                        // taking ownership of the variant).
+                        if let SectionMoveState::SourcePicking { picker: orig } = wrap {
+                            *picker = orig;
+                        }
+                    } else if let GraphMoveOuter::Inner(sms) = outer {
+                        notes_view::render_move_overlay(frame, area, sms);
+                    }
+                }
+                GraphMoveOuter::TargetFromTree { .. } => {
+                    render_move_banner(
+                        frame,
+                        strip_area,
+                        "MOVE target · m: use selected · t: pick from list · /: refine · Esc: back",
+                    );
+                }
+                GraphMoveOuter::TargetPicker { picker, carry } => {
+                    let mut wrap = SectionMoveState::TargetPicking {
+                        source_rel: carry.source_rel.clone(),
+                        source_abs: carry.source_abs.clone(),
+                        source_content: carry.source_content.clone(),
+                        headings: carry.headings.clone(),
+                        selected: carry.selected.clone(),
+                        focus: carry.focus,
+                        clipboard: carry.clipboard.clone(),
+                        picker: std::mem::replace(
+                            picker,
+                            FuzzyPicker::new(VaultFilePickerSource::new(
+                                Arc::clone(ctx.vault),
+                                Arc::clone(ctx.recents),
+                            )),
+                        ),
+                        error: None,
+                    };
+                    notes_view::render_move_overlay(frame, area, &mut wrap);
+                    if let SectionMoveState::TargetPicking { picker: orig, .. } = wrap {
+                        *picker = orig;
+                    }
+                }
+            }
         }
     }
 
@@ -964,6 +1393,21 @@ impl ExpandedView {
         buf.push('…');
         buf
     }
+}
+
+/// One-line status banner overlaid on the view-strip row while a
+/// tree-driven move phase is active (Source/Target). Replaces the
+/// strip's view labels so the user can see which keys fire what right
+/// now.
+fn render_move_banner(frame: &mut Frame, area: Rect, text: &str) {
+    let span = Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(Paragraph::new(Line::from(span)), area);
 }
 
 fn starts_with<T: PartialEq>(haystack: &[T], needle: &[T]) -> bool {

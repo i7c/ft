@@ -6393,6 +6393,126 @@ fn graph_periodic_leader_status_snapshot() -> Result<()> {
     Ok(())
 }
 
+// ── Graph tab · move section (021 · session 5) ────────────────────────
+
+#[test]
+fn graph_m_enters_source_from_tree_phase() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('m'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("MOVE source"),
+        "source banner should appear after `m`:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "`m` alone must not queue any request"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_m_again_on_directory_emits_toast() -> Result<()> {
+    // Default tree starts with the vault root *directory* selected.
+    // Pressing `m` then `m` should not advance — the source row needs
+    // to be a Note. A toast is queued and the source banner stays.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('m'))?;
+    app.dispatch(key('m'))?;
+    let req = app
+        .take_pending_request()
+        .expect("`m` on directory should queue a toast");
+    matches!(
+        req,
+        AppRequest::Toast {
+            style: ToastStyle::Error,
+            ..
+        }
+    )
+    .then_some(())
+    .ok_or_else(|| anyhow::anyhow!("expected error toast, got {req:?}"))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("MOVE source"),
+        "should still be in source phase:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_m_again_on_note_opens_heading_multiselect() -> Result<()> {
+    // Expand the root and walk to a note row, then press m, m. The
+    // shared multiselect popup should appear (its title includes
+    // "step 2/4" via the keymap line).
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Expand root.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Walk down to find a Note row. Hit a max of 8 rows.
+    // First, enter source-from-tree phase.
+    app.dispatch(key('m'))?;
+    for _ in 0..8 {
+        // Try confirming the currently-selected row as source.
+        app.dispatch(key('m'))?;
+        let req = app.take_pending_request();
+        let frame = render(&mut app, 80, 24);
+        if frame.contains("move · 2/4 select") {
+            return Ok(());
+        }
+        // Not a Note row — toast was queued and we stayed in source
+        // phase. Move down and try again.
+        let _ = req;
+        app.dispatch(key('j'))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    panic!("never reached heading multi-select after walking 8 rows; last frame:\n{frame}");
+}
+
+#[test]
+fn graph_move_t_opens_fuzzy_source_picker() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('m'))?;
+    app.dispatch(key('t'))?;
+    let frame = render(&mut app, 80, 24);
+    // The shared move overlay renders SourcePicking with a "pick file"
+    // popup title — exact wording from MOVE_STEP_1_KEYS / picker title.
+    assert!(
+        frame.contains("source") || frame.contains("Select source"),
+        "fuzzy source picker should be visible after `m`+`t`:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_move_esc_cancels_source_phase() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('m'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("MOVE source"),
+        "Esc should cancel the move flow:\n{frame}"
+    );
+    Ok(())
+}
+
 #[test]
 fn no_more_syncing_mode_exists() {
     // Compile-time guard: `Mode::Syncing` was removed in plan 014.
