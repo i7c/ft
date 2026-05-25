@@ -223,32 +223,33 @@ single view.
 
 ### S3 — Periodic notes (`p` leader)
 
-- [ ] `p` (Normal mode) on the Graph tab → enter a `PeriodicLeader`
+- [x] `p` (Normal mode) on the Graph tab → enter a `PeriodicLeader`
       state. The next key chooses a period:
   - `d` → daily, `w` → weekly, `m` → monthly, `q` → quarterly,
     `y` → yearly. Mirrors `notes/mod.rs:434-439`.
   - Any other key (including `Esc`) → cancel back to Normal.
 
-- [ ] `t` (Normal mode) → one-shot synonym for "today's daily note",
+- [x] `t` (Normal mode) → one-shot synonym for "today's daily note",
       matching the Notes tab's `t` binding at `notes/mod.rs:416`.
 
-- [ ] Reuse `run_periodic_open` from `notes/mod.rs:1433`. If it isn't
+- [x] Reuse `run_periodic_open` from `notes/mod.rs:1433`. If it isn't
       already free of `NotesTab` coupling, lift it into a shared
       `ft/src/tui/notes_actions/periodic.rs` module. The function
       ultimately resolves to "create-if-missing then open in editor",
       which has no tab-specific state.
 
-- [ ] After the editor returns, `refresh()` runs as usual, the new
+- [x] After the editor returns, `refresh()` runs as usual, the new
       periodic note appears, and the user's expansion (Session 1)
-      restores cleanly.
+      restores cleanly. *(Refresh wiring is the App's editor-return
+      hook; the periodic flow itself just queues OpenInEditor.)*
 
-- [ ] Tests:
+- [x] Tests:
   - `graph_p_enters_periodic_leader`.
   - `graph_p_then_d_opens_daily`.
-  - `graph_t_opens_daily_shortcut`.
-  - `graph_p_then_unknown_key_cancels`.
-  - Snapshot: `graph_periodic_leader_status_80x24` (status line shows
-    the leader is active, listing `d w m q y`).
+  - `graph_t_opens_today_when_daily_configured` *(named to match the
+    notes-tab equivalent)*.
+  - `graph_p_then_unknown_key_cancels` + `graph_p_then_esc_cancels`.
+  - Snapshot: `graph_periodic_leader_80x24`.
 
 ### S4 — Move section (two-phase, graph-driven)
 
@@ -393,9 +394,9 @@ single view.
 **Goal:** Create blank + create from template. Extract Notes-tab create state machine into shared module (ft/src/tui/notes_actions/create.rs). c/C bindings on Graph tab seed folder from selection (note/dir/ghost).
 **Outcome:** New shared module `ft/src/tui/notes_actions/create.rs` (~720 lines) owns the create flow: `CreateState`, `TemplatePick`, `CollisionChoice`, all 5 step handlers, commit helpers, vault folder/template enumeration, and `discover_template_vars`. New `CreateStep` action enum (`Stay`/`NotHandled`/`Transition(CreateState)`/`Finished`) replaces the tab-specific `CreateAction` so handlers no longer reference `NotesState`. Notes tab thinned by ~565 lines — its `handle_create_key` is now a 14-line shim that delegates to `create::handle_key` and maps `CreateStep` → `EventOutcome`. The new-target sub-flow (still tab-private; lifts in S4) re-uses the shared `TemplatePick`/`CollisionChoice`/`enumerate_*`/`discover_template_vars`/`build_template_context` symbols. Notes view.rs imports `CreateState` from the shared module; `render_create_overlay` exposed as `pub(crate)` so the Graph tab can call it. Graph tab gains `create_state: Option<CreateState>` plus `c`/`C` bindings: `c` jumps straight to `FilenamePrompt` seeded with the folder derived from the selected row (note → containing dir, directory → itself, ghost → parent of wikilink path); `C` opens the template picker. Create overlay captures all keys ahead of input mode and tree bindings. 5 new integration tests + 1 snapshot (`graph_create_filename_prompt_80x24`). Full workspace green: 340 ft + 648 ft-core + integration bins; clippy `-D warnings` clean; fmt clean.
 
-### Session 3 · 2026-05-24 · planned
+### Session 3 · 2026-05-24 · done
 **Goal:** Periodic notes p leader (d/w/m/q/y) + t shortcut for today's daily. Lift run_periodic_open into shared module if needed.
-**Outcome:** 
+**Outcome:** New `ft/src/tui/notes_actions/periodic.rs` (~70 lines) owns `run_periodic_open(ctx, period)` — pulled from `notes/mod.rs` and stripped of the unused `_tab: &mut NotesTab` arg, so the signature is now genuinely tab-agnostic. Also lifted `queue_toast` to `notes_actions/mod.rs` as `pub(crate)` so both create and periodic share it (dropped the private copy from create.rs). Notes tab thinned by ~70 more lines; both call sites delegate to the shared helper. Graph tab gains `periodic_leader: bool` + `p`/`t` bindings: `p` enters a one-shot leader chord that captures the next keypress (`d/w/m/q/y` fires the open flow; any other key — including Esc and a re-press of `p` — cancels silently); `t` is the daily shortcut. Leader popup reuses Notes-tab's `render_periodic_leader` (now `pub(crate)`). 6 new integration tests + 1 snapshot (`graph_periodic_leader_80x24`). Full workspace green: 348 ft + 648 ft-core; clippy `-D warnings` clean; fmt clean.
 
 ### Session 4 · 2026-05-24 · planned
 **Goal:** Move section: two-phase graph-driven flow (m starts; m again confirms; t opens fuzzy picker; / refines tree). Lift heading-select dialog into shared module.

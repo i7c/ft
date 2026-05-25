@@ -28,9 +28,14 @@ use ratatui::{
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 
+use ft_core::periodic::Period;
+
 use crate::tui::{
     event::Event,
-    notes_actions::create::{self, CreateState, CreateStep},
+    notes_actions::{
+        create::{self, CreateState, CreateStep},
+        periodic::run_periodic_open,
+    },
     tab::{AppRequest, EventOutcome, Tab, TabCtx},
     tabs::notes::view as notes_view,
 };
@@ -64,6 +69,11 @@ pub struct GraphTab {
     /// `None` otherwise. While `Some`, the create overlay captures the
     /// keyboard ahead of every other binding.
     create_state: Option<CreateState>,
+    /// Whether the periodic-note leader chord is awaiting its next
+    /// keystroke (`d`/`w`/`m`/`q`/`y`). Mirrors `NotesState::PeriodicLeader`.
+    /// Set by `p`; cleared on any subsequent keypress (the period letter
+    /// fires the open flow; everything else cancels silently).
+    periodic_leader: bool,
 }
 
 impl GraphTab {
@@ -74,7 +84,29 @@ impl GraphTab {
             active: 0,
             input_mode: false,
             create_state: None,
+            periodic_leader: false,
         }
+    }
+
+    /// Consume one key while the periodic-leader chord is active.
+    /// Period letters fire the open flow; any other key (including Esc
+    /// and a re-press of `p`) cancels silently. The flag is cleared
+    /// before the open flow so a toast from `run_periodic_open` lands
+    /// cleanly in the normal-mode UI.
+    fn handle_periodic_leader_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let period = match (k.code, k.modifiers) {
+            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Period::Daily),
+            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(Period::Weekly),
+            (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Period::Monthly),
+            (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Period::Quarterly),
+            (KeyCode::Char('y'), KeyModifiers::NONE) => Some(Period::Yearly),
+            _ => None,
+        };
+        self.periodic_leader = false;
+        if let Some(p) = period {
+            run_periodic_open(ctx, p);
+        }
+        EventOutcome::Consumed
     }
 
     /// Derive the folder the create flow should start in from the
@@ -360,6 +392,13 @@ impl Tab for GraphTab {
             return Ok(self.handle_create_key(k, ctx));
         }
 
+        // Periodic-leader chord: a single keystroke fires (or cancels)
+        // the open flow. Runs ahead of input mode and the outer-tab
+        // passthrough so the period letters can't leak through.
+        if self.periodic_leader {
+            return Ok(self.handle_periodic_leader_key(k, ctx));
+        }
+
         // Input mode owns the keyboard — digits and every other char
         // should land as text in the query, not trigger a tab switch.
         // This must run BEFORE the tab-passthrough check below.
@@ -534,6 +573,14 @@ impl Tab for GraphTab {
                 self.create_state = Some(create::begin_filename_prompt(folder, None));
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+                self.periodic_leader = true;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                run_periodic_open(ctx, Period::Daily);
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
                 // Create from template: open the template picker with
                 // the folder pre-seeded from the current selection.
@@ -681,6 +728,12 @@ impl Tab for GraphTab {
         // Notes-tab renderer so both tabs render the same modal.
         if let Some(cs) = self.create_state.as_mut() {
             notes_view::render_create_overlay(frame, area, cs);
+        }
+
+        // Periodic-leader popup. Same renderer as the Notes tab — a
+        // centered modal listing the period choices (d/w/m/q/y).
+        if self.periodic_leader {
+            notes_view::render_periodic_leader(frame, area);
         }
     }
 

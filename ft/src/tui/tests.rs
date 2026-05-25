@@ -6258,6 +6258,141 @@ fn graph_create_filename_prompt_snapshot() -> Result<()> {
     Ok(())
 }
 
+// ── Graph tab · periodic notes (021 · session 3) ──────────────────────
+
+#[test]
+fn graph_t_opens_today_when_daily_configured() -> Result<()> {
+    // `t` is the one-shot daily synonym. Same semantics as the Notes-tab
+    // binding — the shared run_periodic_open is what makes both behave
+    // identically.
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Switch to graph (default tab is graph at index 0, but on_focus
+    // hasn't fired without the bounce).
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('t'))?;
+    let req = app
+        .take_pending_request()
+        .expect("`t` should queue OpenInEditor for today's daily");
+    match req {
+        AppRequest::OpenInEditor { path, line } => {
+            assert_eq!(line, 1);
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05-10.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_p_enters_periodic_leader() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('p'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("periodic note · pick a period"),
+        "expected leader modal:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "`p` alone must not queue any request"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_p_then_d_opens_daily() -> Result<()> {
+    let (dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('d'))?;
+    let req = app
+        .take_pending_request()
+        .expect("`p` then `d` should queue OpenInEditor for daily");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05-10.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    // Leader must clear after firing.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("periodic note · pick a period"),
+        "leader modal should be gone after firing:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_p_then_unknown_key_cancels() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('p'))?;
+    // `x` is not a period — should silently cancel.
+    app.dispatch(key('x'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("periodic note · pick a period"),
+        "leader modal should be dismissed by an unknown key:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "unknown key must not fire the open flow"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_p_then_esc_cancels() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("periodic note · pick a period"),
+        "Esc should dismiss the leader modal:\n{frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "Esc from leader must not queue anything"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_periodic_leader_status_snapshot() -> Result<()> {
+    let (_dir, vault) = periodic_vault_all_periods();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('p'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_periodic_leader_80x24", frame);
+    Ok(())
+}
+
 #[test]
 fn no_more_syncing_mode_exists() {
     // Compile-time guard: `Mode::Syncing` was removed in plan 014.

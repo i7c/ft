@@ -10,3 +10,16 @@
 //! invoking the flow's entry point.
 
 pub mod create;
+pub mod periodic;
+
+use crate::tui::tab::{AppRequest, TabCtx, ToastStyle};
+
+/// Helper used by the action flows in this crate to surface a status
+/// toast via [`AppRequest::Toast`]. Centralised here so each flow
+/// module doesn't reimplement the same three-line `RefCell` poke.
+pub(crate) fn queue_toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
+    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+        text: text.to_string(),
+        style,
+    });
+}

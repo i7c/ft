@@ -37,6 +37,7 @@ use ft_core::vault::Vault;
 use regex::Regex;
 
 use crate::tui::{
+    notes_actions::queue_toast,
     tab::{AppRequest, TabCtx, ToastStyle},
     widgets::{EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome},
 };
@@ -748,11 +749,4 @@ pub(crate) fn build_template_context(
     let mut ctx = TemplateContext::new(title, today, now);
     ctx.vars = vars;
     ctx
-}
-
-fn queue_toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
-    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
-        text: text.to_string(),
-        style,
-    });
 }

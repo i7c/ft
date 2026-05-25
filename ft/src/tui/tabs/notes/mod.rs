@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::markdown::{extract_headings, Heading};
 use ft_core::notes::template::render as render_template;
@@ -20,16 +19,19 @@ use ft_core::notes::{
     extract_sections, move_sections, shift_section_level, write_pair, Placement, Section,
     SectionPick,
 };
-use ft_core::periodic::{create_or_get_periodic_path, Period};
+use ft_core::periodic::Period;
 use ft_core::search::Hit;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
     event::Event,
-    notes_actions::create::{
-        self, begin_folder_picking, begin_template_picking, build_template_context,
-        discover_template_vars, enumerate_templates, enumerate_vault_folders, CollisionChoice,
-        CreateState, CreateStep, TemplatePick,
+    notes_actions::{
+        create::{
+            self, begin_folder_picking, begin_template_picking, build_template_context,
+            discover_template_vars, enumerate_templates, enumerate_vault_folders, CollisionChoice,
+            CreateState, CreateStep, TemplatePick,
+        },
+        periodic::run_periodic_open,
     },
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     widgets::{
@@ -320,7 +322,7 @@ impl NotesTab {
             // `t` is a one-shot synonym for `p` then `d` — opens today's
             // daily note directly without entering the leader modal.
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                run_periodic_open(self, ctx, Period::Daily);
+                run_periodic_open(ctx, Period::Daily);
                 EventOutcome::Consumed
             }
             // `p` enters the leader; the next key chooses a period.
@@ -347,7 +349,7 @@ impl NotesTab {
         };
         self.state = NotesState::Idle;
         if let Some(p) = period {
-            run_periodic_open(self, ctx, p);
+            run_periodic_open(ctx, p);
         }
         EventOutcome::Consumed
     }
@@ -1288,75 +1290,6 @@ fn request_open_in_editor(ctx: &TabCtx, hit: &Hit) {
     // `record_open` is best-effort and never errors.
     ctx.recents.record_open(&hit.path);
     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor { path: abs, line });
-}
-
-/// Open today's periodic note for `period`, creating it from the
-/// configured template (or a blank stub) when missing. On success,
-/// queues an [`AppRequest::OpenInEditor`] (the implicit acknowledgement
-/// that matches what `commit_create` does on the new-note path); on
-/// any failure path — missing config, render error, write error —
-/// queues an error toast and no editor request.
-///
-/// Both `t` and `p<letter>` route through here so the file-creation
-/// path is identical regardless of how the user got here.
-fn run_periodic_open(_tab: &mut NotesTab, ctx: &TabCtx, period: Period) {
-    // 1. Pull the per-period config — missing config = error toast.
-    let pn = &ctx.vault.config.config.periodic_notes;
-    let cfg_opt = match period {
-        Period::Daily => pn.daily.as_ref(),
-        Period::Weekly => pn.weekly.as_ref(),
-        Period::Monthly => pn.monthly.as_ref(),
-        Period::Quarterly => pn.quarterly.as_ref(),
-        Period::Yearly => pn.yearly.as_ref(),
-    };
-    let Some(cfg) = cfg_opt else {
-        queue_toast(
-            ctx,
-            &format!("{} not configured", period.as_str()),
-            ToastStyle::Error,
-        );
-        return;
-    };
-
-    // 2. today / now follow plan 009's convention (used by the create
-    //    flow at line 1947): today is the App-wide ctx.today (already
-    //    FT_TODAY-aware via resolve_today / for_test_with_clock); now
-    //    pins to FT_TODAY at 00:00 when set, else local wall clock.
-    let today = ctx.today;
-    let now: NaiveDateTime = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .map(|d| d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
-        .unwrap_or_else(|| Local::now().naive_local());
-
-    // 3. Create-or-get. Library errors (template render, write failure,
-    //    bad format string) surface as an error toast.
-    let templates_dir = ctx.vault.templates_dir();
-    let (abs_path, _created) = match create_or_get_periodic_path(
-        &ctx.vault.path,
-        &templates_dir,
-        cfg,
-        today,
-        today,
-        now,
-    ) {
-        Ok(pair) => pair,
-        Err(e) => {
-            queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
-            return;
-        }
-    };
-
-    // 4. Record the open so future picker invocations surface this
-    //    note at the top, then queue the editor handoff (line 1, since
-    //    every periodic note starts with its `# <title>` heading).
-    if let Ok(rel) = abs_path.strip_prefix(&ctx.vault.path) {
-        ctx.recents.record_open(rel);
-    }
-    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
-        path: abs_path,
-        line: 1,
-    });
 }
 
 fn request_open_in_obsidian(ctx: &TabCtx, hit: &Hit) {

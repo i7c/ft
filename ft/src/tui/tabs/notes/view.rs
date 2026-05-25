@@ -160,7 +160,7 @@ pub(super) fn render(
     }
 }
 
-fn render_periodic_leader(frame: &mut Frame, area: Rect) {
+pub(crate) fn render_periodic_leader(frame: &mut Frame, area: Rect) {
     // 40w × 45h fits the 6 PERIODIC_LEADER_KEYS rows + a leading blank
     // within a 24-row terminal with room for borders.
     let popup = centered_rect(40, 45, area);
