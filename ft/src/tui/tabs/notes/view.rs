@@ -13,10 +13,11 @@ use ratatui::{
     Frame,
 };
 
+use crate::tui::notes_actions::create::CreateState;
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::{
-    is_implicitly_selected, ClipboardItem, ComposeRow, CreateState, NewTargetState, NotesState,
-    RenameBuffer, SectionMoveState,
+    is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, NotesState, RenameBuffer,
+    SectionMoveState,
 };
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
@@ -189,8 +190,8 @@ fn render_periodic_leader(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
 }
 
-fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
-    use crate::tui::tabs::notes::CreateState as CS;
+pub(crate) fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
+    use crate::tui::notes_actions::create::CreateState as CS;
     match cs {
         CS::TemplatePicking { picker } => render_path_picker_popup(
             frame,
@@ -248,7 +249,7 @@ fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut CreateState) {
     }
 }
 
-fn step_count(template: Option<&crate::tui::tabs::notes::TemplatePick>) -> usize {
+fn step_count(template: Option<&crate::tui::notes_actions::create::TemplatePick>) -> usize {
     match template {
         None => 2,
         Some(t) if t.vars_needed.is_empty() => 3,
@@ -288,7 +289,7 @@ fn render_path_picker_popup(
 fn render_filename_prompt(
     frame: &mut Frame,
     area: Rect,
-    template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    template: Option<&crate::tui::notes_actions::create::TemplatePick>,
     folder: &std::path::Path,
     buf: &crate::tui::widgets::EditBuffer,
     error: Option<&str>,
@@ -367,7 +368,7 @@ fn render_filename_prompt(
 fn render_var_prompt(
     frame: &mut Frame,
     area: Rect,
-    template: &crate::tui::tabs::notes::TemplatePick,
+    template: &crate::tui::notes_actions::create::TemplatePick,
     folder: &std::path::Path,
     filename: &str,
     vars_so_far: &std::collections::BTreeMap<String, String>,
@@ -455,17 +456,17 @@ fn render_var_prompt(
 fn render_collision_prompt(
     frame: &mut Frame,
     area: Rect,
-    _template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    _template: Option<&crate::tui::notes_actions::create::TemplatePick>,
     folder: &std::path::Path,
     filename: &str,
-    focus: crate::tui::tabs::notes::CollisionChoice,
+    focus: crate::tui::notes_actions::create::CollisionChoice,
 ) {
     let rel = if folder.as_os_str().is_empty() {
         filename.to_string()
     } else {
         format!("{}/{}", folder.display(), filename)
     };
-    use crate::tui::tabs::notes::CollisionChoice as CC;
+    use crate::tui::notes_actions::create::CollisionChoice as CC;
     let popup = centered_rect(60, 30, area);
     frame.render_widget(Clear, popup);
     let title = " create · collision ".to_string();
@@ -669,7 +670,7 @@ fn render_new_target_overlay(frame: &mut Frame, area: Rect, nts: &mut NewTargetS
 fn render_new_target_filename_prompt(
     frame: &mut Frame,
     area: Rect,
-    template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    template: Option<&crate::tui::notes_actions::create::TemplatePick>,
     folder: &std::path::Path,
     buf: &crate::tui::widgets::EditBuffer,
     error: Option<&str>,
@@ -743,7 +744,7 @@ fn render_new_target_filename_prompt(
 fn render_new_target_var_prompt(
     frame: &mut Frame,
     area: Rect,
-    template: &crate::tui::tabs::notes::TemplatePick,
+    template: &crate::tui::notes_actions::create::TemplatePick,
     folder: &std::path::Path,
     filename: &str,
     vars_so_far: &std::collections::BTreeMap<String, String>,
@@ -828,11 +829,11 @@ fn render_new_target_var_prompt(
 fn render_new_target_collision_prompt(
     frame: &mut Frame,
     area: Rect,
-    _template: Option<&crate::tui::tabs::notes::TemplatePick>,
+    _template: Option<&crate::tui::notes_actions::create::TemplatePick>,
     target_rel: &std::path::Path,
-    focus: crate::tui::tabs::notes::CollisionChoice,
+    focus: crate::tui::notes_actions::create::CollisionChoice,
 ) {
-    use crate::tui::tabs::notes::CollisionChoice as CC;
+    use crate::tui::notes_actions::create::CollisionChoice as CC;
     let popup = centered_rect(60, 30, area);
     frame.render_widget(Clear, popup);
     let title = " move · new target · collision ".to_string();

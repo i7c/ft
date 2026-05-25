@@ -13,9 +13,10 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -29,7 +30,9 @@ use ft_core::graph::{Graph, NodeKind, NoteId};
 
 use crate::tui::{
     event::Event,
+    notes_actions::create::{self, CreateState, CreateStep},
     tab::{AppRequest, EventOutcome, Tab, TabCtx},
+    tabs::notes::view as notes_view,
 };
 
 // ── GraphTab ──────────────────────────────────────────────────────────
@@ -56,6 +59,11 @@ pub struct GraphTab {
     /// "editing an inactive view", and the App-level keymap wants one
     /// place to look to decide if printable characters are being captured.
     input_mode: bool,
+    /// Active create-note flow. `Some` whenever the user has pressed
+    /// `c` / `C` and we're walking the shared [`CreateState`] machine;
+    /// `None` otherwise. While `Some`, the create overlay captures the
+    /// keyboard ahead of every other binding.
+    create_state: Option<CreateState>,
 }
 
 impl GraphTab {
@@ -65,6 +73,53 @@ impl GraphTab {
             views: vec![ExpandedView::default()],
             active: 0,
             input_mode: false,
+            create_state: None,
+        }
+    }
+
+    /// Derive the folder the create flow should start in from the
+    /// currently-selected row:
+    /// - Note row → containing folder of that note.
+    /// - Directory row → the directory itself (`""` for vault root).
+    /// - Ghost row → parent of the path the ghost wikilink encodes
+    ///   (bare wikilinks → vault root).
+    /// - No selection / empty tree / no graph → vault root.
+    fn create_folder_from_selection(&self) -> PathBuf {
+        let Some(graph) = self.graph.as_ref() else {
+            return PathBuf::new();
+        };
+        let v = self.active_view();
+        let Some(row) = v.tree.rows().get(v.selected) else {
+            return PathBuf::new();
+        };
+        match graph.node(row.note_id) {
+            NodeKind::Note(n) => n.path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+            NodeKind::Directory(d) => d.path.clone(),
+            NodeKind::Ghost(g) => Path::new(&g.raw)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Feed a key to the active create flow. Returns
+    /// `EventOutcome::NotHandled` if no create flow is active (the
+    /// caller's normal keymap can run).
+    fn handle_create_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(cs) = self.create_state.as_mut() else {
+            return EventOutcome::NotHandled;
+        };
+        match create::handle_key(cs, k, ctx) {
+            CreateStep::Stay => EventOutcome::Consumed,
+            CreateStep::NotHandled => EventOutcome::NotHandled,
+            CreateStep::Transition(next) => {
+                *cs = next;
+                EventOutcome::Consumed
+            }
+            CreateStep::Finished => {
+                self.create_state = None;
+                EventOutcome::Consumed
+            }
         }
     }
 
@@ -298,6 +353,13 @@ impl Tab for GraphTab {
             return Ok(EventOutcome::NotHandled);
         };
 
+        // The create overlay captures the keyboard ahead of every other
+        // binding, including input mode — the user is inside a modal
+        // popup, not the tree.
+        if self.create_state.is_some() {
+            return Ok(self.handle_create_key(k, ctx));
+        }
+
         // Input mode owns the keyboard — digits and every other char
         // should land as text in the query, not trigger a tab switch.
         // This must run BEFORE the tab-passthrough check below.
@@ -464,6 +526,25 @@ impl Tab for GraphTab {
                 self.request_open_selected_in_obsidian(ctx);
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+                // Create blank: seed the folder picker step by jumping
+                // straight into FilenamePrompt with the folder derived
+                // from the current selection.
+                let folder = self.create_folder_from_selection();
+                self.create_state = Some(create::begin_filename_prompt(folder, None));
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
+                // Create from template: open the template picker. The
+                // folder picker step that normally follows is *also*
+                // shown — the user gets to pick a folder after the
+                // template (matching the Notes-tab flow). We don't seed
+                // the folder here because the template picker hasn't
+                // run yet, and short-circuiting past it would require a
+                // larger surface change.
+                self.create_state = Some(create::begin_template_picking(ctx));
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Char('r'), _) => {
                 self.graph = Some(Graph::build(ctx.vault)?);
                 self.restore_all_views();
@@ -595,6 +676,12 @@ impl Tab for GraphTab {
                 let err_span = Span::styled(err.as_str(), Style::default().fg(Color::Red));
                 frame.render_widget(Paragraph::new(Line::from(err_span)), err_rect);
             }
+        }
+
+        // Create overlay floats over everything when active. Reuses the
+        // Notes-tab renderer so both tabs render the same modal.
+        if let Some(cs) = self.create_state.as_mut() {
+            notes_view::render_create_overlay(frame, area, cs);
         }
     }
 

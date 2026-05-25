@@ -6110,6 +6110,117 @@ fn graph_tab_expansion_survives_refresh() -> Result<()> {
 }
 
 #[test]
+fn graph_c_opens_filename_prompt_seeded_from_directory_selection() -> Result<()> {
+    // Default tree starts with the vault root directory selected.
+    // Pressing `c` should open the create overlay's FilenamePrompt with
+    // folder `.` (root). The popup title carries the folder label so we
+    // can assert against the rendered frame.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("filename"),
+        "create overlay (filename step) should be visible — got:\n{frame}"
+    );
+    assert!(
+        frame.contains(". ") || frame.contains("/ . ") || frame.contains("·  . "),
+        "filename prompt title should advertise folder `.` — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_c_opens_filename_prompt_seeded_from_note_selection() -> Result<()> {
+    // Expand the root, navigate to a note row, then press `c`. The
+    // filename prompt's title bar must include the note's containing
+    // directory (Areas or Projects depending on fixture order).
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Walk down until selection lands on a note row (N kind char).
+    // Up to 8 steps is plenty for the dirs fixture's depth.
+    let mut frame = render(&mut app, 80, 24);
+    for _ in 0..8 {
+        // Press `c`; if the resulting popup contains a parent-folder
+        // marker for a note (e.g. " Areas " or " Projects "), succeed.
+        app.dispatch(key('c'))?;
+        let popup = render(&mut app, 80, 24);
+        if popup.contains("filename") && (popup.contains(" Areas ") || popup.contains(" Projects "))
+        {
+            return Ok(());
+        }
+        // Otherwise close (Esc twice — once to folder picker, once to
+        // close the flow) and advance.
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+        app.dispatch(key('j'))?;
+        frame = render(&mut app, 80, 24);
+    }
+    panic!("never landed on a note row with a non-empty parent folder; last frame:\n{frame}");
+}
+
+#[test]
+fn graph_capital_c_opens_template_picker() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('C'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains(" create · 1/4 template "),
+        "template picker title should be visible — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_create_overlay_captures_keys_before_tree_bindings() -> Result<()> {
+    // While the create overlay is up, the tree's `j`/`k` should be
+    // inert — keypresses go to the picker / edit buffer. Smoke-check by
+    // pressing `c`, then pressing `j` a few times, then snapshotting:
+    // we should still see the create overlay (no expansion behaviour
+    // leaked through to the tree underneath).
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('c'))?;
+    for _ in 0..5 {
+        app.dispatch(key('j'))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("filename"),
+        "create overlay must still own the keyboard — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_create_filename_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_create_filename_prompt_80x24", frame);
+    Ok(())
+}
+
+#[test]
 fn no_more_syncing_mode_exists() {
     // Compile-time guard: `Mode::Syncing` was removed in plan 014.
     // If a future change reintroduces a `Syncing` variant, this test

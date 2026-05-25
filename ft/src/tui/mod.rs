@@ -2,6 +2,7 @@ mod app;
 mod editor;
 mod event;
 mod jobs;
+mod notes_actions;
 mod tab;
 mod tabs;
 #[cfg(test)]
