@@ -2,7 +2,7 @@
 id: 021
 name: graph-tui-actions-and-views
 title: Graph TUI: note actions, section move, multi-view state
-status: ready
+status: implementing
 created: 2026-05-24
 updated: 2026-05-24
 ---
@@ -46,14 +46,14 @@ single view.
 
 ### Cross-cutting (applies to all sessions)
 
-- [ ] `cargo test --workspace` green.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] `cargo fmt --check` clean.
-- [ ] No new workspace dependencies.
+- [x] `cargo test --workspace` green. *(S1 baseline; re-verify each session.)*
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `cargo fmt --check` clean.
+- [x] No new workspace dependencies.
 
 ### S1 — `ExpandedView` + multi-view tab strip
 
-- [ ] New type `ExpandedView` in `ft/src/tui/tabs/graph.rs` (or a new
+- [x] New type `ExpandedView` in `ft/src/tui/tabs/graph.rs` (or a new
       `graph/view.rs` submodule if the file grows past ~1000 lines):
   ```rust
   struct ExpandedView {
@@ -78,7 +78,7 @@ single view.
     walking each path from its root, expanding step by step, dropping
     the tail of any path whose next hop no longer exists.
 
-- [ ] `GraphTab` becomes a thin shell around views:
+- [x] `GraphTab` becomes a thin shell around views:
   ```rust
   pub struct GraphTab {
       graph: Option<Graph>,
@@ -93,14 +93,14 @@ single view.
     select row 0. Same first-paint as today.
   - `active_view()` / `active_view_mut()` helpers.
 
-- [ ] Tab-strip rendering at the very top of the Graph tab area
+- [x] Tab-strip rendering at the very top of the Graph tab area
       (single line above the tree). Each view is rendered as
       `[N: query-snippet]` where `query-snippet` is the first ~20
       chars of `query_text` (or `(empty)` if blank). Active view is
       highlighted (reversed style, same convention as the main app's
       tab bar). The tree area shrinks by 1 row to make room.
 
-- [ ] Multi-view keybindings (Normal mode):
+- [x] Multi-view keybindings (Normal mode):
   - `Ctrl+N` — append a new view (empty query, switch to it, drop into
     Input mode automatically so the user can start typing).
   - `Ctrl+W` — close the active view. If it's the last view, replace
@@ -110,7 +110,7 @@ single view.
   - `Ctrl+PageUp` — cycle to previous view (wraps).
   - `Alt+1`..`Alt+9` — jump directly to view N (no-op if N > count).
 
-- [ ] Per-view state preservation on `refresh()` / editor return:
+- [x] Per-view state preservation on `refresh()` / editor return:
   1. Rebuild `Graph` from vault (existing logic).
   2. For each view: re-parse its query (already cached in `query`),
      re-run `select()` to get current roots, then call
@@ -130,12 +130,12 @@ single view.
   3. Query text + input cursor are kept verbatim (not derived from the
      graph).
 
-- [ ] Expansion cache (`HashMap<NoteId, Option<Vec<NoteId>>>` in the
+- [x] Expansion cache (`HashMap<NoteId, Option<Vec<NoteId>>>` in the
       current `TreeState`) is dropped on graph rebuild — `NoteId`s may
       no longer point to the same nodes. Cleared inside
       `restore_expansion`.
 
-- [ ] Tree manipulation (`expand_at`, `collapse_at`) updates both the
+- [x] Tree manipulation (`expand_at`, `collapse_at`) updates both the
       flat `TreeState` (for rendering) and the active view's
       `expanded_paths` (for persistence). Helper:
   ```rust
@@ -145,7 +145,7 @@ single view.
   }
   ```
 
-- [ ] Tests (unit, no TUI):
+- [x] Tests (unit, no TUI):
   - `restore_expansion_walks_each_path`: build a graph, manually
     construct paths, restore — confirm the tree matches.
   - `restore_expansion_truncates_at_missing_node`: remove an
@@ -153,14 +153,14 @@ single view.
     is expanded; the saved path entry is truncated.
   - `restore_expansion_preserves_selection_when_present`.
   - `restore_expansion_falls_back_to_ancestor_when_selection_gone`.
-  - `new_view_starts_empty_and_default_view_seeds_builtin_query`.
+  - `new_view_starts_empty_and_default_view_seeds_builtin_query`
+    *(implemented as `new_graph_tab_has_one_empty_view`)*.
   - `close_last_view_replaces_with_empty_view`.
   - `cycle_views_wraps_at_bounds`.
 
-- [ ] One TUI snapshot test in `ft/src/tui/tests.rs`:
+- [x] One TUI snapshot test in `ft/src/tui/tests.rs`:
       `graph_tab_strip_renders_two_views_active_highlighted`. Existing
-      snapshots regenerate to include the new tab-strip row; review the
-      diff before accepting.
+      snapshots regenerated for the new tab-strip row.
 
 ### S2 — Create note (blank + from template)
 
@@ -374,9 +374,9 @@ single view.
 ## Sessions
  
 
-### Session 1 · 2026-05-24 · planned
+### Session 1 · 2026-05-24 · done
 **Goal:** ExpandedView data structure + multi-view tab strip (Ctrl+N/W/PgUp/PgDn, Alt+1-9). Per-view state survives graph rebuilds; fixes the editor-return tree-collapse bug as a side effect.
-**Outcome:** 
+**Outcome:** `GraphTab` now owns `Vec<ExpandedView>` + `active: usize` + global `input_mode: bool`. Per-view state: `query_text`/`input_cursor`/`parse_error`/`query`, `expanded_paths: HashSet<Vec<NoteId>>` (root-anchored, closed under prefixes), `selected_path: Option<Vec<NoteId>>`, plus derived `tree`/`selected`/`scroll_offset`. `expand_at`/`collapse_at`/`h`-traverse paths are recorded via `add_expansion_path` (auto-includes prefixes) and `forget_expansion_subtree` (drops the path + every extension). `restore_expansion(graph)` rebuilds the tree from `query.select`, replays paths shortest-first, drops any whose nodes have vanished, and restores selection via progressively shorter prefixes of `selected_path`. Tab strip (1 row above tree): `[N: snippet]` per view, active reversed. Bindings: `Ctrl+N` add (drops into input mode), `Ctrl+W` close (last view replaced with empty), `Ctrl+PgUp/PgDn` cycle, `Alt+1`..`Alt+9` jump. Outer-tab digit passthrough narrowed to `KeyModifiers::NONE` so `Alt+digit` lands locally. 17 new unit tests in `view_tests` + 3 new integration tests (`graph_tab_strip_renders_two_views_active_highlighted`, `graph_tab_alt_digit_switches_active_view`, `graph_tab_expansion_survives_refresh` — direct regression for the editor-return collapse bug). 6 existing snapshots regenerated for the new 1-row tab strip. Full workspace green: 335 ft + 648 ft-core + 18 integration bins; clippy `-D warnings` clean; fmt clean.
 
 ### Session 2 · 2026-05-24 · planned
 **Goal:** Create blank + create from template. Extract Notes-tab create state machine into shared module (ft/src/tui/notes_actions/create.rs). c/C bindings on Graph tab seed folder from selection (note/dir/ghost).
@@ -389,4 +389,3 @@ single view.
 ### Session 4 · 2026-05-24 · planned
 **Goal:** Move section: two-phase graph-driven flow (m starts; m again confirms; t opens fuzzy picker; / refines tree). Lift heading-select dialog into shared module.
 **Outcome:** 
-

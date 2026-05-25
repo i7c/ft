@@ -1,12 +1,11 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 97
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
-                ┌ help ────────────────────────────────────────┐                
-press / to edit │Keybindings                                   │                
-                │                                              │                
+ 1: (empty)     ┌ help ────────────────────────────────────────┐                
+                │Keybindings                                   │                
+press / to edit │                                              │                
                 │  q / Ctrl+C        quit                      │                
                 │  ?                 toggle this help          │                
                 │  Tab / Shift+Tab   next / previous tab       │                

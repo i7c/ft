@@ -6034,6 +6034,82 @@ fn graph_tab_input_mode_shows_cursor() -> Result<()> {
 }
 
 #[test]
+fn graph_tab_strip_renders_two_views_active_highlighted() -> Result<()> {
+    // Default vault → focus the Graph tab so view 0 picks up the
+    // builtin default query, then Ctrl+N to spawn a second empty
+    // view and Esc to leave its input mode. The tab strip should
+    // show both views with view 2 (the new one) highlighted active.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_strip_two_views_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_tab_alt_digit_switches_active_view() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Spawn three extra views (Ctrl+N drops into input mode each time;
+    // Esc returns to normal). After this the tab strip has 4 views and
+    // active = 3.
+    for _ in 0..3 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        )))?;
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    }
+    // Alt+1 jumps back to view 0.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('1'),
+        KeyModifiers::ALT,
+    )))?;
+    // App must still be on Graph (plain digit would've switched outer
+    // tab — confirm Alt-digit was consumed locally).
+    assert_eq!(app.active_title(), "Graph");
+    Ok(())
+}
+
+#[test]
+fn graph_tab_expansion_survives_refresh() -> Result<()> {
+    // Open the dirs fixture, expand the root, refresh — root should
+    // still be expanded afterwards. Direct regression for the
+    // editor-return tree-collapse bug.
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Expand the root.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let before = render(&mut app, 80, 24);
+    assert!(
+        before.contains("▼ D /"),
+        "root should be expanded before refresh"
+    );
+    // Refresh rebuilds the graph and re-derives the tree from spec.
+    app.dispatch(key('r'))?;
+    let after = render(&mut app, 80, 24);
+    assert!(
+        after.contains("▼ D /"),
+        "root should still be expanded after refresh — got:\n{after}"
+    );
+    Ok(())
+}
+
+#[test]
 fn no_more_syncing_mode_exists() {
     // Compile-time guard: `Mode::Syncing` was removed in plan 014.
     // If a future change reintroduces a `Syncing` variant, this test

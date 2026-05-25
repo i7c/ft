@@ -3,8 +3,8 @@ source: ft/src/tui/tests.rs
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
- 1: node where kind = D…                                                        
-▶ D /                                                                           
+ 1: node where kind = D…   2: (empty)                                           
+                                                                                
 press / to edit query                                                           
                                                                                 
                                                                                 
@@ -24,5 +24,5 @@ press / to edit query
                                                                                 
                                                                                 
                                                                                 
-> node where kind = Directory and path = ""; expand where edge.kind = directory-
+>                                                                               
  vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal
