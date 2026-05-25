@@ -14,11 +14,12 @@ use ratatui::{
 };
 
 use crate::tui::notes_actions::create::CreateState;
-use crate::tui::tab::TabCtx;
-use crate::tui::tabs::notes::{
-    is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, NotesState, RenameBuffer,
+use crate::tui::notes_actions::section_move::{
+    is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, RenameBuffer,
     SectionMoveState,
 };
+use crate::tui::tab::TabCtx;
+use crate::tui::tabs::notes::NotesState;
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
 /// the `?` help overlay so users see one canonical list.
@@ -530,7 +531,7 @@ fn render_collision_prompt(
     );
 }
 
-fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState) {
+pub(crate) fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut SectionMoveState) {
     match ms {
         SectionMoveState::SourcePicking { picker } => {
             render_picker_popup(

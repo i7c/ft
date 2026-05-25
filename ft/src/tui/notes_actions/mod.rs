@@ -11,6 +11,7 @@
 
 pub mod create;
 pub mod periodic;
+pub mod section_move;
 
 use crate::tui::tab::{AppRequest, TabCtx, ToastStyle};
 

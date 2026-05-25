@@ -4,7 +4,7 @@ name: graph-tui-actions-and-views
 title: Graph TUI: note actions, section move, multi-view state
 status: implementing
 created: 2026-05-24
-updated: 2026-05-24
+updated: 2026-05-25
 ---
 
 # Graph TUI: note actions, section move, multi-view state
@@ -398,6 +398,10 @@ single view.
 **Goal:** Periodic notes p leader (d/w/m/q/y) + t shortcut for today's daily. Lift run_periodic_open into shared module if needed.
 **Outcome:** New `ft/src/tui/notes_actions/periodic.rs` (~70 lines) owns `run_periodic_open(ctx, period)` — pulled from `notes/mod.rs` and stripped of the unused `_tab: &mut NotesTab` arg, so the signature is now genuinely tab-agnostic. Also lifted `queue_toast` to `notes_actions/mod.rs` as `pub(crate)` so both create and periodic share it (dropped the private copy from create.rs). Notes tab thinned by ~70 more lines; both call sites delegate to the shared helper. Graph tab gains `periodic_leader: bool` + `p`/`t` bindings: `p` enters a one-shot leader chord that captures the next keypress (`d/w/m/q/y` fires the open flow; any other key — including Esc and a re-press of `p` — cancels silently); `t` is the daily shortcut. Leader popup reuses Notes-tab's `render_periodic_leader` (now `pub(crate)`). 6 new integration tests + 1 snapshot (`graph_periodic_leader_80x24`). Full workspace green: 348 ft + 648 ft-core; clippy `-D warnings` clean; fmt clean.
 
-### Session 4 · 2026-05-24 · planned
-**Goal:** Move section: two-phase graph-driven flow (m starts; m again confirms; t opens fuzzy picker; / refines tree). Lift heading-select dialog into shared module.
+### Session 4 · 2026-05-25 · done
+**Goal:** S4a — lift the entire section-move flow (`SectionMoveState` + handlers + render + new-target sub-flow) out of `notes/mod.rs` into `notes_actions/section_move.rs`. Notes tab delegates via a thin shim; no behavior change; all existing tests pass. Done as a standalone refactor session so the graph-tab UX (S5) can layer on a clean shared surface.
+**Outcome:** New `ft/src/tui/notes_actions/section_move.rs` (~1760 lines) owns the full section-move state machine: `SectionMoveState`, `MoveCarry`, `ClipboardItem`, `ComposeRow`, `RenameBuffer`, `NewTargetState`, plus every step handler (source picker, multiselect, target picker, compose, new-target sub-flow), `commit_move`, `build_clipboard`, `build_picks_and_plan`, `toggle_selection`, `is_implicitly_selected`, `descendant_lines`, `reorder_pending`, `shift_focused_level`, and the `begin_new_target_*` / `back_to_target_picking` / `compose_with_existing_target` / `advance_*` transition helpers. New `MoveStep` action enum (`Stay`/`NotHandled`/`Transition(SectionMoveState)`/`Finished`) replaces the tab-specific `MoveAction`. New `pub fn handle_key` dispatcher + `pub fn begin_with_picker` entry. `notes/mod.rs` shrunk from 1975 → 253 lines (-87%); `handle_move_key` is now a 14-line shim. `notes/view.rs` updated imports (`SectionMoveState` and friends now from `notes_actions::section_move`); `render_move_overlay` exposed as `pub(crate)` for the Graph tab (S5). Full workspace green: 335 TUI tests + 648 ft-core + integration bins; clippy `-D warnings` clean (added `#[allow(clippy::large_enum_variant)]` on `MoveStep` since `Transition(SectionMoveState)` is ~368 bytes and boxing would just add a heap alloc to every transition); fmt clean. Refactor only — no behavior changes; every Notes-tab section-move test passes unchanged.
+
+### Session 5 · 2026-05-25 · planned
+**Goal:** S4b — Graph-tab move-section UX. Two-phase graph-driven flow: `m` enters source phase (`m` again confirms the selected node, `t` opens the fuzzy picker), heading multi-select reuses the shared module, then target phase (`m` again confirms, `t` opens picker, `/` refines tree), then handoff to shared Composing.
 **Outcome:** 
