@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::tui::{
     event::Event,
+    help::HelpSection,
     tab::{EventOutcome, Tab, TabCtx},
 };
 
@@ -185,5 +186,50 @@ impl Tab for TasksTab {
             v.refresh(ctx)?;
         }
         Ok(())
+    }
+
+    fn help_sections(&self) -> Vec<HelpSection> {
+        vec![
+            HelpSection::new(
+                "Navigation",
+                &[
+                    ("↑ / ↓ · j / k", "select prev / next task"),
+                    ("/", "edit query"),
+                    ("R", "reload vault"),
+                    ("Enter", "open task in $EDITOR"),
+                ],
+            ),
+            HelpSection::new(
+                "Mutations",
+                &[
+                    ("] / [", "due date +1d / -1d"),
+                    ("} / {", "scheduled +1d / -1d"),
+                    ("t", "set due to today"),
+                    ("p / P", "priority cycle fwd / back"),
+                    ("x / X", "complete / cancel"),
+                ],
+            ),
+            HelpSection::new(
+                "Create / edit",
+                &[
+                    ("c", "new task (quickline)"),
+                    ("Shift+C", "new task (blank form)"),
+                    ("e", "open edit popup"),
+                    ("Ctrl+E", "expand quickline → form"),
+                    ("Ctrl+S", "submit form"),
+                    ("Tab / Shift+Tab", "next / prev field (form)"),
+                    ("Enter (target)", "open file/heading picker"),
+                ],
+            ),
+            HelpSection::new(
+                "Text input",
+                &[
+                    ("← / →", "move cursor"),
+                    ("Home / End", "jump to start / end"),
+                    ("Ctrl+W / Ctrl+⌫", "delete previous word"),
+                    ("Esc", "cancel input / close overlay"),
+                ],
+            ),
+        ]
     }
 }

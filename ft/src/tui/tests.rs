@@ -1604,42 +1604,95 @@ fn tasks_tab_wide_terminal_snapshot() -> Result<()> {
 
 // --- session 6: help-overlay audit ------------------------------------------
 
-/// The set of keystroke labels that MUST appear in the help overlay. Updating
-/// the help table requires updating this list so the doc never drifts from
-/// what the code actually binds.
-const EXPECTED_HELP_LABELS: &[&str] = &[
+/// The set of keystroke labels that MUST appear in the help overlay when
+/// the **Tasks** tab is active. Mixes the App-level global section with
+/// the Tasks-tab `help_sections()`. Adjusting either source requires
+/// updating this list so the rendered help never drifts from what the
+/// code actually binds.
+const EXPECTED_TASKS_HELP_LABELS: &[&str] = &[
+    // global
     "q / Ctrl+C",
     "?",
     "Tab / Shift+Tab",
-    "1 / 2",
-    "/",
+    "1 / 2 / 3 / 4",
+    "g s",
+    "Esc",
+    // tasks
     "↑ / ↓ · j / k",
+    "/",
+    "R",
+    "Enter",
     "] / [",
     "} / {",
     "t",
     "p / P",
     "x / X",
+    "c",
+    "Shift+C",
     "e",
-    "c / Shift+C",
     "Ctrl+E",
+    "Ctrl+S",
     "Enter (target)",
-    "Enter",
-    "R",
+    "← / →",
+    "Home / End",
     "Ctrl+W / Ctrl+⌫",
-    "Esc",
 ];
 
 #[test]
-fn help_overlay_documents_every_canonical_binding() -> Result<()> {
+fn help_overlay_documents_every_canonical_tasks_binding() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(1)?;
     app.enter_help();
-    let frame = render(&mut app, 80, 40); // tall enough to render every row
-    for label in EXPECTED_HELP_LABELS {
+    let frame = render(&mut app, 80, 60); // tall enough to render every row
+    for label in EXPECTED_TASKS_HELP_LABELS {
         assert!(
             frame.contains(label),
-            "help overlay is missing key binding `{label}`:\n{frame}"
+            "Tasks help overlay is missing key binding `{label}`:\n{frame}"
+        );
+    }
+    Ok(())
+}
+
+/// The active tab name appears in the overlay header, so a glance at the
+/// popup tells you which keymap you're looking at. Asserted against each
+/// of the four tabs so the per-tab `help_sections()` wiring stays honest.
+#[test]
+fn help_overlay_header_names_active_tab() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    for (idx, title) in ["Graph", "Tasks", "Notes", "Timeblocks"].iter().enumerate() {
+        app.switch_to(idx)?;
+        app.enter_help();
+        let frame = render(&mut app, 80, 40);
+        let needle = format!("Keybindings — {title}");
+        assert!(
+            frame.contains(&needle),
+            "help overlay on tab {idx} missing header `{needle}`:\n{frame}"
+        );
+        // Leave help mode before switching to the next tab.
+        app.dispatch(key('?'))?;
+    }
+    Ok(())
+}
+
+/// Every tab in production `App::new` must contribute at least one help
+/// section with a non-empty entry list — otherwise the per-tab block of
+/// the `?` overlay degrades to just the global section, which is
+/// indistinguishable from "this tab hasn't been wired up".
+#[test]
+fn every_tab_returns_non_empty_help_sections() -> Result<()> {
+    use crate::tui::help::HelpSection;
+
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    for idx in 0..4 {
+        app.switch_to(idx)?;
+        let sections: Vec<HelpSection> = app.active_tab_help_sections();
+        assert!(
+            sections.iter().any(|s| !s.entries.is_empty()),
+            "tab {idx} ({}) returned no non-empty HelpSection",
+            app.active_title()
         );
     }
     Ok(())
@@ -2915,6 +2968,17 @@ fn notes_tab_help_overlay_renders_over_idle() -> Result<()> {
     app.dispatch(key('?'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("notes_help_overlay_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_help_overlay_renders() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.enter_help();
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("timeblocks_help_overlay_80x24", frame);
     Ok(())
 }
 

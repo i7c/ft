@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 2917
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
-┌ notes ───────────────────────────────────────────────────────────────────────┐
-│                                                                              │
-│  Notes — Obsidian-flavoured editing                                          │
-│                                                                              │
-│  o     open file /┌ notes · help ────────────────────────┐                   │
-│  m     move sectio│                                      │                   │
-│  c     create note│  Notes keybindings                   │                   │
-│  C     create note│                                      │                   │
-│  t     open today'│  o       open file / heading         │                   │
-│  p     periodic no│  m       move section(s) to another f│                   │
-│  ?     show this h│  c       create note (blank)         │                   │
-│  Esc   close overl│  C       create note from template   │                   │
-│                   │  t       open today's daily note     │                   │
-│                   │  p       periodic note · d/w/m/q/y   │                   │
-│                   │  ?       show this help              │                   │
-│                   │  Esc     close overlay               │                   │
-│                   │                                      │                   │
-│                   └──────────────────────────────────────┘                   │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
- vault: test-vault  ·  tab: Notes           not yet refreshed      mode: normal
+  1 Graph ┌ help ────────────────────────────────────────────────────┐          
+┌ notes ──│Keybindings — Notes                                       │─────────┐
+│         │                                                          │         │
+│  Notes —│  Global                                                  │         │
+│         │  q / Ctrl+C         quit                                 │         │
+│  o     o│  ?                  toggle this help                     │         │
+│  m     m│  Tab / Shift+Tab    next / previous tab                  │         │
+│  c     c│  1 / 2 / 3 / 4      jump to tab N                        │         │
+│  C     c│  g s                git sync                             │         │
+│  t     o│  Esc                close overlay                        │         │
+│  p     p│                                                          │         │
+│  ?     s│  Notes                                                   │         │
+│  Esc   c│  o                  open file / heading picker           │         │
+│         │  m                  move section(s) to another file      │         │
+│         │  c                  create note (blank)                  │         │
+│         │  Shift+C            create note from template            │         │
+│         │                                                          │         │
+│         │  Periodic notes                                          │         │
+│         │  t                  open today's daily note              │         │
+│         │  p                  leader → d/w/m/q/y for daily…yearly  │         │
+│         │                                                          │         │
+│         │  In any picker / form                                    │         │
+└─────────└──────────────────────────────────────────────────────────┘─────────┘
+ vault: test-vault  ·  tab: Notes           not yet refreshed        mode: help

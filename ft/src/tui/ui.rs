@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::tui::{
+    help::HelpSection,
     jobs::JobKind,
     tab::{Tab, TabCtx},
 };
@@ -203,54 +204,67 @@ pub fn render_body(frame: &mut Frame, area: Rect, tab: &mut dyn Tab, ctx: &TabCt
     tab.render(frame, area, ctx);
 }
 
-const HELP_LINES: &[(&str, &str)] = &[
-    ("q / Ctrl+C", "quit"),
-    ("?", "toggle this help"),
-    ("Tab / Shift+Tab", "next / previous tab"),
-    ("1 / 2", "jump to tab N"),
-    ("g s", "git sync"),
-    ("/", "edit query"),
-    ("↑ / ↓ · j / k", "select task"),
-    ("] / [", "due date +1d / -1d"),
-    ("} / {", "scheduled +1d / -1d"),
-    ("t", "set due to today"),
-    ("p / P", "priority cycle fwd / back"),
-    ("x / X", "complete / cancel"),
-    ("e", "open edit popup"),
-    ("c / Shift+C", "new task (line / form)"),
-    ("Ctrl+E", "expand quickline → form"),
-    ("Enter (target)", "open file/heading picker"),
-    ("Enter", "open task in $EDITOR"),
-    ("R", "reload vault"),
-    ("Ctrl+W / Ctrl+⌫", "delete previous word"),
-    ("Esc", "close overlay"),
-];
-
-pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    // 90% height (was 80%) — the binding list grew past what 80% of a
-    // 24-row terminal could contain after plan-004 added `c` for the
-    // new-task quickline.
-    let popup = centered_rect(60, 90, area);
+/// Render the `?` overlay. The renderer is tab-agnostic: it composes the
+/// shared `global` section (always first) with whatever the active tab
+/// returns from `Tab::help_sections()`. The header carries the tab title
+/// so users can tell which keymap they're looking at.
+pub fn render_help_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    tab_title: &str,
+    global: &HelpSection,
+    tab_sections: &[HelpSection],
+) {
+    // Widened to 75% (was 60% pre-plan-022) so the key + description
+    // columns survive on a standard 80-col terminal once section headers
+    // and grouped Tasks/Graph bindings are stacked. 95% height handles
+    // tabs with long binding lists; sections render top-to-bottom without
+    // scrolling so the popup needs the room.
+    let popup = centered_rect(75, 95, area);
     frame.render_widget(Clear, popup);
 
-    let mut lines: Vec<Line> = Vec::with_capacity(HELP_LINES.len() + 2);
+    // Pre-compute the longest key column across all sections so the
+    // `desc` column lines up no matter which tab is active. The 4-char
+    // floor prevents single-char keys from collapsing the column.
+    let key_width = std::iter::once(global)
+        .chain(tab_sections.iter())
+        .flat_map(|s| s.entries.iter())
+        .map(|e| e.keys.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+
+    let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
-        "Keybindings",
+        format!("Keybindings — {tab_title}"),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
-    lines.push(Line::from(""));
-    for (key, desc) in HELP_LINES {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {key:<18}"),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(*desc, Style::default().fg(Color::White)),
-        ]));
+
+    for section in std::iter::once(global).chain(tab_sections.iter()) {
+        if section.entries.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", section.title),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for entry in &section.entries {
+            let pad = key_width.saturating_sub(entry.keys.chars().count());
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {}{}  ", entry.keys, " ".repeat(pad)),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(entry.desc.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

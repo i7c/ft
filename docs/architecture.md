@@ -172,6 +172,20 @@ DSL with flag filters by AND-ing the parsed expression with a typed
 4. If it needs vault data, call `Vault::discover(vault_flag)?` and
    `vault.scan()` — same pattern as the existing subcommands.
 
+### A new TUI tab
+
+1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
+   `App::new`. The default `help_sections()` returns nothing, which would
+   leave the `?` overlay showing only the shared global section — so:
+2. Override `Tab::help_sections(&self) -> Vec<HelpSection>` returning one
+   or more named [`HelpSection`]s (see `ft/src/tui/help.rs`) for your
+   keymap. Group bindings the way users will look them up
+   ("Navigation", "Mutations", "Modals"); keep key strings short
+   (≤ 18 chars) so they fit alongside descriptions in the 80-col popup.
+3. Add a snapshot test in `ft/src/tui/tests.rs` that switches to the new
+   tab, calls `app.enter_help()`, and renders to a `TestBackend` so the
+   help inventory is locked against drift.
+
 ### A new task format (e.g. dataview)
 
 1. Create `ft-core/src/task/<name>.rs` implementing `TaskFormat`.

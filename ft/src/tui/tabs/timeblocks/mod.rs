@@ -46,6 +46,7 @@ use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
     event::Event,
+    help::HelpSection,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     widgets::EditBuffer,
 };
@@ -1290,6 +1291,51 @@ impl Tab for TimeblocksTab {
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
         self.reload(ctx);
         Ok(())
+    }
+
+    fn help_sections(&self) -> Vec<HelpSection> {
+        vec![
+            HelpSection::new(
+                "Navigation",
+                &[
+                    ("↑ / ↓ · j / k", "select prev / next block"),
+                    ("g / G", "first / last block"),
+                    ("h / l · ← / →", "toggle pane (Split) / switch day (Single)"),
+                    ("f", "toggle Split / Single view"),
+                    ("Shift+H / Shift+L", "slide anchor day back / forward"),
+                    ("Shift+T", "jump anchor to today"),
+                    ("r", "refresh from disk"),
+                ],
+            ),
+            HelpSection::new(
+                "Edit times",
+                &[
+                    ("] / [", "end +5m / -5m"),
+                    ("} / {", "start +5m / -5m"),
+                    ("> / <", "shift block ±5m (duration preserved)"),
+                ],
+            ),
+            HelpSection::new(
+                "Create / edit / delete",
+                &[
+                    ("c", "create missing daily note"),
+                    ("a", "add block (quickline)"),
+                    ("Shift+A", "add block (form)"),
+                    ("e", "edit description (inline)"),
+                    ("t", "add / remove @tags"),
+                    ("d d", "delete focused block (two-stroke)"),
+                ],
+            ),
+            HelpSection::new(
+                "Modals",
+                &[
+                    ("Enter", "commit"),
+                    ("Esc", "cancel / close modal"),
+                    ("Tab / Shift+Tab", "next / prev field (form)"),
+                    ("Ctrl+W / Ctrl+⌫", "delete previous word"),
+                ],
+            ),
+        ]
     }
 }
 

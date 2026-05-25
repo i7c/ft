@@ -1,6 +1,7 @@
 mod app;
 mod editor;
 mod event;
+mod help;
 mod jobs;
 mod notes_actions;
 mod tab;

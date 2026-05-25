@@ -17,6 +17,7 @@ use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
     event::Event,
+    help::HelpSection,
     notes_actions::{
         create::{self, begin_folder_picking, begin_template_picking, CreateState, CreateStep},
         periodic::run_periodic_open,
@@ -54,16 +55,12 @@ pub enum NotesState {
 
 pub struct NotesTab {
     state: NotesState,
-    /// Whether the tab-local help overlay is showing. Toggled by `?` while
-    /// idle; the overlay shadows the help-panel body until dismissed.
-    show_help: bool,
 }
 
 impl NotesTab {
     pub fn new() -> Self {
         Self {
             state: NotesState::Idle,
-            show_help: false,
         }
     }
 
@@ -75,20 +72,7 @@ impl NotesTab {
     }
 
     fn handle_idle_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        if self.show_help {
-            return match k.code {
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
-                    self.show_help = false;
-                    EventOutcome::Consumed
-                }
-                _ => EventOutcome::Consumed,
-            };
-        }
         match (k.code, k.modifiers) {
-            (KeyCode::Char('?'), _) => {
-                self.show_help = true;
-                EventOutcome::Consumed
-            }
             (KeyCode::Char('o'), KeyModifiers::NONE) => {
                 self.state = NotesState::OpenPicking {
                     picker: Self::new_vault_picker(ctx),
@@ -227,7 +211,48 @@ impl Tab for NotesTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        view::render(frame, area, ctx, &mut self.state, self.show_help);
+        view::render(frame, area, ctx, &mut self.state);
+    }
+
+    fn help_sections(&self) -> Vec<HelpSection> {
+        vec![
+            HelpSection::new(
+                "Notes",
+                &[
+                    ("o", "open file / heading picker"),
+                    ("m", "move section(s) to another file"),
+                    ("c", "create note (blank)"),
+                    ("Shift+C", "create note from template"),
+                ],
+            ),
+            HelpSection::new(
+                "Periodic notes",
+                &[
+                    ("t", "open today's daily note"),
+                    ("p", "leader → d/w/m/q/y for daily…yearly"),
+                ],
+            ),
+            HelpSection::new(
+                "In any picker / form",
+                &[
+                    ("↑ / ↓", "select prev / next (also Ctrl+J / Ctrl+K)"),
+                    ("Enter", "select / advance"),
+                    ("Esc", "back / cancel"),
+                    ("Ctrl+W / Ctrl+⌫", "delete previous word"),
+                    ("Ctrl+N", "create new target (target picker)"),
+                ],
+            ),
+            HelpSection::new(
+                "Move flow — compose",
+                &[
+                    ("↑ / ↓ · j / k", "focus row"),
+                    ("Shift+↑ / Shift+↓", "reorder pending row (also K / J)"),
+                    ("← / → · h / l", "decrease / increase heading level"),
+                    ("r", "rename focused pending row"),
+                    ("Enter", "commit move"),
+                ],
+            ),
+        ]
     }
 }
 fn request_open_in_editor(ctx: &TabCtx, hit: &Hit) {

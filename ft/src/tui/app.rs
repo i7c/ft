@@ -23,6 +23,7 @@ use ft_core::config::EditorStrategy;
 use crate::tui::{
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
     event::{BgEvent, Event, EventStream, SyncJobResult},
+    help::global_section,
     jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{graph::GraphTab, notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab},
@@ -204,7 +205,17 @@ impl App {
         );
 
         match self.mode {
-            Mode::Help => ui::render_help_overlay(frame, frame.area()),
+            Mode::Help => {
+                let global = global_section();
+                let sections = self.tabs[self.active].help_sections();
+                ui::render_help_overlay(
+                    frame,
+                    frame.area(),
+                    self.tabs[self.active].title(),
+                    &global,
+                    &sections,
+                );
+            }
             Mode::GitLeader => ui::render_git_leader(frame, frame.area()),
             Mode::SyncConflict => {
                 if let Some(info) = self.sync_conflict.borrow().as_ref() {
@@ -846,6 +857,12 @@ impl App {
 
     pub fn active_title(&self) -> &str {
         self.tabs[self.active].title()
+    }
+
+    /// Help sections the active tab contributes to the `?` overlay. Used
+    /// by the test that asserts every tab wires its own keybinding doc.
+    pub fn active_tab_help_sections(&self) -> Vec<crate::tui::help::HelpSection> {
+        self.tabs[self.active].help_sections()
     }
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {

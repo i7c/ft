@@ -2,27 +2,27 @@
 source: ft/src/tui/tests.rs
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
- 1: (empty)     ┌ help ────────────────────────────────────────┐                
-                │Keybindings                                   │                
-press / to edit │                                              │                
-                │  q / Ctrl+C        quit                      │                
-                │  ?                 toggle this help          │                
-                │  Tab / Shift+Tab   next / previous tab       │                
-                │  1 / 2             jump to tab N             │                
-                │  g s               git sync                  │                
-                │  /                 edit query                │                
-                │  ↑ / ↓ · j / k     select task               │                
-                │  ] / [             due date +1d / -1d        │                
-                │  } / {             scheduled +1d / -1d       │                
-                │  t                 set due to today          │                
-                │  p / P             priority cycle fwd / back │                
-                │  x / X             complete / cancel         │                
-                │  e                 open edit popup           │                
-                │  c / Shift+C       new task (line / form)    │                
-                │  Ctrl+E            expand quickline → form   │                
-                │  Enter (target)    open file/heading picker  │                
-                │  Enter             open task in $EDITOR      │                
-                │  R                 reload vault              │                
->               └──────────────────────────────────────────────┘                
+  1 Graph ┌ help ────────────────────────────────────────────────────┐          
+ 1: (empty│Keybindings — Graph                                       │          
+          │                                                          │          
+press / to│  Global                                                  │          
+          │  q / Ctrl+C              quit                            │          
+          │  ?                       toggle this help                │          
+          │  Tab / Shift+Tab         next / previous tab             │          
+          │  1 / 2 / 3 / 4           jump to tab N                   │          
+          │  g s                     git sync                        │          
+          │  Esc                     close overlay                   │          
+          │                                                          │          
+          │  Navigation                                              │          
+          │  ↑ / ↓ · j / k           select prev / next row          │          
+          │  Enter / l               expand / collapse node          │          
+          │  h                       collapse · jump to parent       │          
+          │  g / G                   first / last row                │          
+          │  Ctrl+D / Ctrl+U         half-page down / up             │          
+          │  r                       refresh graph from disk         │          
+          │                                                          │          
+          │  Query                                                   │          
+          │  /                       edit query (this view)          │          
+          │  Enter                   apply query                     │          
+>         └──────────────────────────────────────────────────────────┘          
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

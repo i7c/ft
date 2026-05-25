@@ -9,6 +9,7 @@ use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::event::Event;
+use crate::tui::help::HelpSection;
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
@@ -119,5 +120,13 @@ pub trait Tab {
 
     fn refresh(&mut self, _ctx: &mut TabCtx) -> Result<()> {
         Ok(())
+    }
+
+    /// Sections rendered in the `?` overlay when this tab is active. The
+    /// App composes these after the shared global section
+    /// (see [`crate::tui::help::global_section`]). Default is empty so a
+    /// new tab can land without a help block until it's filled in.
+    fn help_sections(&self) -> Vec<HelpSection> {
+        Vec::new()
     }
 }

@@ -130,21 +130,11 @@ const CREATE_COLLISION_KEYS: &[(&str, &str)] = &[
     ("Enter", "commit"),
 ];
 
-pub(super) fn render(
-    frame: &mut Frame,
-    area: Rect,
-    _ctx: &TabCtx,
-    state: &mut NotesState,
-    show_help: bool,
-) {
+pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut NotesState) {
     render_idle_body(frame, area);
 
     match state {
-        NotesState::Idle => {
-            if show_help {
-                render_help_overlay(frame, area);
-            }
-        }
+        NotesState::Idle => {}
         NotesState::OpenPicking { picker } => {
             render_picker_popup(
                 frame,
@@ -1227,47 +1217,6 @@ fn render_idle_body(frame: &mut Frame, area: Rect) {
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    // 65% height accommodates the 8 IDLE_KEYS rows plus title + footer.
-    // Bumped from 50% in plan 010 session 3 when `t` and `p` joined.
-    let popup = centered_rect(50, 65, area);
-    frame.render_widget(Clear, popup);
-
-    let mut lines: Vec<Line> = Vec::with_capacity(IDLE_KEYS.len() + 4);
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Notes keybindings",
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-    for (key, desc) in IDLE_KEYS {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {key:<8}"),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(*desc, Style::default().fg(Color::White)),
-        ]));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  press ? or Esc to close",
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
-    )));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" notes · help ")
-        .style(Style::default().bg(Color::Black));
-    frame.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

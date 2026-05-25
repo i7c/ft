@@ -35,6 +35,7 @@ use ft_core::search::Hit;
 
 use crate::tui::{
     event::Event,
+    help::HelpSection,
     notes_actions::{
         create::{self, CreateState, CreateStep},
         periodic::run_periodic_open,
@@ -1170,6 +1171,62 @@ impl Tab for GraphTab {
         self.graph = Some(Graph::build(ctx.vault)?);
         self.restore_all_views();
         Ok(())
+    }
+
+    fn help_sections(&self) -> Vec<HelpSection> {
+        vec![
+            HelpSection::new(
+                "Navigation",
+                &[
+                    ("↑ / ↓ · j / k", "select prev / next row"),
+                    ("Enter / l", "expand / collapse node"),
+                    ("h", "collapse · jump to parent"),
+                    ("g / G", "first / last row"),
+                    ("Ctrl+D / Ctrl+U", "half-page down / up"),
+                    ("r", "refresh graph from disk"),
+                ],
+            ),
+            HelpSection::new(
+                "Query",
+                &[
+                    ("/", "edit query (this view)"),
+                    ("Enter", "apply query"),
+                    ("Esc", "cancel query edit"),
+                ],
+            ),
+            HelpSection::new(
+                "Files",
+                &[
+                    ("o", "open selected note in $EDITOR"),
+                    ("Ctrl+O", "open selected note in Obsidian"),
+                    ("c", "create blank note in current folder"),
+                    ("Shift+C", "create note from template"),
+                ],
+            ),
+            HelpSection::new(
+                "Move section",
+                &[
+                    ("m", "start move (then m = use selected, t = picker)"),
+                    ("Esc", "cancel move flow"),
+                ],
+            ),
+            HelpSection::new(
+                "Periodic notes",
+                &[
+                    ("t", "open today's daily note"),
+                    ("p", "leader → d/w/m/q/y for daily…yearly"),
+                ],
+            ),
+            HelpSection::new(
+                "Views",
+                &[
+                    ("Ctrl+N", "new view (right of current)"),
+                    ("Ctrl+W", "close active view"),
+                    ("Ctrl+PageDown / PageUp", "next / previous view"),
+                    ("Alt+1..9", "jump to view N"),
+                ],
+            ),
+        ]
     }
 }
 
