@@ -78,6 +78,54 @@ ft tasks move stale-id --to inbox/triage.md
 ft tasks move --query 'tag is legacy' --to inbox/triage.md#Triage --dry-run
 ```
 
+## Interactive TUI
+
+`ft tui` launches a full-screen tabbed terminal UI built on `ratatui`.
+Four tabs: **Graph** (DSL-driven link walker), **Tasks** (the daily
+triage view from the CLI, live), **Notes** (fuzzy file picker +
+section operations), and **Timeblocks** (today/tomorrow day planner).
+Global keys: `Tab`/`Shift-Tab` to cycle tabs, `1`–`4` to jump, `?`
+opens a per-tab help overlay, `q` or `Ctrl-C` quits.
+
+```sh
+ft tui                          # discover vault + open
+ft tui --vault path/to/vault
+```
+
+## Notes
+
+`ft notes` covers everything that operates on whole notes — open,
+create, move sections between them, and the link-graph reads/rewrites.
+
+```sh
+# Fuzzy-open the top hit in $EDITOR (or Obsidian via --obsidian)
+ft notes open finance
+ft notes open meeting#Action items
+
+# Create from a template (or a blank `# <title>` stub)
+ft notes create areas/finance.md --template area
+ft notes create journal/scratch.md --var topic=oncall
+
+# Jump to today's daily note (creates it from your daily template if missing)
+ft notes today
+ft notes periodic weekly --offset -1     # last week's note
+ft notes periodic monthly --date 2026-01-15
+
+# Move one or more sections between notes (interactive picker by default)
+ft notes move-section source.md --to target.md#Archive
+```
+
+## Fuzzy find
+
+`ft find` is a scriptable file/heading picker — same fuzzy syntax as
+`ft notes open`, but it prints candidates instead of opening anything.
+
+```sh
+ft find finance                  # filenames matching "finance"
+ft find meeting#Action           # heading matches inside files
+ft find '#TODO' --format ndjson  # vault-wide heading hunt
+```
+
 ## Timeblocks
 
 `ft timeblocks` manages the day-planner block list inside each daily
@@ -99,10 +147,10 @@ ft timeblocks edit standup --end +15m
 ft timeblocks spent this-week --format json
 ```
 
-The TUI gains a "Timeblocks" tab with a today + tomorrow split (or
-single-day full-width via `f`), one-key time chords (`]`/`[`/`}`/`{`
-for ±5-minute edge shifts, `<`/`>` to shift the whole block), `H`/`L`
-to slide the date window, and `T` to jump back to today. See
+The TUI's Timeblocks tab has a today + tomorrow split (or single-day
+full-width via `f`), one-key time chords (`]`/`[`/`}`/`{` for ±5-minute
+edge shifts, `<`/`>` to shift the whole block), `H`/`L` to slide the
+date window, and `T` to jump back to today. See
 [docs/timeblocks.md](docs/timeblocks.md) for the block format, tag
 grammar, full CLI reference, and TUI keymap.
 
@@ -155,6 +203,35 @@ apply" case and aborts before any write. The applier sorts same-file
 edits by descending byte offset so multi-link rewrites in one file
 are byte-safe; the file rename happens last so a self-linking note
 stays correct.
+
+## Graph queries
+
+`ft graph query` runs a small DSL against the in-memory link graph
+and prints the walked subtree. The DSL is a *navigation policy* — a
+`node` block picks the initial set, and an optional `expand` block
+says which edges to follow on each hop — so traversals like "every
+orphan note" or "every note's link subgraph" are one-liners.
+
+```sh
+# Everything under a folder
+ft graph query 'node where path starts_with "Areas/finance/"'
+
+# Notes whose title includes "TODO"
+ft graph query 'node where kind = Note and title includes "TODO"'
+
+# Full link subgraph of every note, depth-bounded
+ft graph query --depth 2 \
+  'node where kind = Note;
+   expand where edge.kind in {link, embed};'
+
+# Long query from a file
+ft graph query --from-file queries/related.gql --format ndjson
+```
+
+Output formats: `tree` (default), `json`, `ndjson`, `edges`,
+`markdown`. See [docs/graph-query-dsl.md](docs/graph-query-dsl.md)
+for the full grammar, attribute compatibility matrix, and worked
+examples.
 
 ## Git sync
 
@@ -209,12 +286,11 @@ ft --json-errors tasks list overdue --format ndjson \
   traits, where to add a new subcommand or task format
 - [docs/task-format.md](docs/task-format.md) — exactly which Tasks-plugin
   emoji fields are supported, with examples and the deferred list
-- [docs/query-dsl.md](docs/query-dsl.md) — supported subset of the plugin's
-  query language with grammar, examples, and an error catalog
+- [docs/query-dsl.md](docs/query-dsl.md) — supported subset of the
+  Tasks-plugin query language with grammar, examples, and an error catalog
+- [docs/graph-query-dsl.md](docs/graph-query-dsl.md) — grammar and worked
+  examples for `ft graph query` and the TUI Graph tab
 - [docs/timeblocks.md](docs/timeblocks.md) — day-planner block format,
   tag grammar, full CLI reference, and TUI keymap
-
-## Status
-
-`ft` is the foundation. A TUI (plan 002) and notes commands (plan 003)
-build on top of `ft-core`.
+- [docs/config.md](docs/config.md) — full config schema (vault discovery,
+  `[daily_notes]`, `[periodic_notes]`, `[git]`, presets)
