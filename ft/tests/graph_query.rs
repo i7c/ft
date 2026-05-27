@@ -472,3 +472,100 @@ fn graph_query_tree_snapshot_for_dirs_fixture() {
     let stdout = String::from_utf8(out).unwrap();
     insta::assert_snapshot!("graph_query_dirs_tree", stdout);
 }
+
+// ── --preset ──────────────────────────────────────────────────────────
+
+#[test]
+fn graph_query_preset_resolves_builtin_tree() {
+    let v = dirs_vault();
+    let out = ft()
+        .args([
+            "--vault",
+            v.to_str().unwrap(),
+            "graph",
+            "query",
+            "--preset",
+            "tree",
+            "--depth",
+            "0",
+            "--format",
+            "ndjson",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let rows: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_str(l).expect("ndjson row must parse"))
+        .collect();
+    assert!(!rows.is_empty(), "tree preset should return rows");
+    assert_eq!(rows[0]["kind"], "Directory");
+}
+
+#[test]
+fn graph_query_preset_unknown_exits_two() {
+    let v = dirs_vault();
+    ft().args([
+        "--vault",
+        v.to_str().unwrap(),
+        "graph",
+        "query",
+        "--preset",
+        "nonexistent",
+    ])
+    .assert()
+    .code(2)
+    .stderr(predicate::str::contains("unknown preset: nonexistent"));
+}
+
+#[test]
+fn graph_query_preset_user_shadows_builtin() {
+    let tmp = TempDir::new().unwrap();
+    let vault_dir = tmp.child("v");
+    vault_dir.create_dir_all().unwrap();
+    vault_dir.child(".obsidian").create_dir_all().unwrap();
+    vault_dir.child(".ft").create_dir_all().unwrap();
+    vault_dir
+        .child(".ft/config.toml")
+        .write_str(
+            r#"
+[graph.presets]
+orphans = "node where kind = Note;"
+"#,
+        )
+        .unwrap();
+    vault_dir.child("a.md").write_str("# A\n").unwrap();
+    vault_dir.child("b.md").write_str("# B\n").unwrap();
+
+    let out = ft()
+        .args([
+            "--vault",
+            vault_dir.path().to_str().unwrap(),
+            "graph",
+            "query",
+            "--preset",
+            "orphans",
+            "--format",
+            "ndjson",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(out).unwrap();
+    let rows: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_str(l).expect("ndjson row must parse"))
+        .collect();
+    assert!(
+        !rows.is_empty(),
+        "user-overridden orphans preset should return rows"
+    );
+}

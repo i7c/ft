@@ -25,6 +25,7 @@ use ratatui::{
     Frame,
 };
 
+use ft_core::graph::preset;
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 
@@ -49,6 +50,82 @@ use crate::tui::{
     tabs::notes::view as notes_view,
     widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
+
+// ── Preset picker source ──────────────────────────────────────────────
+
+struct PresetPickerSource {
+    items: Vec<(String, String)>,
+    matcher: nucleo_matcher::Matcher,
+    buf: Vec<char>,
+}
+
+impl PresetPickerSource {
+    fn new(vault: &ft_core::vault::Vault) -> Self {
+        let mut items: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (name, dsl) in &vault.config.config.graph.presets {
+            if seen.insert(name.clone()) {
+                items.push((name.clone(), dsl.clone()));
+            }
+        }
+        for name in preset::builtin_names() {
+            if seen.insert(name.to_string()) {
+                items.push((name.to_string(), preset::builtin(name).unwrap().to_string()));
+            }
+        }
+        Self {
+            items,
+            matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
+            buf: Vec::new(),
+        }
+    }
+}
+
+impl crate::tui::widgets::PickerSource for PresetPickerSource {
+    type Item = String;
+
+    fn query(&mut self, q: &str, limit: usize) -> Vec<crate::tui::widgets::PickerItem<String>> {
+        let pat = nucleo_matcher::pattern::Pattern::parse(
+            q,
+            nucleo_matcher::pattern::CaseMatching::Smart,
+            nucleo_matcher::pattern::Normalization::Smart,
+        );
+        let mut ranked: Vec<(u32, usize, Vec<u32>)> = Vec::new();
+        for (i, (name, _)) in self.items.iter().enumerate() {
+            self.buf.clear();
+            let haystack = nucleo_matcher::Utf32Str::new(name, &mut self.buf);
+            let mut indices = Vec::new();
+            if let Some(score) = pat.indices(haystack, &mut self.matcher, &mut indices) {
+                ranked.push((score, i, indices));
+            }
+        }
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, i, match_indices)| {
+                let (name, _) = &self.items[i];
+                crate::tui::widgets::PickerItem {
+                    label: name.clone(),
+                    match_indices,
+                    data: name.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn initial_items(&mut self, limit: usize) -> Vec<crate::tui::widgets::PickerItem<String>> {
+        self.items
+            .iter()
+            .take(limit)
+            .map(|(name, _)| crate::tui::widgets::PickerItem {
+                label: name.clone(),
+                match_indices: Vec::new(),
+                data: name.clone(),
+            })
+            .collect()
+    }
+}
 
 // ── GraphTab ──────────────────────────────────────────────────────────
 
@@ -88,6 +165,9 @@ pub struct GraphTab {
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
     move_outer: Option<GraphMoveOuter>,
+    /// Active preset picker. `Some` after `Ctrl+N`; selecting a preset
+    /// pre-fills the query input, dismissing falls back to a blank view.
+    preset_picker: Option<FuzzyPicker<PresetPickerSource>>,
 }
 
 /// Graph-tab outer wrapper around the shared section-move flow.
@@ -136,6 +216,7 @@ impl GraphTab {
             create_state: None,
             periodic_leader: false,
             move_outer: None,
+            preset_picker: None,
         }
     }
 
@@ -500,12 +581,70 @@ impl GraphTab {
         &mut self.views[self.active]
     }
 
-    /// Open a new empty view to the right of the active one and switch
-    /// to it. Drops into input mode so the user can start typing.
+    /// Open a new view. If graph presets exist (user or built-in), opens
+    /// the preset picker first; on selection, pre-fills the query. On
+    /// dismiss, creates a blank view.
+    fn add_view_with_presets(&mut self, ctx: &TabCtx) {
+        let src = PresetPickerSource::new(ctx.vault);
+        if src.items.is_empty() {
+            self.add_view();
+            return;
+        }
+        self.views.push(ExpandedView::default());
+        self.active = self.views.len() - 1;
+        self.preset_picker = Some(FuzzyPicker::new(src));
+    }
+
+    /// Open a new blank view and drop into input mode. Used when no
+    /// presets exist (or by test code).
     fn add_view(&mut self) {
         self.views.push(ExpandedView::default());
         self.active = self.views.len() - 1;
         self.input_mode = true;
+    }
+
+    /// Resolve a preset name to its DSL string, preferring user config over
+    /// built-ins.
+    fn resolve_preset(&self, name: &str, ctx: &TabCtx) -> Option<String> {
+        if let Some(user) = ctx.vault.config.config.graph.presets.get(name) {
+            return Some(user.clone());
+        }
+        preset::builtin(name).map(|s| s.to_string())
+    }
+
+    fn handle_preset_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(mut picker) = self.preset_picker.take() else {
+            return EventOutcome::NotHandled;
+        };
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(name) => {
+                if let Some(dsl) = self.resolve_preset(&name, ctx) {
+                    self.apply_preset_to_active_view(&dsl);
+                    self.input_mode = false;
+                } else {
+                    self.input_mode = true;
+                }
+            }
+            PickerOutcome::Cancelled => {
+                self.input_mode = true;
+            }
+            PickerOutcome::StillOpen => {
+                self.preset_picker = Some(picker);
+            }
+            PickerOutcome::NotHandled => {
+                self.preset_picker = Some(picker);
+                return EventOutcome::NotHandled;
+            }
+        }
+        EventOutcome::Consumed
+    }
+
+    fn apply_preset_to_active_view(&mut self, dsl: &str) {
+        let graph = self.graph.as_ref();
+        let v = &mut self.views[self.active];
+        v.query_text = dsl.to_string();
+        v.input_cursor = dsl.len();
+        v.apply_query(graph);
     }
 
     /// Close the active view. If it's the last view, replace it with a
@@ -729,6 +868,12 @@ impl Tab for GraphTab {
             return Ok(self.handle_create_key(k, ctx));
         }
 
+        // Preset picker: captures keyboard while open. On selection,
+        // pre-fills the new view's query; on dismiss, starts blank.
+        if self.preset_picker.is_some() {
+            return Ok(self.handle_preset_picker_key(k, ctx));
+        }
+
         // Move-section flow: shared and tree-driven phases all funnel
         // through one dispatcher. Most of them capture the keyboard,
         // but `TargetFromTree` deliberately returns `NotHandled` for
@@ -762,7 +907,7 @@ impl Tab for GraphTab {
         // App's tab switcher.
         match (k.code, k.modifiers) {
             (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
-                self.add_view();
+                self.add_view_with_presets(ctx);
                 return Ok(EventOutcome::Consumed);
             }
             (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1165,6 +1310,18 @@ impl Tab for GraphTab {
                 }
             }
         }
+
+        if let Some(ref mut picker) = self.preset_picker {
+            let popup_height = 7.min(area.height);
+            let popup_width = 40.min(area.width);
+            let popup_area = ratatui::layout::Rect {
+                x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+                y: area.y + (area.height.saturating_sub(popup_height)) / 3,
+                width: popup_width,
+                height: popup_height,
+            };
+            picker.render(frame, popup_area);
+        }
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -1220,7 +1377,7 @@ impl Tab for GraphTab {
             HelpSection::new(
                 "Views",
                 &[
-                    ("Ctrl+N", "new view (right of current)"),
+                    ("Ctrl+N", "new view (pick preset or blank)"),
                     ("Ctrl+W", "close active view"),
                     ("Ctrl+PageDown / PageUp", "next / previous view"),
                     ("Alt+1..9", "jump to view N"),

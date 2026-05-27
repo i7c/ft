@@ -6174,6 +6174,22 @@ fn graph_tab_expansion_survives_refresh() -> Result<()> {
 }
 
 #[test]
+fn graph_tab_preset_picker_opens_on_ctrl_n() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Ctrl+N opens the preset picker (built-in presets are available).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_preset_picker_open", frame);
+    Ok(())
+}
+
+#[test]
 fn graph_c_opens_filename_prompt_seeded_from_directory_selection() -> Result<()> {
     // Default tree starts with the vault root directory selected.
     // Pressing `c` should open the create overlay's FilenamePrompt with

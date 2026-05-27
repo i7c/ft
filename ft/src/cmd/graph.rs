@@ -9,7 +9,8 @@
 //!
 //! Exit codes:
 //! - `0` — happy path.
-//! - `2` — DSL parse error (matches the task DSL convention).
+//! - `2` — DSL parse error or unknown preset (matches the task DSL
+//!   convention).
 //! - `1` — every other error (vault not found, IO failure, etc.),
 //!   surfaced through the top-level anyhow path.
 
@@ -19,6 +20,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use ft_core::graph::preset;
 use ft_core::graph::query::{parse, CyclePolicy, WalkOptions};
 use ft_core::graph::Graph;
 use ft_core::vault::Vault;
@@ -39,9 +41,8 @@ pub enum GraphCommand {
 
 #[derive(Args, Debug)]
 pub struct QueryArgs {
-    /// DSL source. Mutually exclusive with `--query` / `--from-file`.
-    /// Exactly one of the three must be supplied.
-    #[arg(value_name = "QUERY", conflicts_with_all = ["query_opt", "from_file"])]
+    /// DSL source. Mutually exclusive with `--query` / `--from-file` / `--preset`.
+    #[arg(value_name = "QUERY", conflicts_with_all = ["query_opt", "from_file", "preset"])]
     pub query: Option<String>,
 
     /// DSL source as a flag (alternative to the positional form).
@@ -49,14 +50,19 @@ pub struct QueryArgs {
         short = 'q',
         long = "query",
         value_name = "QUERY",
-        conflicts_with = "from_file"
+        conflicts_with_all = ["from_file", "preset"]
     )]
     pub query_opt: Option<String>,
 
     /// Read DSL source from a file. Useful when the query grows past
     /// comfortable shell-quoting length.
-    #[arg(long = "from-file", value_name = "PATH")]
+    #[arg(long = "from-file", value_name = "PATH", conflicts_with = "preset")]
     pub from_file: Option<PathBuf>,
+
+    /// Resolve a named graph-query preset (built-in or from config)
+    /// to its DSL string. User presets shadow built-ins of the same name.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["query", "query_opt", "from_file"])]
+    pub preset: Option<String>,
 
     /// Maximum depth to walk. Default unlimited. `0` returns roots only.
     #[arg(long)]
@@ -95,20 +101,18 @@ pub fn run(args: GraphArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 }
 
 fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let src = read_query_source(&args)?;
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    let src = read_query_source(&args, &vault)?;
 
     let query = match parse(&src) {
         Ok(q) => q,
         Err(e) => {
-            // Parse failure is a user-input error, not an exec error —
-            // print straight to stderr, skip the `Error:` chain prefix,
-            // and exit 2 to match the task DSL convention.
             eprintln!("{e}");
             return Ok(ExitCode::from(2));
         }
     };
 
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
     let graph = Graph::build(&vault).context("could not build graph for vault")?;
 
     let opts = WalkOptions {
@@ -130,7 +134,17 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn read_query_source(args: &QueryArgs) -> Result<String> {
+fn read_query_source(args: &QueryArgs, vault: &Vault) -> Result<String> {
+    if let Some(name) = &args.preset {
+        return match resolve_preset(name, vault) {
+            Some(dsl) => Ok(dsl),
+            None => {
+                eprintln!("unknown preset: {name}");
+                std::process::exit(2);
+            }
+        };
+    }
+
     match (
         args.query.as_deref(),
         args.query_opt.as_deref(),
@@ -140,10 +154,17 @@ fn read_query_source(args: &QueryArgs) -> Result<String> {
         (None, None, Some(p)) => std::fs::read_to_string(p)
             .with_context(|| format!("could not read query from {}", p.display())),
         (None, None, None) => Err(anyhow!(
-            "no query supplied — pass a positional QUERY, `--query`, or `--from-file PATH`"
+            "no query supplied — pass a positional QUERY, `--query`, `--from-file PATH`, or `--preset NAME`"
         )),
         _ => Err(anyhow!(
-            "QUERY, --query, and --from-file are mutually exclusive — pass exactly one"
+            "QUERY, --query, --from-file, and --preset are mutually exclusive — pass exactly one"
         )),
     }
+}
+
+fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {
+    if let Some(user) = vault.config.config.graph.presets.get(name) {
+        return Some(user.clone());
+    }
+    preset::builtin(name).map(|s| s.to_string())
 }

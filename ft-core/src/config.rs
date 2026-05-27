@@ -80,6 +80,10 @@ pub struct GraphCfg {
     /// Optional DSL query that seeds the graph tab on first focus. When
     /// unset, the tab falls back to a built-in default.
     pub default_query: Option<String>,
+    /// Named graph-query presets. Keys are preset names; values are graph-DSL
+    /// strings. User presets shadow built-ins of the same name.
+    #[serde(default)]
+    pub presets: HashMap<String, String>,
 }
 
 /// `ft git sync` / TUI `g s` configuration. Currently just the pull
@@ -742,6 +746,40 @@ typo_field = "oops"
         assert_eq!(
             lc.config.graph.default_query.as_deref(),
             Some("node where kind = Directory;")
+        );
+    }
+
+    #[test]
+    fn graph_presets_default_empty() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.graph.presets.is_empty());
+    }
+
+    #[test]
+    fn graph_presets_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[graph.presets]
+my-backlinks = "node where title includes \"Foo\"; expand where edge.kind = link;"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        assert_eq!(
+            lc.config
+                .graph
+                .presets
+                .get("my-backlinks")
+                .map(|s| s.as_str()),
+            Some("node where title includes \"Foo\"; expand where edge.kind = link;")
         );
     }
 
