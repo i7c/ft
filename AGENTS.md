@@ -40,9 +40,12 @@ to `ft-core` first so the CLI benefits too.
   No async runtime, no `Mutex<AppState>`. Workers own their inputs, post a
   `BgEvent::*` back, and exit. In-flight state lives on `App` as a typed
   `RefCell<Option<...>>` slot. The git-sync worker is the reference impl.
-- **`.devplans/`** holds per-feature plans (id, status, sessions log).
-  New features get a plan there; ongoing work updates the matching
-  Sessions entry. Use the `devplan` skill.
+- **Dual-DSL preset pattern.** Both task and graph queries use the same
+  convention: a `builtin(name) -> Option<&str>` + `builtin_names()` table
+  in `ft-core`, user presets in config shadowing built-ins, and CLI
+  `--preset <name>` resolution (user config → built-in → exit 2 on
+  unknown). Task presets live in `Config::presets`; graph presets in
+  `GraphCfg::presets` — separate maps to avoid cross-DSL ambiguity.
 
 ## Build invariants
 
@@ -84,6 +87,10 @@ cargo fmt --check
   property test (`serialize(parse(line)) == line`).
 - **New output format:** new module under `ft/src/output/`, variant on
   `output::Format`, wire it into `ft/src/cmd/tasks.rs::run_list`.
+- **New graph preset:** add entry to `ft_core::graph::preset::builtin()`
+  and `builtin_names()`, add a round-trip parse test. CLI `--preset`
+  and TUI quick-pick pick it up automatically. Same pattern applies
+  to task presets (`ft_core::query::preset`).
 
 ## Conventions to keep
 
