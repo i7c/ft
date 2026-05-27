@@ -48,6 +48,8 @@
 use std::fmt;
 
 use crate::graph::{EdgeKind, Graph, LinkForm, NodeKind, NoteId};
+#[cfg(test)]
+use crate::vault::Scan;
 
 // ── AST types ────────────────────────────────────────────────────────
 
@@ -104,6 +106,18 @@ pub enum Attr {
     Form,
     Indegree,
     Outdegree,
+    /// Task-specific: status (e.g., "Open", "Done")
+    Status,
+    /// Task-specific: priority (e.g., "High", "Medium")
+    Priority,
+    /// Task-specific: due date (YYYY-MM-DD)
+    Due,
+    /// Task-specific: scheduled date (YYYY-MM-DD)
+    Scheduled,
+    /// Task-specific: description text
+    Description,
+    /// Task-specific: tags (Vec<String>)
+    Tags,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -939,8 +953,8 @@ impl Parser {
         position: usize,
     ) -> Result<(), DslError> {
         let allowed: &[&str] = match subject {
-            Subject::Edge => &["link", "embed", "directory-contains"],
-            _ => &["Note", "Directory", "Ghost"],
+            Subject::Edge => &["link", "embed", "directory-contains", "has-task"],
+            _ => &["Note", "Directory", "Ghost", "Task"],
         };
         let check = |lit: &Literal| -> Result<(), DslError> {
             let s = literal_as_str(lit);
@@ -1001,6 +1015,13 @@ fn parse_attr(s: &str, position: usize) -> Result<Attr, DslError> {
         "form" => Ok(Attr::Form),
         "indegree" => Ok(Attr::Indegree),
         "outdegree" => Ok(Attr::Outdegree),
+        // Task-specific attributes
+        "status" => Ok(Attr::Status),
+        "priority" => Ok(Attr::Priority),
+        "due" => Ok(Attr::Due),
+        "scheduled" => Ok(Attr::Scheduled),
+        "description" => Ok(Attr::Description),
+        "tags" => Ok(Attr::Tags),
         _ => Err(DslError::UnknownAttribute {
             attr: s.to_string(),
             position,
@@ -1043,6 +1064,14 @@ fn validate_attr_subject(
             ),
             position,
         }),
+
+        // Task attributes: node-only (self, from, to). Reject edge.
+        (Attr::Status | Attr::Priority | Attr::Due | Attr::Scheduled | Attr::Description | Attr::Tags, Subject::Edge) => Err(DslError::ScopeError {
+            entity: "edge".into(),
+            hint: format!("`{attr_name}` is a node attribute, not an edge attribute"),
+            position,
+        }),
+        (Attr::Status | Attr::Priority | Attr::Due | Attr::Scheduled | Attr::Description | Attr::Tags, _) => Ok(()),
     }
 }
 
@@ -1263,6 +1292,34 @@ fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> bool {
             };
             eval_string_op(&v, c.op, &c.value)
         }
+        // Task-specific string attributes
+        Attr::Status | Attr::Priority | Attr::Due | Attr::Scheduled | Attr::Description => {
+            let v = match node_string_attr(graph.node(id), c.attr) {
+                Some(s) => s,
+                None => return false,
+            };
+            eval_string_op(&v, c.op, &c.value)
+        }
+        // Task tags — special handling for `includes` and `in` operators
+        Attr::Tags => {
+            let node = graph.node(id);
+            let task_tags: &[String] = match node {
+                NodeKind::Task(t) => &t.tags,
+                _ => return false,
+            };
+            match (c.op, &c.value) {
+                (Op::Includes, Value::Single(lit)) => {
+                    let tag = literal_as_str(lit);
+                    task_tags.iter().any(|t| t == tag)
+                }
+                (Op::In, Value::Set(lits)) => {
+                    let tags: Vec<&str> = lits.iter().map(literal_as_str).collect();
+                    task_tags.iter().any(|t| tags.contains(&t.as_str()))
+                }
+                // Other operators on tags return false
+                _ => false,
+            }
+        }
         Attr::Indegree => {
             let count = graph.incoming(id).count() as i64;
             eval_int_op(count, c.op, &c.value)
@@ -1295,9 +1352,35 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
             NodeKind::Note(n) => Some(n.path.to_string_lossy().into_owned()),
             NodeKind::Directory(d) => Some(d.path.to_string_lossy().into_owned()),
             NodeKind::Ghost(_) => None,
+            NodeKind::Task(t) => Some(t.source_file.to_string_lossy().into_owned()),
         },
         Attr::Title => match node {
             NodeKind::Note(n) => Some(n.title.clone()),
+            _ => None,
+        },
+        // Task-specific string attributes
+        Attr::Status => match node {
+            NodeKind::Task(t) => Some(t.status.clone()),
+            _ => None,
+        },
+        Attr::Priority => match node {
+            NodeKind::Task(t) => t.priority.clone(),
+            _ => None,
+        },
+        Attr::Due => match node {
+            NodeKind::Task(t) => t.due.clone(),
+            _ => None,
+        },
+        Attr::Scheduled => match node {
+            NodeKind::Task(t) => t.scheduled.clone(),
+            _ => None,
+        },
+        Attr::Description => match node {
+            NodeKind::Task(t) => Some(t.description.clone()),
+            _ => None,
+        },
+        Attr::Tags => match node {
+            NodeKind::Task(t) => Some(t.tags.join(",")),
             _ => None,
         },
         _ => None,
@@ -1309,6 +1392,7 @@ fn node_kind_str(n: &NodeKind) -> &'static str {
         NodeKind::Note(_) => "Note",
         NodeKind::Directory(_) => "Directory",
         NodeKind::Ghost(_) => "Ghost",
+        NodeKind::Task(_) => "Task",
     }
 }
 
@@ -1317,6 +1401,7 @@ fn edge_kind_str(e: &EdgeKind) -> &'static str {
         EdgeKind::Link(_) => "link",
         EdgeKind::Embed(_) => "embed",
         EdgeKind::Contains => "directory-contains",
+        EdgeKind::HasTask => "has-task",
     }
 }
 
@@ -1468,6 +1553,12 @@ fn attr_name(a: Attr) -> &'static str {
         Attr::Form => "form",
         Attr::Indegree => "indegree",
         Attr::Outdegree => "outdegree",
+        Attr::Status => "status",
+        Attr::Priority => "priority",
+        Attr::Due => "due",
+        Attr::Scheduled => "scheduled",
+        Attr::Description => "description",
+        Attr::Tags => "tags",
     }
 }
 
@@ -1906,7 +1997,7 @@ mod tests {
         #[test]
         fn select_match_all() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node;").unwrap();
             let ids = q.select(&g);
             // 4 notes + 4 dirs = 8
@@ -1916,7 +2007,7 @@ mod tests {
         #[test]
         fn select_all_notes() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where kind = Note;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4);
@@ -1925,7 +2016,7 @@ mod tests {
         #[test]
         fn select_all_directories() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where kind = Directory;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4);
@@ -1934,7 +2025,7 @@ mod tests {
         #[test]
         fn select_path_starts_with() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where path starts_with \"Areas\";").unwrap();
             let ids = q.select(&g);
             // Areas dir, Areas/finance.md, Areas/operations dir, Areas/operations/shifts.md
@@ -1946,7 +2037,7 @@ mod tests {
             // Substring would match Areas/old-Projects/ too if it existed;
             // starts_with rejects matches that aren't a true prefix.
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where path starts_with \"Projects/\";").unwrap();
             let ids = q.select(&g);
             // Only Projects/alpha.md (the directory itself is "Projects", not "Projects/")
@@ -1956,7 +2047,7 @@ mod tests {
         #[test]
         fn select_path_ends_with_md() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where path ends_with \".md\";").unwrap();
             let ids = q.select(&g);
             // All 4 notes end with .md; no directories should match.
@@ -1966,7 +2057,7 @@ mod tests {
         #[test]
         fn select_kind_in_set() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where kind in {Note, Directory};").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 8);
@@ -1976,7 +2067,7 @@ mod tests {
         fn select_indegree_zero() {
             // Only the vault root directory has no incoming edges.
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where indegree = 0;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 1);
@@ -1989,7 +2080,7 @@ mod tests {
         #[test]
         fn select_without_incoming_contains() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse(
                 "node where kind in {Note, Directory} without incoming(kind = directory-contains);",
             )
@@ -2005,7 +2096,7 @@ mod tests {
         #[test]
         fn select_two_blocks_union_deduped() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where kind = Directory; node where path starts_with \"Areas\";")
                 .unwrap();
             let ids = q.select(&g);
@@ -2017,7 +2108,7 @@ mod tests {
         #[test]
         fn expand_full_directory_tree() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse(
                 "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};",
             )
@@ -2033,7 +2124,7 @@ mod tests {
         #[test]
         fn expand_notes_only() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse(
                 "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
             )
@@ -2048,7 +2139,7 @@ mod tests {
         #[test]
         fn expand_none_when_no_policy() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where kind = Note;").unwrap();
             let any = q.select(&g)[0];
             assert!(q.expand(&g, any).is_none());
@@ -2059,7 +2150,7 @@ mod tests {
             // v2 behavior: parent that doesn't satisfy `from` conditions
             // returns Some(vec![]), not None.
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse(
                 "node; expand where from.kind = Directory and edge.kind = directory-contains;",
             )
@@ -2076,7 +2167,7 @@ mod tests {
         #[test]
         fn expand_on_links_vault() {
             let v = links_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse(
                 "node; expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};",
             )
@@ -2089,7 +2180,7 @@ mod tests {
         #[test]
         fn title_match_on_note() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where title = \"root\";").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 1);
@@ -2098,7 +2189,7 @@ mod tests {
         #[test]
         fn outdegree_zero_excludes_root() {
             let v = dirs_vault();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node where outdegree = 0;").unwrap();
             let ids = q.select(&g);
             // The 4 notes in dirs/ have no outgoing edges; the root and
@@ -2128,7 +2219,7 @@ mod tests {
                 .unwrap()
                 .join("tests/fixtures/dirs");
             let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-            Graph::build(&v).unwrap()
+            Graph::build(&v, &Scan::default()).unwrap()
         }
 
         fn dirs_query() -> GraphQuery {
@@ -2244,7 +2335,7 @@ mod tests {
             tmp.child("a.md").write_str("[[b]]\n").unwrap();
             tmp.child("b.md").write_str("[[a]]\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
             (tmp, g)
         }
 
@@ -2784,6 +2875,237 @@ mod tests {
                 DslError::UnterminatedString { .. } => "UnterminatedString",
                 DslError::IllegalCharacter { .. } => "IllegalCharacter",
             }
+        }
+    }
+
+    mod task_queries {
+        use std::path::PathBuf;
+
+        use super::*;
+        use crate::graph::Graph;
+        use crate::task::{Priority, Status, Task};
+        use crate::vault::Vault;
+        use assert_fs::prelude::*;
+
+        fn vault_with_tasks() -> (assert_fs::TempDir, Scan) {
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("root.md")
+                .write_str("- [ ] Fix login bug\n- [x] Review quarterly report\n")
+                .unwrap();
+            tmp.child("Areas").create_dir_all().unwrap();
+            tmp.child("Areas/finance.md")
+                .write_str("- [ ] Process invoices\n")
+                .unwrap();
+            tmp.child("Projects").create_dir_all().unwrap();
+            tmp.child("Projects/alpha.md")
+                .write_str("- [ ] Ship beta\n")
+                .unwrap();
+
+            let scan = Scan {
+                tasks: vec![
+                    Task {
+                        description: "Fix login bug".into(),
+                        status: Status::Open,
+                        priority: Some(Priority::High),
+                        due: Some(chrono::NaiveDate::from_ymd_opt(2025, 6, 1).unwrap()),
+                        scheduled: None,
+                        tags: vec!["bug".into(), "urgent".into()],
+                        source_file: PathBuf::from("root.md"),
+                        source_line: 1,
+                        created: None,
+                        start: None,
+                        done: None,
+                        cancelled: None,
+                        recurrence: None,
+                        id: None,
+                        depends_on: vec![],
+                        on_completion: None,
+                        block_link: None,
+                        raw_trailing: None,
+                        indent_level: 0,
+                        parent: None,
+                    },
+                    Task {
+                        description: "Review quarterly report".into(),
+                        status: Status::Done,
+                        priority: None,
+                        due: None,
+                        scheduled: None,
+                        tags: vec!["finance".into()],
+                        source_file: PathBuf::from("root.md"),
+                        source_line: 2,
+                        created: None,
+                        start: None,
+                        done: None,
+                        cancelled: None,
+                        recurrence: None,
+                        id: None,
+                        depends_on: vec![],
+                        on_completion: None,
+                        block_link: None,
+                        raw_trailing: None,
+                        indent_level: 0,
+                        parent: None,
+                    },
+                    Task {
+                        description: "Process invoices".into(),
+                        status: Status::Open,
+                        priority: Some(Priority::Medium),
+                        due: Some(chrono::NaiveDate::from_ymd_opt(2025, 6, 15).unwrap()),
+                        scheduled: None,
+                        tags: vec!["finance".into(), "invoices".into()],
+                        source_file: PathBuf::from("Areas/finance.md"),
+                        source_line: 1,
+                        created: None,
+                        start: None,
+                        done: None,
+                        cancelled: None,
+                        recurrence: None,
+                        id: None,
+                        depends_on: vec![],
+                        on_completion: None,
+                        block_link: None,
+                        raw_trailing: None,
+                        indent_level: 0,
+                        parent: None,
+                    },
+                ],
+                errors: vec![],
+            };
+            (tmp, scan)
+        }
+
+        /// Task 7.5: node_kind_str returns "Task" for task nodes.
+        #[test]
+        fn node_kind_str_returns_task() {
+            let td = crate::graph::TaskData {
+                description: "test".into(),
+                status: "Open".into(),
+                priority: None,
+                due: None,
+                scheduled: None,
+                tags: vec![],
+                source_file: PathBuf::from("test.md"),
+                source_line: 1,
+            };
+            assert_eq!(super::node_kind_str(&NodeKind::Task(td)), "Task");
+        }
+
+        /// Task 7.6: edge_kind_str returns "has-task" for HasTask edges.
+        #[test]
+        fn edge_kind_str_returns_has_task() {
+            assert_eq!(super::edge_kind_str(&EdgeKind::HasTask), "has-task");
+        }
+
+        /// Task 7.7: DSL `node where kind = "Task"` returns only task nodes.
+        #[test]
+        fn dsl_kind_eq_task_returns_task_nodes() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            let q = parse("node where kind = Task;").unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 3);
+            for id in &results {
+                assert!(matches!(g.node(*id), NodeKind::Task(_)));
+            }
+        }
+
+        /// Task 7.8: DSL task attribute filters.
+        #[test]
+        fn dsl_task_attribute_filters() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            // Filter by status = "Done"
+            let q = parse(r#"node where kind = Task and status = "Done";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Review quarterly report");
+            }
+
+            // Filter by priority = "High"
+            let q = parse(r#"node where kind = Task and priority = "High";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Fix login bug");
+            }
+
+            // Filter by due date
+            let q = parse(r#"node where kind = Task and due = "2025-06-15";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Process invoices");
+            }
+
+            // Filter by description starts_with
+            let q =
+                parse(r#"node where kind = Task and description starts_with "Process";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Process invoices");
+            }
+
+            // Filter by tags includes
+            let q = parse(r#"node where kind = Task and tags includes "bug";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Fix login bug");
+            }
+
+            // Filter by tags in set
+            let q = parse(r#"node where kind = Task and tags in {"bug", "urgent"};"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Fix login bug");
+            }
+        }
+
+        /// Task 7.9: DSL expand with to.kind including "Task" reveals task children.
+        #[test]
+        fn dsl_expand_reveals_task_children() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            // Expand root directory via directory-contains, then notes should show tasks
+            let q = parse(
+                r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task};"#,
+            )
+            .unwrap();
+
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            assert!(!tree.is_empty());
+            assert_eq!(tree[0].depth, 0);
+
+            fn count_tasks_in_tree(nodes: &[WalkNode], graph: &Graph) -> usize {
+                let mut count = 0;
+                for node in nodes {
+                    if matches!(graph.node(node.id), NodeKind::Task(_)) {
+                        count += 1;
+                    }
+                    count += count_tasks_in_tree(&node.children, graph);
+                }
+                count
+            }
+            assert_eq!(count_tasks_in_tree(&tree, &g), 3);
+
+            // Without HasTask in edge.kind, no tasks should appear
+            let q_no_tasks = parse(
+                r#"node where kind = Directory and path = ""; expand where edge.kind = directory-contains;"#,
+            )
+            .unwrap();
+            let tree_no_tasks = q_no_tasks.walk(&g, &WalkOptions::unlimited());
+            assert_eq!(count_tasks_in_tree(&tree_no_tasks, &g), 0);
         }
     }
 }

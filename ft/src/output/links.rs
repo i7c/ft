@@ -80,6 +80,9 @@ impl LinkRow {
             NodeKind::Directory(d) => LinkRowTarget::Resolved {
                 path: d.path.clone(),
             },
+            NodeKind::Task(t) => LinkRowTarget::Unresolved {
+                raw: t.description.clone(),
+            },
         };
         Self {
             src: src_path.to_path_buf(),
@@ -129,6 +132,7 @@ impl LinkRow {
                 PathBuf::from("<ghost>")
             }
             NodeKind::Directory(d) => d.path.clone(),
+            NodeKind::Task(t) => t.source_file.clone(),
         };
         Self {
             src: src_path,

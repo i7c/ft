@@ -171,6 +171,12 @@ pub fn plan_rename(
                 new_path.display()
             )));
         }
+        NodeKind::Task(_) => {
+            return Err(Error::Notes(format!(
+                "renaming task nodes is not supported: {}",
+                new_path.display()
+            )));
+        }
     };
 
     let mut edits: Vec<FileEdit> = Vec::new();
@@ -185,6 +191,7 @@ pub fn plan_rename(
             NodeKind::Note(n) => n.path.clone(),
             NodeKind::Ghost(_) => continue, // ghosts never have outgoing edges
             NodeKind::Directory(d) => d.path.clone(),
+            NodeKind::Task(_) => continue, // tasks never have outgoing edges
         };
 
         let replacement = build_replacement(edge, &linker_path, &new_path, &new_title);
@@ -442,7 +449,7 @@ fn relative_url_from(linker_path: &Path, target_rel: &Path) -> String {
 mod rename_tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::vault::Vault;
+    use crate::vault::{Scan, Vault};
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
     use std::io::Write as _;
@@ -473,7 +480,7 @@ mod rename_tests {
     #[test]
     fn rename_single_wikilink_linker_updates_file_and_link() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "see [[foo]] now\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -496,7 +503,7 @@ mod rename_tests {
             ("foo.md", "# Foo\n"),
             ("a.md", "[[foo]] one [[foo]] two [[foo]] three\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("a-much-longer-name.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -515,7 +522,7 @@ mod rename_tests {
             ("foo.md", "# Foo\n"),
             ("a.md", "see [[foo|My Foo]] please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -528,7 +535,7 @@ mod rename_tests {
             ("foo.md", "# Foo\n## H1\n"),
             ("a.md", "see [[foo#H1]] please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -539,7 +546,7 @@ mod rename_tests {
     fn rename_wikilink_with_anchor_and_display_preserves_both() {
         let (_dir, v, root) =
             make_vault(&[("foo.md", "# Foo\n## H1\n"), ("a.md", "see [[foo#H1|D]]\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -554,7 +561,7 @@ mod rename_tests {
             ("notes/foo.md", "# Foo\n"),
             ("a.md", "see [[notes/foo]] please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "notes/foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("notes/bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -567,7 +574,7 @@ mod rename_tests {
             ("notes/foo.md", "# Foo\n"),
             ("a.md", "see [[notes/foo.md]] please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "notes/foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("notes/bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -582,7 +589,7 @@ mod rename_tests {
             ("foo.md", "# Foo\n"),
             ("a.md", "see [Click here](foo.md) please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -596,7 +603,7 @@ mod rename_tests {
     fn rename_md_link_extension_less_keeps_extension_less() {
         let (_dir, v, root) =
             make_vault(&[("foo.md", "# Foo\n"), ("a.md", "see [F](foo) please\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -611,7 +618,7 @@ mod rename_tests {
             ("foo.md", "# Foo\n"),
             ("notes/from.md", "see [F](../foo.md) please\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("baz.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -625,7 +632,7 @@ mod rename_tests {
     fn rename_md_link_with_anchor_preserves_anchor() {
         let (_dir, v, root) =
             make_vault(&[("foo.md", "# Foo\n## H\n"), ("a.md", "[F](foo.md#H)\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -637,7 +644,7 @@ mod rename_tests {
     #[test]
     fn rename_wiki_embed_keeps_bang_prefix() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "![[foo]]\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -647,7 +654,7 @@ mod rename_tests {
     #[test]
     fn rename_md_embed_keeps_bang_prefix() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "![alt](foo.md)\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -662,7 +669,7 @@ mod rename_tests {
         // the file should be moved to bar.md AND its contents updated
         // to [[bar]].
         let (_dir, v, root) = make_vault(&[("foo.md", "see [[foo]] for self-reference\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -684,7 +691,7 @@ mod rename_tests {
             ("a.md", "see [[Phantom]]\n"),
             ("b.md", "also [[Phantom]]\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let phantom = g.ghost_by_raw("Phantom").unwrap();
         let plan = plan_rename(&g, &root, phantom, Path::new("Real.md")).unwrap();
         assert!(plan.rename.is_none());
@@ -703,7 +710,7 @@ mod rename_tests {
             ("bar.md", "# Bar (existing)\n"),
             ("a.md", "[[foo]]\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let err = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap_err();
         assert!(format!("{err}").contains("target already exists"));
@@ -716,7 +723,7 @@ mod rename_tests {
     #[test]
     fn rename_freshness_guard_trips_when_linker_changes_between_plan_and_apply() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "[[foo]]\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
 
@@ -745,7 +752,7 @@ mod rename_tests {
     #[test]
     fn rename_with_no_incoming_edges_just_renames_the_file() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         assert!(plan.edits.is_empty());
@@ -757,7 +764,7 @@ mod rename_tests {
     #[test]
     fn rename_to_same_path_is_a_noop() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("foo.md")).unwrap();
         assert!(plan.rename.is_none());
@@ -771,7 +778,7 @@ mod rename_tests {
     #[test]
     fn rename_md_link_to_path_with_spaces_url_encodes_in_href() {
         let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "[F](foo.md)\n")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("My Note.md")).unwrap();
         apply_rename_plan(&root, &plan).unwrap();
@@ -787,7 +794,7 @@ mod rename_tests {
             ("a.md", "[[foo]]\n"),
             ("b.md", "[[foo]]\n"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         // foo.md (renamed) + a.md + b.md = 3

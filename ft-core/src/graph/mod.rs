@@ -44,7 +44,8 @@ use petgraph::Direction;
 use rayon::prelude::*;
 
 use crate::error::Result;
-use crate::vault::Vault;
+use crate::task::Task;
+use crate::vault::{Scan, Vault};
 
 /// Stable identity of a node within a single [`Graph`].
 ///
@@ -76,6 +77,9 @@ pub enum NodeKind {
     /// A vault directory. Contains notes and subdirectories via
     /// [`EdgeKind::Contains`] edges.
     Directory(DirData),
+    /// A task extracted from a note. Connected to its source note via
+    /// [`EdgeKind::HasTask`] edges.
+    Task(TaskData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +117,27 @@ impl DirData {
     }
 }
 
+/// Task node data — denormalized from [`crate::task::Task`] for graph queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskData {
+    /// Task description text.
+    pub description: String,
+    /// Task status as string for DSL evaluation (e.g., "Open", "Done").
+    pub status: String,
+    /// Priority level, if set.
+    pub priority: Option<String>,
+    /// Due date as YYYY-MM-DD string, if set.
+    pub due: Option<String>,
+    /// Scheduled date as YYYY-MM-DD string, if set.
+    pub scheduled: Option<String>,
+    /// Tags extracted from the task description.
+    pub tags: Vec<String>,
+    /// Source file (vault-relative path) where the task appears.
+    pub source_file: PathBuf,
+    /// 1-indexed line number within the source file.
+    pub source_line: usize,
+}
+
 /// Per-edge payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
@@ -124,13 +149,15 @@ pub enum EdgeKind {
     /// A directory contains a child node (note or subdirectory). Unit
     /// variant — there is no textual link to rewrite.
     Contains,
+    /// A note has a task as a child. Edge from note node to task node.
+    HasTask,
 }
 
 impl EdgeKind {
     pub fn link(&self) -> Option<&LinkEdge> {
         match self {
             EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
-            EdgeKind::Contains => None,
+            EdgeKind::Contains | EdgeKind::HasTask => None,
         }
     }
 }
@@ -205,6 +232,9 @@ pub struct Graph {
     /// Unresolved-target string → ghost node. Shared across all linkers
     /// so removing one linker doesn't necessarily orphan the ghost.
     ghost_index: HashMap<String, NoteId>,
+    /// (source_file, source_line) → task node. Used for task deduplication
+    /// and lookup. The source_file is a vault-relative PathBuf.
+    task_index: HashMap<(PathBuf, usize), NoteId>,
 }
 
 impl Graph {
@@ -215,7 +245,10 @@ impl Graph {
     /// consistent. Honors the same ignore rules as [`Vault::scan`]
     /// (`.obsidian/`, `.git/`, `attachments/`, `.gitignore`,
     /// `[ignored_paths]`).
-    pub fn build(vault: &Vault) -> Result<Graph> {
+    ///
+    /// Task nodes are created from `scan.tasks` after the note nodes,
+    /// and `HasTask` edges connect notes to their tasks.
+    pub fn build(vault: &Vault, scan: &Scan) -> Result<Graph> {
         let files = vault.markdown_files();
 
         // Parse phase (parallel): read each file, extract raw links.
@@ -234,6 +267,7 @@ impl Graph {
             path_index: HashMap::new(),
             title_index: HashMap::new(),
             ghost_index: HashMap::new(),
+            task_index: HashMap::new(),
         };
 
         // Insert all note nodes first so resolution can see the full
@@ -258,6 +292,14 @@ impl Graph {
                 .expect("note node was just inserted");
             graph.insert_edges_for(src, rel, links);
         }
+
+        // Insert task nodes from scan data.
+        for task in &scan.tasks {
+            graph.insert_task_node(task);
+        }
+
+        // Create HasTask edges from notes to their tasks.
+        graph.insert_hastask_edges();
 
         Ok(graph)
     }
@@ -526,6 +568,70 @@ impl Graph {
             for (child_id, child_path) in &children {
                 if is_immediate_child(parent_path, child_path) {
                     self.g.add_edge(parent_id.0, child_id.0, EdgeKind::Contains);
+                }
+            }
+        }
+    }
+
+    /// Insert a task node from a Task struct. Deduplicates by (source_file, source_line).
+    /// Returns the NoteId of the task node (existing or newly created).
+    fn insert_task_node(&mut self, task: &Task) -> NoteId {
+        let key = (task.source_file.clone(), task.source_line);
+        if let Some(id) = self.task_index.get(&key) {
+            return *id;
+        }
+
+        let task_data = TaskData {
+            description: task.description.clone(),
+            status: format!("{:?}", task.status),
+            priority: task.priority.map(|p| format!("{:?}", p)),
+            due: task.due.map(|d| d.to_string()),
+            scheduled: task.scheduled.map(|s| s.to_string()),
+            tags: task.tags.clone(),
+            source_file: task.source_file.clone(),
+            source_line: task.source_line,
+        };
+
+        let idx = self.g.add_node(NodeKind::Task(task_data));
+        let id = NoteId(idx);
+        self.task_index.insert(key, id);
+        id
+    }
+
+    /// Create HasTask edges from each note node to its task nodes.
+    /// Matches tasks to notes by TaskData.source_file == NoteData.path.
+    fn insert_hastask_edges(&mut self) {
+        // Collect note nodes and their paths
+        let notes: Vec<(NoteId, PathBuf)> = self
+            .g
+            .node_indices()
+            .filter_map(|idx| {
+                if let NodeKind::Note(data) = &self.g[idx] {
+                    Some((NoteId(idx), data.path.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Collect task nodes and their source files
+        let tasks: Vec<(NoteId, PathBuf)> = self
+            .g
+            .node_indices()
+            .filter_map(|idx| {
+                if let NodeKind::Task(data) = &self.g[idx] {
+                    Some((NoteId(idx), data.source_file.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Create edges from notes to their tasks
+        for (note_id, note_path) in &notes {
+            for (task_id, task_source) in &tasks {
+                if note_path == task_source {
+                    self.g.add_edge(note_id.0, task_id.0, EdgeKind::HasTask);
                 }
             }
         }

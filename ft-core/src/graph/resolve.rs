@@ -156,7 +156,7 @@ fn normalize_relative(p: &Path) -> PathBuf {
 mod resolve_tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::vault::Vault;
+    use crate::vault::{Scan, Vault};
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
 
@@ -173,7 +173,7 @@ mod resolve_tests {
     #[test]
     fn wiki_title_resolves_when_unique() {
         let (_dir, v) = make_vault(&[("Foo.md", ""), ("Bar.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let r = resolve_wiki("Foo", &g);
         assert!(matches!(r, Resolution::Resolved(_)));
     }
@@ -181,7 +181,7 @@ mod resolve_tests {
     #[test]
     fn wiki_title_unresolved_when_missing() {
         let (_dir, v) = make_vault(&[("Foo.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         match resolve_wiki("Missing", &g) {
             Resolution::Unresolved(key) => assert_eq!(key, "Missing"),
             r => panic!("expected unresolved, got {r:?}"),
@@ -195,7 +195,7 @@ mod resolve_tests {
             ("archive/Index.md", "archived"),
             ("deep/nested/Index.md", "very deep"),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let r = resolve_wiki("Index", &g);
         match r {
             Resolution::Resolved(id) => match g.node(id) {
@@ -215,7 +215,7 @@ mod resolve_tests {
             ("alpha/Same.md", ""),
             ("beta/Same.md", ""),
         ]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         match resolve_wiki("Same", &g) {
             Resolution::Resolved(id) => match g.node(id) {
                 crate::graph::NodeKind::Note(data) => {
@@ -230,7 +230,7 @@ mod resolve_tests {
     #[test]
     fn wiki_path_form_resolves() {
         let (_dir, v) = make_vault(&[("sub/Foo.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         assert!(matches!(
             resolve_wiki("sub/Foo", &g),
             Resolution::Resolved(_)
@@ -244,7 +244,7 @@ mod resolve_tests {
     #[test]
     fn md_link_resolves_relative_to_linker_dir() {
         let (_dir, v) = make_vault(&[("notes/from.md", ""), ("notes/target.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let r = resolve_md("target.md", std::path::Path::new("notes/from.md"), &g);
         assert!(matches!(r, Resolution::Resolved(_)));
     }
@@ -252,7 +252,7 @@ mod resolve_tests {
     #[test]
     fn md_link_handles_parent_dir_traversal() {
         let (_dir, v) = make_vault(&[("a/from.md", ""), ("b/target.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         let r = resolve_md("../b/target.md", std::path::Path::new("a/from.md"), &g);
         assert!(matches!(r, Resolution::Resolved(_)));
     }
@@ -260,7 +260,7 @@ mod resolve_tests {
     #[test]
     fn md_link_unresolved_keys_normalized_path() {
         let (_dir, v) = make_vault(&[("from.md", "")]);
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
         match resolve_md("./missing.md", std::path::Path::new("from.md"), &g) {
             Resolution::Unresolved(k) => assert_eq!(k, "missing.md"),
             r => panic!("expected unresolved, got {r:?}"),

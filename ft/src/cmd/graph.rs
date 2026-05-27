@@ -113,7 +113,7 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         }
     };
 
-    let graph = Graph::build(&vault).context("could not build graph for vault")?;
+    let graph = Graph::build(&vault, &vault.scan()).context("could not build graph for vault")?;
 
     let opts = WalkOptions {
         max_depth: args.depth,

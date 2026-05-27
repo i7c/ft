@@ -198,6 +198,7 @@ fn kind_char(node: &NodeKind) -> char {
         NodeKind::Note(_) => 'N',
         NodeKind::Directory(_) => 'D',
         NodeKind::Ghost(_) => 'G',
+        NodeKind::Task(_) => 'T',
     }
 }
 
@@ -206,6 +207,7 @@ fn kind_name(node: &NodeKind) -> &'static str {
         NodeKind::Note(_) => "Note",
         NodeKind::Directory(_) => "Directory",
         NodeKind::Ghost(_) => "Ghost",
+        NodeKind::Task(_) => "Task",
     }
 }
 
@@ -224,6 +226,7 @@ fn display_label(node: &NodeKind) -> String {
             }
         }
         NodeKind::Ghost(g) => g.raw.clone(),
+        NodeKind::Task(t) => t.description.clone(),
     }
 }
 
@@ -232,6 +235,7 @@ fn node_path(node: &NodeKind) -> String {
         NodeKind::Note(n) => n.path.to_string_lossy().into_owned(),
         NodeKind::Directory(d) => d.path.to_string_lossy().into_owned(),
         NodeKind::Ghost(g) => g.raw.clone(),
+        NodeKind::Task(t) => t.source_file.to_string_lossy().into_owned(),
     }
 }
 
@@ -246,6 +250,7 @@ fn node_title(node: &NodeKind) -> String {
             }
         }
         NodeKind::Ghost(g) => g.raw.clone(),
+        NodeKind::Task(t) => t.description.clone(),
     }
 }
 
@@ -254,5 +259,6 @@ fn edge_kind_label(e: &EdgeKind) -> &'static str {
         EdgeKind::Link(_) => "link",
         EdgeKind::Embed(_) => "embed",
         EdgeKind::Contains => "directory-contains",
+        EdgeKind::HasTask => "has-task",
     }
 }

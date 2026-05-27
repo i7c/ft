@@ -1025,7 +1025,7 @@ pub struct LinksArgs {
 
 fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault).context("building note graph")?;
+    let graph = Graph::build(&vault, &vault.scan()).context("building note graph")?;
 
     let query = args.note.join(" ");
     let id = resolve_note_query(&graph, &vault, &query)?;
@@ -1036,6 +1036,7 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
         NodeKind::Directory(_) => {
             unreachable!("directory nodes are not selectable from the CLI yet")
         }
+        NodeKind::Task(_) => unreachable!("task nodes are not selectable from the CLI yet"),
     };
 
     let rows: Vec<LinkRow> = match dir {
@@ -1211,7 +1212,7 @@ pub struct RenameArgs {
 
 fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault).context("building note graph")?;
+    let graph = Graph::build(&vault, &vault.scan()).context("building note graph")?;
 
     let id = resolve_rename_source(&graph, &vault, &args.note)?;
 
@@ -1220,6 +1221,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         NodeKind::Note(n) => Some(n.path.clone()),
         NodeKind::Ghost(_) => None,
         NodeKind::Directory(_) => None,
+        NodeKind::Task(_) => None,
     };
 
     let new_path = parse_new_path(&args.new, source_rel.as_deref())?;

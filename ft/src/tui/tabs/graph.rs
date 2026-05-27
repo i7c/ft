@@ -549,6 +549,11 @@ impl GraphTab {
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_default(),
+            NodeKind::Task(t) => t
+                .source_file
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
         }
     }
 
@@ -828,7 +833,8 @@ impl Tab for GraphTab {
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
         if self.graph.is_none() {
-            self.graph = Some(Graph::build(ctx.vault)?);
+            let scan = ctx.vault.scan();
+            self.graph = Some(Graph::build(ctx.vault, &scan)?);
             // First focus: seed the FIRST view only — additional views
             // (created later via Ctrl+N) start empty by design. Skip if
             // a query is already present (test paths construct the tab
@@ -1095,7 +1101,8 @@ impl Tab for GraphTab {
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('r'), _) => {
-                self.graph = Some(Graph::build(ctx.vault)?);
+                let scan = ctx.vault.scan();
+                self.graph = Some(Graph::build(ctx.vault, &scan)?);
                 self.restore_all_views();
                 Ok(EventOutcome::Consumed)
             }
@@ -1325,7 +1332,8 @@ impl Tab for GraphTab {
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        self.graph = Some(Graph::build(ctx.vault)?);
+        let scan = ctx.vault.scan();
+        self.graph = Some(Graph::build(ctx.vault, &scan)?);
         self.restore_all_views();
         Ok(())
     }
@@ -1768,6 +1776,7 @@ impl TreeState {
                 }
             }
             NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
+            NodeKind::Task(t) => (t.description.clone(), 'T'),
         };
         // Compute expandability up-front by asking the policy how many
         // children this node has. None = no expand block at all (still
@@ -1794,14 +1803,14 @@ mod tree_tests {
 
     use ft_core::graph::query::parse as parse_query;
     use ft_core::graph::Graph;
-    use ft_core::vault::Vault;
+    use ft_core::vault::{Scan, Vault};
 
     use super::*;
 
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v).unwrap()
+        Graph::build(&v, &Scan::default()).unwrap()
     }
 
     fn dirs_query() -> GraphQuery {
@@ -1978,7 +1987,7 @@ mod tree_tests {
         tmp.child(".obsidian").create_dir_all().unwrap();
 
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v).unwrap();
+        let g = Graph::build(&v, &Scan::default()).unwrap();
 
         let q = parse_query(
             "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
@@ -2033,6 +2042,82 @@ mod tree_tests {
             );
         }
     }
+
+    #[test]
+    fn task_nodes_render_with_kind_char_t() {
+        use assert_fs::prelude::*;
+        use ft_core::task::{Status, Task};
+
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("root.md")
+            .write_str("- [ ] Task one\n- [x] Task two\n")
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+        let scan = Scan {
+            tasks: vec![
+                Task {
+                    description: "Task one".into(),
+                    status: Status::Open,
+                    priority: None,
+                    tags: vec![],
+                    due: None,
+                    scheduled: None,
+                    source_file: PathBuf::from("root.md"),
+                    source_line: 1,
+                    created: None,
+                    start: None,
+                    done: None,
+                    cancelled: None,
+                    recurrence: None,
+                    id: None,
+                    depends_on: vec![],
+                    on_completion: None,
+                    block_link: None,
+                    raw_trailing: None,
+                    indent_level: 0,
+                    parent: None,
+                },
+                Task {
+                    description: "Task two".into(),
+                    status: Status::Done,
+                    priority: None,
+                    tags: vec![],
+                    due: None,
+                    scheduled: None,
+                    source_file: PathBuf::from("root.md"),
+                    source_line: 2,
+                    created: None,
+                    start: None,
+                    done: None,
+                    cancelled: None,
+                    recurrence: None,
+                    id: None,
+                    depends_on: vec![],
+                    on_completion: None,
+                    block_link: None,
+                    raw_trailing: None,
+                    indent_level: 0,
+                    parent: None,
+                },
+            ],
+            errors: vec![],
+        };
+        let g = Graph::build(&v, &scan).unwrap();
+
+        // Query for task nodes only
+        let q = parse_query("node where kind = Task;").unwrap();
+        let mut state = TreeState::default();
+        let roots = q.select(&g);
+        state.build_from(&roots, &g, &q);
+
+        assert_eq!(state.rows.len(), 2);
+        assert_eq!(state.rows[0].kind_char, 'T');
+        assert_eq!(state.rows[0].display, "Task one");
+        assert_eq!(state.rows[1].kind_char, 'T');
+        assert_eq!(state.rows[1].display, "Task two");
+    }
 }
 
 #[cfg(test)]
@@ -2040,14 +2125,14 @@ mod view_tests {
     use std::path::PathBuf;
 
     use ft_core::graph::Graph;
-    use ft_core::vault::Vault;
+    use ft_core::vault::{Scan, Vault};
 
     use super::*;
 
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v).unwrap()
+        Graph::build(&v, &Scan::default()).unwrap()
     }
 
     fn dirs_query_text() -> &'static str {
