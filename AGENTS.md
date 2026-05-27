@@ -46,6 +46,15 @@ to `ft-core` first so the CLI benefits too.
   `--preset <name>` resolution (user config → built-in → exit 2 on
   unknown). Task presets live in `Config::presets`; graph presets in
   `GraphCfg::presets` — separate maps to avoid cross-DSL ambiguity.
+- **Signature changes on core APIs.** A new param to a widely-called
+  function (e.g. `Graph::build`) ripples through every test file. Before
+  making such a change, grep for callers and consider a compatibility
+  helper or struct-params pattern. Flag the test-ripple cost in the
+  design phase so the effort is budgeted.
+- **Model structs implement `Default`.** Structs with many optional
+  fields (e.g. `Task`, `LinkEdge`) should derive or impl `Default`
+  so tests can construct them with `..Default::default()`. This keeps
+  test code resilient when new fields are added.
 
 ## Build invariants
 
