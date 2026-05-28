@@ -12,7 +12,7 @@
 - [x] 2.3 In `Graph::build`, after inserting note and directory nodes, iterate `scan.tasks` to insert task nodes using `insert_task_node`
 - [x] 2.4 Add `insert_hastask_edges` method that creates `EdgeKind::HasTask` edges from each note node to its task nodes (matching by `NoteData.path == TaskData.source_file`)
 - [x] 2.5 In `Graph::build`, call `insert_hastask_edges` after link/embed edge insertion
-- [ ] 2.6 Update all callers of `Graph::build` (`ft/src/tui/tabs/graph.rs`, `ft/src/cmd/graph.rs`, tests) to pass `&Scan`
+- [x] 2.6 Update all callers of `Graph::build` (`ft/src/tui/tabs/graph.rs`, `ft/src/cmd/graph.rs`, tests) to pass `&Scan`
 
 ## 3. DSL Parser
 

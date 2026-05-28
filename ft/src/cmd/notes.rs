@@ -24,7 +24,7 @@ use ft_core::notes::{
 use ft_core::periodic::{create_or_get_periodic_path, Period};
 use ft_core::recents::RecentsLog;
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
-use ft_core::vault::Vault;
+use ft_core::vault::{Scan, Vault};
 use regex::Regex;
 
 use crate::output::links::{
@@ -1025,7 +1025,7 @@ pub struct LinksArgs {
 
 fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &vault.scan()).context("building note graph")?;
+    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
 
     let query = args.note.join(" ");
     let id = resolve_note_query(&graph, &vault, &query)?;
@@ -1212,7 +1212,7 @@ pub struct RenameArgs {
 
 fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &vault.scan()).context("building note graph")?;
+    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
 
     let id = resolve_rename_source(&graph, &vault, &args.note)?;
 

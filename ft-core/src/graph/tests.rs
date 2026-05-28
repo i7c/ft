@@ -796,3 +796,68 @@ fn task_node_deduplication_by_source() {
         assert_eq!(td.description, "First task");
     }
 }
+
+/// 3.2: Task whose source_file does not match any note: task node exists,
+/// no HasTask edge terminates at it, and node where kind = Task returns it.
+#[test]
+fn task_with_no_matching_note() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    use assert_fs::prelude::*;
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("root.md").write_str("- [ ] Real task\n").unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let scan = Scan {
+        tasks: vec![Task {
+            description: "Orphan task".into(),
+            status: Status::Open,
+            priority: None,
+            tags: vec![],
+            due: None,
+            scheduled: None,
+            source_file: PathBuf::from("nonexistent.md"),
+            source_line: 1,
+            created: None,
+            start: None,
+            done: None,
+            cancelled: None,
+            recurrence: None,
+            id: None,
+            depends_on: vec![],
+            on_completion: None,
+            block_link: None,
+            raw_trailing: None,
+            indent_level: 0,
+            parent: None,
+        }],
+        errors: vec![],
+    };
+    let g = Graph::build(&v, &scan).unwrap();
+
+    // (a) The task node exists
+    let task_nodes: Vec<_> = g
+        .nodes()
+        .filter(|(_, k)| matches!(k, NodeKind::Task(_)))
+        .collect();
+    assert_eq!(task_nodes.len(), 1);
+    if let NodeKind::Task(td) = task_nodes[0].1 {
+        assert_eq!(td.description, "Orphan task");
+        assert_eq!(td.source_file, PathBuf::from("nonexistent.md"));
+    }
+
+    // (b) No HasTask edge terminates at this task node
+    let task_id = task_nodes[0].0;
+    let incoming_has_task = g
+        .incoming(task_id)
+        .any(|(_, e)| matches!(e, EdgeKind::HasTask));
+    assert!(
+        !incoming_has_task,
+        "orphan task should have no incoming HasTask edge"
+    );
+
+    // (c) node where kind = Task returns it
+    use crate::graph::query::parse;
+    let q = parse("node where kind = Task;").unwrap();
+    let results = q.select(&g);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], task_id);
+}

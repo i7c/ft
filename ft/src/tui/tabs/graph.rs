@@ -99,7 +99,7 @@ impl crate::tui::widgets::PickerSource for PresetPickerSource {
                 ranked.push((score, i, indices));
             }
         }
-        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.0));
         ranked
             .into_iter()
             .take(limit)

@@ -30,6 +30,11 @@ pub fn builtin_names() -> &'static [&'static str] {
 mod tests {
     use super::*;
     use crate::graph::query;
+    use crate::graph::Graph;
+    use crate::task::{Status, Task};
+    use crate::vault::{Scan, Vault};
+    use assert_fs::prelude::*;
+    use std::path::PathBuf;
 
     #[test]
     fn every_builtin_parses() {
@@ -45,30 +50,116 @@ mod tests {
         assert!(builtin("nope").is_none());
     }
 
-    /// Task 7.10: tasks-in-tree preset parses and differs from tree in expand targets.
+    /// 6.2: tasks-in-tree preset includes tasks when walked against a graph with tasks.
     #[test]
-    fn tasks_in_tree_preset_differs_from_tree() {
-        let tasks_dsl = builtin("tasks-in-tree").expect("tasks-in-tree preset exists");
-        let tree_dsl = builtin("tree").expect("tree preset exists");
+    fn tasks_in_tree_preset_includes_tasks() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("root.md").write_str("- [ ] A task\n").unwrap();
 
-        // Both parse successfully
-        let tasks_q = query::parse(tasks_dsl)
-            .unwrap_or_else(|e| panic!("tasks-in-tree failed to parse: {e}"));
-        let tree_q = query::parse(tree_dsl).unwrap_or_else(|e| panic!("tree failed to parse: {e}"));
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = Scan {
+            tasks: vec![Task {
+                description: "A task".into(),
+                status: Status::Open,
+                priority: None,
+                tags: vec![],
+                due: None,
+                scheduled: None,
+                source_file: PathBuf::from("root.md"),
+                source_line: 1,
+                created: None,
+                start: None,
+                done: None,
+                cancelled: None,
+                recurrence: None,
+                id: None,
+                depends_on: vec![],
+                on_completion: None,
+                block_link: None,
+                raw_trailing: None,
+                indent_level: 0,
+                parent: None,
+            }],
+            errors: vec![],
+        };
+        let g = Graph::build(&v, &scan).unwrap();
 
-        // Both should have an expand block
-        assert!(tasks_q.expansion.is_some(), "tasks-in-tree has expand");
-        assert!(tree_q.expansion.is_some(), "tree has expand");
+        let dsl_str = builtin("tasks-in-tree").expect("tasks-in-tree preset exists");
+        let q = query::parse(dsl_str).unwrap();
+        let tree = q.walk(&g, &query::WalkOptions::unlimited());
 
-        // The DSL strings should differ (tasks-in-tree includes has-task)
-        assert_ne!(tasks_dsl, tree_dsl, "presets must differ");
+        fn count_tasks(nodes: &[query::WalkNode], graph: &Graph) -> usize {
+            let mut count = 0;
+            for node in nodes {
+                if matches!(graph.node(node.id), crate::graph::NodeKind::Task(_)) {
+                    count += 1;
+                }
+                count += count_tasks(&node.children, graph);
+            }
+            count
+        }
+
         assert!(
-            tasks_dsl.contains("has-task"),
-            "tasks-in-tree should reference has-task"
+            count_tasks(&tree, &g) > 0,
+            "tasks-in-tree should include tasks"
         );
-        assert!(
-            !tree_dsl.contains("has-task"),
-            "tree should not reference has-task"
+    }
+
+    /// 6.3: tree preset excludes tasks when walked against the same graph.
+    #[test]
+    fn tree_preset_excludes_tasks() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("root.md").write_str("- [ ] A task\n").unwrap();
+
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = Scan {
+            tasks: vec![Task {
+                description: "A task".into(),
+                status: Status::Open,
+                priority: None,
+                tags: vec![],
+                due: None,
+                scheduled: None,
+                source_file: PathBuf::from("root.md"),
+                source_line: 1,
+                created: None,
+                start: None,
+                done: None,
+                cancelled: None,
+                recurrence: None,
+                id: None,
+                depends_on: vec![],
+                on_completion: None,
+                block_link: None,
+                raw_trailing: None,
+                indent_level: 0,
+                parent: None,
+            }],
+            errors: vec![],
+        };
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let dsl_str = builtin("tree").expect("tree preset exists");
+        let q = query::parse(dsl_str).unwrap();
+        let tree = q.walk(&g, &query::WalkOptions::unlimited());
+
+        fn count_tasks(nodes: &[query::WalkNode], graph: &Graph) -> usize {
+            let mut count = 0;
+            for node in nodes {
+                if matches!(graph.node(node.id), crate::graph::NodeKind::Task(_)) {
+                    count += 1;
+                }
+                count += count_tasks(&node.children, graph);
+            }
+            count
+        }
+
+        assert_eq!(
+            count_tasks(&tree, &g),
+            0,
+            "tree preset should exclude tasks"
         );
     }
 }

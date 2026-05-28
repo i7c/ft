@@ -18,6 +18,17 @@ pub enum Status {
     Cancelled,
 }
 
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Open => "Open",
+            Status::Done => "Done",
+            Status::InProgress => "InProgress",
+            Status::Cancelled => "Cancelled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Priority {
     Highest,
@@ -28,6 +39,16 @@ pub enum Priority {
 }
 
 impl Priority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Priority::Highest => "Highest",
+            Priority::High => "High",
+            Priority::Medium => "Medium",
+            Priority::Low => "Low",
+            Priority::Lowest => "Lowest",
+        }
+    }
+
     pub fn emoji(self) -> &'static str {
         match self {
             Priority::Highest => "🔺",
@@ -72,4 +93,26 @@ pub struct Task {
     pub indent_level: usize,
     /// `source_line` of the nearest ancestor task with smaller `indent_level`.
     pub parent: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_as_str_exhaustive() {
+        assert_eq!(Status::Open.as_str(), "Open");
+        assert_eq!(Status::Done.as_str(), "Done");
+        assert_eq!(Status::InProgress.as_str(), "InProgress");
+        assert_eq!(Status::Cancelled.as_str(), "Cancelled");
+    }
+
+    #[test]
+    fn priority_as_str_exhaustive() {
+        assert_eq!(Priority::Highest.as_str(), "Highest");
+        assert_eq!(Priority::High.as_str(), "High");
+        assert_eq!(Priority::Medium.as_str(), "Medium");
+        assert_eq!(Priority::Low.as_str(), "Low");
+        assert_eq!(Priority::Lowest.as_str(), "Lowest");
+    }
 }

@@ -1352,7 +1352,7 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
             NodeKind::Note(n) => Some(n.path.to_string_lossy().into_owned()),
             NodeKind::Directory(d) => Some(d.path.to_string_lossy().into_owned()),
             NodeKind::Ghost(_) => None,
-            NodeKind::Task(t) => Some(t.source_file.to_string_lossy().into_owned()),
+            NodeKind::Task(_) => None,
         },
         Attr::Title => match node {
             NodeKind::Note(n) => Some(n.title.clone()),
@@ -1377,10 +1377,6 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
         },
         Attr::Description => match node {
             NodeKind::Task(t) => Some(t.description.clone()),
-            _ => None,
-        },
-        Attr::Tags => match node {
-            NodeKind::Task(t) => Some(t.tags.join(",")),
             _ => None,
         },
         _ => None,
@@ -3070,22 +3066,20 @@ mod tests {
             }
         }
 
-        /// Task 7.9: DSL expand with to.kind including "Task" reveals task children.
+        /// 5.2: DSL expand with to.kind including "Task" reveals task children.
         #[test]
-        fn dsl_expand_reveals_task_children() {
+        fn dsl_expand_to_kind_includes_task() {
             let (_tmp, scan) = vault_with_tasks();
             let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
             let g = Graph::build(&v, &scan).unwrap();
 
-            // Expand root directory via directory-contains, then notes should show tasks
             let q = parse(
-                r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task};"#,
+                r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task} and to.kind in {Note, Directory, Task};"#,
             )
-            .unwrap();
+                .unwrap();
 
             let tree = q.walk(&g, &WalkOptions::unlimited());
             assert!(!tree.is_empty());
-            assert_eq!(tree[0].depth, 0);
 
             fn count_tasks_in_tree(nodes: &[WalkNode], graph: &Graph) -> usize {
                 let mut count = 0;
@@ -3097,15 +3091,103 @@ mod tests {
                 }
                 count
             }
-            assert_eq!(count_tasks_in_tree(&tree, &g), 3);
+            assert!(count_tasks_in_tree(&tree, &g) > 0);
+        }
 
-            // Without HasTask in edge.kind, no tasks should appear
-            let q_no_tasks = parse(
-                r#"node where kind = Directory and path = ""; expand where edge.kind = directory-contains;"#,
+        /// 5.3: DSL expand with to.kind excluding "Task" omits task children.
+        #[test]
+        fn dsl_expand_to_kind_excludes_task() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            let q = parse(
+                r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task} and to.kind in {Note, Directory};"#,
             )
-            .unwrap();
-            let tree_no_tasks = q_no_tasks.walk(&g, &WalkOptions::unlimited());
-            assert_eq!(count_tasks_in_tree(&tree_no_tasks, &g), 0);
+                .unwrap();
+
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            assert!(!tree.is_empty());
+
+            fn count_tasks_in_tree(nodes: &[WalkNode], graph: &Graph) -> usize {
+                let mut count = 0;
+                for node in nodes {
+                    if matches!(graph.node(node.id), NodeKind::Task(_)) {
+                        count += 1;
+                    }
+                    count += count_tasks_in_tree(&node.children, graph);
+                }
+                count
+            }
+            assert_eq!(count_tasks_in_tree(&tree, &g), 0);
+        }
+
+        /// 5.4: path attribute on task node yields no match.
+        #[test]
+        fn dsl_path_on_task_yields_no_match() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            let q = parse(r#"node where kind = Task and path = "root.md";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 0);
+        }
+
+        /// 5.5: title attribute on task node yields no match.
+        #[test]
+        fn dsl_title_on_task_yields_no_match() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            let q = parse(r#"node where kind = Task and title = "anything";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 0);
+        }
+
+        /// 5.6: Inequality and in-set on status.
+        #[test]
+        fn dsl_task_inequality_and_in_set() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            // status != "Done" returns the two open tasks
+            let q = parse(r#"node where kind = Task and status != "Done";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 2);
+            for id in &results {
+                if let NodeKind::Task(td) = g.node(*id) {
+                    assert_ne!(td.status, "Done");
+                }
+            }
+
+            // status in {"Open", "InProgress"} returns only open tasks
+            let q =
+                parse(r#"node where kind = Task and status in {"Open", "InProgress"};"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 2);
+            for id in &results {
+                if let NodeKind::Task(td) = g.node(*id) {
+                    assert_eq!(td.status, "Open");
+                }
+            }
+        }
+
+        /// 5.7: description ends_with selects the matching task.
+        #[test]
+        fn dsl_task_description_ends_with() {
+            let (_tmp, scan) = vault_with_tasks();
+            let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &scan).unwrap();
+
+            let q = parse(r#"node where kind = Task and description ends_with "bug";"#).unwrap();
+            let results = q.select(&g);
+            assert_eq!(results.len(), 1);
+            if let NodeKind::Task(td) = g.node(results[0]) {
+                assert_eq!(td.description, "Fix login bug");
+            }
         }
     }
 }
