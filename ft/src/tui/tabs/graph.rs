@@ -2510,7 +2510,7 @@ mod view_tests {
         // The active view's query is replaced with the preset DSL.
         assert_eq!(
             tab.views[0].query_text,
-            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into};"#,
+            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into, link, embed};"#,
             "active view query should be replaced by the selected preset DSL"
         );
 

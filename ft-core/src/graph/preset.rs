@@ -18,7 +18,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
             r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task};"#
         }
         "crosslinks" => {
-            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into};"#
+            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into, link, embed};"#
         }
         _ => return None,
     })
