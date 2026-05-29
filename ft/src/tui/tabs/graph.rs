@@ -18,10 +18,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Paragraph},
+    widgets::{Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -1346,14 +1346,13 @@ impl Tab for GraphTab {
         }
 
         if let Some(ref mut picker) = self.preset_picker {
-            let popup_height = 7.min(area.height);
-            let popup_width = 40.min(area.width);
-            let popup_area = ratatui::layout::Rect {
-                x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-                y: area.y + (area.height.saturating_sub(popup_height)) / 3,
-                width: popup_width,
-                height: popup_height,
-            };
+            // Percentage-based sizing so the picker grows with the
+            // terminal. At 80×24 this gives roughly 48×12 — enough to
+            // show all 5 built-in presets without scrolling; on a
+            // larger viewport the picker scales up so long preset
+            // names and user-defined presets fit comfortably.
+            let popup_area = centered_rect(60, 60, area);
+            frame.render_widget(Clear, popup_area);
             picker.render(frame, popup_area);
         }
     }
@@ -1662,6 +1661,28 @@ fn render_move_banner(frame: &mut Frame, area: Rect, text: &str) {
 
 fn starts_with<T: PartialEq>(haystack: &[T], needle: &[T]) -> bool {
     haystack.len() >= needle.len() && haystack[..needle.len()] == *needle
+}
+
+/// Build a rectangle centred in `area` taking `percent_x` / `percent_y`
+/// of the available space (same helper used by the Notes tab for its
+/// modal popups).
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 // ── TreeState ─────────────────────────────────────────────────────────
