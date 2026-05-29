@@ -953,7 +953,13 @@ impl Parser {
         position: usize,
     ) -> Result<(), DslError> {
         let allowed: &[&str] = match subject {
-            Subject::Edge => &["link", "embed", "directory-contains", "has-task"],
+            Subject::Edge => &[
+                "link",
+                "embed",
+                "directory-contains",
+                "has-task",
+                "links-into",
+            ],
             _ => &["Note", "Directory", "Ghost", "Task"],
         };
         let check = |lit: &Literal| -> Result<(), DslError> {
@@ -1398,6 +1404,7 @@ fn edge_kind_str(e: &EdgeKind) -> &'static str {
         EdgeKind::Embed(_) => "embed",
         EdgeKind::Contains => "directory-contains",
         EdgeKind::HasTask => "has-task",
+        EdgeKind::LinksInto => "links-into",
     }
 }
 
@@ -2992,6 +2999,29 @@ mod tests {
         #[test]
         fn edge_kind_str_returns_has_task() {
             assert_eq!(super::edge_kind_str(&EdgeKind::HasTask), "has-task");
+        }
+
+        /// Parse round-trip: links-into edge kind accepted in expand block.
+        #[test]
+        fn dsl_parses_links_into_edge_kind() {
+            let q =
+                parse("node where kind = Note; expand where edge.kind = \"links-into\";").unwrap();
+            // Round-trip serialization.
+            let s = q.to_string();
+            let q2 = parse(&s).unwrap();
+            assert_eq!(q, q2);
+        }
+
+        /// Parse round-trip: links-into accepted in set form.
+        #[test]
+        fn dsl_parses_links_into_in_set() {
+            let q = parse(
+                r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into};"#,
+            )
+            .unwrap();
+            let s = q.to_string();
+            let q2 = parse(&s).unwrap();
+            assert_eq!(q, q2);
         }
 
         /// Task 7.7: DSL `node where kind = "Task"` returns only task nodes.

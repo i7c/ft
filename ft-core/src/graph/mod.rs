@@ -35,7 +35,7 @@ pub mod resolve;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
@@ -151,13 +151,17 @@ pub enum EdgeKind {
     Contains,
     /// A note has a task as a child. Edge from note node to task node.
     HasTask,
+    /// A note links to one or more notes contained in a directory.
+    /// Derived edge — one per unique (source-note, target-directory) pair
+    /// from resolved Link / Embed edges. Unit variant (no LinkEdge data).
+    LinksInto,
 }
 
 impl EdgeKind {
     pub fn link(&self) -> Option<&LinkEdge> {
         match self {
             EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
-            EdgeKind::Contains | EdgeKind::HasTask => None,
+            EdgeKind::Contains | EdgeKind::HasTask | EdgeKind::LinksInto => None,
         }
     }
 }
@@ -301,6 +305,9 @@ impl Graph {
         // Create HasTask edges from notes to their tasks.
         graph.insert_hastask_edges();
 
+        // Create LinksInto edges from notes to directories they link into.
+        graph.insert_links_into_edges();
+
         Ok(graph)
     }
 
@@ -343,6 +350,7 @@ impl Graph {
 
         self.remove_outgoing_edges(src);
         self.insert_edges_for(src, &rel, &links);
+        self.insert_links_into_for(src);
         Ok(())
     }
 
@@ -611,6 +619,49 @@ impl Graph {
             if let Some(&note_id) = self.path_index.get(&source_file) {
                 if matches!(self.g[note_id.0], NodeKind::Note(_)) {
                     self.g.add_edge(note_id.0, task_id.0, EdgeKind::HasTask);
+                }
+            }
+        }
+    }
+
+    /// Create LinksInto edges from each note to every directory that
+    /// contains at least one note it links to (via Link or Embed).
+    /// Deduplicates: at most one edge per (source, directory) pair.
+    fn insert_links_into_edges(&mut self) {
+        let note_ids: Vec<NoteId> = self
+            .g
+            .node_indices()
+            .filter(|idx| matches!(self.g[*idx], NodeKind::Note(_)))
+            .map(NoteId)
+            .collect();
+        for src in note_ids {
+            self.insert_links_into_for(src);
+        }
+    }
+
+    /// Insert LinksInto edges for a single source note. Removes any
+    /// existing LinksInto edges from this source first (idempotent for
+    /// build, essential for refresh_note where remove_outgoing_edges
+    /// already dropped them).
+    fn insert_links_into_for(&mut self, src: NoteId) {
+        let mut seen_dirs: HashSet<NoteId> = HashSet::new();
+        // Collect candidate (target, edge) pairs before iterating to
+        // avoid borrow conflicts with add_edge.
+        let candidates: Vec<(NoteId, EdgeKind)> = self
+            .g
+            .edges_directed(src.0, Direction::Outgoing)
+            .map(|e| (NoteId(e.target()), e.weight().clone()))
+            .collect();
+        for (dst, edge) in &candidates {
+            if !matches!(edge, EdgeKind::Link(_) | EdgeKind::Embed(_)) {
+                continue;
+            }
+            if let NodeKind::Note(note_data) = self.node(*dst) {
+                let parent_path = normalize_path(note_data.path.parent().unwrap_or(Path::new("")));
+                if let Some(dir_id) = self.node_by_path(&parent_path) {
+                    if seen_dirs.insert(dir_id) {
+                        self.g.add_edge(src.0, dir_id.0, EdgeKind::LinksInto);
+                    }
                 }
             }
         }

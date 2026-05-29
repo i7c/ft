@@ -2502,14 +2502,15 @@ mod view_tests {
         assert!(tab.preset_picker_for_active_view);
 
         // Simulate pressing Enter on the first match (alphabetically
-        // "dangling" → "node where kind = Ghost;").
+        // "crosslinks" → the crosslinks preset DSL).
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let outcome = tab.handle_preset_picker_key(enter, &ctx);
         assert!(matches!(outcome, EventOutcome::Consumed));
 
         // The active view's query is replaced with the preset DSL.
         assert_eq!(
-            tab.views[0].query_text, "node where kind = Ghost;",
+            tab.views[0].query_text,
+            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into};"#,
             "active view query should be replaced by the selected preset DSL"
         );
 

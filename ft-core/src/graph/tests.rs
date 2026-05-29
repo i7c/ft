@@ -42,6 +42,7 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 EdgeKind::Embed(_) => "embed",
                 EdgeKind::Contains => "contains",
                 EdgeKind::HasTask => "has-task",
+                EdgeKind::LinksInto => "links-into",
             };
             let l = edge.link()?;
             Some(format!(
@@ -70,7 +71,11 @@ fn hub_outgoing_covers_every_link_shape() {
     let v = fixture_vault();
     let g = Graph::build(&v, &Scan::default()).unwrap();
     let hub = note(&g, "notes/hub.md");
-    let edges: Vec<&EdgeKind> = g.outgoing(hub).map(|(_, e)| e).collect();
+    let edges: Vec<&EdgeKind> = g
+        .outgoing(hub)
+        .filter(|(_, e)| !matches!(e, EdgeKind::LinksInto))
+        .map(|(_, e)| e)
+        .collect();
 
     // Sanity: at least the wikilink + md + embed shapes from the
     // fixture all show up. Exact count below.
@@ -128,7 +133,7 @@ fn frontmatter_links_are_skipped() {
     // `[[hub]]` in the body. Only `hub` should appear.
     let targets: Vec<&str> = g
         .outgoing(alpha)
-        .map(|(_, e)| e.link().unwrap().target_text.as_str())
+        .filter_map(|(_, e)| e.link().map(|l| l.target_text.as_str()))
         .collect();
     assert_eq!(targets, vec!["hub"]);
 }
@@ -171,7 +176,7 @@ fn url_encoded_md_link_resolves() {
     // Look for the edge whose raw_text is the URL-encoded form.
     let resolved = g
         .outgoing(hub)
-        .filter(|(_, e)| e.link().unwrap().raw_text.contains("%20"))
+        .filter(|(_, e)| e.link().is_some_and(|l| l.raw_text.contains("%20")))
         .find_map(|(dst, _)| match g.node(dst) {
             NodeKind::Note(n) => Some(n.path.clone()),
             _ => None,
@@ -189,7 +194,8 @@ fn external_urls_do_not_become_edges() {
     let g = Graph::build(&v, &Scan::default()).unwrap();
     let hub = note(&g, "notes/hub.md");
     for (_, e) in g.outgoing(hub) {
-        let raw = &e.link().unwrap().raw_text;
+        let Some(l) = e.link() else { continue };
+        let raw = &l.raw_text;
         assert!(
             !raw.contains("https://") && !raw.contains("mailto:"),
             "external URL leaked as an edge: {raw}"
@@ -205,7 +211,7 @@ fn byte_ranges_round_trip_against_source_files() {
     let abs = v.path.join("notes/hub.md");
     let content = std::fs::read_to_string(&abs).unwrap();
     for (_, edge) in g.outgoing(hub_id) {
-        let l = edge.link().unwrap();
+        let Some(l) = edge.link() else { continue };
         assert_eq!(
             &content[l.byte_range.clone()],
             l.raw_text,
@@ -232,7 +238,11 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     let c = note(&g, "c.md");
-    assert_eq!(g.outgoing(a).count(), 2, "a starts with two outgoing");
+    assert_eq!(
+        g.outgoing(a).filter(|(_, e)| e.link().is_some()).count(),
+        2,
+        "a starts with two link edges"
+    );
     assert_eq!(
         g.incoming(a).filter(|(_, e)| e.link().is_some()).count(),
         1,
@@ -860,4 +870,180 @@ fn task_with_no_matching_note() {
     let results = q.select(&g);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0], task_id);
+}
+
+// ── LinksInto edge tests ────────────────────────────────────────────
+
+use assert_fs::prelude::*;
+
+fn make_links_vault(files: &[(&str, &str)]) -> (assert_fs::TempDir, Vault) {
+    let dir = assert_fs::TempDir::new().unwrap();
+    dir.child(".obsidian").create_dir_all().unwrap();
+    for (rel, content) in files {
+        dir.child(rel).write_str(content).unwrap();
+    }
+    let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+    (dir, vault)
+}
+
+/// Collect (src_path, dst_kind, dst_path_or_label) for outgoing LinksInto edges.
+fn links_into_edges(graph: &Graph) -> Vec<(PathBuf, String, String)> {
+    let mut results: Vec<(PathBuf, String, String)> = Vec::new();
+    for (id, node) in graph.nodes() {
+        let NodeKind::Note(nd) = node else { continue };
+        for (dst, edge) in graph.outgoing(id) {
+            if !matches!(edge, EdgeKind::LinksInto) {
+                continue;
+            }
+            let dst_label = match graph.node(dst) {
+                NodeKind::Directory(d) => {
+                    if d.path.as_os_str().is_empty() {
+                        "<root>".to_string()
+                    } else {
+                        d.path.to_string_lossy().into_owned()
+                    }
+                }
+                other => format!("{:?}", other),
+            };
+            results.push((nd.path.clone(), "LinksInto".into(), dst_label));
+        }
+    }
+    results.sort();
+    results
+}
+
+/// 4.1: Note linking to a note in a subdirectory produces a LinksInto edge.
+#[test]
+fn links_into_subdirectory() {
+    let (_dir, v) = make_links_vault(&[("a/b/foo.md", "[[Bar]]"), ("c/d/e/Bar.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].0, PathBuf::from("a/b/foo.md"));
+    assert_eq!(edges[0].2, "c/d/e");
+}
+
+/// 4.2: Note linking to a root-level note produces a LinksInto edge
+/// to the root Directory node.
+#[test]
+fn links_into_root_level_target() {
+    let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Index]]"), ("Index.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].0, PathBuf::from("a/foo.md"));
+    assert_eq!(edges[0].2, "<root>");
+}
+
+/// 4.3: Embed link produces a LinksInto edge.
+#[test]
+fn links_into_from_embed() {
+    let (_dir, v) = make_links_vault(&[("a/foo.md", "![[pic]]"), ("images/pic.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].0, PathBuf::from("a/foo.md"));
+    assert_eq!(edges[0].2, "images");
+}
+
+/// 4.4: Multiple links to notes in the same folder produce exactly one
+/// LinksInto edge (deduplication).
+#[test]
+fn links_into_deduplicates_same_folder() {
+    let (_dir, v) =
+        make_links_vault(&[("a/foo.md", "[[X]]\n[[Y]]"), ("d/X.md", ""), ("d/Y.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(
+        edges.len(),
+        1,
+        "should be exactly one LinksInto edge to folder d"
+    );
+    assert_eq!(edges[0].0, PathBuf::from("a/foo.md"));
+    assert_eq!(edges[0].2, "d");
+}
+
+/// 4.5: Links to notes in different folders produce separate LinksInto edges.
+#[test]
+fn links_into_different_folders() {
+    let (_dir, v) = make_links_vault(&[
+        ("a/foo.md", "[[X]]\n[[Y]]"),
+        ("d1/X.md", ""),
+        ("d2/Y.md", ""),
+    ]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(edges.len(), 2);
+    let dirs: Vec<&str> = edges.iter().map(|e| e.2.as_str()).collect();
+    assert!(dirs.contains(&"d1"));
+    assert!(dirs.contains(&"d2"));
+}
+
+/// 4.6: Unresolved (ghost) links produce no LinksInto edges.
+#[test]
+fn links_into_excludes_ghosts() {
+    let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Phantom]]")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert!(
+        edges.is_empty(),
+        "ghost links should produce no LinksInto edges"
+    );
+}
+
+/// 4.7: Mix of resolved and unresolved — resolved produces LinksInto, ghost does not.
+#[test]
+fn links_into_mixed_resolved_and_ghost() {
+    let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Real]]\n[[Phantom]]"), ("d/Real.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    // Only one LinksInto edge (from Real), not from Phantom.
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].2, "d");
+}
+
+/// 4.8: Note linking to a sibling in its own folder still produces a LinksInto edge.
+#[test]
+fn links_into_self_folder() {
+    let (_dir, v) = make_links_vault(&[("a/b/foo.md", "[[Baz]]"), ("a/b/Baz.md", "")]);
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let edges = links_into_edges(&g);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].2, "a/b");
+}
+
+/// 4.9: refresh_note recomputes LinksInto edges correctly.
+#[test]
+fn links_into_refresh_note() {
+    let (dir, v) = make_links_vault(&[("a/foo.md", "[[X]]"), ("d1/X.md", ""), ("d2/Y.md", "")]);
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+
+    // Initially: one LinksInto edge to d1.
+    let initial = links_into_edges(&g);
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].2, "d1");
+
+    // Edit foo.md to also link to d2/Y.
+    dir.child("a/foo.md").write_str("[[X]]\n[[Y]]").unwrap();
+    g.refresh_note(&v.path, &PathBuf::from("a/foo.md")).unwrap();
+
+    let updated = links_into_edges(&g);
+    assert_eq!(
+        updated.len(),
+        2,
+        "should now have LinksInto edges to both d1 and d2"
+    );
+    let dirs: Vec<&str> = updated.iter().map(|e| e.2.as_str()).collect();
+    assert!(dirs.contains(&"d1"));
+    assert!(dirs.contains(&"d2"));
+
+    // Remove all links from foo.md.
+    dir.child("a/foo.md").write_str("").unwrap();
+    g.refresh_note(&v.path, &PathBuf::from("a/foo.md")).unwrap();
+
+    let cleared = links_into_edges(&g);
+    assert!(
+        cleared.is_empty(),
+        "no links should mean no LinksInto edges"
+    );
 }

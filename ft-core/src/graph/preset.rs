@@ -17,13 +17,23 @@ pub fn builtin(name: &str) -> Option<&'static str> {
         "tasks-in-tree" => {
             r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, has-task};"#
         }
+        "crosslinks" => {
+            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into};"#
+        }
         _ => return None,
     })
 }
 
 /// Names of all built-in presets, sorted, for help text and shell completions.
 pub fn builtin_names() -> &'static [&'static str] {
-    &["dangling", "links", "orphans", "tasks-in-tree", "tree"]
+    &[
+        "crosslinks",
+        "dangling",
+        "links",
+        "orphans",
+        "tasks-in-tree",
+        "tree",
+    ]
 }
 
 #[cfg(test)]

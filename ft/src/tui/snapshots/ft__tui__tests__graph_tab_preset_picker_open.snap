@@ -11,12 +11,12 @@ press / to edit query
                 │type to search…                               │                
                 └──────────────────────────────────────────────┘                
                 ┌ recent · type to search ─────────────────────┐                
-                │▶ dangling                                    │                
+                │▶ crosslinks                                  │                
+                │  dangling                                    │                
                 │  links                                       │                
                 │  orphans                                     │                
                 │  tasks-in-tree                               │                
                 │  tree                                        │                
-                │                                              │                
                 │                                              │                
                 │                                              │                
                 │                                              │                
