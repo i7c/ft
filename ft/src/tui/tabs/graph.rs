@@ -165,9 +165,15 @@ pub struct GraphTab {
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
     move_outer: Option<GraphMoveOuter>,
-    /// Active preset picker. `Some` after `Ctrl+N`; selecting a preset
-    /// pre-fills the query input, dismissing falls back to a blank view.
+    /// Active preset picker. `Some` after `Ctrl+N` or `Ctrl+P`;
+    /// selecting a preset applies the preset DSL. Dismissing falls
+    /// back to a blank view (`Ctrl+N`) or leaves the active view
+    /// unchanged (`Ctrl+P`).
     preset_picker: Option<FuzzyPicker<PresetPickerSource>>,
+    /// When `true`, the open picker was triggered by `Ctrl+P` and
+    /// should apply the selected preset to the *existing* active view
+    /// rather than a newly-created one.
+    preset_picker_for_active_view: bool,
 }
 
 /// Graph-tab outer wrapper around the shared section-move flow.
@@ -217,6 +223,7 @@ impl GraphTab {
             periodic_leader: false,
             move_outer: None,
             preset_picker: None,
+            preset_picker_for_active_view: false,
         }
     }
 
@@ -595,8 +602,21 @@ impl GraphTab {
             self.add_view();
             return;
         }
+        self.preset_picker_for_active_view = false;
         self.views.push(ExpandedView::default());
         self.active = self.views.len() - 1;
+        self.preset_picker = Some(FuzzyPicker::new(src));
+    }
+
+    /// Open the preset picker bound to the *current* active view (the
+    /// `Ctrl+P` path). On selection the active view's query is replaced
+    /// in-place; on dismiss nothing changes.
+    fn open_preset_picker_for_active_view(&mut self, ctx: &TabCtx) {
+        let src = PresetPickerSource::new(ctx.vault);
+        if src.items.is_empty() {
+            return;
+        }
+        self.preset_picker_for_active_view = true;
         self.preset_picker = Some(FuzzyPicker::new(src));
     }
 
@@ -621,17 +641,20 @@ impl GraphTab {
         let Some(mut picker) = self.preset_picker.take() else {
             return EventOutcome::NotHandled;
         };
+        let for_active = self.preset_picker_for_active_view;
         match picker.handle_key(k) {
             PickerOutcome::Selected(name) => {
                 if let Some(dsl) = self.resolve_preset(&name, ctx) {
                     self.apply_preset_to_active_view(&dsl);
-                    self.input_mode = false;
-                } else {
-                    self.input_mode = true;
                 }
+                self.input_mode = false;
+                self.preset_picker_for_active_view = false;
             }
             PickerOutcome::Cancelled => {
-                self.input_mode = true;
+                if !for_active {
+                    self.input_mode = true;
+                }
+                self.preset_picker_for_active_view = false;
             }
             PickerOutcome::StillOpen => {
                 self.preset_picker = Some(picker);
@@ -914,6 +937,10 @@ impl Tab for GraphTab {
         match (k.code, k.modifiers) {
             (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
                 self.add_view_with_presets(ctx);
+                return Ok(EventOutcome::Consumed);
+            }
+            (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
+                self.open_preset_picker_for_active_view(ctx);
                 return Ok(EventOutcome::Consumed);
             }
             (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1357,6 +1384,7 @@ impl Tab for GraphTab {
                     ("/", "edit query (this view)"),
                     ("Enter", "apply query"),
                     ("Esc", "cancel query edit"),
+                    ("Ctrl+P", "load preset into this view"),
                 ],
             ),
             HelpSection::new(
@@ -2411,5 +2439,61 @@ mod view_tests {
         assert_eq!(tab.active, 1, "out-of-range switch must be a no-op");
         tab.switch_view(0);
         assert_eq!(tab.active, 0);
+    }
+
+    /// Ctrl+P opens the preset picker for the active view; selecting
+    /// a preset replaces the active view's query in-place.
+    #[test]
+    fn ctrl_p_preset_replaces_active_view_query() {
+        use chrono::NaiveDate;
+        use ft_core::recents::RecentsLog;
+        use std::cell::Cell;
+        use std::cell::RefCell;
+        use std::sync::Arc;
+
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
+        let vault = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
+        let vault = Arc::new(vault);
+        let recents = Arc::new(RecentsLog::for_vault(&vault));
+        let today = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+        let last_refresh = Cell::new(None);
+        let pending_request = RefCell::new(None);
+
+        let ctx = TabCtx {
+            vault: &vault,
+            recents: &recents,
+            today,
+            last_refresh: &last_refresh,
+            pending_request: &pending_request,
+        };
+
+        // Build graph so views can resolve queries.
+        let scan = vault.scan();
+        let graph = Graph::build(&vault, &scan).unwrap();
+
+        let mut tab = GraphTab::new();
+        tab.graph = Some(graph);
+        tab.views[0].query_text = "node where kind = Note;".to_string();
+
+        // Ctrl+P → open picker bound to the active view.
+        tab.open_preset_picker_for_active_view(&ctx);
+        assert!(tab.preset_picker.is_some());
+        assert!(tab.preset_picker_for_active_view);
+
+        // Simulate pressing Enter on the first match (alphabetically
+        // "dangling" → "node where kind = Ghost;").
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let outcome = tab.handle_preset_picker_key(enter, &ctx);
+        assert!(matches!(outcome, EventOutcome::Consumed));
+
+        // The active view's query is replaced with the preset DSL.
+        assert_eq!(
+            tab.views[0].query_text, "node where kind = Ghost;",
+            "active view query should be replaced by the selected preset DSL"
+        );
+
+        // Flag is reset after selection.
+        assert!(!tab.preset_picker_for_active_view);
+        assert!(tab.preset_picker.is_none());
     }
 }
