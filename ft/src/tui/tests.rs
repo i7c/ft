@@ -6610,3 +6610,23 @@ fn no_more_syncing_mode_exists() {
         }
     }
 }
+
+#[test]
+fn graph_tab_z_roots_on_selected_note() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Expand the root directory so children show up.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate past root to first child, press z. Children are Areas/,
+    // Projects/, root.md. Pressing z on any of them rewrites the query.
+    app.dispatch(key('j'))?;
+    app.dispatch(key('z'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_z_rooted_on_note", frame);
+    Ok(())
+}

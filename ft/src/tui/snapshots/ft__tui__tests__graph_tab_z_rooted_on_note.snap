@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
+ 1: node where kind = D…                                                        
+▶ D Projects/                                                                   
+press / to edit query                                                           
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+> node where kind = Directory and path = "Projects"; expand where edge.kind = di
+ vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal

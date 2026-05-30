@@ -675,6 +675,58 @@ impl GraphTab {
         v.apply_query(graph);
     }
 
+    /// Rewrite the active view's query to root on the currently-selected
+    /// node. Only works for Note and Directory nodes (which have paths).
+    /// Ghost and Task nodes are no-ops.
+    fn rewrite_query_for_root(&mut self) {
+        // Gather all needed data first, then mutate the view.
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let v = &self.views[self.active];
+        let Some(row) = v.tree.rows().get(v.selected) else {
+            return;
+        };
+        let note_id = row.note_id;
+        let (kind_str, path_str) = match graph.node(note_id) {
+            NodeKind::Note(n) => ("Note", n.path.to_string_lossy().into_owned()),
+            NodeKind::Directory(d) => ("Directory", d.path.to_string_lossy().into_owned()),
+            _ => return, // Ghost, Task — no path attribute
+        };
+
+        // Escape double-quote and backslash in the path.
+        let escaped_path: String = path_str
+            .chars()
+            .flat_map(|c| match c {
+                '\\' => vec!['\\', '\\'],
+                '"' => vec!['\\', '"'],
+                other => vec![other],
+            })
+            .collect();
+
+        // Preserve the expand block from the current parsed query.
+        let query = v.query.clone();
+        let expand_part = match query.as_ref() {
+            Some(q) => {
+                let full = format!("{q}");
+                full.find("; expand")
+                    .map(|idx| full[idx..].to_string())
+                    .unwrap_or_else(|| ";".to_string())
+            }
+            None => ";".to_string(),
+        };
+        // Drop immutable references before mutating.
+        let _ = v;
+
+        let new_query =
+            format!("node where kind = {kind_str} and path = \"{escaped_path}\"{expand_part}");
+
+        let v = &mut self.views[self.active];
+        v.query_text = new_query;
+        v.input_cursor = v.query_text.len();
+        v.apply_query(Some(graph));
+    }
+
     /// Close the active view. If it's the last view, replace it with a
     /// fresh empty view so we never have zero views (avoids a special
     /// "no views" rendering path).
@@ -988,6 +1040,10 @@ impl Tab for GraphTab {
         match (k.code, k.modifiers) {
             (KeyCode::Char('/'), KeyModifiers::NONE) => {
                 self.input_mode = true;
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('z'), KeyModifiers::NONE) => {
+                self.rewrite_query_for_root();
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
@@ -1374,6 +1430,7 @@ impl Tab for GraphTab {
                     ("h", "collapse · jump to parent"),
                     ("g / G", "first / last row"),
                     ("Ctrl+D / Ctrl+U", "half-page down / up"),
+                    ("z", "root view on selected node"),
                     ("r", "refresh graph from disk"),
                 ],
             ),
@@ -2173,6 +2230,7 @@ mod tree_tests {
 mod view_tests {
     use std::path::PathBuf;
 
+    use assert_fs::prelude::*;
     use ft_core::graph::Graph;
     use ft_core::vault::{Scan, Vault};
 
@@ -2517,5 +2575,183 @@ mod view_tests {
         // Flag is reset after selection.
         assert!(!tab.preset_picker_for_active_view);
         assert!(tab.preset_picker.is_none());
+    }
+
+    // ── z (root-on-selected) tests ──────────────────────────────────
+
+    /// Helper: build a graph, apply a query so the tree has the target
+    /// node as a row, select it, and return the tab.
+    fn tab_with_node_selected(
+        files: &[(&str, &str)],
+        query_text: &str,
+        select_path: &str,
+    ) -> GraphTab {
+        use std::path::Path;
+        let dir = assert_fs::TempDir::new().unwrap();
+        dir.child(".obsidian").create_dir_all().unwrap();
+        for (rel, content) in files {
+            dir.child(rel).write_str(content).unwrap();
+        }
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        let scan = vault.scan();
+        let graph = Graph::build(&vault, &scan).unwrap();
+        let mut v = ExpandedView {
+            query_text: query_text.to_string(),
+            ..Default::default()
+        };
+        v.apply_query(Some(&graph));
+        // Find and select the row matching select_path.
+        let target = graph
+            .node_by_path(Path::new(select_path))
+            .expect("target node must exist");
+        let sel = v
+            .tree
+            .rows()
+            .iter()
+            .position(|r| r.note_id == target)
+            .expect("target row must be in tree");
+        v.selected = sel;
+        let mut tab = GraphTab::new();
+        tab.graph = Some(graph);
+        tab.views[0] = v;
+        tab
+    }
+
+    #[test]
+    fn z_on_note_rewrites_query() {
+        let mut tab = tab_with_node_selected(
+            &[("Areas/finance.md", "[[Projects/alpha]]"), ("Projects/alpha.md", "")],
+            "node where kind = Note and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};",
+            "Areas/finance.md",
+        );
+        tab.rewrite_query_for_root();
+        assert_eq!(
+            tab.views[0].query_text,
+            "node where kind = Note and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};"
+        );
+    }
+
+    #[test]
+    fn z_on_directory_rewrites_query() {
+        let mut tab = tab_with_node_selected(
+            &[("Areas/finance.md", "")],
+            "node where kind = Directory and path = \"Areas\"; expand where edge.kind = directory-contains;",
+            "Areas",
+        );
+        tab.rewrite_query_for_root();
+        assert_eq!(
+            tab.views[0].query_text,
+            "node where kind = Directory and path = \"Areas\"; expand where edge.kind = directory-contains;"
+        );
+    }
+
+    #[test]
+    fn z_on_root_directory_rewrites_query() {
+        let mut tab = tab_with_node_selected(
+            &[("foo.md", "")],
+            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;",
+            "",
+        );
+        tab.rewrite_query_for_root();
+        assert_eq!(
+            tab.views[0].query_text,
+            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
+        );
+    }
+
+    #[test]
+    fn z_on_ghost_is_noop() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        dir.child(".obsidian").create_dir_all().unwrap();
+        dir.child("foo.md").write_str("[[Phantom]]").unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let mut v = ExpandedView {
+            query_text: "node where kind = Ghost;".to_string(),
+            ..Default::default()
+        };
+        v.apply_query(Some(&graph));
+        v.selected = 0;
+        let mut tab = GraphTab::new();
+        tab.graph = Some(graph);
+        tab.views[0] = v;
+        let before = tab.views[0].query_text.clone();
+        tab.rewrite_query_for_root();
+        assert_eq!(tab.views[0].query_text, before, "ghost should be no-op");
+    }
+
+    #[test]
+    fn z_on_task_is_noop() {
+        use ft_core::task::{Status, Task};
+        let dir = assert_fs::TempDir::new().unwrap();
+        dir.child(".obsidian").create_dir_all().unwrap();
+        dir.child("root.md").write_str("- [ ] A task\n").unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        let scan = Scan {
+            tasks: vec![Task {
+                description: "A task".into(),
+                status: Status::Open,
+                priority: None,
+                tags: vec![],
+                due: None,
+                scheduled: None,
+                source_file: PathBuf::from("root.md"),
+                source_line: 1,
+                created: None,
+                start: None,
+                done: None,
+                cancelled: None,
+                recurrence: None,
+                id: None,
+                depends_on: vec![],
+                on_completion: None,
+                block_link: None,
+                raw_trailing: None,
+                indent_level: 0,
+                parent: None,
+            }],
+            errors: vec![],
+        };
+        let graph = Graph::build(&vault, &scan).unwrap();
+        let mut v = ExpandedView {
+            query_text: "node where kind = Task;".to_string(),
+            ..Default::default()
+        };
+        v.apply_query(Some(&graph));
+        v.selected = 0;
+        let mut tab = GraphTab::new();
+        tab.graph = Some(graph);
+        tab.views[0] = v;
+        let before = tab.views[0].query_text.clone();
+        tab.rewrite_query_for_root();
+        assert_eq!(tab.views[0].query_text, before, "task should be no-op");
+    }
+
+    #[test]
+    fn z_preserves_expand_block() {
+        let mut tab = tab_with_node_selected(
+            &[("Areas/finance.md", "")],
+            "node where kind = Directory and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};",
+            "", // root directory is always in the tree for this query
+        );
+        tab.rewrite_query_for_root();
+        assert_eq!(
+            tab.views[0].query_text,
+            "node where kind = Directory and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};"
+        );
+    }
+
+    #[test]
+    fn z_no_expand_block_produces_trailing_semicolon() {
+        let mut tab = tab_with_node_selected(
+            &[("foo.md", "")],
+            "node where kind = Note and path = \"foo.md\";",
+            "foo.md",
+        );
+        tab.rewrite_query_for_root();
+        assert_eq!(
+            tab.views[0].query_text,
+            "node where kind = Note and path = \"foo.md\";"
+        );
     }
 }
