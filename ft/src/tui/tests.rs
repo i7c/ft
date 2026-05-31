@@ -6863,8 +6863,7 @@ fn graph_r_on_note_renames_file_on_disk() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    // Navigate to a Note row.
-    app.dispatch(key('j'))?;
+    // Navigate to the a.md row.
     app.dispatch(key('j'))?;
     app.dispatch(key('r'))?;
     // Clear pre-filled text and type new name.
