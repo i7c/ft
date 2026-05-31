@@ -1176,6 +1176,11 @@ impl GraphQuery {
                 children.push(child_id);
             }
         }
+        // Sort children by a content-derived key so iteration order is
+        // independent of filesystem walk order (which varies by OS /
+        // filesystem). Without this, the TUI tree and walk() output
+        // would be non-deterministic across machines.
+        children.sort_by_key(|id| child_sort_key(graph, *id));
         Some(children)
     }
 
@@ -1287,6 +1292,19 @@ fn eval_node_conditions(
         }
     }
     true
+}
+
+/// Stable, content-derived key for ordering child nodes returned by
+/// [`GraphQuery::expand`]. Two-level: (kind_rank, name) so directories
+/// group before notes, and within a kind we sort alphabetically by the
+/// natural display string. Independent of filesystem walk order.
+fn child_sort_key(graph: &Graph, id: NoteId) -> (u8, String) {
+    match graph.node(id) {
+        NodeKind::Directory(d) => (0, d.path.to_string_lossy().into_owned()),
+        NodeKind::Note(n) => (1, n.path.to_string_lossy().into_owned()),
+        NodeKind::Ghost(g) => (2, g.raw.clone()),
+        NodeKind::Task(t) => (3, format!("{}:{}", t.source_file.display(), t.source_line)),
+    }
 }
 
 fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> bool {

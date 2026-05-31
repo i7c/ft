@@ -4,7 +4,7 @@ expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
  1: node where kind = D…                                                        
-▶   D Projects/                                                                 
+▶   D Areas/                                                                    
 press / to edit query                                                           
                                                                                 
                                                                                 
@@ -24,5 +24,5 @@ press / to edit query
                                                                                 
                                                                                 
                                                                                 
-> node where kind = Directory and path = "Projects"; expand where edge.kind = di
+> node where kind = Directory and path = "Areas"; expand where edge.kind = direc
  vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal
