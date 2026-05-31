@@ -379,6 +379,40 @@ pub fn apply_rename_plan(vault_root: &Path, plan: &RenamePlan) -> Result<()> {
     Ok(())
 }
 
+/// Walk [`EdgeKind::Contains`] edges from `dir_id` via BFS to collect
+/// all reachable notes with their new vault-relative paths. Used by
+/// both the CLI `ft notes mv` and the TUI's directory rename / move
+/// flows to expand a directory selection into individual note moves.
+pub fn collect_directory_notes(
+    graph: &Graph,
+    dir_id: NoteId,
+    old_dir: &Path,
+    new_dir: &Path,
+) -> Vec<(NoteId, PathBuf)> {
+    let mut result: Vec<(NoteId, PathBuf)> = Vec::new();
+    let mut queue: Vec<NoteId> = vec![dir_id];
+    while let Some(current) = queue.pop() {
+        for (child_id, edge) in graph.outgoing(current) {
+            if !matches!(edge, EdgeKind::Contains) {
+                continue;
+            }
+            match graph.node(child_id) {
+                NodeKind::Note(n) => {
+                    let old = n.path.clone();
+                    let suffix = old.strip_prefix(old_dir).unwrap_or(&old);
+                    let new = new_dir.join(suffix);
+                    result.push((child_id, new));
+                }
+                NodeKind::Directory(_) => {
+                    queue.push(child_id);
+                }
+                _ => {}
+            }
+        }
+    }
+    result
+}
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 fn file_snapshot(vault_root: &Path, rel: &Path) -> Result<FileSnapshot> {

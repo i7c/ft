@@ -101,7 +101,7 @@ fn rename_path_form_wikilink_keeps_path_form() {
         "notes",
         "rename",
         "notes/foo.md",
-        "notes/bar.md",
+        "bar",
     ])
     .assert()
     .success();
@@ -184,8 +184,9 @@ fn rename_bare_name_keeps_source_directory() {
 }
 
 #[test]
-fn rename_full_path_moves_file_across_directories() {
+fn rename_rejects_slash_in_new_name() {
     let v = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "[[foo]]\n")]);
+    // Path-based moves now go through `ft notes mv`.
     ft().args([
         "--vault",
         v.path().to_str().unwrap(),
@@ -195,11 +196,11 @@ fn rename_full_path_moves_file_across_directories() {
         "archive/foo.md",
     ])
     .assert()
-    .success();
-    assert!(!v.child("foo.md").path().exists());
-    assert!(v.child("archive/foo.md").path().exists());
-    // Title (filename stem) didn't change → wikilink target is still `foo`.
-    assert_eq!(read(&v, "a.md"), "[[foo]]\n");
+    .failure()
+    .stderr(predicate::str::contains("use `ft notes mv`"));
+    // File was NOT moved.
+    assert!(v.child("foo.md").path().exists());
+    assert!(!v.child("archive/foo.md").path().exists());
 }
 
 #[test]

@@ -27,8 +27,10 @@ use ratatui::{
 
 use ft_core::graph::preset;
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
-use ft_core::graph::rename::{apply_rename_plan, plan_multi_rename, plan_rename};
-use ft_core::graph::{EdgeKind, Graph, NodeKind, NoteId};
+use ft_core::graph::rename::{
+    apply_rename_plan, collect_directory_notes, plan_multi_rename, plan_rename,
+};
+use ft_core::graph::{Graph, NodeKind, NoteId};
 
 use std::sync::Arc;
 
@@ -2246,36 +2248,6 @@ fn starts_with<T: PartialEq>(haystack: &[T], needle: &[T]) -> bool {
 
 /// Walk [`EdgeKind::Contains`] edges from `dir_id` via BFS to collect
 /// all reachable notes with their current vault-relative paths.
-fn collect_directory_notes(
-    graph: &ft_core::graph::Graph,
-    dir_id: NoteId,
-    old_dir: &Path,
-    new_dir: &Path,
-) -> Vec<(NoteId, PathBuf)> {
-    let mut result: Vec<(NoteId, PathBuf)> = Vec::new();
-    let mut queue: Vec<NoteId> = vec![dir_id];
-    while let Some(current) = queue.pop() {
-        for (child_id, edge) in graph.outgoing(current) {
-            if !matches!(edge, EdgeKind::Contains) {
-                continue;
-            }
-            match graph.node(child_id) {
-                NodeKind::Note(n) => {
-                    let old = n.path.clone();
-                    let suffix = old.strip_prefix(old_dir).unwrap_or(&old);
-                    let new = new_dir.join(suffix);
-                    result.push((child_id, new));
-                }
-                NodeKind::Directory(_) => {
-                    queue.push(child_id);
-                }
-                _ => {}
-            }
-        }
-    }
-    result
-}
-
 /// Build a rectangle centred in `area` taking `percent_x` / `percent_y`
 /// of the available space (same helper used by the Notes tab for its
 /// modal popups).

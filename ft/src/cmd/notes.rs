@@ -62,6 +62,10 @@ pub enum NotesCommand {
     /// Rename a note (or unresolved `[[Phantom]]` target) and rewrite
     /// every link in the vault to point at the new name.
     Rename(RenameArgs),
+    /// Move one or more notes or directories to a target directory,
+    /// updating all vault-wide references.
+    #[command(name = "mv")]
+    Move(MoveArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -74,6 +78,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Backlinks(a) => run_links(a, vault_flag, Direction::Backlinks),
         NotesCommand::Links(a) => run_links(a, vault_flag, Direction::Forward),
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
+        NotesCommand::Move(a) => run_mv(a, vault_flag),
     }
 }
 
@@ -1196,14 +1201,28 @@ pub struct RenameArgs {
     #[arg(value_name = "NOTE", required = true)]
     pub note: String,
 
-    /// New name or path. `mv` ergonomics:
-    ///
-    /// - bare name (no `/`): keep the same directory, swap the stem.
-    /// - path with `/`: vault-relative full target path.
-    ///
-    /// `.md` is appended automatically when missing.
+    /// New filename stem (no directory — use `ft notes mv` to change
+    /// directories). `.md` is appended automatically when missing.
     #[arg(value_name = "NEW", required = true)]
     pub new: String,
+
+    /// Print the plan and exit without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+// ── ft notes mv ──────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct MoveArgs {
+    /// One or more vault-relative paths to move (notes or directories).
+    /// `.md` extension is optional for notes.
+    #[arg(value_name = "SOURCE", required = true, num_args = 1..)]
+    pub sources: Vec<String>,
+
+    /// Vault-relative path of the target directory. Must exist on disk.
+    #[arg(value_name = "TARGET", required = true)]
+    pub target: String,
 
     /// Print the plan and exit without writing anything.
     #[arg(long)]
@@ -1224,7 +1243,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         NodeKind::Task(_) => None,
     };
 
-    let new_path = parse_new_path(&args.new, source_rel.as_deref())?;
+    let new_path = parse_new_name(&args.new, source_rel.as_deref())?;
 
     let plan = plan_rename(&graph, &vault.path, id, &new_path).map_err(|e| anyhow!("{e}"))?;
 
@@ -1263,7 +1282,155 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     Ok(ExitCode::SUCCESS)
 }
 
-/// Resolve `<note>` for rename. Same precedence as `resolve_note_query`
+// ── ft notes mv ──────────────────────────────────────────────────────────────
+
+fn run_mv(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+
+    // Resolve the target to a directory.
+    let target_rel = Path::new(args.target.trim());
+    let target_abs = vault.path.join(target_rel);
+    if !target_abs.exists() {
+        return Err(anyhow!(
+            "target directory not found: {}",
+            target_rel.display()
+        ));
+    }
+    if !target_abs.is_dir() {
+        return Err(anyhow!(
+            "target is not a directory: {}",
+            target_rel.display()
+        ));
+    }
+
+    // Resolve each source to (NoteId, new_path) pairs.
+    let mut moves: Vec<(NoteId, PathBuf)> = Vec::new();
+    let mut file_count = 0usize;
+    let mut dir_count = 0usize;
+    for raw in &args.sources {
+        let (pairs, is_dir) = resolve_mv_source(&graph, raw, target_rel)?;
+        if is_dir {
+            dir_count += 1;
+        } else {
+            file_count += 1;
+        }
+        moves.extend(pairs);
+    }
+    let total_sources = file_count + dir_count;
+
+    if moves.is_empty() {
+        println!("nothing to move");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let plan = ft_core::graph::rename::plan_multi_rename(&graph, &vault.path, &moves)
+        .map_err(|e| anyhow!("{e}"))?;
+
+    if args.dry_run {
+        print_mv_plan_summary(&plan, total_sources, file_count, dir_count);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    ft_core::graph::rename::apply_rename_plan(&vault.path, &plan).map_err(|e| anyhow!("{e}"))?;
+
+    let edit_files = plan
+        .edits
+        .iter()
+        .map(|e| e.path.as_path())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let edit_count = plan.edits.len();
+    let rename_count = plan.renames.len();
+    println!(
+        "moved {rename_count} note(s) to {} — updated {edit_count} link(s) in {edit_files} file(s)",
+        target_rel.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve one source argument to (NoteId, new_path) pairs and whether
+/// it was a directory (is_dir=true) or a single file.
+fn resolve_mv_source(
+    graph: &Graph,
+    raw: &str,
+    target_dir: &Path,
+) -> Result<(Vec<(NoteId, PathBuf)>, bool)> {
+    use ft_core::graph::rename::collect_directory_notes;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("empty source path"));
+    }
+    let path = Path::new(trimmed);
+
+    // Try as a note (with and without .md).
+    if let Some(note_id) = graph
+        .note_by_path(path)
+        .or_else(|| graph.note_by_path(&path.with_extension("md")))
+    {
+        let note_data = match graph.node(note_id) {
+            NodeKind::Note(n) => n,
+            _ => unreachable!("note_by_path returned non-Note"),
+        };
+        let stem = note_data.path.file_name().unwrap_or_default();
+        let new_path = target_dir.join(stem);
+        return Ok((vec![(note_id, new_path)], false));
+    }
+
+    // Try as a directory.
+    if let Some(dir_id) = graph.node_by_path(path) {
+        if let NodeKind::Directory(d) = graph.node(dir_id) {
+            let old_dir = d.path.clone();
+            let new_dir = target_dir.join(&d.name);
+            let pairs = collect_directory_notes(graph, dir_id, &old_dir, &new_dir);
+            if pairs.is_empty() {
+                return Err(anyhow!("directory contains no notes: {}", trimmed));
+            }
+            return Ok((pairs, true));
+        }
+    }
+
+    Err(anyhow!(
+        "source not found: {trimmed} (is it a note or directory in the vault?)"
+    ))
+}
+
+fn print_mv_plan_summary(
+    plan: &RenamePlan,
+    _total_sources: usize,
+    file_count: usize,
+    dir_count: usize,
+) {
+    if plan.renames.is_empty() {
+        println!("nothing to move");
+        return;
+    }
+    println!(
+        "would move {} file(s) and {} director(ies) ({} renames total)",
+        file_count,
+        dir_count,
+        plan.renames.len()
+    );
+    for r in &plan.renames {
+        println!("  {} → {}", r.from.display(), r.to.display());
+    }
+    let mut by_file: std::collections::BTreeMap<&Path, usize> = std::collections::BTreeMap::new();
+    for edit in &plan.edits {
+        *by_file.entry(edit.path.as_path()).or_default() += 1;
+    }
+    if by_file.is_empty() {
+        println!("no link rewrites needed");
+    } else {
+        println!(
+            "would update {} link(s) in {} file(s):",
+            plan.edits.len(),
+            by_file.len()
+        );
+        for (path, n) in by_file {
+            println!("  {} ({n} edit(s))", path.display());
+        }
+    }
+}
 /// (path → title → fuzzy), with one extra path: a literal `[[Phantom]]`
 /// form selects the matching ghost node by its raw target string.
 fn resolve_rename_source(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
@@ -1284,12 +1451,18 @@ fn resolve_rename_source(graph: &Graph, vault: &Vault, query: &str) -> Result<No
 }
 
 /// Translate the user's `<new>` arg into a vault-relative target path.
-/// Rules: bare name (no `/`) inherits `source_rel`'s directory; path
-/// with `/` is vault-relative; `.md` is appended when missing.
-fn parse_new_path(raw: &str, source_rel: Option<&Path>) -> Result<PathBuf> {
+/// `<new>` must be a bare filename stem (no `/`). `.md` is appended
+/// when missing. The new path is in the same directory as the source
+/// (or vault root for ghost renames).
+fn parse_new_name(raw: &str, source_rel: Option<&Path>) -> Result<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("<new> is empty"));
+    }
+    if trimmed.contains('/') {
+        return Err(anyhow!(
+            "use `ft notes mv` to change directories. To rename in place, pass a bare filename without /."
+        ));
     }
     let with_md = if std::path::Path::new(trimmed)
         .extension()
@@ -1299,10 +1472,7 @@ fn parse_new_path(raw: &str, source_rel: Option<&Path>) -> Result<PathBuf> {
     } else {
         PathBuf::from(format!("{trimmed}.md"))
     };
-    let has_slash = trimmed.contains('/');
-    if has_slash {
-        Ok(with_md)
-    } else if let Some(src) = source_rel {
+    if let Some(src) = source_rel {
         let dir = src.parent().unwrap_or_else(|| Path::new(""));
         Ok(dir.join(with_md))
     } else {
