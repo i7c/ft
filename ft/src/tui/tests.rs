@@ -7199,6 +7199,59 @@ fn graph_move_enter_on_directory_executes_move() -> Result<()> {
 }
 
 #[test]
+fn graph_move_two_notes_preserves_relative_md_link() -> Result<()> {
+    // x.md links to y.md via [other note](y.md). Move both to sub/.
+    // Since they stay in the same directory, the relative link is unchanged.
+    let (dir, vault) = rename_vault(&[
+        ("x.md", "# X\nsee [other note](y.md)\n"),
+        ("y.md", "# Y\n"),
+        ("sub/placeholder.md", "# placeholder\n"),
+    ]);
+    let vault_path = dir.path().join("vault");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Children: root(D,0), sub(D,1), x(N,2), y(N,3) — alphabetical.
+    // Navigate to x(N) and Space-select.
+    app.dispatch(key('j'))?; // sub(D,1)
+    app.dispatch(key('j'))?; // x(N,2)
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?; // y(N,3)
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // r enters move phase.
+    app.dispatch(key('r'))?;
+    // Navigate to sub(D) and confirm.
+    app.dispatch(key('k'))?; // up to x(N,2)
+    app.dispatch(key('k'))?; // up to sub(D,1)
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Verify files moved.
+    assert!(!vault_path.join("x.md").exists());
+    assert!(!vault_path.join("y.md").exists());
+    assert!(vault_path.join("sub/x.md").exists());
+    assert!(vault_path.join("sub/y.md").exists());
+    // Relative markdown link should be unchanged (both in same dir).
+    let x_content = std::fs::read_to_string(vault_path.join("sub/x.md")).unwrap();
+    assert!(
+        x_content.contains("[other note](y.md)"),
+        "relative md link should stay [other note](y.md), got:\n{x_content}"
+    );
+    Ok(())
+}
+
+#[test]
 fn graph_move_enter_on_note_toasts_and_stays() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);

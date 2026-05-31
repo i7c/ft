@@ -143,6 +143,20 @@ pub fn plan_multi_rename(
     let mut edits: Vec<FileEdit> = Vec::new();
     let mut touched_files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
 
+    // Build a map from old (vault-relative) path → new path for every
+    // note being renamed, so that when a linker is itself being moved
+    // we can compute relative URLs from its new location rather than
+    // its old one.
+    let mut path_map: std::collections::HashMap<PathBuf, PathBuf> =
+        std::collections::HashMap::new();
+    for &(src, ref new_path_raw) in moves {
+        if let NodeKind::Note(n) = graph.node(src) {
+            if n.path != *new_path_raw {
+                path_map.insert(n.path.clone(), normalize_path(new_path_raw));
+            }
+        }
+    }
+
     for &(src, ref new_path_raw) in moves {
         let new_path = normalize_path(new_path_raw);
         let new_title = new_path
@@ -216,8 +230,11 @@ pub fn plan_multi_rename(
                 NodeKind::Directory(d) => d.path.clone(),
                 NodeKind::Task(_) => continue,
             };
+            // If the linker is also being renamed, use its new path
+            // for relative-URL computation.
+            let effective_linker_path = path_map.get(&linker_path).unwrap_or(&linker_path);
 
-            let replacement = build_replacement(edge, &linker_path, &new_path, &new_title);
+            let replacement = build_replacement(edge, effective_linker_path, &new_path, &new_title);
             edits.push(FileEdit {
                 path: linker_path.clone(),
                 byte_range: link.byte_range.clone(),
@@ -915,6 +932,29 @@ mod rename_tests {
         // foo.md → bar.md, baz.md → qux.md, foo's link updated.
         assert_eq!(read(&root.join("bar.md")), "see [[qux]]\n");
         assert_eq!(read(&root.join("qux.md")), "# Baz\n");
+    }
+
+    #[test]
+    fn multi_rename_cross_reference_md_link_preserves_relative_path() {
+        // x.md links to y.md via [note](y.md). Move both to sub/.
+        // The relative link should stay (y.md) since both end up in the
+        // same directory.
+        let (_dir, v, root) = make_vault(&[("x.md", "see [note](y.md)\n"), ("y.md", "# Y\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let x = note_id(&g, "x.md");
+        let y = note_id(&g, "y.md");
+        let plan = plan_multi_rename(
+            &g,
+            &root,
+            &[
+                (x, PathBuf::from("sub/x.md")),
+                (y, PathBuf::from("sub/y.md")),
+            ],
+        )
+        .unwrap();
+        apply_rename_plan(&root, &plan).unwrap();
+        assert_eq!(read(&root.join("sub/x.md")), "see [note](y.md)\n");
+        assert_eq!(read(&root.join("sub/y.md")), "# Y\n");
     }
 
     #[test]
