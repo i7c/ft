@@ -6691,11 +6691,34 @@ fn graph_space_toggles_selection_on_note() -> Result<()> {
 }
 
 #[test]
-fn graph_space_is_noop_on_directory() -> Result<()> {
+fn graph_space_toggles_selection_on_directory() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     switch_to_graph(&mut app)?;
-    // Root is a directory, first row. Space should not add marker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // First child is a directory (Areas). Space should add marker.
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains('●'),
+        "● expected on directory row — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_space_is_noop_on_root() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Root is the first row. Space should not add marker.
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char(' '),
         KeyModifiers::NONE,
@@ -6703,7 +6726,7 @@ fn graph_space_is_noop_on_directory() -> Result<()> {
     let frame = render(&mut app, 80, 24);
     assert!(
         !frame.contains('●'),
-        "no ● expected on directory row — got:\n{frame}"
+        "no ● expected on root — got:\n{frame}"
     );
     Ok(())
 }
@@ -7131,7 +7154,7 @@ fn graph_r_with_selections_enters_move_phase() -> Result<()> {
     app.dispatch(key('r'))?;
     let frame = render(&mut app, 80, 24);
     assert!(
-        frame.contains("Move 1 note(s)"),
+        frame.contains("Move 1 selection(s)"),
         "move banner expected — got:\n{frame}"
     );
     Ok(())
@@ -7200,7 +7223,7 @@ fn graph_move_enter_on_note_toasts_and_stays() -> Result<()> {
     let frame = render(&mut app, 80, 24);
     // Banner should still be visible (phase stays active).
     assert!(
-        frame.contains("Move 1 note(s)"),
+        frame.contains("Move 1 selection(s)"),
         "move banner should still be visible after bad target — got:\n{frame}"
     );
     Ok(())
@@ -7227,7 +7250,7 @@ fn graph_move_esc_cancels_flow() -> Result<()> {
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
     let frame = render(&mut app, 80, 24);
     assert!(
-        !frame.contains("Move 1 note(s)"),
+        !frame.contains("Move 1 selection(s)"),
         "move banner should be gone after Esc — got:\n{frame}"
     );
     assert!(

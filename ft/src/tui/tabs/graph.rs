@@ -392,7 +392,8 @@ impl GraphTab {
     }
 
     /// Execute a multi-note move: plan and apply renames for each
-    /// selected note to `target_dir/`, then refresh.
+    /// selected note to `target_dir/`, then refresh. Directory
+    /// selections are expanded to their contained notes via BFS.
     fn execute_multi_move(&mut self, ctx: &TabCtx, selected: &HashSet<NoteId>, target_dir: &Path) {
         let Some(graph) = self.graph.as_ref() else {
             self.move_outer = None;
@@ -401,34 +402,57 @@ impl GraphTab {
         let vault_root = &ctx.vault.path;
 
         let mut moves: Vec<(NoteId, PathBuf)> = Vec::new();
+        let mut seen: HashSet<NoteId> = HashSet::new();
         let mut skipped = 0usize;
-        let total = selected.len();
+        let mut dir_count = 0usize;
         for &id in selected {
-            let node = graph.node(id);
-            let note_path = match node {
-                NodeKind::Note(n) => n.path.clone(),
-                _ => continue,
-            };
-            if note_path.parent() == Some(target_dir) {
-                skipped += 1;
-                continue;
+            match graph.node(id) {
+                NodeKind::Note(n) => {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let note_path = n.path.clone();
+                    if note_path.parent() == Some(target_dir) {
+                        skipped += 1;
+                        continue;
+                    }
+                    let stem = note_path.file_name().unwrap_or_default();
+                    let new_path = target_dir.join(stem);
+                    moves.push((id, new_path));
+                }
+                NodeKind::Directory(d) => {
+                    dir_count += 1;
+                    // Expand directory to all contained notes.
+                    let old_dir = d.path.clone();
+                    let new_dir = target_dir.join(d.name.as_str());
+                    for (note_id, new_note_path) in
+                        collect_directory_notes(graph, id, &old_dir, &new_dir)
+                    {
+                        if seen.insert(note_id) {
+                            moves.push((note_id, new_note_path));
+                        }
+                    }
+                }
+                _ => {}
             }
-            let stem = note_path.file_name().unwrap_or_default();
-            let new_path = target_dir.join(stem);
-            moves.push((id, new_path));
         }
 
         self.move_outer = None;
 
         if moves.is_empty() {
-            queue_toast(
-                ctx,
-                &format!(
+            let total = selected.len();
+            let msg = if dir_count > 0 {
+                format!(
+                    "all notes from {total} selection(s) are already in {}",
+                    target_dir.display()
+                )
+            } else {
+                format!(
                     "all {total} note(s) are already in {}",
                     target_dir.display()
-                ),
-                ToastStyle::Info,
-            );
+                )
+            };
+            queue_toast(ctx, &msg, ToastStyle::Info);
             return;
         }
 
@@ -445,7 +469,13 @@ impl GraphTab {
         }
 
         let moved = moves.len();
-        let msg = if skipped > 0 {
+        let msg = if dir_count > 0 {
+            format!(
+                "moved {moved} note(s) from {dir_count} director{} to {}",
+                if dir_count == 1 { "y" } else { "ies" },
+                target_dir.display()
+            )
+        } else if skipped > 0 {
             format!(
                 "moved {moved} note(s) to {} ({skipped} already there)",
                 target_dir.display()
@@ -1581,23 +1611,25 @@ impl Tab for GraphTab {
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                let is_note = {
+                let (selectable, note_id, is_root) = {
                     let v = self.active_view();
                     let Some(row) = v.tree.rows().get(v.selected) else {
                         return Ok(EventOutcome::Consumed);
                     };
-                    matches!(
-                        self.graph.as_ref().map(|g| g.node(row.note_id)),
-                        Some(NodeKind::Note(_))
-                    )
+                    let note_id = row.note_id;
+                    let (selectable, is_root) = match self.graph.as_ref().map(|g| g.node(note_id)) {
+                        Some(NodeKind::Note(_)) => (true, false),
+                        Some(NodeKind::Directory(d)) => (true, d.path.as_os_str().is_empty()),
+                        _ => (false, false),
+                    };
+                    (selectable, note_id, is_root)
                 };
-                if is_note {
+                if selectable && !is_root {
                     let v = self.active_view_mut();
-                    let row = &v.tree.rows()[v.selected];
-                    if v.multi_selected.contains(&row.note_id) {
-                        v.multi_selected.remove(&row.note_id);
+                    if v.multi_selected.contains(&note_id) {
+                        v.multi_selected.remove(&note_id);
                     } else {
-                        v.multi_selected.insert(row.note_id);
+                        v.multi_selected.insert(note_id);
                     }
                 }
                 Ok(EventOutcome::Consumed)
@@ -1827,7 +1859,7 @@ impl Tab for GraphTab {
                 GraphMoveOuter::MoveTargetFromTree { selected } => {
                     let n = selected.len();
                     let text = format!(
-                        "Move {n} note(s): navigate to target directory, Enter/m to confirm, t for picker, Esc to cancel"
+                        "Move {n} selection(s): navigate to target directory, Enter/m to confirm, t for picker, Esc to cancel"
                     );
                     render_move_banner(frame, strip_area, &text);
                 }

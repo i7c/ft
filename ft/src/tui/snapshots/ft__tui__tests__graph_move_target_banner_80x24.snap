@@ -1,10 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 7316
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
-Move 1 note(s): navigate to target directory, Enter/m to confirm, t for picker, 
+Move 1 selection(s): navigate to target directory, Enter/m to confirm, t for pic
 ▼   D /                                                                         
   ▶   D Projects/                                                               
   ▶   D Areas/                                                                  
