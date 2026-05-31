@@ -1242,20 +1242,23 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         .collect::<std::collections::BTreeSet<_>>()
         .len();
     let edit_count = plan.edits.len();
-    match (&plan.rename, source_rel.as_deref()) {
-        (Some(r), _) => println!(
+    let rename_count = plan.renames.len();
+    if rename_count > 0 {
+        let r = &plan.renames[0];
+        println!(
             "renamed {} → {}, updated {} link(s) in {} file(s)",
             r.from.display(),
             r.to.display(),
             edit_count,
             edit_files
-        ),
-        (None, _) => println!(
+        );
+    } else {
+        println!(
             "rewrote {} ghost link(s) in {} file(s) — pass `ft notes create {}` to create the new file",
             edit_count,
             edit_files,
             new_path.display()
-        ),
+        );
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1308,13 +1311,14 @@ fn parse_new_path(raw: &str, source_rel: Option<&Path>) -> Result<PathBuf> {
     }
 }
 
-fn print_rename_plan_summary(plan: &RenamePlan, source_rel: Option<&Path>, new_path: &Path) {
-    match (&plan.rename, source_rel) {
-        (Some(r), _) => println!("would rename: {} → {}", r.from.display(), r.to.display()),
-        (None, _) => println!(
+fn print_rename_plan_summary(plan: &RenamePlan, _source_rel: Option<&Path>, new_path: &Path) {
+    if let Some(r) = plan.renames.first() {
+        println!("would rename: {} → {}", r.from.display(), r.to.display());
+    } else {
+        println!(
             "would rewrite ghost links to point at: {}",
             new_path.display()
-        ),
+        );
     }
     let mut by_file: std::collections::BTreeMap<&Path, usize> = std::collections::BTreeMap::new();
     for edit in &plan.edits {

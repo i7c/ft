@@ -66,29 +66,29 @@ pub struct FileSnapshot {
     pub len: u64,
 }
 
-/// Pure description of a rename. Build with [`plan_rename`]; apply
-/// with [`apply_rename_plan`].
+/// Pure description of a rename. Build with [`plan_rename`] or
+/// [`plan_multi_rename`]; apply with [`apply_rename_plan`].
 #[derive(Debug, Clone)]
 pub struct RenamePlan {
-    /// `None` when the source is a ghost (no file exists to move; only
-    /// linkers are rewritten).
-    pub rename: Option<FileRename>,
+    /// File-system moves. Empty for ghost-only renames or same-path
+    /// no-ops. Applied after all edits.
+    pub renames: Vec<FileRename>,
     /// Per-linker text edits, in arbitrary order. The applier groups by
     /// path and sorts descending before writing.
     pub edits: Vec<FileEdit>,
-    /// One snapshot per touched file (each linker file plus the
-    /// renamed-file if applicable). Used by the applier's freshness
-    /// check.
+    /// One snapshot per touched file (each linker file plus each
+    /// renamed source file if applicable). Used by the applier's
+    /// freshness check.
     pub snapshots: Vec<FileSnapshot>,
 }
 
 impl RenamePlan {
-    /// Number of distinct files this plan will write. (Source-rename
-    /// counts; pure ghost renames touch only linker files.)
+    /// Number of distinct files this plan will write. (Source-renames
+    /// count; pure ghost renames touch only linker files.)
     pub fn touched_files(&self) -> usize {
         let mut paths: std::collections::BTreeSet<&Path> =
             self.edits.iter().map(|e| e.path.as_path()).collect();
-        if let Some(r) = &self.rename {
+        for r in &self.renames {
             paths.insert(r.from.as_path());
         }
         paths.len()
@@ -96,6 +96,9 @@ impl RenamePlan {
 }
 
 /// Build a [`RenamePlan`] for renaming `src` to `new_path`.
+///
+/// Convenience wrapper around [`plan_multi_rename`] for the
+/// single-note case.
 ///
 /// `new_path` is **vault-relative**. The caller (CLI / TUI) is
 /// responsible for translating user input into a vault-relative path
@@ -113,108 +116,130 @@ pub fn plan_rename(
     src: NoteId,
     new_path: &Path,
 ) -> Result<RenamePlan> {
-    let new_path = normalize_path(new_path);
-    let new_title = new_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .ok_or_else(|| {
-            Error::Notes(format!("new path has no file stem: {}", new_path.display()))
-        })?;
-    if new_title.is_empty() {
-        return Err(Error::Notes(format!(
-            "new path has an empty filename stem: {}",
-            new_path.display()
-        )));
-    }
+    plan_multi_rename(graph, vault_root, &[(src, new_path.to_path_buf())])
+}
 
-    let (rename, source_rel_for_snapshot) = match graph.node(src) {
-        NodeKind::Note(data) => {
-            let from = data.path.clone();
-            // Refuse to clobber an unrelated existing file.
-            let abs_to = vault_root.join(&new_path);
-            let abs_from = vault_root.join(&from);
-            if from != new_path && abs_to.exists() {
-                return Err(Error::Notes(format!(
-                    "target already exists: {} — refusing to overwrite",
-                    new_path.display()
-                )));
-            }
-            // No-op rename (same path) is allowed and produces an empty
-            // edit set. The applier still walks the freshness snapshots
-            // so misuse is loud but not destructive.
-            if from == new_path {
-                let _ = abs_from;
-                return Ok(RenamePlan {
-                    rename: None,
-                    edits: Vec::new(),
-                    snapshots: vec![file_snapshot(vault_root, &from)?],
-                });
-            }
-            (
-                Some(FileRename {
-                    from: from.clone(),
-                    to: new_path.clone(),
-                }),
-                Some(from),
-            )
-        }
-        NodeKind::Ghost(_) => {
-            // Ghost rename: no file move. We still refuse to point
-            // linkers at a name whose file already exists *unless* the
-            // user asked for that — in that case the rewrite is what
-            // they want. Allow it.
-            (None, None)
-        }
-        NodeKind::Directory(_) => {
-            return Err(Error::Notes(format!(
-                "renaming directory nodes is not yet supported: {}",
-                new_path.display()
-            )));
-        }
-        NodeKind::Task(_) => {
-            return Err(Error::Notes(format!(
-                "renaming task nodes is not supported: {}",
-                new_path.display()
-            )));
-        }
-    };
-
+/// Build a combined [`RenamePlan`] for renaming multiple notes at once.
+///
+/// Each `(NoteId, PathBuf)` pair specifies a source note (real or ghost)
+/// and its new vault-relative path. All edits are computed from a single
+/// graph snapshot so cross-references between the moved notes are
+/// handled correctly (edit-then-rename ordering).
+///
+/// Same-path pairs are silently skipped. Pairs where the new file already
+/// exists on disk (and is not the source file) return `Err`.
+///
+/// Errors:
+/// - `Error::Notes` when any `new_path` already exists on disk and isn't
+///   the same file as its source — refuses to clobber.
+/// - `Error::Notes` when any new title would be empty.
+/// - `Error::Io` when reading a touched file fails.
+pub fn plan_multi_rename(
+    graph: &Graph,
+    vault_root: &Path,
+    moves: &[(NoteId, PathBuf)],
+) -> Result<RenamePlan> {
+    let mut renames: Vec<FileRename> = Vec::new();
     let mut edits: Vec<FileEdit> = Vec::new();
     let mut touched_files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
 
-    for (linker_id, edge) in graph.incoming(src) {
-        let link = match edge.link() {
-            Some(l) => l,
-            None => continue, // Contains edges — not rewritable
-        };
-        let linker_path = match graph.node(linker_id) {
-            NodeKind::Note(n) => n.path.clone(),
-            NodeKind::Ghost(_) => continue, // ghosts never have outgoing edges
-            NodeKind::Directory(d) => d.path.clone(),
-            NodeKind::Task(_) => continue, // tasks never have outgoing edges
-        };
+    for &(src, ref new_path_raw) in moves {
+        let new_path = normalize_path(new_path_raw);
+        let new_title = new_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                Error::Notes(format!("new path has no file stem: {}", new_path.display()))
+            })?;
+        if new_title.is_empty() {
+            return Err(Error::Notes(format!(
+                "new path has an empty filename stem: {}",
+                new_path.display()
+            )));
+        }
 
-        let replacement = build_replacement(edge, &linker_path, &new_path, &new_title);
-        edits.push(FileEdit {
-            path: linker_path.clone(),
-            byte_range: link.byte_range.clone(),
-            replacement,
-        });
-        touched_files.insert(linker_path);
+        let file_rename;
+        let source_rel_for_snapshot;
+        match graph.node(src) {
+            NodeKind::Note(data) => {
+                let from = data.path.clone();
+                let abs_to = vault_root.join(&new_path);
+                if from != new_path && abs_to.exists() {
+                    return Err(Error::Notes(format!(
+                        "target already exists: {} — refusing to overwrite",
+                        new_path.display()
+                    )));
+                }
+                // Same-path skip: no rename, no edits.
+                if from == new_path {
+                    touched_files.insert(from.clone());
+                    continue;
+                } else {
+                    file_rename = Some(FileRename {
+                        from: from.clone(),
+                        to: new_path.clone(),
+                    });
+                    source_rel_for_snapshot = Some(from);
+                }
+            }
+            NodeKind::Ghost(_) => {
+                file_rename = None;
+                source_rel_for_snapshot = None;
+            }
+            NodeKind::Directory(_) => {
+                return Err(Error::Notes(format!(
+                    "renaming directory nodes is not yet supported: {}",
+                    new_path.display()
+                )));
+            }
+            NodeKind::Task(_) => {
+                return Err(Error::Notes(format!(
+                    "renaming task nodes is not supported: {}",
+                    new_path.display()
+                )));
+            }
+        }
+
+        if let Some(r) = file_rename {
+            renames.push(r);
+        }
+
+        // Collect edits for incoming links.
+        for (linker_id, edge) in graph.incoming(src) {
+            let link = match edge.link() {
+                Some(l) => l,
+                None => continue,
+            };
+            let linker_path = match graph.node(linker_id) {
+                NodeKind::Note(n) => n.path.clone(),
+                NodeKind::Ghost(_) => continue,
+                NodeKind::Directory(d) => d.path.clone(),
+                NodeKind::Task(_) => continue,
+            };
+
+            let replacement = build_replacement(edge, &linker_path, &new_path, &new_title);
+            edits.push(FileEdit {
+                path: linker_path.clone(),
+                byte_range: link.byte_range.clone(),
+                replacement,
+            });
+            touched_files.insert(linker_path);
+        }
+
+        // Snapshot the source file.
+        if let Some(ref src_rel) = source_rel_for_snapshot {
+            touched_files.insert(src_rel.clone());
+        }
     }
 
-    // Snapshot: every touched linker plus the source file (if real).
+    // Build unique snapshots from all touched files.
     let mut snapshots: Vec<FileSnapshot> = Vec::new();
-    if let Some(src_rel) = source_rel_for_snapshot {
-        snapshots.push(file_snapshot(vault_root, &src_rel)?);
-        touched_files.remove(&src_rel); // avoid double snapshot
-    }
     for path in touched_files {
         snapshots.push(file_snapshot(vault_root, &path)?);
     }
 
     Ok(RenamePlan {
-        rename,
+        renames,
         edits,
         snapshots,
     })
@@ -228,7 +253,10 @@ pub fn plan_rename(
 /// 2. Validate non-overlap of edits within each file.
 /// 3. Apply edits per file in **descending** byte order via
 ///    [`fs::write_atomic`].
-/// 4. `std::fs::rename(from, to)` last (creating `to`'s parent dirs).
+/// 4. `std::fs::rename(from, to)` for every rename (creating `to`'s
+///    parent dirs as needed).
+/// 5. Best-effort empty-directory cleanup under old parent dirs
+///    (deepest first; non-empty dirs are silently preserved).
 ///
 /// Per-file atomicity is guaranteed; multi-file atomicity is not.
 /// Documented under "Cross-file atomicity" in the module docs.
@@ -290,9 +318,11 @@ pub fn apply_rename_plan(vault_root: &Path, plan: &RenamePlan) -> Result<()> {
         write_atomic(&abs, &content)?;
     }
 
-    // 4. File rename — last so any in-self edits land at the old path
-    // before the move.
-    if let Some(rename) = &plan.rename {
+    // 4. File renames — last so any in-self edits land at the old path
+    // before the move. Apply in arbitrary order; parent dirs created as
+    // needed.
+    let mut old_dirs: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    for rename in &plan.renames {
         let from = vault_root.join(&rename.from);
         let to = vault_root.join(&rename.to);
         if let Some(parent) = to.parent() {
@@ -307,6 +337,26 @@ pub fn apply_rename_plan(vault_root: &Path, plan: &RenamePlan) -> Result<()> {
             path: from.clone(),
             source: e,
         })?;
+        // Track old parent dirs for cleanup.
+        if let Some(parent) = rename.from.parent() {
+            if !parent.as_os_str().is_empty() {
+                old_dirs.insert(parent.to_path_buf());
+            }
+        }
+    }
+
+    // 5. Best-effort empty directory cleanup.
+    // Collect unique parent dirs from all renames, sort deepest-first
+    // so we remove children before parents.
+    if !old_dirs.is_empty() {
+        let mut dirs: Vec<PathBuf> = old_dirs.into_iter().collect();
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+        for dir_rel in &dirs {
+            let dir_abs = vault_root.join(dir_rel);
+            // Only remove if it exists (it may already have been
+            // removed as a descendant of a deeper rename) and is empty.
+            let _ = std::fs::remove_dir(&dir_abs);
+        }
     }
 
     Ok(())
@@ -694,7 +744,7 @@ mod rename_tests {
         let g = Graph::build(&v, &Scan::default()).unwrap();
         let phantom = g.ghost_by_raw("Phantom").unwrap();
         let plan = plan_rename(&g, &root, phantom, Path::new("Real.md")).unwrap();
-        assert!(plan.rename.is_none());
+        assert!(plan.renames.is_empty());
         apply_rename_plan(&root, &plan).unwrap();
         assert!(!root.join("Real.md").exists()); // not created
         assert_eq!(read(&root.join("a.md")), "see [[Real]]\n");
@@ -767,7 +817,7 @@ mod rename_tests {
         let g = Graph::build(&v, &Scan::default()).unwrap();
         let foo = note_id(&g, "foo.md");
         let plan = plan_rename(&g, &root, foo, Path::new("foo.md")).unwrap();
-        assert!(plan.rename.is_none());
+        assert!(plan.renames.is_empty());
         assert!(plan.edits.is_empty());
         apply_rename_plan(&root, &plan).unwrap();
         assert!(root.join("foo.md").exists());
@@ -799,5 +849,195 @@ mod rename_tests {
         let plan = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
         // foo.md (renamed) + a.md + b.md = 3
         assert_eq!(plan.touched_files(), 3);
+    }
+
+    // ── plan_multi_rename tests ──────────────────────────────────────
+
+    #[test]
+    fn multi_rename_single_note_matches_plan_rename() {
+        let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "[[foo]]\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let plan1 = plan_rename(&g, &root, foo, Path::new("bar.md")).unwrap();
+        let plan2 = plan_multi_rename(&g, &root, &[(foo, PathBuf::from("bar.md"))]).unwrap();
+        assert_eq!(plan1.renames.len(), plan2.renames.len());
+        assert_eq!(plan1.edits.len(), plan2.edits.len());
+        assert_eq!(plan1.snapshots.len(), plan2.snapshots.len());
+    }
+
+    #[test]
+    fn multi_rename_two_notes_no_cross_refs() {
+        let (_dir, v, root) = make_vault(&[
+            ("foo.md", "# Foo\n"),
+            ("baz.md", "# Baz\n"),
+            ("a.md", "[[foo]] and [[baz]]\n"),
+        ]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let baz = note_id(&g, "baz.md");
+        let plan = plan_multi_rename(
+            &g,
+            &root,
+            &[
+                (foo, PathBuf::from("bar.md")),
+                (baz, PathBuf::from("qux.md")),
+            ],
+        )
+        .unwrap();
+        // Two renames + edits in a.md for both.
+        assert_eq!(plan.renames.len(), 2);
+        assert!(plan.edits.len() >= 2);
+        apply_rename_plan(&root, &plan).unwrap();
+        assert!(!root.join("foo.md").exists());
+        assert!(!root.join("baz.md").exists());
+        assert!(root.join("bar.md").exists());
+        assert!(root.join("qux.md").exists());
+        assert_eq!(read(&root.join("a.md")), "[[bar]] and [[qux]]\n");
+    }
+
+    #[test]
+    fn multi_rename_with_cross_reference() {
+        // foo.md links to baz.md, both renamed.
+        let (_dir, v, root) = make_vault(&[("foo.md", "see [[baz]]\n"), ("baz.md", "# Baz\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let baz = note_id(&g, "baz.md");
+        let plan = plan_multi_rename(
+            &g,
+            &root,
+            &[
+                (foo, PathBuf::from("bar.md")),
+                (baz, PathBuf::from("qux.md")),
+            ],
+        )
+        .unwrap();
+        apply_rename_plan(&root, &plan).unwrap();
+        // foo.md → bar.md, baz.md → qux.md, foo's link updated.
+        assert_eq!(read(&root.join("bar.md")), "see [[qux]]\n");
+        assert_eq!(read(&root.join("qux.md")), "# Baz\n");
+    }
+
+    #[test]
+    fn multi_rename_ghost_in_moves() {
+        let (_dir, v, root) = make_vault(&[
+            ("a.md", "see [[Phantom]]\n"),
+            ("b.md", "also [[Phantom]]\n"),
+        ]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let phantom = g.ghost_by_raw("Phantom").unwrap();
+        let plan = plan_multi_rename(&g, &root, &[(phantom, PathBuf::from("Real.md"))]).unwrap();
+        assert!(plan.renames.is_empty());
+        apply_rename_plan(&root, &plan).unwrap();
+        assert_eq!(read(&root.join("a.md")), "see [[Real]]\n");
+        assert_eq!(read(&root.join("b.md")), "also [[Real]]\n");
+    }
+
+    #[test]
+    fn multi_rename_empty_moves_is_noop() {
+        let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let plan = plan_multi_rename(&g, &root, &[]).unwrap();
+        assert!(plan.renames.is_empty());
+        assert!(plan.edits.is_empty());
+        apply_rename_plan(&root, &plan).unwrap();
+        assert!(root.join("foo.md").exists());
+    }
+
+    #[test]
+    fn multi_rename_same_path_is_skipped() {
+        let (_dir, v, root) = make_vault(&[("foo.md", "# Foo\n"), ("a.md", "[[foo]]\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let plan = plan_multi_rename(&g, &root, &[(foo, PathBuf::from("foo.md"))]).unwrap();
+        assert!(plan.renames.is_empty());
+        assert!(plan.edits.is_empty());
+    }
+
+    #[test]
+    fn multi_rename_target_exists_errors() {
+        let (_dir, v, root) =
+            make_vault(&[("foo.md", "# Foo\n"), ("bar.md", "# Bar (existing)\n")]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let err = plan_multi_rename(&g, &root, &[(foo, PathBuf::from("bar.md"))]).unwrap_err();
+        assert!(format!("{err}").contains("target already exists"));
+    }
+
+    #[test]
+    fn multi_rename_three_files_directory_cleanup() {
+        let (_dir, v, root) = make_vault(&[
+            ("subdir/a.md", "# A\n"),
+            ("subdir/b.md", "# B\n"),
+            ("subdir/c.md", "# C\n"),
+        ]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let a = note_id(&g, "subdir/a.md");
+        let b = note_id(&g, "subdir/b.md");
+        let c = note_id(&g, "subdir/c.md");
+        let plan = plan_multi_rename(
+            &g,
+            &root,
+            &[
+                (a, PathBuf::from("out/a.md")),
+                (b, PathBuf::from("out/b.md")),
+                (c, PathBuf::from("out/c.md")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(plan.renames.len(), 3);
+        apply_rename_plan(&root, &plan).unwrap();
+        assert!(root.join("out/a.md").exists());
+        assert!(root.join("out/b.md").exists());
+        assert!(root.join("out/c.md").exists());
+        // Old empty subdir should be removed.
+        assert!(!root.join("subdir").exists());
+    }
+
+    #[test]
+    fn multi_rename_non_empty_dir_preserved() {
+        let (_dir, v, root) = make_vault(&[
+            ("subdir/a.md", "# A\n"),
+            ("subdir/b.md", "# B\n"),
+            ("subdir/logo.png", "fake image\n"),
+        ]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let a = note_id(&g, "subdir/a.md");
+        let plan = plan_multi_rename(&g, &root, &[(a, PathBuf::from("out/a.md"))]).unwrap();
+        apply_rename_plan(&root, &plan).unwrap();
+        assert!(root.join("out/a.md").exists());
+        // subdir still exists (contains b.md + logo.png).
+        assert!(root.join("subdir").exists());
+        assert!(root.join("subdir/logo.png").exists());
+    }
+
+    #[test]
+    fn multi_rename_freshness_check_across_files() {
+        let (_dir, v, root) = make_vault(&[
+            ("foo.md", "# Foo\n"),
+            ("baz.md", "# Baz\n"),
+            ("a.md", "[[foo]] [[baz]]\n"),
+        ]);
+        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let foo = note_id(&g, "foo.md");
+        let baz = note_id(&g, "baz.md");
+        let plan = plan_multi_rename(
+            &g,
+            &root,
+            &[
+                (foo, PathBuf::from("bar.md")),
+                (baz, PathBuf::from("qux.md")),
+            ],
+        )
+        .unwrap();
+        // Mutate a.md out-of-band.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut f = std::fs::File::create(root.join("a.md")).unwrap();
+        writeln!(f, "different content").unwrap();
+        drop(f);
+        let err = apply_rename_plan(&root, &plan).unwrap_err();
+        assert!(format!("{err}").contains("file changed since plan"));
+        // No files were renamed.
+        assert!(root.join("foo.md").exists());
+        assert!(root.join("baz.md").exists());
     }
 }

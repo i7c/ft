@@ -27,7 +27,8 @@ use ratatui::{
 
 use ft_core::graph::preset;
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
-use ft_core::graph::{Graph, NodeKind, NoteId};
+use ft_core::graph::rename::{apply_rename_plan, plan_multi_rename, plan_rename};
+use ft_core::graph::{EdgeKind, Graph, NodeKind, NoteId};
 
 use std::sync::Arc;
 
@@ -48,7 +49,7 @@ use crate::tui::{
     },
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
-    widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
+    widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
 // ── Preset picker source ──────────────────────────────────────────────
@@ -165,6 +166,8 @@ pub struct GraphTab {
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
     move_outer: Option<GraphMoveOuter>,
+    /// Active rename-in-place modal. `Some` when Flow B is open.
+    rename_state: Option<GraphRenameState>,
     /// Active preset picker. `Some` after `Ctrl+N` or `Ctrl+P`;
     /// selecting a preset applies the preset DSL. Dismissing falls
     /// back to a blank view (`Ctrl+N`) or leaves the active view
@@ -174,6 +177,15 @@ pub struct GraphTab {
     /// should apply the selected preset to the *existing* active view
     /// rather than a newly-created one.
     preset_picker_for_active_view: bool,
+}
+
+/// Inline rename-in-place state. `Some` while the rename modal is open.
+#[derive(Debug)]
+struct GraphRenameState {
+    note_id: NoteId,
+    is_directory: bool,
+    buffer: EditBuffer,
+    source_rel: PathBuf,
 }
 
 /// Graph-tab outer wrapper around the shared section-move flow.
@@ -210,6 +222,15 @@ pub enum GraphMoveOuter {
         picker: FuzzyPicker<VaultFilePickerSource>,
         carry: MoveCarry,
     },
+    /// Flow A phase 2: selecting target directory for moved notes.
+    /// `Enter`/`m` confirms selected Directory row; `t` opens picker;
+    /// Esc cancels.
+    MoveTargetFromTree { selected: HashSet<NoteId> },
+    /// Flow A fallback: fuzzy directory picker for target.
+    MoveTargetPicker {
+        picker: FuzzyPicker<VaultFilePickerSource>,
+        selected: HashSet<NoteId>,
+    },
 }
 
 impl GraphTab {
@@ -222,6 +243,7 @@ impl GraphTab {
             create_state: None,
             periodic_leader: false,
             move_outer: None,
+            rename_state: None,
             preset_picker: None,
             preset_picker_for_active_view: false,
         }
@@ -343,6 +365,101 @@ impl GraphTab {
         };
         let step = compose_with_existing_target(carry, hit.path, target_abs, target_content);
         self.apply_inner_step(step);
+    }
+
+    /// Confirm the currently-selected row as the move target for Flow A.
+    /// Reads the Directory path and executes the multi-note move.
+    fn confirm_move_target(&mut self, ctx: &TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let v = self.active_view();
+        let Some(row) = v.tree.rows().get(v.selected) else {
+            queue_toast(ctx, "select a directory as target", ToastStyle::Error);
+            return;
+        };
+        let dir_path = match graph.node(row.note_id) {
+            NodeKind::Directory(d) => d.path.clone(),
+            _ => {
+                queue_toast(ctx, "select a directory as target", ToastStyle::Error);
+                return;
+            }
+        };
+        let Some(GraphMoveOuter::MoveTargetFromTree { selected }) = self.move_outer.take() else {
+            return;
+        };
+        self.execute_multi_move(ctx, &selected, &dir_path);
+    }
+
+    /// Execute a multi-note move: plan and apply renames for each
+    /// selected note to `target_dir/`, then refresh.
+    fn execute_multi_move(&mut self, ctx: &TabCtx, selected: &HashSet<NoteId>, target_dir: &Path) {
+        let Some(graph) = self.graph.as_ref() else {
+            self.move_outer = None;
+            return;
+        };
+        let vault_root = &ctx.vault.path;
+
+        let mut moves: Vec<(NoteId, PathBuf)> = Vec::new();
+        let mut skipped = 0usize;
+        let total = selected.len();
+        for &id in selected {
+            let node = graph.node(id);
+            let note_path = match node {
+                NodeKind::Note(n) => n.path.clone(),
+                _ => continue,
+            };
+            if note_path.parent() == Some(target_dir) {
+                skipped += 1;
+                continue;
+            }
+            let stem = note_path.file_name().unwrap_or_default();
+            let new_path = target_dir.join(stem);
+            moves.push((id, new_path));
+        }
+
+        self.move_outer = None;
+
+        if moves.is_empty() {
+            queue_toast(
+                ctx,
+                &format!(
+                    "all {total} note(s) are already in {}",
+                    target_dir.display()
+                ),
+                ToastStyle::Info,
+            );
+            return;
+        }
+
+        let plan = match plan_multi_rename(graph, vault_root, &moves) {
+            Ok(p) => p,
+            Err(e) => {
+                queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+                return;
+            }
+        };
+        if let Err(e) = apply_rename_plan(vault_root, &plan) {
+            queue_toast(ctx, &format!("move failed: {e}"), ToastStyle::Error);
+            return;
+        }
+
+        let moved = moves.len();
+        let msg = if skipped > 0 {
+            format!(
+                "moved {moved} note(s) to {} ({skipped} already there)",
+                target_dir.display()
+            )
+        } else {
+            format!("moved {moved} note(s) to {}", target_dir.display())
+        };
+        queue_toast(ctx, &msg, ToastStyle::Success);
+
+        let scan = ctx.vault.scan();
+        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
+            self.graph = Some(new_graph);
+            self.restore_all_views();
+        }
     }
 
     /// Dispatch a keystroke while the move overlay is active. Returns
@@ -510,6 +627,59 @@ impl GraphTab {
                     EventOutcome::NotHandled
                 }
             },
+            GraphMoveOuter::MoveTargetFromTree { selected } => {
+                match (k.code, k.modifiers) {
+                    (KeyCode::Enter, _) | (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
+                        self.confirm_move_target(ctx);
+                        EventOutcome::Consumed
+                    }
+                    (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                        self.move_outer = Some(GraphMoveOuter::MoveTargetPicker {
+                            picker: self.open_source_picker(ctx),
+                            selected,
+                        });
+                        EventOutcome::Consumed
+                    }
+                    (KeyCode::Esc, _) => {
+                        // Cancel: clear multi-selection (already
+                        // consumed from ExpandedView), drop outer.
+                        EventOutcome::Consumed
+                    }
+                    // Tree navigation keys pass through.
+                    _ => {
+                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
+                        EventOutcome::NotHandled
+                    }
+                }
+            }
+            GraphMoveOuter::MoveTargetPicker {
+                mut picker,
+                selected,
+            } => {
+                match picker.handle_key(k) {
+                    PickerOutcome::Selected(hit) => {
+                        // Execute move to the selected directory.
+                        let dir_path = hit.path;
+                        self.execute_multi_move(ctx, &selected, &dir_path);
+                        EventOutcome::Consumed
+                    }
+                    PickerOutcome::Cancelled => {
+                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
+                        EventOutcome::Consumed
+                    }
+                    PickerOutcome::StillOpen => {
+                        self.move_outer =
+                            Some(GraphMoveOuter::MoveTargetPicker { picker, selected });
+                        EventOutcome::Consumed
+                    }
+                    PickerOutcome::NotHandled => {
+                        self.move_outer =
+                            Some(GraphMoveOuter::MoveTargetPicker { picker, selected });
+                        EventOutcome::NotHandled
+                    }
+                }
+            }
         }
     }
 
@@ -582,6 +752,168 @@ impl GraphTab {
                 self.create_state = None;
                 EventOutcome::Consumed
             }
+        }
+    }
+
+    /// Dispatch a keystroke while the rename-in-place modal (Flow B) is
+    /// open. EditBuffer keys are routed; Enter commits, Esc discards.
+    fn handle_rename_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(rs) = self.rename_state.as_mut() else {
+            return EventOutcome::NotHandled;
+        };
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.rename_state = None;
+                EventOutcome::Consumed
+            }
+            (KeyCode::Enter, _) => {
+                let new_name = rs.buffer.text.trim().to_string();
+                if new_name.is_empty() {
+                    queue_toast(ctx, "name cannot be empty", ToastStyle::Error);
+                    return EventOutcome::Consumed;
+                }
+                if new_name.contains('/') {
+                    queue_toast(
+                        ctx,
+                        "name cannot contain / — use move (Space-select + r) to change directories",
+                        ToastStyle::Error,
+                    );
+                    return EventOutcome::Consumed;
+                }
+                self.commit_rename(ctx, &new_name);
+                EventOutcome::Consumed
+            }
+            (KeyCode::Char(c), KeyModifiers::NONE) => {
+                rs.buffer.insert(c);
+                EventOutcome::Consumed
+            }
+            (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+                rs.buffer.insert(c);
+                EventOutcome::Consumed
+            }
+            (KeyCode::Backspace, _) => {
+                rs.buffer.backspace();
+                EventOutcome::Consumed
+            }
+            (KeyCode::Delete, _) => {
+                rs.buffer.delete();
+                EventOutcome::Consumed
+            }
+            (KeyCode::Left, _) => {
+                rs.buffer.left();
+                EventOutcome::Consumed
+            }
+            (KeyCode::Right, _) => {
+                rs.buffer.right();
+                EventOutcome::Consumed
+            }
+            (KeyCode::Home, _) => {
+                rs.buffer.home();
+                EventOutcome::Consumed
+            }
+            (KeyCode::End, _) => {
+                rs.buffer.end();
+                EventOutcome::Consumed
+            }
+            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                rs.buffer.delete_word_backward();
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    /// Build and apply the rename plan for the current rename modal.
+    /// On success, refreshes the graph and closes the modal. On error,
+    /// toasts and leaves the modal open.
+    fn commit_rename(&mut self, ctx: &TabCtx, new_name: &str) {
+        let Some(rs) = self.rename_state.take() else {
+            return;
+        };
+        let Some(graph) = self.graph.as_ref() else {
+            self.rename_state = Some(rs);
+            return;
+        };
+        let vault_root = &ctx.vault.path;
+
+        if rs.is_directory {
+            // Directory rename: collect all notes under old dir via BFS,
+            // compute new paths, plan_multi_rename.
+            let dir_path = &rs.source_rel;
+            let new_dir = dir_path.parent().unwrap_or(Path::new("")).join(new_name);
+            if vault_root.join(&new_dir).exists() {
+                queue_toast(
+                    ctx,
+                    &format!("target directory already exists: {}", new_dir.display()),
+                    ToastStyle::Error,
+                );
+                self.rename_state = Some(rs);
+                return;
+            }
+            let moves = collect_directory_notes(graph, rs.note_id, dir_path, &new_dir);
+            match plan_multi_rename(graph, vault_root, &moves) {
+                Ok(plan) => {
+                    if let Err(e) = apply_rename_plan(vault_root, &plan) {
+                        queue_toast(ctx, &format!("rename failed: {e}"), ToastStyle::Error);
+                        self.rename_state = Some(rs);
+                        return;
+                    }
+                    let n = moves.len();
+                    queue_toast(
+                        ctx,
+                        &format!(
+                            "renamed directory {} → {} ({} file{})",
+                            dir_path.display(),
+                            new_dir.display(),
+                            n,
+                            if n == 1 { "" } else { "s" }
+                        ),
+                        ToastStyle::Success,
+                    );
+                }
+                Err(e) => {
+                    queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+                    self.rename_state = Some(rs);
+                    return;
+                }
+            }
+        } else {
+            // Note rename: plan_rename with new path in same directory.
+            let new_path = rs.source_rel.parent().unwrap_or(Path::new("")).join(
+                if new_name.ends_with(".md") {
+                    PathBuf::from(new_name)
+                } else {
+                    PathBuf::from(format!("{new_name}.md"))
+                },
+            );
+            match plan_rename(graph, vault_root, rs.note_id, &new_path) {
+                Ok(plan) => {
+                    if let Err(e) = apply_rename_plan(vault_root, &plan) {
+                        queue_toast(ctx, &format!("rename failed: {e}"), ToastStyle::Error);
+                        self.rename_state = Some(rs);
+                        return;
+                    }
+                    let old_display = rs.source_rel.display();
+                    let new_display = new_path.display();
+                    queue_toast(
+                        ctx,
+                        &format!("renamed {old_display} → {new_display}"),
+                        ToastStyle::Success,
+                    );
+                }
+                Err(e) => {
+                    queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+                    self.rename_state = Some(rs);
+                    return;
+                }
+            }
+        }
+
+        // Success: refresh the graph.
+        let scan = ctx.vault.scan();
+        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
+            self.graph = Some(new_graph);
+            self.restore_all_views();
         }
     }
 
@@ -774,6 +1106,7 @@ impl GraphTab {
             return;
         };
         for v in self.views.iter_mut() {
+            v.multi_selected.clear();
             v.restore_expansion(g);
         }
     }
@@ -947,6 +1280,11 @@ impl Tab for GraphTab {
         // popup, not the tree.
         if self.create_state.is_some() {
             return Ok(self.handle_create_key(k, ctx));
+        }
+
+        // Rename modal (Flow B): captures keyboard while open.
+        if self.rename_state.is_some() {
+            return Ok(self.handle_rename_key(k, ctx));
         }
 
         // Preset picker: captures keyboard while open. On selection,
@@ -1183,11 +1521,94 @@ impl Tab for GraphTab {
                 self.create_state = Some(create::begin_template_picking(ctx, Some(folder)));
                 Ok(EventOutcome::Consumed)
             }
-            (KeyCode::Char('r'), _) => {
+            (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
                 let scan = ctx.vault.scan();
                 self.graph = Some(Graph::build(ctx.vault, &scan)?);
                 self.restore_all_views();
                 Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                // Check multi_selected first (needs mutable access to active view).
+                let selected = {
+                    let v = self.active_view_mut();
+                    if !v.multi_selected.is_empty() {
+                        let s = std::mem::take(&mut v.multi_selected);
+                        Some(s)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(s) = selected {
+                    self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected: s });
+                    return Ok(EventOutcome::Consumed);
+                }
+                // Flow B: rename focused node in place (needs immutable
+                // access to graph and view).
+                let graph = self.graph.as_ref();
+                let v = self.active_view();
+                let Some(row) = v.tree.rows().get(v.selected) else {
+                    return Ok(EventOutcome::Consumed);
+                };
+                match graph.map(|g| g.node(row.note_id)) {
+                    Some(NodeKind::Note(n)) => {
+                        self.rename_state = Some(GraphRenameState {
+                            note_id: row.note_id,
+                            is_directory: false,
+                            buffer: EditBuffer::from(&n.title),
+                            source_rel: n.path.clone(),
+                        });
+                    }
+                    Some(NodeKind::Directory(d)) if d.path.as_os_str().is_empty() => {
+                        queue_toast(ctx, "cannot rename vault root", ToastStyle::Error);
+                    }
+                    Some(NodeKind::Directory(d)) => {
+                        self.rename_state = Some(GraphRenameState {
+                            note_id: row.note_id,
+                            is_directory: true,
+                            buffer: EditBuffer::from(&d.name),
+                            source_rel: d.path.clone(),
+                        });
+                    }
+                    Some(NodeKind::Ghost(_)) => {
+                        queue_toast(
+                            ctx,
+                            "cannot rename a ghost — create the note first",
+                            ToastStyle::Error,
+                        );
+                    }
+                    _ => {}
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                let is_note = {
+                    let v = self.active_view();
+                    let Some(row) = v.tree.rows().get(v.selected) else {
+                        return Ok(EventOutcome::Consumed);
+                    };
+                    matches!(
+                        self.graph.as_ref().map(|g| g.node(row.note_id)),
+                        Some(NodeKind::Note(_))
+                    )
+                };
+                if is_note {
+                    let v = self.active_view_mut();
+                    let row = &v.tree.rows()[v.selected];
+                    if v.multi_selected.contains(&row.note_id) {
+                        v.multi_selected.remove(&row.note_id);
+                    } else {
+                        v.multi_selected.insert(row.note_id);
+                    }
+                }
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Esc, KeyModifiers::NONE) => {
+                let v = self.active_view_mut();
+                if !v.multi_selected.is_empty() {
+                    v.multi_selected.clear();
+                    return Ok(EventOutcome::Consumed);
+                }
+                Ok(EventOutcome::NotHandled)
             }
             _ => Ok(EventOutcome::NotHandled),
         }
@@ -1244,8 +1665,13 @@ impl Tab for GraphTab {
                 } else {
                     ' '
                 };
+                let sel_marker = if v.multi_selected.contains(&row.note_id) {
+                    '●'
+                } else {
+                    ' '
+                };
                 let line = format!(
-                    "{indent}{indicator} {kind} {display}",
+                    "{indent}{indicator} {sel_marker} {kind} {display}",
                     kind = row.kind_char,
                     display = row.display,
                 );
@@ -1398,7 +1824,69 @@ impl Tab for GraphTab {
                         *picker = orig;
                     }
                 }
+                GraphMoveOuter::MoveTargetFromTree { selected } => {
+                    let n = selected.len();
+                    let text = format!(
+                        "Move {n} note(s): navigate to target directory, Enter/m to confirm, t for picker, Esc to cancel"
+                    );
+                    render_move_banner(frame, strip_area, &text);
+                }
+                GraphMoveOuter::MoveTargetPicker {
+                    picker,
+                    selected: _,
+                } => {
+                    picker.render(frame, area);
+                }
             }
+        }
+
+        // Rename-in-place modal (Flow B). Rendered as a centered overlay
+        // similar to the create flow.
+        if let Some(rs) = self.rename_state.as_mut() {
+            let popup_area = centered_rect(60, 30, area);
+            frame.render_widget(Clear, popup_area);
+            let [title_area, buf_area, footer_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(popup_area);
+            let title = if rs.is_directory {
+                "Rename directory"
+            } else {
+                "Rename note"
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))),
+                title_area,
+            );
+            let buf_text = &rs.buffer.text;
+            let buf_display = if buf_text.is_empty() {
+                " ".to_string()
+            } else {
+                buf_text.clone()
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    buf_display,
+                    Style::default().fg(Color::Yellow),
+                ))),
+                buf_area,
+            );
+            let footer = "Enter: commit · Esc: discard";
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    footer,
+                    Style::default().fg(Color::Gray),
+                ))),
+                footer_area,
+            );
         }
 
         if let Some(ref mut picker) = self.preset_picker {
@@ -1503,6 +1991,10 @@ pub struct ExpandedView {
     /// leaf we shed the tail and re-try until we hit an ancestor that
     /// still exists.
     selected_path: Option<Vec<NoteId>>,
+    /// Space-toggled multi-selection. When non-empty, `r` triggers Flow
+    /// A (move to directory) instead of Flow B (rename in place).
+    /// Cleared on graph rebuild (NoteIds are stale).
+    multi_selected: HashSet<NoteId>,
     tree: TreeState,
     selected: usize,
     scroll_offset: usize,
@@ -1718,6 +2210,38 @@ fn render_move_banner(frame: &mut Frame, area: Rect, text: &str) {
 
 fn starts_with<T: PartialEq>(haystack: &[T], needle: &[T]) -> bool {
     haystack.len() >= needle.len() && haystack[..needle.len()] == *needle
+}
+
+/// Walk [`EdgeKind::Contains`] edges from `dir_id` via BFS to collect
+/// all reachable notes with their current vault-relative paths.
+fn collect_directory_notes(
+    graph: &ft_core::graph::Graph,
+    dir_id: NoteId,
+    old_dir: &Path,
+    new_dir: &Path,
+) -> Vec<(NoteId, PathBuf)> {
+    let mut result: Vec<(NoteId, PathBuf)> = Vec::new();
+    let mut queue: Vec<NoteId> = vec![dir_id];
+    while let Some(current) = queue.pop() {
+        for (child_id, edge) in graph.outgoing(current) {
+            if !matches!(edge, EdgeKind::Contains) {
+                continue;
+            }
+            match graph.node(child_id) {
+                NodeKind::Note(n) => {
+                    let old = n.path.clone();
+                    let suffix = old.strip_prefix(old_dir).unwrap_or(&old);
+                    let new = new_dir.join(suffix);
+                    result.push((child_id, new));
+                }
+                NodeKind::Directory(_) => {
+                    queue.push(child_id);
+                }
+                _ => {}
+            }
+        }
+    }
+    result
 }
 
 /// Build a rectangle centred in `area` taking `percent_x` / `percent_y`

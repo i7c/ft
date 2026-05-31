@@ -6160,14 +6160,17 @@ fn graph_tab_expansion_survives_refresh() -> Result<()> {
     )))?;
     let before = render(&mut app, 80, 24);
     assert!(
-        before.contains("▼ D /"),
+        before.contains("▼   D /"),
         "root should be expanded before refresh"
     );
     // Refresh rebuilds the graph and re-derives the tree from spec.
-    app.dispatch(key('r'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('r'),
+        KeyModifiers::CONTROL,
+    )))?;
     let after = render(&mut app, 80, 24);
     assert!(
-        after.contains("▼ D /"),
+        after.contains("▼   D /"),
         "root should still be expanded after refresh — got:\n{after}"
     );
     Ok(())
@@ -6628,5 +6631,681 @@ fn graph_tab_z_roots_on_selected_note() -> Result<()> {
     app.dispatch(key('z'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("graph_tab_z_rooted_on_note", frame);
+    Ok(())
+}
+
+// ── Graph tab · rename/move (plan graph-tui-note-rename) ─────────────
+
+/// Build a vault in a TempDir with the given files (creates .obsidian).
+fn rename_vault(files: &[(&str, &str)]) -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    for (rel, content) in files {
+        let file_path = vault_path.join(rel);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, content).unwrap();
+    }
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Switch to the Graph tab (index 0). Bounces through a different tab
+/// so on_focus fires.
+fn switch_to_graph(app: &mut App) -> Result<()> {
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    Ok(())
+}
+
+// ── Multi-select tests ───────────────────────────────────────────────
+
+#[test]
+fn graph_space_toggles_selection_on_note() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to a Note row (3rd child is root.md, a Note).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    // Verify we're on a Note row by pressing Space and checking for ●.
+    // Press Space to toggle.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains('●'),
+        "● selection marker expected — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_space_is_noop_on_directory() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Root is a directory, first row. Space should not add marker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains('●'),
+        "no ● expected on directory row — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_space_toggles_off() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to Note row (3 j presses).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    // Space on, then Space off.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains('●'),
+        "marker should be gone after toggle-off — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_esc_clears_all_selections() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to Note row.
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // Esc clears.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains('●'),
+        "selection marker should be gone after Esc — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_esc_empty_selection_passes_through() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // With nothing selected, Esc should not change state.
+    let before = render(&mut app, 80, 24);
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let after = render(&mut app, 80, 24);
+    assert_eq!(before, after, "Esc with empty selection should be a no-op");
+    Ok(())
+}
+
+#[test]
+fn graph_selections_clear_on_ctrl_r_refresh() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // Ctrl+r refresh.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('r'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains('●'),
+        "selection marker should be gone after refresh — got:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Flow B · rename note tests ───────────────────────────────────────
+
+#[test]
+fn graph_r_on_note_opens_rename_modal() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to Note row.
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Rename note"),
+        "rename modal title expected — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_r_on_note_renames_file_on_disk() -> Result<()> {
+    let (dir, vault) = rename_vault(&[("foo.md", "# Foo\n"), ("a.md", "see [[foo]] now\n")]);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to a Note row.
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    // Clear pre-filled text and type new name.
+    for _ in 0..10 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "bar".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // After commit, a.md → bar.md. Original content references foo.
+    let vault_path = dir.path().join("vault");
+    assert!(!vault_path.join("a.md").exists(), "a.md should be gone");
+    assert!(vault_path.join("bar.md").exists(), "bar.md should exist");
+    let bar_content = std::fs::read_to_string(vault_path.join("bar.md")).unwrap();
+    assert!(
+        bar_content.contains("see [[foo]]"),
+        "bar.md should contain the original link"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_r_empty_name_shows_error() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    // Clear pre-filled text.
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Rename note"),
+        "modal should stay open on empty name — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_r_slash_in_name_shows_error() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    // Clear and type "a/b".
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "a/b".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Rename note"),
+        "modal should stay open on slash in name — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_r_on_ghost_toasts() -> Result<()> {
+    let (dir, vault) = rename_vault(&[("a.md", "see [[Phantom]]\n")]);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root to see ghost children.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to a ghost row (G kind char).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    // Should not show rename modal.
+    assert!(
+        !frame.contains("Rename note"),
+        "rename modal should not open for ghost — got:\n{frame}"
+    );
+    let _ = dir;
+    Ok(())
+}
+
+#[test]
+fn graph_esc_in_rename_modal_closes() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("Rename note"),
+        "rename modal should be closed after Esc — got:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Flow B · rename directory tests ──────────────────────────────────
+
+#[test]
+fn graph_r_on_directory_opens_rename_modal() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root to see subdirectories.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // First child is a directory (Areas).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Rename directory"),
+        "rename directory modal title expected — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_r_on_root_toasts() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Root is the first row. Press r.
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("Rename directory"),
+        "rename modal should NOT open for root — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_rename_directory_moves_files_and_updates_refs() -> Result<()> {
+    let (dir, vault) = rename_vault(&[
+        ("docs/guide.md", "# Guide\n"),
+        ("docs/ref.md", "# Reference\n"),
+        ("external.md", "see [[docs/guide]] for help\n"),
+    ]);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to docs/ directory (first child after root).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    // Clear and type new name.
+    for _ in 0..10 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "manual".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let vault_path = dir.path().join("vault");
+    assert!(!vault_path.join("docs").exists());
+    assert!(vault_path.join("manual/guide.md").exists());
+    assert!(vault_path.join("manual/ref.md").exists());
+    let ext = std::fs::read_to_string(vault_path.join("external.md")).unwrap();
+    assert!(ext.contains("[[manual/guide]]"));
+    Ok(())
+}
+
+#[test]
+fn graph_rename_directory_target_exists_errors() -> Result<()> {
+    let (_dir, vault) = rename_vault(&[
+        ("docs/guide.md", "# Guide\n"),
+        ("manual/other.md", "# Other\n"),
+    ]);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    for _ in 0..10 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "manual".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // Modal should stay open on error.
+    assert!(
+        frame.contains("Rename directory"),
+        "rename modal should stay open on target-exists error — got:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Flow A · move tests ──────────────────────────────────────────────
+
+#[test]
+fn graph_r_with_selections_enters_move_phase() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    // Space-select a note.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // r with selection → move phase.
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Move 1 note(s)"),
+        "move banner expected — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_move_enter_on_directory_executes_move() -> Result<()> {
+    // Move a note to an existing subdirectory.
+    let (dir, vault) = rename_vault(&[
+        ("foo.md", "# Foo\n"),
+        ("sub/placeholder.md", "# placeholder\n"),
+    ]);
+    let vault_path = dir.path().join("vault");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Navigate to foo.md (2nd child after root D — appears after sub/).
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    // Space-select.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // r enters move phase.
+    app.dispatch(key('r'))?;
+    // Navigate to sub/ directory row and confirm with Enter.
+    // Children: root(D,0), sub(D,1), foo(N,2).
+    app.dispatch(key('k'))?; // up to sub (D, index 1)
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Verify file moved.
+    assert!(!vault_path.join("foo.md").exists());
+    assert!(vault_path.join("sub/foo.md").exists());
+    Ok(())
+}
+
+#[test]
+fn graph_move_enter_on_note_toasts_and_stays() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('r'))?;
+    // Try to confirm on a Note row (not a directory).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // Banner should still be visible (phase stays active).
+    assert!(
+        frame.contains("Move 1 note(s)"),
+        "move banner should still be visible after bad target — got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_move_esc_cancels_flow() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('r'))?;
+    // Esc cancels.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("Move 1 note(s)"),
+        "move banner should be gone after Esc — got:\n{frame}"
+    );
+    assert!(
+        !frame.contains('●'),
+        "selection marker should be cleared — got:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Snapshot tests ───────────────────────────────────────────────────
+
+#[test]
+fn graph_rename_note_modal_snapshot() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_rename_note_modal_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_move_target_banner_snapshot() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_move_target_banner_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn graph_multi_select_markers_snapshot() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_multi_select_markers_80x24", frame);
     Ok(())
 }
