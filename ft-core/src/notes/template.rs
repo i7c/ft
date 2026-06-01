@@ -38,7 +38,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::format::{parse as parse_strftime, Parsed, StrftimeItems};
-use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, Weekday};
+use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use minijinja::value::{Kwargs, Object, ObjectRepr, Value};
 use minijinja::{Environment, Error as MjError, ErrorKind as MjErrorKind, UndefinedBehavior};
 
@@ -257,7 +257,11 @@ fn weekday_of_filter(value: Value, weekday: u32) -> std::result::Result<Value, M
 
 fn format_date(value: &Value, format: &str) -> std::result::Result<String, MjError> {
     if let Some(d) = value.downcast_object_ref::<DateValue>() {
-        Ok(d.0.format(format).to_string())
+        // chrono 0.4.44 panics when formatting a NaiveDate with time
+        // specifiers (%H, %M, %S). Convert to NaiveDateTime at midnight
+        // so the time fields render as 00:00:00 instead of crashing.
+        let dt = d.0.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        Ok(dt.format(format).to_string())
     } else if let Some(dt) = value.downcast_object_ref::<DateTimeValue>() {
         Ok(dt.0.format(format).to_string())
     } else {
@@ -519,5 +523,14 @@ mod tests {
         let err = render(r#"{{ today | date(formaat="%Y") }}"#, &ctx()).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("formaat") || msg.contains("kwarg"), "{msg}");
+    }
+
+    #[test]
+    fn date_filter_with_time_specifiers_on_date_value() {
+        // The user's quick-capture template uses {{ today | date(format="%Y-%m-%d %H:%M") }}.
+        // `today` is a NaiveDate, but %H and %M are time specifiers.
+        // This should render successfully (chrono zero-fills time fields for NaiveDate).
+        let out = render(r#"### {{ today | date(format="%Y-%m-%d %H:%M") }}"#, &ctx()).unwrap();
+        assert_eq!(out, "### 2026-05-13 00:00");
     }
 }
