@@ -90,7 +90,7 @@ impl JournalTab {
     /// `entries`. The blame cache is loaded from disk on first use and
     /// saved best-effort after a successful build.
     fn load_for(&mut self, path: PathBuf, ctx: &mut TabCtx) {
-        let Some(repo) = discover_repo(&ctx.vault.path) else {
+        if discover_repo(&ctx.vault.path).is_none() {
             self.last_error = Some(
                 "vault is not inside a git repository — journal needs git history".to_string(),
             );
@@ -99,7 +99,7 @@ impl JournalTab {
             self.selected = 0;
             self.scroll_offset = 0;
             return;
-        };
+        }
 
         // Build a fresh graph; the App-level graph belongs to the Graph
         // tab and isn't easily reachable from here.
@@ -126,13 +126,34 @@ impl JournalTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
 
-        match build_journal(&graph, note_id, ctx.vault, &repo, cache) {
-            Ok(entries) => {
+        // Pass `vault.path` as the git CWD: paragraph paths are
+        // vault-relative, and `git -C <vault>` finds the enclosing repo
+        // even when the vault is a subdirectory of it.
+        let vault_path = ctx.vault.path.clone();
+        match build_journal(&graph, note_id, ctx.vault, &vault_path, cache) {
+            Ok(report) => {
                 self.last_error = None;
                 self.target_path = Some(path);
-                self.entries = entries;
+                self.entries = report.entries;
                 self.selected = 0;
                 self.scroll_offset = 0;
+                if !report.skipped_blame.is_empty() {
+                    let first = report
+                        .skipped_blame
+                        .first()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    let extra = report.skipped_blame.len().saturating_sub(1);
+                    let msg = if extra == 0 {
+                        format!("blame skipped 1 file: {first}")
+                    } else {
+                        format!(
+                            "blame skipped {} files (e.g. {first})",
+                            report.skipped_blame.len()
+                        )
+                    };
+                    crate::tui::notes_actions::queue_toast(ctx, &msg, ToastStyle::Info);
+                }
                 // Best-effort cache save — failures are logged via toast
                 // and otherwise non-fatal.
                 if let Err(e) = cache.save(&ctx.vault.path) {

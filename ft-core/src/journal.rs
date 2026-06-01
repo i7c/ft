@@ -44,6 +44,21 @@ pub struct JournalEntry {
     pub date: NaiveDate,
 }
 
+/// Result of [`build_journal`]: the feed plus per-file diagnostics so
+/// the CLI/TUI can warn instead of silently dropping entries.
+#[derive(Debug, Default, Clone)]
+pub struct JournalReport {
+    /// The feed itself, already sorted reverse-chronologically.
+    pub entries: Vec<JournalEntry>,
+    /// Vault-relative paths whose paragraphs were dropped because
+    /// `git blame` failed — typically untracked files or files outside
+    /// the git repo. Useful as a warning signal: if this is non-empty
+    /// the user is probably looking at a configuration problem (e.g.
+    /// the vault sits below the repo root and paths weren't rewritten),
+    /// not a genuinely empty feed.
+    pub skipped_blame: Vec<PathBuf>,
+}
+
 /// Build the reverse-chronological journal feed for `note_id`.
 ///
 /// Steps:
@@ -61,11 +76,11 @@ pub fn build_journal(
     vault: &Vault,
     repo: &Path,
     cache: &mut BlameCache,
-) -> Result<Vec<JournalEntry>> {
+) -> Result<JournalReport> {
     let note_path = match graph.node(note_id) {
         NodeKind::Note(n) => n.path.clone(),
         // Ghost/Directory/Task/Paragraph: journal doesn't apply.
-        _ => return Ok(Vec::new()),
+        _ => return Ok(JournalReport::default()),
     };
 
     let alias_ids = resolve_related_aliases(graph, note_id, vault, &note_path)?;
@@ -93,6 +108,8 @@ pub fn build_journal(
     // Resolve dates per paragraph, fetching blame lazily on demand.
     let head = git::head_hash(repo)?;
     let mut entries: Vec<JournalEntry> = Vec::new();
+    let mut skipped_blame: Vec<PathBuf> = Vec::new();
+    let mut skipped_seen: HashSet<PathBuf> = HashSet::new();
     for p_id in paragraph_ids {
         let NodeKind::Paragraph(p) = graph.node(p_id) else {
             continue;
@@ -102,11 +119,18 @@ pub fn build_journal(
         }
         let path_str = p.source_file.to_string_lossy().into_owned();
         if cache.get(&path_str, &head).is_none() {
-            // Compute and insert. Skip on blame failure — file may
-            // be untracked / outside repo; that paragraph drops out.
+            // Try to populate. On blame failure (untracked / outside
+            // repo / path-relativity bug) record it once per file so
+            // callers can surface a warning instead of silently
+            // returning an empty feed.
             match git::blame_file(repo, &p.source_file) {
                 Ok(blame) => cache.insert(path_str.clone(), head.clone(), blame),
-                Err(_) => continue,
+                Err(_) => {
+                    if skipped_seen.insert(p.source_file.clone()) {
+                        skipped_blame.push(p.source_file.clone());
+                    }
+                    continue;
+                }
             }
         }
         let Some(blame) = cache.get(&path_str, &head) else {
@@ -135,7 +159,11 @@ pub fn build_journal(
             .cmp(&a.date)
             .then_with(|| a.source_title.cmp(&b.source_title))
     });
-    Ok(entries)
+    skipped_blame.sort();
+    Ok(JournalReport {
+        entries,
+        skipped_blame,
+    })
 }
 
 /// Resolve the alias `NoteId`s declared in `note_id`'s `## Related`
@@ -298,11 +326,16 @@ mod tests {
         let (vault, graph, repo) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let entries = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
+        assert!(report.skipped_blame.is_empty());
 
         // Daily-A mentions [[Target]]; Daily-B mentions [[Bar]] which
         // is a Related alias of Target. Both should appear.
-        let titles: Vec<&str> = entries.iter().map(|e| e.source_title.as_str()).collect();
+        let titles: Vec<&str> = report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
         assert!(titles.contains(&"Daily-A"));
         assert!(titles.contains(&"Daily-B"));
         // Target.md itself should NOT appear (it links to its own
@@ -321,10 +354,73 @@ mod tests {
         let (vault, graph, repo) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let entries = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].date, entries[1].date, "same-day commits");
-        assert_eq!(entries[0].source_title, "Daily-A");
-        assert_eq!(entries[1].source_title, "Daily-B");
+        let report = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(
+            report.entries[0].date, report.entries[1].date,
+            "same-day commits"
+        );
+        assert_eq!(report.entries[0].source_title, "Daily-A");
+        assert_eq!(report.entries[1].source_title, "Daily-B");
+    }
+
+    /// Regression test for the subdirectory-vault bug: when the vault
+    /// lives below the git repo root, we still want callers to be able
+    /// to pass the vault path as the `repo` argument and have blame
+    /// succeed against vault-relative paths (`git -C <vault>` resolves
+    /// them inside the enclosing repo).
+    #[test]
+    fn journal_works_when_vault_is_repo_subdir() {
+        use assert_fs::prelude::*;
+        use std::process::Command;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        let repo_root = tmp.path().to_path_buf();
+        let vault_dir = repo_root.join("brain");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        // Initialize git at the parent, not the vault.
+        let run_git = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(dir)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        run_git(&repo_root, &["init", "-b", "main"]);
+        run_git(&repo_root, &["config", "user.name", "T"]);
+        run_git(&repo_root, &["config", "user.email", "t@e.com"]);
+        run_git(&repo_root, &["config", "commit.gpgsign", "false"]);
+
+        // Vault contents.
+        tmp.child("brain/.obsidian").create_dir_all().unwrap();
+        tmp.child("brain/Target.md")
+            .write_str("# Target\n")
+            .unwrap();
+        tmp.child("brain/Daily.md")
+            .write_str("Mention [[Target]] here.\n")
+            .unwrap();
+        run_git(&repo_root, &["add", "."]);
+        run_git(&repo_root, &["commit", "-m", "c1"]);
+
+        let vault = Vault::discover(Some(vault_dir.clone())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let target = graph.note_by_path(Path::new("Target.md")).unwrap();
+        let mut cache = BlameCache::default();
+        // Pass vault.path (not the repo root) as the `repo` argument —
+        // git -C still finds the enclosing repo and vault-relative
+        // paths resolve correctly.
+        let report = build_journal(&graph, target, &vault, &vault.path, &mut cache).unwrap();
+        assert!(
+            report.skipped_blame.is_empty(),
+            "expected no blame skips, got {:?}",
+            report.skipped_blame
+        );
+        let titles: Vec<&str> = report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
+        assert!(titles.contains(&"Daily"), "got titles: {titles:?}");
     }
 }

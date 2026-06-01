@@ -1175,22 +1175,39 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
     let query = args.note.join(" ");
     let note_id = resolve_note_query(&graph, &vault, &query)?;
-    let repo = ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+    // Verify the vault is inside a git repo, but then run blame from
+    // `vault.path` itself: paragraph `source_file` paths are
+    // vault-relative, and `git -C <vault>` finds the enclosing repo
+    // regardless of whether the vault is the repo root or a subdir.
+    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("the vault is not inside a git repository — `ft notes journal` needs git history for section dates")
     })?;
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let entries = ft_core::journal::build_journal(&graph, note_id, &vault, &repo, &mut cache)
+    let report = ft_core::journal::build_journal(&graph, note_id, &vault, &vault.path, &mut cache)
         .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
 
+    if !report.skipped_blame.is_empty() {
+        eprintln!(
+            "warning: dropped paragraphs from {} file(s) because `git blame` failed (untracked or path lookup failed):",
+            report.skipped_blame.len()
+        );
+        for p in report.skipped_blame.iter().take(5) {
+            eprintln!("  - {}", p.display());
+        }
+        if report.skipped_blame.len() > 5 {
+            eprintln!("  …and {} more", report.skipped_blame.len() - 5);
+        }
+    }
+
     if args.json {
-        render_journal_json(&entries)?;
+        render_journal_json(&report.entries)?;
     } else {
         let use_color =
             !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
-        render_journal_table(&entries, use_color);
+        render_journal_table(&report.entries, use_color);
     }
     Ok(ExitCode::SUCCESS)
 }
