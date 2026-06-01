@@ -13,7 +13,10 @@ fn vault() -> assert_fs::TempDir {
 fn vault_with_template(name: &str, content: &str) -> assert_fs::TempDir {
     let dir = vault();
     dir.child("templates-ft").create_dir_all().unwrap();
-    dir.child("templates-ft").child(name).write_str(content).unwrap();
+    dir.child("templates-ft")
+        .child(name)
+        .write_str(content)
+        .unwrap();
     dir
 }
 
@@ -70,7 +73,10 @@ fn append_to_section_via_frontmatter() {
 
     let content = std::fs::read_to_string(target.path()).unwrap();
     // The "## Meeting" from the template should appear after the Daily Log section.
-    assert!(content.contains("entry\n## Meeting"), "content: {content:?}");
+    assert!(
+        content.contains("entry\n## Meeting"),
+        "content: {content:?}"
+    );
 }
 
 #[test]

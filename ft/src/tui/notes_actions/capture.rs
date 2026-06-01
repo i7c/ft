@@ -153,8 +153,7 @@ fn execute_append_preset(
         .unwrap_or_default();
 
     let tctx = build_template_context(title, ctx.today, Default::default());
-    let rendered =
-        render_template(template_source, &tctx).map_err(|e| format!("template render: {e}"))?;
+    let rendered = render_catch_unwind(template_source, &tctx)?;
 
     let section_heading = preset
         .section
@@ -207,8 +206,7 @@ fn execute_create_preset(
         .unwrap_or_default();
 
     let tctx = build_template_context(title, ctx.today, Default::default());
-    let content =
-        render_template(template_source, &tctx).map_err(|e| format!("template render: {e}"))?;
+    let content = render_catch_unwind(template_source, &tctx)?;
 
     write_atomic(&abs_dest, &content).map_err(|e| format!("write: {e}"))?;
 
@@ -281,4 +279,17 @@ fn resolve_create_pattern(
         vault_root.join(folder).join(&filename)
     };
     Ok(path)
+}
+
+/// Render a template with `catch_unwind` to guard against minijinja
+/// panics triggered by specific template syntax bugs in some versions.
+fn render_catch_unwind(
+    source: &str,
+    ctx: &ft_core::notes::template::TemplateContext,
+) -> Result<String, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_template(source, ctx)
+    }))
+    .map_err(|_| "template render panicked — check template syntax".to_string())?
+    .map_err(|e| format!("template render: {e}"))
 }

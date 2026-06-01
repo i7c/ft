@@ -210,12 +210,22 @@ fn commit_append(
 
     // Render the template.
     let tctx = create::build_template_context(title, ctx.today, Default::default());
-    let rendered = match render_template(&template.source, &tctx) {
-        Ok(s) => s,
-        Err(e) => {
+    let rendered = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_template(&template.source, &tctx)
+    })) {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             queue_toast(
                 ctx,
                 &format!("template render failed: {e}"),
+                ToastStyle::Error,
+            );
+            return;
+        }
+        Err(_panic) => {
+            queue_toast(
+                ctx,
+                "template render panicked — check template syntax",
                 ToastStyle::Error,
             );
             return;
