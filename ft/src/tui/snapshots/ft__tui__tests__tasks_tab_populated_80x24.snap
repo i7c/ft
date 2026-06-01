@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 116
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
 ┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
 │                      ││not done and due before 2026-05-18 sort by due, priori│
 │ Sun 10 May           │└──────────────────────────────────────────────────────┘

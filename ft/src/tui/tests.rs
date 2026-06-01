@@ -1108,6 +1108,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Timeblocks");
     app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Journal");
+    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Graph");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");
@@ -7469,5 +7471,176 @@ fn graph_related_modal_confirm_writes_to_note() -> Result<()> {
         .count();
     assert!(new_links >= 1, "expected new related entry:\n{after}");
     drop(dir);
+    Ok(())
+}
+
+// ── Journal tab ──────────────────────────────────────────────────────
+
+/// Index of the Journal tab in the App's tab vector. Computed by
+/// `App::for_test_with_clock` adding it after the existing four tabs.
+fn journal_tab_idx() -> usize {
+    4
+}
+
+/// Build a vault with one commit so the blame cache resolves dates.
+/// `Target.md` is the note we'll open the journal for; `DailyA.md`
+/// mentions it once.
+fn journal_test_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("Target.md"), "# Target\n").unwrap();
+    std::fs::write(vault_path.join("DailyA.md"), "Mentions [[Target]] today.\n").unwrap();
+
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git binary on PATH");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn journal_tab_empty_state_shows_picker_prompt() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(journal_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("press `/` to pick a note"),
+        "empty Journal tab missing prompt:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_tab_renders_entries_after_queued_load() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Stage the cross-tab jump payload by sending the AppRequest directly:
+    // simulate what `service_request` does — queue the path on the
+    // Journal tab and switch to it.
+    app.queue_journal_for_tab_test("Target.md");
+    app.switch_to(journal_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("DailyA"),
+        "journal feed missing source title:\n{frame}"
+    );
+    assert!(
+        frame.contains("Mentions [[Target]] today."),
+        "journal feed missing paragraph body:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_tab_help_lists_keybindings() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(journal_tab_idx())?;
+    let sections = app.active_tab_help_sections();
+    let merged: String = sections
+        .iter()
+        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
+        .collect();
+    for expected in ["/", "R", "c", "Enter", "j / k"] {
+        assert!(
+            merged.contains(expected),
+            "help missing `{expected}`:\n{merged}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_shift_j_jumps_to_journal_tab_for_selected_note() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Default Graph tab focus + the dirs-style default query lists the
+    // vault's root directory first; navigate down to a Note row.
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?; // expand root
+          // Walk down until a Note row is selected.
+    for _ in 0..6 {
+        if app.graph_tab_selected_is_note_for_test() {
+            break;
+        }
+        app.dispatch(key('j'))?;
+    }
+    assert!(
+        app.graph_tab_selected_is_note_for_test(),
+        "test prelude must reach a Note row"
+    );
+
+    // Shift+J should raise AppRequest::JournalForNote. The test driver
+    // services pending requests via the in-process helper.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('J'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.service_request_for_test()?;
+
+    assert_eq!(app.active_title(), "Journal");
+    Ok(())
+}
+
+#[test]
+fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Stay on Graph tab with the root directory selected (it's a
+    // Directory row, not a Note).
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('J'),
+        KeyModifiers::SHIFT,
+    )))?;
+    // The pending request should be a Toast (error guidance), NOT a
+    // JournalForNote jump. Servicing it leaves the active tab on Graph.
+    match app.take_pending_request() {
+        Some(AppRequest::Toast { text, .. }) => {
+            assert!(
+                text.to_lowercase().contains("note"),
+                "toast text must hint at the Note-row requirement: {text}"
+            );
+        }
+        other => panic!("expected a Toast pending request, got {other:?}"),
+    }
+    assert_eq!(app.active_title(), "Graph");
+    Ok(())
+}
+
+#[test]
+fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
+    let (_dir, vault) = related_modal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    let sections = app.active_tab_help_sections();
+    let merged: String = sections
+        .iter()
+        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
+        .collect();
+    assert!(
+        merged.contains("Shift+J"),
+        "graph-tab help must mention Shift+J for Journal jump:\n{merged}"
+    );
     Ok(())
 }

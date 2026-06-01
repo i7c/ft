@@ -26,7 +26,10 @@ use crate::tui::{
     help::global_section,
     jobs::{JobHandle, JobKind},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
-    tabs::{graph::GraphTab, notes::NotesTab, tasks::TasksTab, timeblocks::TimeblocksTab},
+    tabs::{
+        graph::GraphTab, journal::JournalTab, notes::NotesTab, tasks::TasksTab,
+        timeblocks::TimeblocksTab,
+    },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
@@ -97,6 +100,7 @@ impl App {
             Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
             Box::new(TimeblocksTab::new()),
+            Box::new(JournalTab::new()),
         ];
         Self::with_tabs(vault, recents, today, tabs)
     }
@@ -416,6 +420,13 @@ impl App {
             }
             AppRequest::SyncGit { message } => {
                 self.dispatch_sync_git(events, message)?;
+                Ok(())
+            }
+            AppRequest::JournalForNote { path } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_for(&path);
+                    self.switch_tab(idx)?;
+                }
                 Ok(())
             }
         }
@@ -829,6 +840,7 @@ impl App {
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
+            Box::new(JournalTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
@@ -858,6 +870,7 @@ impl App {
             // TimeblocksTab shares the same ClockFn type alias as
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
+            Box::new(JournalTab::new()),
         ];
         Self::with_tabs(Arc::new(vault), recents, today, tabs)
     }
@@ -952,6 +965,64 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Service a pending `AppRequest::JournalForNote` (or other simple
+    /// requests that don't touch the terminal). Lets tests exercise the
+    /// graph→Journal cross-tab jump without driving the real event
+    /// loop. Returns Ok with no effect when nothing is pending.
+    #[cfg(test)]
+    pub fn service_request_for_test(&mut self) -> Result<()> {
+        let req = match self.pending_request.borrow_mut().take() {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        match req {
+            AppRequest::JournalForNote { path } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_for(&path);
+                    self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
+            AppRequest::Toast { text, style } => {
+                *self.toast.borrow_mut() = Some(Toast {
+                    text,
+                    style,
+                    deadline: std::time::Instant::now() + TOAST_DURATION,
+                });
+                Ok(())
+            }
+            other => {
+                // Restore for caller — terminal-touching requests need
+                // the real service_request path.
+                *self.pending_request.borrow_mut() = Some(other);
+                Ok(())
+            }
+        }
+    }
+
+    /// Forward a vault-relative path to the Journal tab's queue.
+    /// Equivalent to the App servicing `AppRequest::JournalForNote`
+    /// without going through the request channel — useful when a test
+    /// wants to set up a state without simulating the keystrokes.
+    #[cfg(test)]
+    pub fn queue_journal_for_tab_test(&mut self, path: &str) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+            self.tabs[idx].queue_journal_for(std::path::Path::new(path));
+        }
+    }
+
+    /// True iff the active tab reports that its currently-selected
+    /// row is a Note (via the `Tab::selected_is_note_for_test` test
+    /// hook). Used by cross-tab-jump tests to gate the precondition.
+    #[cfg(test)]
+    pub fn graph_tab_selected_is_note_for_test(&self) -> bool {
+        self.tabs
+            .iter()
+            .find(|t| t.title() == "Graph")
+            .map(|t| t.selected_is_note_for_test())
+            .unwrap_or(false)
     }
 
     /// Currently-active toast, if any. Used by tests to assert the

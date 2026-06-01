@@ -2,7 +2,7 @@
 source: ft/src/tui/tests.rs
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks                              
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
  1: node where kind = D…                                                        
 ▶   D /                                                                         
                                                                                 

@@ -1615,6 +1615,26 @@ impl Tab for GraphTab {
                 }
                 return Ok(EventOutcome::Consumed);
             }
+            // Shift+J: open the Journal tab for the currently-selected
+            // Note row. Plain `j` is the cursor-down binding.
+            (KeyCode::Char('J'), m) if m == KeyModifiers::SHIFT => {
+                if let Some(note_id) = self.selected_note_id() {
+                    if let Some(graph) = self.graph.as_ref() {
+                        if let NodeKind::Note(n) = graph.node(note_id) {
+                            let path = n.path.clone();
+                            *ctx.pending_request.borrow_mut() =
+                                Some(AppRequest::JournalForNote { path });
+                        }
+                    }
+                } else {
+                    queue_toast(
+                        ctx,
+                        "select a Note row to open its journal",
+                        ToastStyle::Error,
+                    );
+                }
+                return Ok(EventOutcome::Consumed);
+            }
             _ => {}
         }
 
@@ -2241,7 +2261,16 @@ impl Tab for GraphTab {
                     ("Esc / q", "close modal without writing"),
                 ],
             ),
+            HelpSection::new(
+                "Cross-tab",
+                &[("Shift+J", "open Journal tab for the selected note")],
+            ),
         ]
+    }
+
+    #[cfg(test)]
+    fn selected_is_note_for_test(&self) -> bool {
+        self.selected_note_id().is_some()
     }
 }
 

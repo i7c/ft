@@ -39,6 +39,12 @@ pub enum AppRequest {
     SyncGit {
         message: Option<String>,
     },
+    /// Switch the active tab to the Journal tab and queue the given
+    /// vault-relative note path on it so the journal auto-loads. Raised
+    /// by the graph tab's `Shift+J` keybinding.
+    JournalForNote {
+        path: PathBuf,
+    },
 }
 
 /// Visual styling for a [`Toast`]. Green for success (create, save),
@@ -136,4 +142,20 @@ pub trait Tab {
     /// when launched via `ft notes update-related`. Default is a
     /// no-op: tabs that don't host the modal ignore the request.
     fn queue_related_modal(&mut self, _note_path: &std::path::Path) {}
+
+    /// Hook for the cross-tab Journal jump (see
+    /// [`AppRequest::JournalForNote`]). The Journal tab overrides
+    /// this to store a vault-relative path; the path is consumed and
+    /// turned into a load on the tab's next `on_focus`. Default is a
+    /// no-op: other tabs ignore the request.
+    fn queue_journal_for(&mut self, _note_path: &std::path::Path) {}
+
+    /// Test-only probe: does the currently-selected row represent a
+    /// real Note? Default is `false`; the graph tab overrides this
+    /// so cross-tab tests can assert their precondition without
+    /// reaching into private state.
+    #[cfg(test)]
+    fn selected_is_note_for_test(&self) -> bool {
+        false
+    }
 }

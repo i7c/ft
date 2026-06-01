@@ -33,6 +33,10 @@ pub struct JournalEntry {
     pub source_title: String,
     /// Vault-relative path of the source note.
     pub source_path: PathBuf,
+    /// 1-indexed line number of the paragraph's first line inside
+    /// `source_path`. Lets consumers (e.g. the TUI Journal tab) open
+    /// `$EDITOR` at the exact paragraph rather than the top of the file.
+    pub line_start: u32,
     /// The paragraph text itself.
     pub section_text: String,
     /// Date of the most recent commit touching any line in the
@@ -119,6 +123,7 @@ pub fn build_journal(
         entries.push(JournalEntry {
             source_title,
             source_path: p.source_file.clone(),
+            line_start: p.line_start,
             section_text: p.text.clone(),
             date,
         });
