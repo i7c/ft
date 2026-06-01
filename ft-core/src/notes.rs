@@ -16,6 +16,7 @@
 //! the moved sections duplicated rather than lost. Duplication is
 //! recoverable by hand; data loss isn't.
 
+pub mod append;
 pub mod template;
 
 use std::path::Path;
@@ -322,7 +323,9 @@ pub fn obsidian_url(vault_name: &str, rel_path: &Path, heading: Option<&Heading>
 /// `offsets[i]` is the byte where line `i+1` starts. A virtual entry at
 /// `offsets[line_count]` equals `content.len()` so callers can compute
 /// section end-of-file naturally.
-fn line_byte_offsets(content: &str) -> Vec<usize> {
+/// Byte offset of the start of each 1-indexed line. `offsets[0]` is 0;
+/// `offsets[i]` is the byte where line `i+1` starts.
+pub(crate) fn line_byte_offsets(content: &str) -> Vec<usize> {
     let mut offsets = vec![0usize];
     for (idx, c) in content.char_indices() {
         if c == '\n' {

@@ -13,6 +13,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::tui::notes_actions::append::AppendState;
 use crate::tui::notes_actions::create::CreateState;
 use crate::tui::notes_actions::section_move::{
     is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, RenameBuffer,
@@ -147,6 +148,15 @@ pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut N
         }
         NotesState::MoveSection(ms) => render_move_overlay(frame, area, ms),
         NotesState::Creating(cs) => render_create_overlay(frame, area, cs),
+        NotesState::Appending(as_) => render_append_overlay(frame, area, as_),
+        NotesState::CapturePicking { picker } => render_picker_popup(
+            frame,
+            area,
+            " quick capture · preset ",
+            picker,
+            &[("Enter", "run"), ("Esc", "cancel")],
+            None,
+        ),
         NotesState::PeriodicLeader => render_periodic_leader(frame, area),
     }
 }
@@ -240,6 +250,32 @@ pub(crate) fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut Crea
             abs_path: _,
             focus,
         } => render_collision_prompt(frame, area, template.as_ref(), folder, filename, *focus),
+    }
+}
+
+/// Popup footer keys for the append template picker.
+static APPEND_TEMPLATE_KEYS: &[(&str, &str)] = &[("Enter", "select template"), ("Esc", "cancel")];
+
+/// Popup footer keys for the append file picker.
+static APPEND_FILE_KEYS: &[(&str, &str)] = &[("Enter", "append"), ("Esc", "back")];
+
+pub(crate) fn render_append_overlay(frame: &mut Frame, area: Rect, as_: &mut AppendState) {
+    match as_ {
+        AppendState::TemplatePicking { picker, .. } => render_path_picker_popup(
+            frame,
+            area,
+            " append · template ",
+            picker,
+            APPEND_TEMPLATE_KEYS,
+        ),
+        AppendState::FilePicking { picker, .. } => render_picker_popup(
+            frame,
+            area,
+            " append · target note ",
+            picker,
+            APPEND_FILE_KEYS,
+            None,
+        ),
     }
 }
 
@@ -1030,11 +1066,11 @@ fn render_compose_row(
     Line::from(spans)
 }
 
-fn render_picker_popup(
+pub(crate) fn render_picker_popup<S: crate::tui::widgets::PickerSource>(
     frame: &mut Frame,
     area: Rect,
     title: &str,
-    picker: &mut crate::tui::widgets::FuzzyPicker<crate::tui::widgets::VaultFilePickerSource>,
+    picker: &mut crate::tui::widgets::FuzzyPicker<S>,
     keys: &[(&str, &str)],
     error: Option<&str>,
 ) {

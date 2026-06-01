@@ -17,6 +17,7 @@ use ft_core::fs::write_atomic;
 use ft_core::graph::rename::{apply_rename_plan, plan_rename, RenamePlan};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::markdown::{extract_headings, Heading};
+use ft_core::notes::append::{self, append_template as core_append_template};
 use ft_core::notes::template::{render as render_template, TemplateContext};
 use ft_core::notes::{
     move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
@@ -75,6 +76,9 @@ pub enum NotesCommand {
     /// target note.
     #[command(name = "update-related")]
     UpdateRelated(UpdateRelatedArgs),
+    /// Append a rendered template into an existing note (at end or
+    /// after a named section).
+    Append(AppendArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -90,6 +94,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Move(a) => run_mv(a, vault_flag),
         NotesCommand::Journal(a) => run_journal(a, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
+        NotesCommand::Append(a) => run_append(a, vault_flag),
     }
 }
 
@@ -619,6 +624,47 @@ pub struct CreateArgs {
     pub vault_name: Option<String>,
 }
 
+#[derive(Args, Debug)]
+pub struct AppendArgs {
+    /// Target note (vault-relative or absolute). Must exist.
+    #[arg(value_name = "PATH", required = true)]
+    pub path: PathBuf,
+
+    /// Template source. Same resolution rules as `ft notes create --template`.
+    #[arg(long, value_name = "PATH", required = true)]
+    pub template: PathBuf,
+
+    /// Section heading to append under. Case-insensitive, any ATX level.
+    /// When absent, reads `ft-append-section` from the target's frontmatter;
+    /// when that's also absent, appends to end of file.
+    #[arg(long, value_name = "TEXT")]
+    pub section: Option<String>,
+
+    /// Override the auto-derived title used in templates.
+    #[arg(long, value_name = "TEXT")]
+    pub title: Option<String>,
+
+    /// Custom template variable, surfaced as `vars.KEY`.
+    #[arg(long = "var", value_name = "KEY=VAL", value_parser = parse_var_kv)]
+    pub vars: Vec<(String, String)>,
+
+    /// Suppress opening the file in `$EDITOR` after appending.
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Override `$EDITOR` for this invocation.
+    #[arg(long, value_name = "BIN")]
+    pub editor: Option<String>,
+
+    /// After appending, print an `obsidian://open` URL.
+    #[arg(long)]
+    pub obsidian: bool,
+
+    /// Override the vault basename used in the `obsidian://` URL.
+    #[arg(long, value_name = "NAME")]
+    pub vault_name: Option<String>,
+}
+
 fn parse_var_kv(s: &str) -> std::result::Result<(String, String), String> {
     let (k, v) = s
         .split_once('=')
@@ -719,6 +765,113 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    // 1. Resolve target path.
+    let abs_target = resolve_target_path(&vault.path, &args.path);
+    if !abs_target.exists() {
+        eprintln!(
+            "error: target note does not exist: {}",
+            abs_target.display()
+        );
+        return Ok(ExitCode::from(2));
+    }
+
+    // 2. Read the existing file content.
+    let file_content = std::fs::read_to_string(&abs_target)
+        .with_context(|| format!("could not read target `{}`", abs_target.display()))?;
+
+    // 3. Derive title.
+    let derived_title = abs_target
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = args.title.clone().unwrap_or(derived_title);
+
+    // 4. Resolve template path and render.
+    let tpl_path = resolve_template_path(&vault, &args.template).map_err(|e| {
+        eprintln!("error: {e}");
+        anyhow!("{e}")
+    })?;
+    let source = std::fs::read_to_string(&tpl_path)
+        .with_context(|| format!("reading template {}", tpl_path.display()))?;
+    let ctx = build_template_context(title.clone(), &args.vars);
+    let rendered = render_template(&source, &ctx).map_err(|e| {
+        eprintln!(
+            "error: template render failed ({}): {e}",
+            tpl_path.display()
+        );
+        anyhow!("{e}")
+    })?;
+
+    // 5. Determine section heading: explicit --section > frontmatter > None.
+    let section_heading = args
+        .section
+        .as_deref()
+        .map(String::from)
+        .or_else(|| append::frontmatter_append_section(&file_content));
+
+    // 6. Append.
+    let (new_content, insert_line) =
+        core_append_template(&file_content, &rendered, section_heading.as_deref())
+            .map_err(|e| anyhow!("{e}"))?;
+
+    // 7. Write atomically.
+    write_atomic(&abs_target, &new_content)
+        .map_err(|e| anyhow!("write {}: {e}", abs_target.display()))?;
+
+    // 8. Tell the user.
+    let rel = abs_target
+        .strip_prefix(&vault.path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| abs_target.display().to_string());
+    let where_msg = match &section_heading {
+        Some(s) => format!("appended to \"{s}\" in {rel}"),
+        None => format!("appended to {rel}"),
+    };
+    eprintln!("{where_msg}");
+
+    // 9. Post-append handoff.
+    if args.obsidian {
+        let rel_p = abs_target
+            .strip_prefix(&vault.path)
+            .unwrap_or(&abs_target)
+            .to_path_buf();
+        let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel_p, None);
+        if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
+            println!("{url}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        open_url(&url)?;
+        println!("{url}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if !args.no_open {
+        let editor = resolve_editor(args.editor.as_deref());
+        spawn_editor(&editor, &abs_target, insert_line)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve a target path that must already exist (append, not create).
+fn resolve_target_path(vault_root: &Path, raw: &Path) -> PathBuf {
+    let with_ext = if raw.extension().is_some_and(|e| e == "md") {
+        raw.to_path_buf()
+    } else {
+        let mut p = raw.as_os_str().to_owned();
+        p.push(".md");
+        PathBuf::from(p)
+    };
+    if with_ext.is_absolute() {
+        with_ext
+    } else {
+        vault_root.join(with_ext)
+    }
 }
 
 fn resolve_create_dest(vault_root: &Path, raw: &Path) -> PathBuf {

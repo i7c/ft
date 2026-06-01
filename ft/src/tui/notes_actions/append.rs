@@ -1,0 +1,256 @@
+//! Tab-agnostic "append with template" flow.
+//!
+//! The flow has up to three visible steps:
+//! 1. **TemplatePicking** — fuzzy pick a template under the configured
+//!    templates dir (same as the create flow's step 1).
+//! 2. **FilePicking** — (notes tab only) pick the target note from the
+//!    vault. Skipped when the tab already knows the target (graph tab).
+//! 3. **Commit** — render the template, read `ft-append-section` from the
+//!    target note's frontmatter (unless a section override is supplied),
+//!    append, write atomically, open editor at the insertion line.
+//!
+//! Unlike the create flow, there is no folder picker or filename prompt —
+//! the target note already exists.
+//!
+//! [`handle_key`] is the public entry point; tabs feed every key event
+//! through it while the append flow is active.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crossterm::event::KeyEvent;
+use ft_core::fs::write_atomic;
+use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
+use ft_core::notes::template::render as render_template;
+
+use crate::tui::{
+    notes_actions::{
+        create::{self, discover_template_vars, TemplatePick},
+        queue_toast,
+    },
+    tab::{AppRequest, TabCtx, ToastStyle},
+    widgets::{FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource},
+};
+
+// ── State ────────────────────────────────────────────────────────────
+
+/// The append flow's state machine. Owned by whichever tab is currently
+/// running the flow.
+pub enum AppendState {
+    /// Step 1: pick a template. If `target_path` is `Some`, the flow
+    /// commits directly after template selection (graph tab path).
+    /// If `None`, the flow transitions to `FilePicking` (notes tab path).
+    TemplatePicking {
+        picker: FuzzyPicker<PathListPickerSource>,
+        target_path: Option<PathBuf>,
+        section_override: Option<String>,
+    },
+    /// Step 2 (notes tab only): pick the target file after the template
+    /// was chosen. `template` is carried forward.
+    FilePicking {
+        template: TemplatePick,
+        section_override: Option<String>,
+        picker: FuzzyPicker<VaultFilePickerSource>,
+    },
+}
+
+/// Result of feeding a key event to the append flow.
+pub enum AppendStep {
+    Stay,
+    NotHandled,
+    Transition(Box<AppendState>),
+    Finished,
+}
+
+impl AppendState {
+    /// Build a `TemplatePicking` state with a known target (graph tab).
+    pub fn begin_with_target(
+        ctx: &TabCtx,
+        target_path: PathBuf,
+        section_override: Option<String>,
+    ) -> Self {
+        let templates = create::enumerate_templates(ctx.vault);
+        AppendState::TemplatePicking {
+            picker: FuzzyPicker::new(PathListPickerSource::new(templates)),
+            target_path: Some(target_path),
+            section_override,
+        }
+    }
+
+    /// Build a `TemplatePicking` state without a target (notes tab).
+    /// After the template is chosen, the flow transitions to `FilePicking`.
+    pub fn begin_no_target(ctx: &TabCtx, section_override: Option<String>) -> Self {
+        let templates = create::enumerate_templates(ctx.vault);
+        AppendState::TemplatePicking {
+            picker: FuzzyPicker::new(PathListPickerSource::new(templates)),
+            target_path: None,
+            section_override,
+        }
+    }
+}
+
+// ── Dispatcher ───────────────────────────────────────────────────────
+
+/// Feed a key event to the active `AppendState`.
+pub fn handle_key(state: &mut AppendState, k: KeyEvent, ctx: &TabCtx) -> AppendStep {
+    match state {
+        AppendState::TemplatePicking {
+            picker,
+            target_path,
+            section_override,
+        } => handle_template_picker_key(k, picker, target_path, section_override, ctx),
+        AppendState::FilePicking {
+            template,
+            section_override,
+            picker,
+        } => handle_file_picker_key(k, template, section_override, picker, ctx),
+    }
+}
+
+fn handle_template_picker_key(
+    k: KeyEvent,
+    picker: &mut FuzzyPicker<PathListPickerSource>,
+    target_path: &mut Option<PathBuf>,
+    section_override: &mut Option<String>,
+    ctx: &TabCtx,
+) -> AppendStep {
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(rel) => {
+            let abs = ctx.vault.templates_dir().join(&rel);
+            let source = match std::fs::read_to_string(&abs) {
+                Ok(s) => s,
+                Err(e) => {
+                    queue_toast(
+                        ctx,
+                        &format!("could not read template: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return AppendStep::Finished;
+                }
+            };
+            let vars_needed = discover_template_vars(&source);
+            let template = TemplatePick {
+                rel,
+                source,
+                vars_needed,
+            };
+
+            if let Some(tgt) = target_path.take() {
+                // Graph tab: commit immediately.
+                commit_append(ctx, &template, &tgt, section_override.as_deref());
+                AppendStep::Finished
+            } else {
+                // Notes tab: transition to file picker.
+                AppendStep::Transition(Box::new(AppendState::FilePicking {
+                    template,
+                    section_override: section_override.take(),
+                    picker: FuzzyPicker::new(VaultFilePickerSource::new(
+                        Arc::clone(ctx.vault),
+                        Arc::clone(ctx.recents),
+                    )),
+                }))
+            }
+        }
+        PickerOutcome::Cancelled => AppendStep::Finished,
+        PickerOutcome::StillOpen => AppendStep::Stay,
+        PickerOutcome::NotHandled => AppendStep::NotHandled,
+    }
+}
+
+fn handle_file_picker_key(
+    k: KeyEvent,
+    template: &mut TemplatePick,
+    section_override: &mut Option<String>,
+    picker: &mut FuzzyPicker<VaultFilePickerSource>,
+    ctx: &TabCtx,
+) -> AppendStep {
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(hit) => {
+            let abs = ctx.vault.path.join(&hit.path);
+            commit_append(ctx, template, &abs, section_override.as_deref());
+            AppendStep::Finished
+        }
+        PickerOutcome::Cancelled => AppendStep::Transition(Box::new(AppendState::begin_no_target(
+            ctx,
+            section_override.take(),
+        ))),
+        PickerOutcome::StillOpen => AppendStep::Stay,
+        PickerOutcome::NotHandled => AppendStep::NotHandled,
+    }
+}
+
+// ── Commit ─────────────────────────────────────────────────────────────
+
+/// Render the template, determine the section target, append, write
+/// atomically, and queue an `OpenInEditor` request at the insertion line.
+fn commit_append(
+    ctx: &TabCtx,
+    template: &TemplatePick,
+    target_path: &Path,
+    section_override: Option<&str>,
+) {
+    // Read the target file.
+    let file_content = match std::fs::read_to_string(target_path) {
+        Ok(s) => s,
+        Err(e) => {
+            queue_toast(
+                ctx,
+                &format!("could not read target: {e}"),
+                ToastStyle::Error,
+            );
+            return;
+        }
+    };
+
+    // Derive title from the target file's stem.
+    let title = target_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // Render the template.
+    let tctx = create::build_template_context(title, ctx.today, Default::default());
+    let rendered = match render_template(&template.source, &tctx) {
+        Ok(s) => s,
+        Err(e) => {
+            queue_toast(
+                ctx,
+                &format!("template render failed: {e}"),
+                ToastStyle::Error,
+            );
+            return;
+        }
+    };
+
+    // Determine section heading: explicit override > frontmatter > None.
+    let section_heading = section_override
+        .map(String::from)
+        .or_else(|| frontmatter_append_section(&file_content));
+
+    // Append.
+    let (new_content, insert_line) =
+        match core_append_template(&file_content, &rendered, section_heading.as_deref()) {
+            Ok(v) => v,
+            Err(e) => {
+                queue_toast(ctx, &format!("append failed: {e}"), ToastStyle::Error);
+                return;
+            }
+        };
+
+    // Write atomically.
+    if let Err(e) = write_atomic(target_path, &new_content) {
+        queue_toast(ctx, &format!("write failed: {e}"), ToastStyle::Error);
+        return;
+    }
+
+    // Record open and queue editor.
+    let rel = target_path
+        .strip_prefix(&ctx.vault.path)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| target_path.to_path_buf());
+    ctx.recents.record_open(&rel);
+    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+        path: target_path.to_path_buf(),
+        line: insert_line,
+    });
+}

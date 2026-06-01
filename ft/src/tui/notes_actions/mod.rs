@@ -9,6 +9,8 @@
 //! (`Option<CreateState>`, or a variant in its own state enum) and for
 //! invoking the flow's entry point.
 
+pub mod append;
+pub mod capture;
 pub mod create;
 pub mod periodic;
 pub mod section_move;

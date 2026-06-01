@@ -51,6 +51,9 @@ pub struct Config {
     /// Graph-tab settings. See [`GraphCfg`].
     #[serde(default)]
     pub graph: GraphCfg,
+    /// Quick-capture presets, keyed by preset name. See [`CapturePreset`].
+    #[serde(default)]
+    pub capture_presets: HashMap<String, CapturePreset>,
 }
 
 impl Config {
@@ -84,6 +87,41 @@ pub struct GraphCfg {
     /// strings. User presets shadow built-ins of the same name.
     #[serde(default)]
     pub presets: HashMap<String, String>,
+}
+
+/// Quick-capture preset. Each preset bundles an action (append or create),
+/// a template, and optional target resolution fields.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturePreset {
+    /// Whether to append to an existing note or create a new one.
+    pub action: CaptureAction,
+    /// Template name resolved under `[notes].templates_dir`.
+    pub template: String,
+    /// Hardcoded target note (vault-relative path) for append presets.
+    /// When absent, the target is resolved from tab context.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Section heading to append under (for append presets). Overrides
+    /// any `ft-append-section` frontmatter in the target note.
+    #[serde(default)]
+    pub section: Option<String>,
+    /// Filename pattern for create presets. Supports strftime `%Y`, `%m`,
+    /// `%d`, `%q`, `%Q` tokens. `.md` is appended automatically.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Target folder (vault-relative) for create presets. Defaults to
+    /// vault root when absent.
+    #[serde(default)]
+    pub folder: Option<String>,
+}
+
+/// Action for a quick-capture preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureAction {
+    Append,
+    Create,
 }
 
 /// `ft git sync` / TUI `g s` configuration. Currently just the pull
@@ -802,5 +840,106 @@ my-backlinks = "node where title includes \"Foo\"; expand where edge.kind = link
         std::env::set_var("TMUX", "");
         assert_eq!(EditorStrategy::TmuxPopup.resolve(), EditorStrategy::Suspend);
         std::env::remove_var("TMUX");
+    }
+
+    // ── capture_presets ───────────────────────────────────────────────
+
+    #[test]
+    fn capture_preset_append_with_hardcoded_note() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[capture_presets.journal]
+action = "append"
+template = "daily.md"
+note = "Journal/daily.md"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        let p = lc.config.capture_presets.get("journal").unwrap();
+        assert_eq!(p.action, CaptureAction::Append);
+        assert_eq!(p.template, "daily.md");
+        assert_eq!(p.note.as_deref(), Some("Journal/daily.md"));
+        assert!(p.path.is_none());
+    }
+
+    #[test]
+    fn capture_preset_create_with_path() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[capture_presets.meeting]
+action = "create"
+template = "meeting.md"
+path = "%Y-%m-%d meeting"
+folder = "Meetings"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        let p = lc.config.capture_presets.get("meeting").unwrap();
+        assert_eq!(p.action, CaptureAction::Create);
+        assert_eq!(p.template, "meeting.md");
+        assert_eq!(p.path.as_deref(), Some("%Y-%m-%d meeting"));
+        assert_eq!(p.folder.as_deref(), Some("Meetings"));
+    }
+
+    #[test]
+    fn capture_preset_unknown_key_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[capture_presets.bad]
+action = "append"
+template = "t.md"
+not_a_key = "x"
+"#,
+            )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "deny_unknown_fields should reject unknown key");
+    }
+
+    #[test]
+    fn capture_preset_invalid_action_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[capture_presets.bad]
+action = "invalid"
+template = "t.md"
+"#,
+            )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "invalid action variant should be rejected");
+    }
+
+    #[test]
+    fn capture_preset_missing_template_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[capture_presets.bad]
+action = "append"
+"#,
+            )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(
+            r.is_err(),
+            "missing required template field should be rejected"
+        );
     }
 }

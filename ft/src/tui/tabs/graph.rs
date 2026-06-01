@@ -41,6 +41,8 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     notes_actions::{
+        append::{self, AppendState, AppendStep},
+        capture::{self, CapturePresetPickerSource},
         create::{self, CreateState, CreateStep},
         periodic::run_periodic_open,
         queue_toast,
@@ -159,6 +161,11 @@ pub struct GraphTab {
     /// `None` otherwise. While `Some`, the create overlay captures the
     /// keyboard ahead of every other binding.
     create_state: Option<CreateState>,
+    /// Active append-with-template flow. `Some` when the user presses `A`
+    /// on a note row. Uses the shared [`AppendState`] machine.
+    append_state: Option<AppendState>,
+    /// Active quick-capture preset picker. `Some` after `Q`.
+    capture_picker: Option<FuzzyPicker<CapturePresetPickerSource>>,
     /// Whether the periodic-note leader chord is awaiting its next
     /// keystroke (`d`/`w`/`m`/`q`/`y`). Mirrors `NotesState::PeriodicLeader`.
     /// Set by `p`; cleared on any subsequent keypress (the period letter
@@ -310,6 +317,8 @@ impl GraphTab {
             active: 0,
             input_mode: false,
             create_state: None,
+            append_state: None,
+            capture_picker: None,
             periodic_leader: false,
             move_outer: None,
             rename_state: None,
@@ -989,6 +998,56 @@ impl GraphTab {
         }
     }
 
+    fn handle_append_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(as_) = self.append_state.as_mut() else {
+            return EventOutcome::NotHandled;
+        };
+        match append::handle_key(as_, k, ctx) {
+            AppendStep::Stay => EventOutcome::Consumed,
+            AppendStep::NotHandled => EventOutcome::NotHandled,
+            AppendStep::Transition(next) => {
+                *as_ = *next;
+                EventOutcome::Consumed
+            }
+            AppendStep::Finished => {
+                self.append_state = None;
+                EventOutcome::Consumed
+            }
+        }
+    }
+
+    fn handle_capture_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(picker) = self.capture_picker.as_mut() else {
+            return EventOutcome::NotHandled;
+        };
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(name) => {
+                self.capture_picker = None;
+                let target = self.selected_note_abs_path(ctx);
+                match capture::execute_preset(ctx, &name, target) {
+                    Ok(()) => {}
+                    Err(e) => queue_toast(ctx, &e, ToastStyle::Error),
+                }
+                EventOutcome::Consumed
+            }
+            PickerOutcome::Cancelled => {
+                self.capture_picker = None;
+                EventOutcome::Consumed
+            }
+            PickerOutcome::StillOpen => EventOutcome::Consumed,
+            PickerOutcome::NotHandled => EventOutcome::NotHandled,
+        }
+    }
+
+    fn selected_note_abs_path(&self, ctx: &TabCtx) -> Option<PathBuf> {
+        let graph = self.graph.as_ref()?;
+        let id = self.selected_note_id()?;
+        match graph.node(id) {
+            NodeKind::Note(n) => Some(ctx.vault.path.join(&n.path)),
+            _ => None,
+        }
+    }
+
     /// Dispatch a keystroke while the rename-in-place modal (Flow B) is
     /// open. EditBuffer keys are routed; Enter commits, Esc discards.
     fn handle_rename_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
@@ -1525,6 +1584,16 @@ impl Tab for GraphTab {
             return Ok(self.handle_create_key(k, ctx));
         }
 
+        // Append overlay: template picking for append with template.
+        if self.append_state.is_some() {
+            return Ok(self.handle_append_key(k, ctx));
+        }
+
+        // Capture preset picker.
+        if self.capture_picker.is_some() {
+            return Ok(self.handle_capture_picker_key(k, ctx));
+        }
+
         // Rename modal (Flow B): captures keyboard while open.
         if self.rename_state.is_some() {
             return Ok(self.handle_rename_key(k, ctx));
@@ -1804,6 +1873,25 @@ impl Tab for GraphTab {
                 self.create_state = Some(create::begin_template_picking(ctx, Some(folder)));
                 Ok(EventOutcome::Consumed)
             }
+            (KeyCode::Char('A'), _) => {
+                // Append with template: use the selected note as target.
+                // Must have a note row selected; otherwise toast an error.
+                let Some(target_path) = self.selected_note_abs_path(ctx) else {
+                    queue_toast(
+                        ctx,
+                        "select a note first (A appends to the selected note)",
+                        ToastStyle::Error,
+                    );
+                    return Ok(EventOutcome::Consumed);
+                };
+                self.append_state = Some(AppendState::begin_with_target(ctx, target_path, None));
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('Q'), _) => {
+                let src = CapturePresetPickerSource::new(ctx.vault);
+                self.capture_picker = Some(FuzzyPicker::new(src));
+                Ok(EventOutcome::Consumed)
+            }
             (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
                 let scan = ctx.vault.scan();
                 self.graph = Some(Graph::build(ctx.vault, &scan)?);
@@ -2034,6 +2122,23 @@ impl Tab for GraphTab {
             notes_view::render_create_overlay(frame, area, cs);
         }
 
+        // Append overlay.
+        if let Some(as_) = self.append_state.as_mut() {
+            notes_view::render_append_overlay(frame, area, as_);
+        }
+
+        // Capture preset picker.
+        if let Some(picker) = self.capture_picker.as_mut() {
+            notes_view::render_picker_popup(
+                frame,
+                area,
+                " quick capture · preset ",
+                picker,
+                &[("Enter", "run"), ("Esc", "cancel")],
+                None,
+            );
+        }
+
         // Periodic-leader popup. Same renderer as the Notes tab — a
         // centered modal listing the period choices (d/w/m/q/y).
         if self.periodic_leader {
@@ -2227,6 +2332,8 @@ impl Tab for GraphTab {
                     ("Ctrl+O", "open selected note in Obsidian"),
                     ("c", "create blank note in current folder"),
                     ("Shift+C", "create note from template"),
+                    ("A", "append template to selected note"),
+                    ("Q", "quick capture (run a preset)"),
                 ],
             ),
             HelpSection::new(

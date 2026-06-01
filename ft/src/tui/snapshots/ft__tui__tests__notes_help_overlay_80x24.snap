@@ -18,11 +18,11 @@ expression: frame
 │         │  m                  move section(s) to another file      │         │
 │         │  c                  create note (blank)                  │         │
 │         │  Shift+C            create note from template            │         │
+│         │  a                  append template to a note            │         │
+│         │  Q                  quick capture (run a preset)         │         │
 │         │                                                          │         │
 │         │  Periodic notes                                          │         │
 │         │  t                  open today's daily note              │         │
 │         │  p                  leader → d/w/m/q/y for daily…yearly  │         │
-│         │                                                          │         │
-│         │  In any picker / form                                    │         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Notes           not yet refreshed        mode: help
