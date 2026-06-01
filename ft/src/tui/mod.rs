@@ -27,11 +27,27 @@ pub use app::App;
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// A startup action initiated from outside the TUI loop (e.g. by a
+/// CLI subcommand that launches the TUI in a specific state).
+#[derive(Debug, Clone)]
+pub enum InitialAction {
+    /// Switch to the graph tab on startup and open the Related
+    /// updater modal for the note at the given vault-relative path.
+    OpenRelatedModal { note_path: std::path::PathBuf },
+}
+
 /// Entry point for `ft tui`. Sets up the terminal, runs the event loop, and
 /// always restores the terminal on exit (success or panic).
 pub fn run(vault: Vault) -> Result<()> {
+    run_with_action(vault, None)
+}
+
+/// Same as [`run`] but accepts a startup action that the app applies
+/// once the initial graph build is complete.
+pub fn run_with_action(vault: Vault, initial: Option<InitialAction>) -> Result<()> {
     let mut terminal = setup_terminal().context("failed to enter TUI mode")?;
     let mut app = App::new(Arc::new(vault));
+    app.set_initial_action(initial);
     let result = app.run(&mut terminal);
     restore_terminal(&mut terminal).context("failed to restore terminal")?;
     result

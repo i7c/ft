@@ -959,8 +959,10 @@ impl Parser {
                 "directory-contains",
                 "has-task",
                 "links-into",
+                "owns-paragraph",
+                "paragraph-link",
             ],
-            _ => &["Note", "Directory", "Ghost", "Task"],
+            _ => &["Note", "Directory", "Ghost", "Task", "Paragraph"],
         };
         let check = |lit: &Literal| -> Result<(), DslError> {
             let s = literal_as_str(lit);
@@ -1304,6 +1306,7 @@ fn child_sort_key(graph: &Graph, id: NoteId) -> (u8, String) {
         NodeKind::Note(n) => (1, n.path.to_string_lossy().into_owned()),
         NodeKind::Ghost(g) => (2, g.raw.clone()),
         NodeKind::Task(t) => (3, format!("{}:{}", t.source_file.display(), t.source_line)),
+        NodeKind::Paragraph(p) => (4, format!("{}:{}", p.source_file.display(), p.line_start)),
     }
 }
 
@@ -1375,6 +1378,9 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
         Attr::Path => match node {
             NodeKind::Note(n) => Some(n.path.to_string_lossy().into_owned()),
             NodeKind::Directory(d) => Some(d.path.to_string_lossy().into_owned()),
+            // Paragraphs live inside notes; they don't have their own
+            // filesystem path. Use `kind = Paragraph` to filter to them.
+            NodeKind::Paragraph(_) => None,
             NodeKind::Ghost(_) => None,
             NodeKind::Task(_) => None,
         },
@@ -1413,6 +1419,7 @@ fn node_kind_str(n: &NodeKind) -> &'static str {
         NodeKind::Directory(_) => "Directory",
         NodeKind::Ghost(_) => "Ghost",
         NodeKind::Task(_) => "Task",
+        NodeKind::Paragraph(_) => "Paragraph",
     }
 }
 
@@ -1423,6 +1430,8 @@ fn edge_kind_str(e: &EdgeKind) -> &'static str {
         EdgeKind::Contains => "directory-contains",
         EdgeKind::HasTask => "has-task",
         EdgeKind::LinksInto => "links-into",
+        EdgeKind::OwnsParagraph => "owns-paragraph",
+        EdgeKind::ParagraphLink => "paragraph-link",
     }
 }
 
@@ -2021,8 +2030,8 @@ mod tests {
             let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node;").unwrap();
             let ids = q.select(&g);
-            // 4 notes + 4 dirs = 8
-            assert_eq!(ids.len(), 8);
+            // 4 notes + 4 dirs + 4 paragraphs (one heading per note) = 12
+            assert_eq!(ids.len(), 12);
         }
 
         #[test]
@@ -2208,16 +2217,83 @@ mod tests {
         }
 
         #[test]
+        fn select_kind_paragraph_returns_only_paragraph_nodes() {
+            let v = dirs_vault();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q = parse("node where kind = Paragraph;").unwrap();
+            let ids = q.select(&g);
+            assert_eq!(ids.len(), 4, "one paragraph (heading) per note");
+            for id in &ids {
+                assert!(matches!(g.node(*id), NodeKind::Paragraph(_)));
+            }
+        }
+
+        #[test]
+        fn expand_owns_paragraph_yields_paragraph_children_of_note() {
+            use assert_fs::prelude::*;
+
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("note.md")
+                .write_str("first\n\nsecond paragraph\n")
+                .unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q = parse(
+                "node where kind = Note; \
+                 expand where from.kind = Note and edge.kind = owns-paragraph;",
+            )
+            .unwrap();
+            let roots = q.select(&g);
+            assert_eq!(roots.len(), 1);
+            let children = q.expand(&g, roots[0]).unwrap();
+            assert_eq!(children.len(), 2);
+            for id in children {
+                assert!(matches!(g.node(id), NodeKind::Paragraph(_)));
+            }
+        }
+
+        #[test]
+        fn expand_paragraph_link_yields_target_notes() {
+            use assert_fs::prelude::*;
+
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("a.md").write_str("links to [[b]]\n").unwrap();
+            tmp.child("b.md").write_str("hi\n").unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q = parse(
+                "node where kind = Paragraph; \
+                 expand where from.kind = Paragraph and edge.kind = paragraph-link;",
+            )
+            .unwrap();
+            let paragraphs = q.select(&g);
+            // Two notes → two paragraphs; only a's paragraph has an
+            // outgoing ParagraphLink edge.
+            let mut total_targets = 0;
+            for p in paragraphs {
+                let children = q.expand(&g, p).unwrap();
+                total_targets += children.len();
+            }
+            assert_eq!(total_targets, 1);
+        }
+
+        #[test]
         fn outdegree_zero_excludes_root() {
             let v = dirs_vault();
             let g = Graph::build(&v, &Scan::default()).unwrap();
-            let q = parse("node where outdegree = 0;").unwrap();
+            // Restrict to Note kind: notes now own paragraph nodes via
+            // OwnsParagraph edges (outdegree > 0), so leaf notes can no
+            // longer have outdegree = 0. Filter to Paragraph instead
+            // for the leaf check.
+            let q = parse("node where kind = Paragraph and outdegree = 0;").unwrap();
             let ids = q.select(&g);
-            // The 4 notes in dirs/ have no outgoing edges; the root and
-            // the directory nodes have at least one Contains edge each.
+            // The 4 heading-only paragraphs in dirs/ have no outgoing
+            // edges (no wiki links).
             assert_eq!(ids.len(), 4);
             for id in &ids {
-                assert!(matches!(g.node(*id), NodeKind::Note(_)));
+                assert!(matches!(g.node(*id), NodeKind::Paragraph(_)));
             }
         }
     }

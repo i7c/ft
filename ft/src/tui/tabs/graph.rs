@@ -21,7 +21,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -179,6 +179,16 @@ pub struct GraphTab {
     /// should apply the selected preset to the *existing* active view
     /// rather than a newly-created one.
     preset_picker_for_active_view: bool,
+    /// Active Related-section updater modal. `Some` when open;
+    /// captures the keyboard for the duration. Triggered by `R` on a
+    /// Note row or by `ft notes update-related` via
+    /// [`crate::tui::InitialAction::OpenRelatedModal`].
+    related_modal: Option<RelatedModal>,
+    /// Vault-relative path of a note whose Related modal should open
+    /// on the next focus once the graph is built. Set by
+    /// [`crate::tui::App`] when the TUI was launched via
+    /// `ft notes update-related`.
+    queued_related_path: Option<PathBuf>,
 }
 
 /// Inline rename-in-place state. `Some` while the rename modal is open.
@@ -188,6 +198,63 @@ struct GraphRenameState {
     is_directory: bool,
     buffer: EditBuffer,
     source_rel: PathBuf,
+}
+
+/// Related-section updater modal state. Built on `R` keypress against
+/// a Note row (or via `ft notes update-related`). Splits scored
+/// concepts into two visual groups: entries already in N's Related
+/// section (non-interactive, marked) followed by suggested candidates
+/// the user toggles with Space.
+#[derive(Debug)]
+struct RelatedModal {
+    /// The note whose Related section is being updated.
+    target_path: PathBuf,
+    target_title: String,
+    /// Concepts already in the Related section (alias links inside
+    /// the section's body). Rendered as non-interactive "✓" rows.
+    already: Vec<ft_core::related::RelatedScore>,
+    /// Candidates not yet in the Related section. The cursor moves
+    /// through this slice; Space toggles `checked` membership.
+    candidates: Vec<ft_core::related::RelatedScore>,
+    /// Titles the user has checked for inclusion. Keyed by title
+    /// (graph NoteIds aren't durable across rebuilds, but titles
+    /// are good enough for this short-lived UI state).
+    checked: HashSet<String>,
+    cursor: usize,
+    scroll_offset: usize,
+}
+
+impl RelatedModal {
+    /// Move cursor through the candidate list. No-op when there are
+    /// no candidates (already-in-related rows are non-interactive).
+    fn move_cursor(&mut self, delta: isize) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        let len = self.candidates.len() as isize;
+        let new = (self.cursor as isize + delta).clamp(0, len - 1);
+        self.cursor = new as usize;
+    }
+
+    fn toggle_current(&mut self) {
+        let Some(c) = self.candidates.get(self.cursor) else {
+            return;
+        };
+        let key = c.title.clone();
+        if !self.checked.remove(&key) {
+            self.checked.insert(key);
+        }
+    }
+
+    /// Collected concept titles in the same order they appear in
+    /// `candidates` (deterministic).
+    fn selected_titles(&self) -> Vec<String> {
+        self.candidates
+            .iter()
+            .filter(|c| self.checked.contains(&c.title))
+            .map(|c| c.title.clone())
+            .collect()
+    }
 }
 
 /// Graph-tab outer wrapper around the shared section-move flow.
@@ -248,7 +315,137 @@ impl GraphTab {
             rename_state: None,
             preset_picker: None,
             preset_picker_for_active_view: false,
+            related_modal: None,
+            queued_related_path: None,
         }
+    }
+
+    /// Return the `NoteId` of the currently-selected Note row, or
+    /// `None` for non-Note rows (directories, ghosts, paragraphs).
+    fn selected_note_id(&self) -> Option<NoteId> {
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let row = v.tree.rows().get(v.selected)?;
+        matches!(graph.node(row.note_id), NodeKind::Note(_)).then_some(row.note_id)
+    }
+
+    /// Handle a key while the Related-section modal is open.
+    fn handle_related_modal_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
+                self.related_modal = None;
+                EventOutcome::Consumed
+            }
+            (KeyCode::Enter, _) => {
+                self.confirm_related_modal(ctx);
+                EventOutcome::Consumed
+            }
+            (KeyCode::Char(' '), _) => {
+                if let Some(m) = self.related_modal.as_mut() {
+                    m.toggle_current();
+                }
+                EventOutcome::Consumed
+            }
+            (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
+                if let Some(m) = self.related_modal.as_mut() {
+                    m.move_cursor(-1);
+                }
+                EventOutcome::Consumed
+            }
+            (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => {
+                if let Some(m) = self.related_modal.as_mut() {
+                    m.move_cursor(1);
+                }
+                EventOutcome::Consumed
+            }
+            _ => EventOutcome::Consumed,
+        }
+    }
+
+    /// Compute scores and open the Related-updater modal for the
+    /// note at `note_path`. No-op if the path doesn't resolve to a
+    /// real note in the current graph.
+    fn open_related_modal_for_path(&mut self, note_path: &Path, ctx: &mut TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let Some(note_id) = graph.note_by_path(note_path) else {
+            return;
+        };
+        self.open_related_modal_for_id(note_id, ctx);
+    }
+
+    /// Build the Related modal for a known `NoteId` (current graph).
+    fn open_related_modal_for_id(&mut self, note_id: NoteId, ctx: &mut TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let NodeKind::Note(note_data) = graph.node(note_id) else {
+            queue_toast(
+                ctx,
+                "select a note row (paragraphs / directories aren't supported)",
+                ToastStyle::Error,
+            );
+            return;
+        };
+        let target_path = note_data.path.clone();
+        let target_title = note_data.title.clone();
+        let scores = match ft_core::related::score_related(graph, note_id, ctx.vault) {
+            Ok(s) => s,
+            Err(e) => {
+                queue_toast(ctx, &format!("scoring failed: {e}"), ToastStyle::Error);
+                return;
+            }
+        };
+        let (already, candidates): (Vec<_>, Vec<_>) =
+            scores.into_iter().partition(|s| s.already_in_related);
+        self.related_modal = Some(RelatedModal {
+            target_path,
+            target_title,
+            already,
+            candidates,
+            checked: HashSet::new(),
+            cursor: 0,
+            scroll_offset: 0,
+        });
+    }
+
+    /// Apply the modal's selected concepts to the target note via
+    /// the `ft-core::related` plan/apply pair and close the modal.
+    fn confirm_related_modal(&mut self, ctx: &mut TabCtx) {
+        let Some(modal) = self.related_modal.take() else {
+            return;
+        };
+        let titles = modal.selected_titles();
+        if titles.is_empty() {
+            return;
+        }
+        let abs = ctx.vault.path.join(&modal.target_path);
+        let content = match std::fs::read_to_string(&abs) {
+            Ok(s) => s,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("read {}: {e}", modal.target_path.display()),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        let plan = ft_core::related::plan_related_update(&content, &titles);
+        if let Err(e) = ft_core::related::apply_related_update(&plan, &abs) {
+            queue_toast(
+                ctx,
+                &format!("write {}: {e}", modal.target_path.display()),
+                ToastStyle::Error,
+            );
+            return;
+        }
+        queue_toast(
+            ctx,
+            &format!("added {} concept(s) to Related", plan.appended.len()),
+            ToastStyle::Info,
+        );
     }
 
     /// Resolve the currently-selected row to a `Hit` that the shared
@@ -759,6 +956,11 @@ impl GraphTab {
                 .map(|p| p.to_path_buf())
                 .unwrap_or_default(),
             NodeKind::Task(t) => t
+                .source_file
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
+            NodeKind::Paragraph(p) => p
                 .source_file
                 .parent()
                 .map(|p| p.to_path_buf())
@@ -1299,7 +1501,16 @@ impl Tab for GraphTab {
                 self.restore_all_views();
             }
         }
+        // If a queued Related modal was requested before the graph
+        // existed (e.g. `ft notes update-related <note>`), open it now.
+        if let Some(path) = self.queued_related_path.take() {
+            self.open_related_modal_for_path(&path, ctx);
+        }
         Ok(())
+    }
+
+    fn queue_related_modal(&mut self, note_path: &Path) {
+        self.queued_related_path = Some(note_path.to_path_buf());
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
@@ -1317,6 +1528,11 @@ impl Tab for GraphTab {
         // Rename modal (Flow B): captures keyboard while open.
         if self.rename_state.is_some() {
             return Ok(self.handle_rename_key(k, ctx));
+        }
+
+        // Related-section modal: captures keyboard while open.
+        if self.related_modal.is_some() {
+            return Ok(self.handle_related_modal_key(k, ctx));
         }
 
         // Preset picker: captures keyboard while open. On selection,
@@ -1382,6 +1598,21 @@ impl Tab for GraphTab {
             {
                 let idx = (c as u8 - b'1') as usize;
                 self.switch_view(idx);
+                return Ok(EventOutcome::Consumed);
+            }
+            // Shift+R: open the Related-section updater modal for the
+            // currently-selected Note row. Plain `r` is taken by the
+            // graph refresh keymap.
+            (KeyCode::Char('R'), m) if m == KeyModifiers::SHIFT => {
+                if let Some(note_id) = self.selected_note_id() {
+                    self.open_related_modal_for_id(note_id, ctx);
+                } else {
+                    queue_toast(
+                        ctx,
+                        "select a Note row to update its Related section",
+                        ToastStyle::Error,
+                    );
+                }
                 return Ok(EventOutcome::Consumed);
             }
             _ => {}
@@ -1933,6 +2164,10 @@ impl Tab for GraphTab {
             frame.render_widget(Clear, popup_area);
             picker.render(frame, popup_area);
         }
+
+        if let Some(modal) = self.related_modal.as_ref() {
+            render_related_modal(frame, area, modal);
+        }
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -1995,6 +2230,15 @@ impl Tab for GraphTab {
                     ("Ctrl+W", "close active view"),
                     ("Ctrl+PageDown / PageUp", "next / previous view"),
                     ("Alt+1..9", "jump to view N"),
+                ],
+            ),
+            HelpSection::new(
+                "Related section",
+                &[
+                    ("Shift+R", "open Related-section updater modal"),
+                    ("Space", "toggle candidate (in modal)"),
+                    ("Enter", "append checked concepts (in modal)"),
+                    ("Esc / q", "close modal without writing"),
                 ],
             ),
         ]
@@ -2231,6 +2475,83 @@ impl ExpandedView {
 /// tree-driven move phase is active (Source/Target). Replaces the
 /// strip's view labels so the user can see which keys fire what right
 /// now.
+fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
+    let popup_area = centered_rect(70, 70, area);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Update Related: {} ", modal.target_title))
+        .style(Style::default());
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let [header_area, list_area, footer_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let header_text = if modal.candidates.is_empty() && modal.already.is_empty() {
+        "no co-occurring concepts found".to_string()
+    } else {
+        format!(
+            "{} already in Related · {} candidate(s)",
+            modal.already.len(),
+            modal.candidates.len()
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            header_text,
+            Style::default().fg(Color::Gray),
+        ))),
+        header_area,
+    );
+
+    let mut lines: Vec<Line> = Vec::new();
+    for s in &modal.already {
+        lines.push(Line::from(vec![
+            Span::styled("  ✓  ", Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("[[{}]]", s.title),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("  ({})", s.score),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+    for (i, s) in modal.candidates.iter().enumerate() {
+        let checked = modal.checked.contains(&s.title);
+        let marker = if checked { "[x]" } else { "[ ]" };
+        let cursor = if i == modal.cursor { "▶ " } else { "  " };
+        let mut style = Style::default();
+        if i == modal.cursor {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("{cursor}{marker} "), style),
+            Span::styled(format!("[[{}]]", s.title), style),
+            Span::styled(format!("  ({})", s.score), style.fg(Color::DarkGray)),
+        ]));
+    }
+    frame.render_widget(
+        Paragraph::new(lines).scroll((modal.scroll_offset as u16, 0)),
+        list_area,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Space: toggle · Enter: confirm · Esc/q: cancel",
+            Style::default().fg(Color::Gray),
+        ))),
+        footer_area,
+    );
+}
+
 fn render_move_banner(frame: &mut Frame, area: Rect, text: &str) {
     let span = Span::styled(
         text,
@@ -2411,6 +2732,9 @@ impl TreeState {
             }
             NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
             NodeKind::Task(t) => (t.description.clone(), 'T'),
+            NodeKind::Paragraph(p) => {
+                (format!("{}:{}", p.source_file.display(), p.line_start), 'P')
+            }
         };
         // Compute expandability up-front by asking the policy how many
         // children this node has. None = no expand block at all (still

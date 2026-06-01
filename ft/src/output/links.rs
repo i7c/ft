@@ -81,6 +81,9 @@ impl LinkRow {
                 path: d.path.clone(),
             },
             NodeKind::Task(_) => unreachable!("task nodes are not link targets in run_links"),
+            NodeKind::Paragraph(_) => {
+                unreachable!("paragraph nodes are not link targets in run_links")
+            }
         };
         Self {
             src: src_path.to_path_buf(),
@@ -131,6 +134,7 @@ impl LinkRow {
             }
             NodeKind::Directory(d) => d.path.clone(),
             NodeKind::Task(_) => unreachable!("task nodes are not link targets in run_links"),
+            NodeKind::Paragraph(p) => p.source_file.clone(),
         };
         Self {
             src: src_path,

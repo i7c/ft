@@ -73,6 +73,10 @@ pub struct App {
     /// status bar renders an in-flight indicator and re-entrant
     /// submissions are rejected with a toast.
     jobs: RefCell<Option<JobHandle>>,
+    /// Optional action to apply once the first frame is about to draw.
+    /// Set by `App::set_initial_action` before `run`; consumed on the
+    /// first iteration of the event loop.
+    initial_action: RefCell<Option<crate::tui::InitialAction>>,
     should_quit: bool,
 }
 
@@ -115,12 +119,41 @@ impl App {
             toast: RefCell::new(None),
             sync_conflict: RefCell::new(None),
             jobs: RefCell::new(None),
+            initial_action: RefCell::new(None),
             should_quit: false,
+        }
+    }
+
+    /// Queue a startup action to apply on first event-loop iteration.
+    /// Called by `tui::run_with_action` from CLI entry points like
+    /// `ft notes update-related`.
+    pub fn set_initial_action(&mut self, action: Option<crate::tui::InitialAction>) {
+        *self.initial_action.borrow_mut() = action;
+    }
+
+    /// Drain and apply the queued startup action exactly once.
+    fn apply_initial_action(&mut self) {
+        let Some(action) = self.initial_action.borrow_mut().take() else {
+            return;
+        };
+        match action {
+            crate::tui::InitialAction::OpenRelatedModal { note_path } => {
+                // Graph tab is always index 0 in the default lineup.
+                self.active = 0;
+                // Tell the graph tab to open the modal once it's
+                // built its graph. Phase 10 wires the receiver.
+                self.tabs[0].queue_related_modal(&note_path);
+            }
         }
     }
 
     pub fn run(&mut self, terminal: &mut Tui) -> Result<()> {
         let events = EventStream::new(Duration::from_secs(1));
+
+        // Apply any startup action queued by the CLI entry point
+        // before the first focus call (so the action can switch tabs
+        // and the focus dispatch hits the right one).
+        self.apply_initial_action();
 
         // Initial focus event so the first tab can lazily load if needed.
         {
@@ -849,6 +882,24 @@ impl App {
 
     pub fn switch_to(&mut self, idx: usize) -> Result<()> {
         self.switch_tab(idx)
+    }
+
+    /// Drain the queued [`crate::tui::InitialAction`] (if any) and
+    /// re-focus the now-active tab so on_focus side effects run.
+    /// Mirrors what `run` does on its first iteration so snapshot
+    /// tests can exercise startup-action plumbing without an event
+    /// loop.
+    #[cfg(test)]
+    pub fn apply_initial_action_for_test(&mut self) -> Result<()> {
+        self.apply_initial_action();
+        let mut ctx = TabCtx {
+            vault: &self.vault,
+            recents: &self.recents,
+            today: self.today,
+            last_refresh: &self.last_refresh,
+            pending_request: &self.pending_request,
+        };
+        self.tabs[self.active].on_focus(&mut ctx)
     }
 
     pub fn active_index(&self) -> usize {

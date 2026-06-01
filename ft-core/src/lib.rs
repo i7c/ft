@@ -1,14 +1,17 @@
+pub mod blame_cache;
 pub mod config;
 pub mod dates;
 pub mod error;
 pub mod fs;
 pub mod git;
 pub mod graph;
+pub mod journal;
 pub mod markdown;
 pub mod notes;
 pub mod periodic;
 pub mod query;
 pub mod recents;
+pub mod related;
 pub mod search;
 pub mod selector;
 pub mod task;

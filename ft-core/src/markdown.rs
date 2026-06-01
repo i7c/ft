@@ -40,6 +40,92 @@ pub fn extract_headings(content: &str) -> Vec<Heading> {
     out
 }
 
+/// A paragraph-sized section of markdown content.
+///
+/// Boundaries: one or more blank lines, a Markdown heading line (which
+/// itself starts a new paragraph), or a horizontal-rule separator
+/// (`--` or more dashes on a line by themselves). Frontmatter and
+/// fenced / indented code blocks are skipped via [`LineSkipState`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Paragraph {
+    /// 1-indexed line number of the first line in the paragraph.
+    pub line_start: u32,
+    /// 1-indexed line number of the last line in the paragraph.
+    pub line_end: u32,
+    /// Paragraph lines joined with `\n` — no trailing newline.
+    pub text: String,
+}
+
+/// Extract every paragraph from `content` in document order.
+///
+/// See [`Paragraph`] for boundary rules.
+pub fn extract_paragraphs(content: &str) -> Vec<Paragraph> {
+    let mut out = Vec::new();
+    let mut state = LineSkipState::new();
+    let mut buf: Option<(u32, u32, Vec<String>)> = None;
+
+    fn flush(out: &mut Vec<Paragraph>, buf: &mut Option<(u32, u32, Vec<String>)>) {
+        if let Some((line_start, line_end, lines)) = buf.take() {
+            out.push(Paragraph {
+                line_start,
+                line_end,
+                text: lines.join("\n"),
+            });
+        }
+    }
+
+    for (idx, line) in content.lines().enumerate() {
+        let lineno = (idx + 1) as u32;
+        if state.skip_line(line) {
+            flush(&mut out, &mut buf);
+            continue;
+        }
+        if line.trim().is_empty() {
+            flush(&mut out, &mut buf);
+            continue;
+        }
+        if is_atx_heading(line) {
+            flush(&mut out, &mut buf);
+            buf = Some((lineno, lineno, vec![line.to_string()]));
+            continue;
+        }
+        if is_rule_separator(line) {
+            flush(&mut out, &mut buf);
+            continue;
+        }
+        match &mut buf {
+            Some((_, end, lines)) => {
+                *end = lineno;
+                lines.push(line.to_string());
+            }
+            None => {
+                buf = Some((lineno, lineno, vec![line.to_string()]));
+            }
+        }
+    }
+    flush(&mut out, &mut buf);
+    out
+}
+
+fn is_atx_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if !(1..=6).contains(&level) {
+        return false;
+    }
+    let after = &trimmed[level..];
+    after.is_empty() || after.starts_with(|c: char| c.is_whitespace())
+}
+
+/// Horizontal-rule separator: a line whose non-whitespace content is
+/// two or more `-` characters. CommonMark's stricter rule (3+ matching
+/// `-`/`*`/`_`) isn't enforced — we accept the wider Obsidian-friendly
+/// form including the spec's `--` separator.
+fn is_rule_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.len() >= 2 && trimmed.chars().all(|c| c == '-')
+}
+
 /// Tracks frontmatter / fenced code block / indented code block state
 /// across a line-by-line scan of a markdown file. Both the heading
 /// extractor (above) and the link parser (`crate::graph::parser`) use
@@ -314,5 +400,134 @@ title: not frontmatter
         assert_eq!(headings.len(), 2);
         assert_eq!(headings[0].text, "");
         assert_eq!(headings[1].text, "also empty");
+    }
+
+    // ── extract_paragraphs ─────────────────────────────────────────────
+
+    fn p(line_start: u32, line_end: u32, text: &str) -> Paragraph {
+        Paragraph {
+            line_start,
+            line_end,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn paragraphs_empty_input() {
+        assert_eq!(extract_paragraphs(""), Vec::<Paragraph>::new());
+    }
+
+    #[test]
+    fn paragraphs_single_paragraph() {
+        assert_eq!(
+            extract_paragraphs("only line\n"),
+            vec![p(1, 1, "only line")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_blank_line_boundary() {
+        let body = "line one\nline two\n\nline three\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 2, "line one\nline two"), p(4, 4, "line three")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_multiple_blank_lines_collapse() {
+        let body = "a\n\n\n\nb\n";
+        assert_eq!(extract_paragraphs(body), vec![p(1, 1, "a"), p(5, 5, "b")]);
+    }
+
+    #[test]
+    fn paragraphs_heading_boundary() {
+        let body = "intro text\n## Section\nbody\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 1, "intro text"), p(2, 3, "## Section\nbody")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_consecutive_headings_each_start_paragraph() {
+        let body = "## H1\n### H2\nbody\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 1, "## H1"), p(2, 3, "### H2\nbody")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_rule_separator_double_dash() {
+        let body = "a\n--\nb\n";
+        assert_eq!(extract_paragraphs(body), vec![p(1, 1, "a"), p(3, 3, "b")]);
+    }
+
+    #[test]
+    fn paragraphs_rule_separator_triple_dash() {
+        let body = "a\n---\nb\n";
+        assert_eq!(extract_paragraphs(body), vec![p(1, 1, "a"), p(3, 3, "b")]);
+    }
+
+    #[test]
+    fn paragraphs_skip_frontmatter() {
+        let body = "---\ntitle: Foo\n---\nbody\n";
+        assert_eq!(extract_paragraphs(body), vec![p(4, 4, "body")]);
+    }
+
+    #[test]
+    fn paragraphs_skip_fenced_code_block() {
+        let body = "before\n\n```rust\nlet x = 1;\nlet y = 2;\n```\n\nafter\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 1, "before"), p(8, 8, "after")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_trailing_blank_lines_ignored() {
+        let body = "a\n\n\n";
+        assert_eq!(extract_paragraphs(body), vec![p(1, 1, "a")]);
+    }
+
+    #[test]
+    fn paragraphs_no_trailing_newline() {
+        let body = "single";
+        assert_eq!(extract_paragraphs(body), vec![p(1, 1, "single")]);
+    }
+
+    #[test]
+    fn paragraphs_heading_alone() {
+        let body = "## Just a heading\n\nnext\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 1, "## Just a heading"), p(3, 3, "next")]
+        );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+
+        /// Extracted paragraphs have non-overlapping line ranges, in
+        /// strictly ascending order, and every paragraph's `text` joins
+        /// the lines verbatim from `content`.
+        #[test]
+        fn paragraphs_ranges_disjoint_and_ordered(content in "[a-zA-Z0-9 #\\-\\n]{0,200}") {
+            let paragraphs = extract_paragraphs(&content);
+            let lines: Vec<&str> = content.lines().collect();
+            let mut last_end: u32 = 0;
+            for p in &paragraphs {
+                proptest::prop_assert!(p.line_start <= p.line_end);
+                proptest::prop_assert!(p.line_start > last_end,
+                    "paragraph at {}..{} overlaps prior end {}", p.line_start, p.line_end, last_end);
+                last_end = p.line_end;
+                let start = p.line_start as usize - 1;
+                let end = p.line_end as usize - 1;
+                proptest::prop_assert!(end < lines.len());
+                let reconstructed: String = lines[start..=end].join("\n");
+                proptest::prop_assert_eq!(&p.text, &reconstructed);
+            }
+        }
     }
 }

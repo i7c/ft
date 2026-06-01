@@ -215,6 +215,120 @@ fn current_branch(repo: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+// ── Blame ───────────────────────────────────────────────────────────────
+
+/// One line's git-blame record. `timestamp` is the author-time unix
+/// epoch seconds; `commit_hash` is the full 40-char SHA.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LineBlame {
+    pub line: u32,
+    pub commit_hash: String,
+    pub timestamp: i64,
+}
+
+/// Return the current HEAD commit hash for `repo` (40-char SHA).
+pub fn head_hash(repo: &Path) -> Result<String> {
+    let out = git(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err("rev-parse HEAD", &out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Per-line blame for `rel_path` (vault-relative or relative to `repo`).
+///
+/// Shells out to `git blame --porcelain`. The porcelain header for each
+/// hunk has the form:
+///
+/// ```text
+/// <40-char sha> <orig-line> <cur-line> <hunk-len>
+/// author Name
+/// author-time 1736000000
+/// ...
+/// \t<line content>
+/// ```
+///
+/// We parse the SHA and author-time off the header lines and emit one
+/// [`LineBlame`] per source line (1-indexed). Returns `Err` when `git`
+/// fails (file not tracked, repo missing, etc.).
+pub fn blame_file(repo: &Path, rel_path: &Path) -> Result<Vec<LineBlame>> {
+    let out = git(repo)
+        .args(["blame", "--porcelain"])
+        .arg(rel_path)
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(
+            &format!("blame --porcelain {}", rel_path.display()),
+            &out.stderr,
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    // Per-commit metadata is given once per SHA: we cache by SHA so
+    // subsequent hunks from the same commit can reuse the timestamp
+    // without git re-emitting the header lines.
+    let mut sha_time: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut out_blame: Vec<LineBlame> = Vec::new();
+
+    let mut current_sha: Option<String> = None;
+    let mut pending_time: Option<i64> = None;
+
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            // Content line — emit the LineBlame for the most recent
+            // header tuple.
+            let sha = current_sha
+                .as_ref()
+                .expect("porcelain content line preceded by header");
+            let ts = pending_time
+                .or_else(|| sha_time.get(sha).copied())
+                .expect("author-time recorded before content line");
+            sha_time.insert(sha.clone(), ts);
+            let lineno = (out_blame.len() as u32) + 1;
+            out_blame.push(LineBlame {
+                line: lineno,
+                commit_hash: sha.clone(),
+                timestamp: ts,
+            });
+            pending_time = None;
+            continue;
+        }
+        // Header / metadata line.
+        if let Some((head_sha, _rest)) = parse_porcelain_header(line) {
+            current_sha = Some(head_sha);
+            pending_time = None;
+            continue;
+        }
+        if let Some(ts) = line.strip_prefix("author-time ") {
+            if let Ok(n) = ts.trim().parse::<i64>() {
+                pending_time = Some(n);
+            }
+        }
+    }
+
+    Ok(out_blame)
+}
+
+/// A porcelain header looks like `<sha> <orig> <cur> <hunk-len>` —
+/// 40-char hex SHA followed by space-separated integers. Returns
+/// `Some((sha, rest))` when the line begins with a 40-char hex SHA
+/// followed by a space.
+fn parse_porcelain_header(line: &str) -> Option<(String, &str)> {
+    let sha = line.get(0..40)?;
+    if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let rest = line.get(40..)?;
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    Some((sha.to_string(), rest))
+}
+
 // ── Sync ─────────────────────────────────────────────────────────────────
 
 /// Orchestrate the full sync sequence. See the module docs for the
@@ -710,6 +824,69 @@ mod tests {
             }
             other => panic!("expected RebaseConflict, got {other:?}"),
         }
+    }
+
+    // ── blame_file ──────────────────────────────────────────────────
+
+    #[test]
+    fn blame_file_single_commit() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        fs::write(tmp.path().join("a.md"), "one\ntwo\nthree\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "init"]);
+
+        let blame = blame_file(tmp.path(), Path::new("a.md")).unwrap();
+        assert_eq!(blame.len(), 3);
+        let first_sha = &blame[0].commit_hash;
+        assert_eq!(first_sha.len(), 40);
+        for (i, b) in blame.iter().enumerate() {
+            assert_eq!(b.line as usize, i + 1);
+            assert_eq!(&b.commit_hash, first_sha, "single-commit file");
+            assert!(b.timestamp > 0);
+        }
+    }
+
+    #[test]
+    fn blame_file_two_commits_have_different_shas() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        fs::write(tmp.path().join("a.md"), "one\ntwo\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "first"]);
+
+        // Wait a second so author-time differs.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(tmp.path().join("a.md"), "one\nALTERED\nthree\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "second"]);
+
+        let blame = blame_file(tmp.path(), Path::new("a.md")).unwrap();
+        assert_eq!(blame.len(), 3);
+        // Line 1 is unchanged (first commit). Lines 2 and 3 are from
+        // the second commit.
+        assert_eq!(blame[1].commit_hash, blame[2].commit_hash);
+        assert_ne!(blame[0].commit_hash, blame[1].commit_hash);
+    }
+
+    #[test]
+    fn blame_file_untracked_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        fs::write(tmp.path().join("untracked.md"), "x\n").unwrap();
+        let err = blame_file(tmp.path(), Path::new("untracked.md"));
+        assert!(err.is_err(), "blame of untracked file should fail");
+    }
+
+    #[test]
+    fn head_hash_returns_sha_after_commit() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        fs::write(tmp.path().join("a.md"), "x\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "init"]);
+        let sha = head_hash(tmp.path()).unwrap();
+        assert_eq!(sha.len(), 40);
     }
 
     #[test]

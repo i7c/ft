@@ -212,6 +212,12 @@ pub fn plan_multi_rename(
                     new_path.display()
                 )));
             }
+            NodeKind::Paragraph(_) => {
+                return Err(Error::Notes(format!(
+                    "renaming paragraph nodes is not supported: {}",
+                    new_path.display()
+                )));
+            }
         }
 
         if let Some(r) = file_rename {
@@ -229,6 +235,7 @@ pub fn plan_multi_rename(
                 NodeKind::Ghost(_) => continue,
                 NodeKind::Directory(d) => d.path.clone(),
                 NodeKind::Task(_) => continue,
+                NodeKind::Paragraph(_) => continue,
             };
             // If the linker is also being renamed, use its new path
             // for relative-URL computation.

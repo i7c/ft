@@ -7384,3 +7384,90 @@ fn graph_multi_select_markers_snapshot() -> Result<()> {
     assert_tui_snapshot!("graph_multi_select_markers_80x24", frame);
     Ok(())
 }
+
+// ── Related-section modal ────────────────────────────────────────────
+
+/// Build a vault with two paragraphs that co-occur with N: one
+/// same-paragraph hit (+3 for C) and one same-file cross-paragraph
+/// hit (+1 for D). Plus one alias in N's existing Related section.
+fn related_modal_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+
+    std::fs::write(vault_path.join("N.md"), "# N\n\n## Related\n- [[Alias]]\n").unwrap();
+    std::fs::write(vault_path.join("Alias.md"), "# Alias\n").unwrap();
+    std::fs::write(vault_path.join("C.md"), "# C\n").unwrap();
+    std::fs::write(vault_path.join("D.md"), "# D\n").unwrap();
+    std::fs::write(
+        vault_path.join("Notes.md"),
+        "Mentions [[N]] and [[C]] in the same paragraph.\n\nLater, [[D]] gets mentioned alone.\n",
+    )
+    .unwrap();
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn graph_related_modal_opens_on_initial_action() -> Result<()> {
+    let (_dir, vault) = related_modal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.set_initial_action(Some(crate::tui::InitialAction::OpenRelatedModal {
+        note_path: std::path::PathBuf::from("N.md"),
+    }));
+    app.apply_initial_action_for_test()?;
+    let frame = render(&mut app, 80, 24);
+    // Modal renders concept titles (Alias as already-in-related, C and D as candidates).
+    assert!(frame.contains("[[Alias]]"), "modal shows alias:\n{frame}");
+    assert!(frame.contains("[[C]]"), "modal shows candidate C:\n{frame}");
+    assert!(frame.contains("[[D]]"), "modal shows candidate D:\n{frame}");
+    Ok(())
+}
+
+#[test]
+fn graph_related_modal_help_sections_include_shift_r() -> Result<()> {
+    let (_dir, vault) = related_modal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    let sections = app.active_tab_help_sections();
+    let merged: String = sections
+        .iter()
+        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
+        .collect();
+    assert!(
+        merged.contains("Shift+R"),
+        "help must surface Shift+R for Related modal:\n{merged}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_related_modal_confirm_writes_to_note() -> Result<()> {
+    let (dir, vault) = related_modal_vault();
+    let note_path = vault.path.join("N.md");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.set_initial_action(Some(crate::tui::InitialAction::OpenRelatedModal {
+        note_path: std::path::PathBuf::from("N.md"),
+    }));
+    app.apply_initial_action_for_test()?;
+    // Toggle the first candidate and confirm.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let after = std::fs::read_to_string(&note_path)?;
+    // Existing Alias preserved; at least one new concept appended.
+    assert!(after.contains("[[Alias]]"), "alias preserved:\n{after}");
+    let new_links = after
+        .lines()
+        .filter(|l| l.starts_with("- [[") && !l.contains("[[Alias]]"))
+        .count();
+    assert!(new_links >= 1, "expected new related entry:\n{after}");
+    drop(dir);
+    Ok(())
+}

@@ -36,6 +36,9 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 NodeKind::Ghost(g) => format!("ghost:{}", g.raw),
                 NodeKind::Directory(d) => format!("dir:{}", d.path.display()),
                 NodeKind::Task(t) => format!("task:{}", t.description),
+                NodeKind::Paragraph(p) => {
+                    format!("paragraph:{}:{}", p.source_file.display(), p.line_start)
+                }
             };
             let edge_kind = match edge {
                 EdgeKind::Link(_) => "link",
@@ -43,6 +46,8 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 EdgeKind::Contains => "contains",
                 EdgeKind::HasTask => "has-task",
                 EdgeKind::LinksInto => "links-into",
+                EdgeKind::OwnsParagraph => "owns-paragraph",
+                EdgeKind::ParagraphLink => "paragraph-link",
             };
             let l = edge.link()?;
             Some(format!(
@@ -73,7 +78,7 @@ fn hub_outgoing_covers_every_link_shape() {
     let hub = note(&g, "notes/hub.md");
     let edges: Vec<&EdgeKind> = g
         .outgoing(hub)
-        .filter(|(_, e)| !matches!(e, EdgeKind::LinksInto))
+        .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
         .map(|(_, e)| e)
         .collect();
 
@@ -147,9 +152,13 @@ fn ghost_node_is_shared_across_linkers() {
     let phantom = g
         .ghost_by_raw("Phantom")
         .expect("Phantom ghost should exist");
-    // Only hub.md links to Phantom in the fixture; one incoming edge.
-    let incoming: Vec<_> = g.incoming(phantom).collect();
-    assert_eq!(incoming.len(), 1);
+    // Only hub.md links to Phantom in the fixture; one Link edge from
+    // hub plus a ParagraphLink edge from hub's owning paragraph.
+    let link_incoming: Vec<_> = g
+        .incoming(phantom)
+        .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
+        .collect();
+    assert_eq!(link_incoming.len(), 1);
 }
 
 #[test]
@@ -311,7 +320,14 @@ fn refresh_note_keeps_ghost_when_other_linkers_remain() {
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
     let mut g = Graph::build(&v, &Scan::default()).unwrap();
     let phantom = g.ghost_by_raw("Phantom").unwrap();
-    assert_eq!(g.incoming(phantom).count(), 2);
+    // Two Link incoming edges (a.md, b.md). Paragraph nodes also link
+    // via ParagraphLink — filter to Link-form edges for this assertion.
+    let link_in = |g: &Graph, id: NoteId| {
+        g.incoming(id)
+            .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
+            .count()
+    };
+    assert_eq!(link_in(&g, phantom), 2);
 
     // Remove the link from a.md only.
     let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
@@ -322,7 +338,154 @@ fn refresh_note_keeps_ghost_when_other_linkers_remain() {
     let phantom = g
         .ghost_by_raw("Phantom")
         .expect("ghost should still exist (b still links)");
-    assert_eq!(g.incoming(phantom).count(), 1);
+    assert_eq!(link_in(&g, phantom), 1);
+}
+
+// ── Paragraph node tests ──────────────────────────────────────────────
+
+#[test]
+fn paragraph_nodes_inserted_for_each_paragraph_in_note() {
+    use assert_fs::prelude::*;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md")
+        .write_str("first paragraph\n\nsecond paragraph\n")
+        .unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = g.note_by_path(Path::new("a.md")).unwrap();
+
+    let owned: Vec<NoteId> = g
+        .outgoing(a)
+        .filter(|(_, e)| matches!(e, EdgeKind::OwnsParagraph))
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(owned.len(), 2, "two paragraphs → two OwnsParagraph edges");
+    for p_id in &owned {
+        assert!(matches!(g.node(*p_id), NodeKind::Paragraph(_)));
+    }
+}
+
+#[test]
+fn paragraph_link_edges_resolve_to_target_note() {
+    use assert_fs::prelude::*;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md").write_str("links to [[b]]\n").unwrap();
+    tmp.child("b.md").write_str("hello\n").unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = g.note_by_path(Path::new("a.md")).unwrap();
+    let b = g.note_by_path(Path::new("b.md")).unwrap();
+
+    let paragraph = g
+        .outgoing(a)
+        .find(|(_, e)| matches!(e, EdgeKind::OwnsParagraph))
+        .map(|(p, _)| p)
+        .expect("a.md owns one paragraph");
+    let targets: Vec<NoteId> = g
+        .outgoing(paragraph)
+        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink))
+        .map(|(t, _)| t)
+        .collect();
+    assert_eq!(targets, vec![b], "paragraph links to b via ParagraphLink");
+}
+
+#[test]
+fn paragraph_link_to_unresolved_target_creates_ghost() {
+    use assert_fs::prelude::*;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md").write_str("see [[Phantom]]\n").unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let phantom = g.ghost_by_raw("Phantom").expect("ghost exists");
+    let paragraph_link_in: usize = g
+        .incoming(phantom)
+        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink))
+        .count();
+    assert_eq!(paragraph_link_in, 1);
+}
+
+#[test]
+fn paragraph_by_loc_lookup_returns_correct_id() {
+    use assert_fs::prelude::*;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md")
+        .write_str("first\n\nsecond paragraph here\n")
+        .unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+
+    let p1 = g.paragraph_by_loc(Path::new("a.md"), 1).unwrap();
+    assert!(matches!(g.node(p1), NodeKind::Paragraph(p) if p.line_start == 1));
+    let p2 = g.paragraph_by_loc(Path::new("a.md"), 3).unwrap();
+    assert!(matches!(g.node(p2), NodeKind::Paragraph(p) if p.line_start == 3));
+    assert!(g.paragraph_by_loc(Path::new("a.md"), 2).is_none());
+}
+
+#[test]
+fn refresh_note_updates_paragraph_count() {
+    use assert_fs::prelude::*;
+    use std::io::Write as _;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md").write_str("only paragraph\n").unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = g.note_by_path(Path::new("a.md")).unwrap();
+
+    let count = |g: &Graph| {
+        g.outgoing(a)
+            .filter(|(_, e)| matches!(e, EdgeKind::OwnsParagraph))
+            .count()
+    };
+    assert_eq!(count(&g), 1);
+
+    // Add a second paragraph.
+    let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
+    writeln!(f, "first\n\nsecond paragraph").unwrap();
+    drop(f);
+
+    g.refresh_note(&v.path, &tmp.path().join("a.md")).unwrap();
+    assert_eq!(count(&g), 2, "refresh should reinsert paragraphs");
+}
+
+#[test]
+fn refresh_note_clears_stale_paragraph_index_entries() {
+    use assert_fs::prelude::*;
+    use std::io::Write as _;
+
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md")
+        .write_str("first\n\nsecond\n\nthird\n")
+        .unwrap();
+
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+
+    // Original line_start for the third paragraph is 5; after rewrite
+    // we drop the third, so paragraph_by_loc(a.md, 5) should be gone.
+    assert!(g.paragraph_by_loc(Path::new("a.md"), 5).is_some());
+
+    let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
+    writeln!(f, "first\n\nsecond").unwrap();
+    drop(f);
+
+    g.refresh_note(&v.path, &tmp.path().join("a.md")).unwrap();
+    assert!(g.paragraph_by_loc(Path::new("a.md"), 5).is_none());
 }
 
 #[test]

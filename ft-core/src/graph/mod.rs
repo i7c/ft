@@ -80,6 +80,10 @@ pub enum NodeKind {
     /// A task extracted from a note. Connected to its source note via
     /// [`EdgeKind::HasTask`] edges.
     Task(TaskData),
+    /// A paragraph-sized section of a note. Connected to its owning
+    /// note via [`EdgeKind::OwnsParagraph`] and to any wiki-link
+    /// targets it mentions via [`EdgeKind::ParagraphLink`].
+    Paragraph(ParagraphData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +119,21 @@ impl DirData {
             name: String::new(),
         }
     }
+}
+
+/// Paragraph node data — a block of contiguous markdown content within
+/// one note, identified by its 1-indexed line range. Created during
+/// [`Graph::build`] from [`crate::markdown::extract_paragraphs`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParagraphData {
+    /// Vault-relative path of the owning note.
+    pub source_file: PathBuf,
+    /// 1-indexed inclusive line range start within the source note.
+    pub line_start: u32,
+    /// 1-indexed inclusive line range end within the source note.
+    pub line_end: u32,
+    /// Paragraph text — lines joined with `\n`, no trailing newline.
+    pub text: String,
 }
 
 /// Task node data — denormalized from [`crate::task::Task`] for graph queries.
@@ -155,13 +174,23 @@ pub enum EdgeKind {
     /// Derived edge — one per unique (source-note, target-directory) pair
     /// from resolved Link / Embed edges. Unit variant (no LinkEdge data).
     LinksInto,
+    /// A note owns a paragraph node. Edge from note → paragraph.
+    OwnsParagraph,
+    /// A paragraph links to a note (or ghost) via a wiki link in its
+    /// body. Edge from paragraph → target. Each wiki-form link in a
+    /// paragraph produces one edge.
+    ParagraphLink,
 }
 
 impl EdgeKind {
     pub fn link(&self) -> Option<&LinkEdge> {
         match self {
             EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
-            EdgeKind::Contains | EdgeKind::HasTask | EdgeKind::LinksInto => None,
+            EdgeKind::Contains
+            | EdgeKind::HasTask
+            | EdgeKind::LinksInto
+            | EdgeKind::OwnsParagraph
+            | EdgeKind::ParagraphLink => None,
         }
     }
 }
@@ -239,6 +268,11 @@ pub struct Graph {
     /// (source_file, source_line) → task node. Used for task deduplication
     /// and lookup. The source_file is a vault-relative PathBuf.
     task_index: HashMap<(PathBuf, usize), NoteId>,
+    /// (source_file, line_start) → paragraph node. Each paragraph is
+    /// uniquely identified by its owning note's path and 1-indexed first
+    /// line. Populated during `Graph::build` / refreshed by
+    /// `Graph::refresh_note`.
+    paragraph_index: HashMap<(PathBuf, u32), NoteId>,
 }
 
 impl Graph {
@@ -255,14 +289,21 @@ impl Graph {
     pub fn build(vault: &Vault, scan: &Scan) -> Result<Graph> {
         let files = vault.markdown_files();
 
-        // Parse phase (parallel): read each file, extract raw links.
-        let parsed: Vec<(PathBuf, String, Vec<parser::RawLink>)> = files
+        // Parse phase (parallel): read each file, extract raw links and
+        // paragraph ranges in the same pass.
+        let parsed: Vec<(
+            PathBuf,
+            String,
+            Vec<parser::RawLink>,
+            Vec<crate::markdown::Paragraph>,
+        )> = files
             .par_iter()
             .filter_map(|abs| {
                 let rel = abs.strip_prefix(&vault.path).ok()?.to_path_buf();
                 let content = std::fs::read_to_string(abs).ok()?;
                 let links = parser::extract_links(&content);
-                Some((rel, content, links))
+                let paragraphs = crate::markdown::extract_paragraphs(&content);
+                Some((rel, content, links, paragraphs))
             })
             .collect();
 
@@ -272,11 +313,12 @@ impl Graph {
             title_index: HashMap::new(),
             ghost_index: HashMap::new(),
             task_index: HashMap::new(),
+            paragraph_index: HashMap::new(),
         };
 
         // Insert all note nodes first so resolution can see the full
         // path/title indexes for any cross-reference.
-        for (rel, _content, _links) in &parsed {
+        for (rel, _content, _links, _paragraphs) in &parsed {
             graph.insert_note_node(rel.clone());
         }
 
@@ -289,12 +331,23 @@ impl Graph {
         graph.insert_contains_edges();
 
         // Now resolve and insert link edges.
-        for (rel, _content, links) in &parsed {
+        for (rel, _content, links, _paragraphs) in &parsed {
             let src = *graph
                 .path_index
                 .get(rel)
                 .expect("note node was just inserted");
             graph.insert_edges_for(src, rel, links);
+        }
+
+        // Insert paragraph nodes, OwnsParagraph edges, and
+        // ParagraphLink edges. Done after link resolution so the
+        // path/title indexes are fully populated.
+        for (rel, _content, links, paragraphs) in &parsed {
+            let src = *graph
+                .path_index
+                .get(rel)
+                .expect("note node was just inserted");
+            graph.insert_paragraph_nodes_for(src, rel, paragraphs, links);
         }
 
         // Insert task nodes from scan data.
@@ -341,6 +394,7 @@ impl Graph {
             source: e,
         })?;
         let links = parser::extract_links(&content);
+        let paragraphs = crate::markdown::extract_paragraphs(&content);
 
         let normalized = normalize_path(&rel);
         let src = match self.path_index.get(&normalized) {
@@ -348,9 +402,11 @@ impl Graph {
             None => self.insert_note_node(rel.clone()),
         };
 
+        self.remove_paragraph_nodes(src);
         self.remove_outgoing_edges(src);
         self.insert_edges_for(src, &rel, &links);
         self.insert_links_into_for(src);
+        self.insert_paragraph_nodes_for(src, &rel, &paragraphs, &links);
         Ok(())
     }
 
@@ -377,6 +433,14 @@ impl Graph {
     /// has been materialized.
     pub fn ghost_by_raw(&self, raw: &str) -> Option<NoteId> {
         self.ghost_index.get(raw).copied()
+    }
+
+    /// The paragraph node at `(path, line_start)`, if any. `path` is
+    /// vault-relative; `line_start` is 1-indexed.
+    pub fn paragraph_by_loc(&self, path: &Path, line_start: u32) -> Option<NoteId> {
+        self.paragraph_index
+            .get(&(normalize_path(path), line_start))
+            .copied()
     }
 
     /// The kind of node at `id`. Panics on a stale id (one whose node
@@ -504,9 +568,17 @@ impl Graph {
         }
     }
 
-    fn insert_directory_nodes(&mut self, parsed: &[(PathBuf, String, Vec<parser::RawLink>)]) {
+    fn insert_directory_nodes(
+        &mut self,
+        parsed: &[(
+            PathBuf,
+            String,
+            Vec<parser::RawLink>,
+            Vec<crate::markdown::Paragraph>,
+        )],
+    ) {
         let mut dir_paths: BTreeSet<PathBuf> = BTreeSet::new();
-        for (rel, _, _) in parsed {
+        for (rel, _, _, _) in parsed {
             let normalized = normalize_path(rel);
             let mut current = normalized.parent();
             while let Some(parent) = current {
@@ -636,6 +708,103 @@ impl Graph {
             .collect();
         for src in note_ids {
             self.insert_links_into_for(src);
+        }
+    }
+
+    /// Insert paragraph nodes and their edges for one note. Creates
+    /// one `NodeKind::Paragraph` per element of `paragraphs`, an
+    /// `OwnsParagraph` edge from `note_id` → paragraph, and a
+    /// `ParagraphLink` edge from paragraph → each wiki-form link
+    /// target it contains. Markdown-form links are ignored — only
+    /// `[[...]]` and `![[...]]` produce ParagraphLink edges.
+    fn insert_paragraph_nodes_for(
+        &mut self,
+        note_id: NoteId,
+        note_rel: &Path,
+        paragraphs: &[crate::markdown::Paragraph],
+        links: &[parser::RawLink],
+    ) {
+        let note_rel_norm = normalize_path(note_rel);
+        for paragraph in paragraphs {
+            let data = ParagraphData {
+                source_file: note_rel_norm.clone(),
+                line_start: paragraph.line_start,
+                line_end: paragraph.line_end,
+                text: paragraph.text.clone(),
+            };
+            let idx = self.g.add_node(NodeKind::Paragraph(data));
+            let p_id = NoteId(idx);
+            self.paragraph_index
+                .insert((note_rel_norm.clone(), paragraph.line_start), p_id);
+            self.g.add_edge(note_id.0, p_id.0, EdgeKind::OwnsParagraph);
+
+            for raw in links {
+                if raw.form != LinkForm::WikiLink {
+                    continue;
+                }
+                let line = raw.line as u32;
+                if line < paragraph.line_start || line > paragraph.line_end {
+                    continue;
+                }
+                let target = resolve::resolve_wiki(&raw.target_text, self);
+                let dst = match target {
+                    resolve::Resolution::Resolved(id) => id,
+                    resolve::Resolution::Unresolved(key) => self.intern_ghost(&key),
+                    resolve::Resolution::NotALink => continue,
+                };
+                self.g.add_edge(p_id.0, dst.0, EdgeKind::ParagraphLink);
+            }
+        }
+    }
+
+    /// Remove all paragraph nodes owned by `note_id`. Each removal
+    /// takes the OwnsParagraph edge and any outgoing ParagraphLink
+    /// edges with it (petgraph removes connected edges automatically).
+    /// Orphaned ghosts (ParagraphLink-only ghosts that lose their last
+    /// incoming edge) are garbage-collected.
+    fn remove_paragraph_nodes(&mut self, note_id: NoteId) {
+        // Collect paragraph children of `note_id`.
+        let paragraph_ids: Vec<NoteId> = self
+            .g
+            .edges_directed(note_id.0, Direction::Outgoing)
+            .filter(|e| matches!(e.weight(), EdgeKind::OwnsParagraph))
+            .map(|e| NoteId(e.target()))
+            .collect();
+
+        // Collect ghost neighbors of those paragraphs before removal.
+        let mut ghost_candidates: Vec<NoteId> = Vec::new();
+        for p_id in &paragraph_ids {
+            for e in self.g.edges_directed(p_id.0, Direction::Outgoing) {
+                if matches!(e.weight(), EdgeKind::ParagraphLink)
+                    && matches!(self.g[e.target()], NodeKind::Ghost(_))
+                {
+                    ghost_candidates.push(NoteId(e.target()));
+                }
+            }
+        }
+
+        // Remove paragraph nodes (with their edges) and their index entries.
+        for p_id in paragraph_ids {
+            if let NodeKind::Paragraph(data) = &self.g[p_id.0] {
+                self.paragraph_index
+                    .remove(&(data.source_file.clone(), data.line_start));
+            }
+            self.g.remove_node(p_id.0);
+        }
+
+        // GC orphaned ghosts.
+        for ghost in ghost_candidates {
+            if self
+                .g
+                .edges_directed(ghost.0, Direction::Incoming)
+                .next()
+                .is_none()
+            {
+                if let NodeKind::Ghost(GhostData { raw }) = &self.g[ghost.0] {
+                    self.ghost_index.remove(raw);
+                }
+                self.g.remove_node(ghost.0);
+            }
         }
     }
 

@@ -66,6 +66,15 @@ pub enum NotesCommand {
     /// updating all vault-wide references.
     #[command(name = "mv")]
     Move(MoveArgs),
+    /// Reverse-chronological feed of paragraph-level mentions of a
+    /// note (and its Related-section aliases) across the vault. Dates
+    /// come from `git blame`.
+    Journal(JournalArgs),
+    /// Interactively update a note's `## Related` section. Launches
+    /// the TUI graph tab with a co-occurrence-scoring modal for the
+    /// target note.
+    #[command(name = "update-related")]
+    UpdateRelated(UpdateRelatedArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -79,6 +88,8 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Links(a) => run_links(a, vault_flag, Direction::Forward),
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
         NotesCommand::Move(a) => run_mv(a, vault_flag),
+        NotesCommand::Journal(a) => run_journal(a, vault_flag),
+        NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
     }
 }
 
@@ -1042,6 +1053,9 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
             unreachable!("directory nodes are not selectable from the CLI yet")
         }
         NodeKind::Task(_) => unreachable!("task nodes are not selectable from the CLI yet"),
+        NodeKind::Paragraph(_) => {
+            unreachable!("paragraph nodes are not selectable from the CLI yet")
+        }
     };
 
     let rows: Vec<LinkRow> = match dir {
@@ -1101,6 +1115,130 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
     }
 
     Ok(exit)
+}
+
+// ── ft notes update-related ──────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct UpdateRelatedArgs {
+    /// Note whose Related section to update. Vault-relative path,
+    /// bare title, or fuzzy query.
+    #[arg(value_name = "NOTE", required = true)]
+    pub note: Vec<String>,
+}
+
+fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    if !io::stdout().is_terminal() {
+        return Err(anyhow!(
+            "`ft notes update-related` requires a TTY — the interactive modal cannot render with stdout redirected"
+        ));
+    }
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    // Validate the note resolves to a real note before tearing the
+    // terminal apart for the TUI.
+    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let query = args.note.join(" ");
+    let note_id = resolve_note_query(&graph, &vault, &query)?;
+    let note_path = match graph.node(note_id) {
+        NodeKind::Note(n) => n.path.clone(),
+        _ => return Err(anyhow!("`{query}` does not resolve to a real note")),
+    };
+    crate::tui::run_with_action(
+        vault,
+        Some(crate::tui::InitialAction::OpenRelatedModal { note_path }),
+    )?;
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── ft notes journal ─────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct JournalArgs {
+    /// Note to build the journal for. Vault-relative path (e.g.
+    /// `Areas/finance.md`), bare title, or fuzzy query.
+    #[arg(value_name = "NOTE", required = true)]
+    pub note: Vec<String>,
+
+    /// Output as a JSON array instead of the default human-readable
+    /// table form. Each entry includes `date`, `source_title`,
+    /// `source_path`, and `section` fields.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let query = args.note.join(" ");
+    let note_id = resolve_note_query(&graph, &vault, &query)?;
+    let repo = ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!("the vault is not inside a git repository — `ft notes journal` needs git history for section dates")
+    })?;
+    let mut cache =
+        ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
+    let entries = ft_core::journal::build_journal(&graph, note_id, &vault, &repo, &mut cache)
+        .context("building journal")?;
+    // Best-effort save — a cache write failure is non-fatal.
+    let _ = cache.save(&vault.path);
+
+    if args.json {
+        render_journal_json(&entries)?;
+    } else {
+        let use_color =
+            !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+        render_journal_table(&entries, use_color);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn render_journal_table(entries: &[ft_core::journal::JournalEntry], use_color: bool) {
+    if entries.is_empty() {
+        println!("no journal entries");
+        return;
+    }
+    use owo_colors::OwoColorize;
+    let mut first = true;
+    for e in entries {
+        if !first {
+            println!();
+        }
+        first = false;
+        let header = format!("{}  {}", e.date, e.source_title);
+        if use_color {
+            println!("{}", header.bold().cyan());
+        } else {
+            println!("{header}");
+        }
+        let sep_len = header.chars().count().clamp(20, 72);
+        println!("{}", "─".repeat(sep_len));
+        println!("{}", e.section_text);
+    }
+}
+
+fn render_journal_json(entries: &[ft_core::journal::JournalEntry]) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Row<'a> {
+        date: String,
+        source_title: &'a str,
+        source_path: String,
+        section: &'a str,
+    }
+    let rows: Vec<Row> = entries
+        .iter()
+        .map(|e| Row {
+            date: e.date.to_string(),
+            source_title: &e.source_title,
+            source_path: e.source_path.to_string_lossy().into_owned(),
+            section: &e.section_text,
+        })
+        .collect();
+    let s = serde_json::to_string_pretty(&rows).context("serialize journal json")?;
+    println!("{s}");
+    Ok(())
 }
 
 /// Resolve a `<note>` argument to a [`NoteId`] in the graph.
@@ -1241,6 +1379,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         NodeKind::Ghost(_) => None,
         NodeKind::Directory(_) => None,
         NodeKind::Task(_) => None,
+        NodeKind::Paragraph(_) => None,
     };
 
     let new_path = parse_new_name(&args.new, source_rel.as_deref())?;
