@@ -1,5 +1,8 @@
-## MODIFIED Requirements
+# cli-rename Specification
 
+## Purpose
+TBD - created by archiving change cli-rename-mv-clean-split. Update Purpose after archive.
+## Requirements
 ### Requirement: rename rejects NEW values containing /
 
 The system SHALL reject `<NEW>` values that contain `/` with exit code 2 and an error message directing the user to `ft notes mv`.
@@ -33,14 +36,10 @@ The system SHALL accept `<NEW>` as a bare filename stem (no `/`). `.md` is appen
 - **WHEN** `ft notes rename foo bar --dry-run` is run
 - **THEN** the plan is printed; no files modified
 
-## ADDED Requirements
+<!-- Migration note: this change split the previous `rename` behaviour.
+     Paths-in-NEW (which moved a note to a different directory) are no
+     longer accepted by `rename` — use `ft notes mv <note-path> <target-dir>/`
+     instead. Example: `ft notes rename foo archive/foo.md` →
+     `ft notes mv foo.md archive/`. The "rename rejects NEW values
+     containing /" requirement above is the canonical enforcement. -->
 
-<!-- None; all changes are modifications to existing rename behavior. -->
-
-## REMOVED Requirements
-
-### Requirement: rename supports path-based NEW for directory changes
-
-**Reason**: Ambiguous — `rename` conflated identity changes (title) with location changes (directory). Split into `rename` (identity, bare name) and `mv` (location, paths).
-
-**Migration**: Replace `ft notes rename <note> <path-containing-slash>` with `ft notes mv <note-path> <target-dir>/`. For example: `ft notes rename foo archive/foo.md` → `ft notes mv foo.md archive/`.

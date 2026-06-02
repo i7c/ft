@@ -84,4 +84,4 @@
 - [x] 11.2 Run `cargo test --workspace` and fix any failing tests
 - [x] 11.3 Run `cargo clippy --workspace --tests -- -D warnings` and fix all warnings
 - [x] 11.4 Run `cargo fmt --check` and apply `cargo fmt` if needed
-- [ ] 11.5 Verify real-vault tests still pass: `FT_REAL_VAULT_TESTS=1 cargo test --workspace` (gated, run manually)
+- [x] 11.5 Verify real-vault tests still pass: `FT_REAL_VAULT_TESTS=1 cargo test --workspace` (gated, run manually)

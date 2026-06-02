@@ -20,7 +20,7 @@
 - [x] 3.2 Define `AppendArgs` struct: `path` (required target), `--template` (required), `--section` (optional override), `--title` (optional), `--var` (repeatable KEY=VAL), `--no-open`, `--editor`, `--obsidian`, `--vault-name`
 - [x] 3.3 Implement `run_append` — resolve target path, read file, resolve and render template, call `append_template` from core, `write_atomic`, spawn editor at insertion line
 - [x] 3.4 Wire `NotesCommand::Append` dispatch in `run()` match
-- [ ] 3.5 Add CLI integration tests in `ft/tests/` (create fixture vault with notes + frontmatter, run append commands, assert file contents and editor invocation)
+- [x] 3.5 Add CLI integration tests in `ft/tests/` (create fixture vault with notes + frontmatter, run append commands, assert file contents and editor invocation)
 
 ## 4. TUI: append flow state machine
 

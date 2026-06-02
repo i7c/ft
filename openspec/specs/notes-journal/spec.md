@@ -1,5 +1,8 @@
-## ADDED Requirements
+# notes-journal Specification
 
+## Purpose
+TBD - created by archiving change related-notes-journal. Update Purpose after archive.
+## Requirements
 ### Requirement: ft notes journal subcommand
 `ft notes journal <note>` SHALL be a subcommand under `ft notes`. `<note>` is a fuzzy note selector (same resolution as `ft notes open`) that resolves to a single vault note N. The command SHALL be read-only and SHALL NOT modify any files.
 
@@ -42,7 +45,7 @@ The journal SHALL search across all markdown notes in the vault, including daily
 - **THEN** those paragraphs do NOT appear in the journal
 
 ### Requirement: Journal matching via ParagraphLink edges
-A paragraph is included in the journal if and only if the graph contains a `ParagraphLink` edge from that paragraph node to N or any of N's aliases. No string scanning is performed at query time; the graph is the sole source of truth for matches.
+A paragraph SHALL be included in the journal if and only if the graph contains a `ParagraphLink` edge from that paragraph node to N or any of N's aliases. No string scanning is performed at query time; the graph SHALL be the sole source of truth for matches.
 
 #### Scenario: Graph edge determines inclusion
 - **WHEN** a paragraph node has a `ParagraphLink` edge to N
@@ -76,3 +79,4 @@ With `--json`, the command SHALL emit a JSON array where each element has fields
 #### Scenario: JSON output structure
 - **WHEN** `ft notes journal "Foo" --json` is run and two entries match
 - **THEN** stdout is a valid JSON array with two objects, each containing `date`, `source_title`, `source_path`, and `section` fields
+
