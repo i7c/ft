@@ -1,11 +1,13 @@
 //! Tab-agnostic "append with template" flow.
 //!
-//! The flow has up to three visible steps:
+//! The flow has up to four visible steps:
 //! 1. **TemplatePicking** — fuzzy pick a template under the configured
 //!    templates dir (same as the create flow's step 1).
 //! 2. **FilePicking** — (notes tab only) pick the target note from the
 //!    vault. Skipped when the tab already knows the target (graph tab).
-//! 3. **Commit** — render the template, read `ft-append-section` from the
+//! 3. **VarPrompt** — if the template references `{{ vars.KEY }}`,
+//!    prompt for each one in sequence before committing.
+//! 4. **Commit** — render the template, read `ft-append-section` from the
 //!    target note's frontmatter (unless a section override is supplied),
 //!    append, write atomically, open editor at the insertion line.
 //!
@@ -15,10 +17,11 @@
 //! [`handle_key`] is the public entry point; tabs feed every key event
 //! through it while the append flow is active.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::fs::write_atomic;
 use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
 use ft_core::notes::template::render as render_template;
@@ -29,7 +32,9 @@ use crate::tui::{
         queue_toast,
     },
     tab::{AppRequest, TabCtx, ToastStyle},
-    widgets::{FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource},
+    widgets::{
+        EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+    },
 };
 
 // ── State ────────────────────────────────────────────────────────────
@@ -51,6 +56,17 @@ pub enum AppendState {
         template: TemplatePick,
         section_override: Option<String>,
         picker: FuzzyPicker<VaultFilePickerSource>,
+    },
+    /// Step 3: prompt for template vars (`{{ vars.KEY }}` references),
+    /// one at a time. Commits when all vars have been collected.
+    VarPrompt {
+        template: TemplatePick,
+        target_path: PathBuf,
+        section_override: Option<String>,
+        vars_so_far: BTreeMap<String, String>,
+        /// Index into `template.vars_needed` currently being prompted.
+        next_idx: usize,
+        buf: EditBuffer,
     },
 }
 
@@ -104,6 +120,52 @@ pub fn handle_key(state: &mut AppendState, k: KeyEvent, ctx: &TabCtx) -> AppendS
             section_override,
             picker,
         } => handle_file_picker_key(k, template, section_override, picker, ctx),
+        AppendState::VarPrompt {
+            template,
+            target_path,
+            section_override,
+            vars_so_far,
+            next_idx,
+            buf,
+        } => handle_var_key(
+            k,
+            template,
+            target_path,
+            section_override,
+            vars_so_far,
+            next_idx,
+            buf,
+            ctx,
+        ),
+    }
+}
+
+/// Transition helper: if the template has vars that need prompting, go to
+/// VarPrompt; otherwise commit immediately.
+fn prompt_vars_or_commit(
+    ctx: &TabCtx,
+    template: TemplatePick,
+    target_path: PathBuf,
+    section_override: Option<String>,
+) -> AppendStep {
+    if template.vars_needed.is_empty() {
+        commit_append(
+            ctx,
+            &template,
+            &target_path,
+            section_override.as_deref(),
+            &BTreeMap::new(),
+        );
+        AppendStep::Finished
+    } else {
+        AppendStep::Transition(Box::new(AppendState::VarPrompt {
+            template,
+            target_path,
+            section_override,
+            vars_so_far: BTreeMap::new(),
+            next_idx: 0,
+            buf: EditBuffer::default(),
+        }))
     }
 }
 
@@ -136,9 +198,8 @@ fn handle_template_picker_key(
             };
 
             if let Some(tgt) = target_path.take() {
-                // Graph tab: commit immediately.
-                commit_append(ctx, &template, &tgt, section_override.as_deref());
-                AppendStep::Finished
+                // Graph tab: prompt vars or commit immediately.
+                prompt_vars_or_commit(ctx, template, tgt, section_override.take())
             } else {
                 // Notes tab: transition to file picker.
                 AppendStep::Transition(Box::new(AppendState::FilePicking {
@@ -167,8 +228,14 @@ fn handle_file_picker_key(
     match picker.handle_key(k) {
         PickerOutcome::Selected(hit) => {
             let abs = ctx.vault.path.join(&hit.path);
-            commit_append(ctx, template, &abs, section_override.as_deref());
-            AppendStep::Finished
+            // Take ownership of template and section_override; the state
+            // will be replaced with the transition.
+            let tpl = TemplatePick {
+                rel: std::mem::take(&mut template.rel),
+                source: std::mem::take(&mut template.source),
+                vars_needed: std::mem::take(&mut template.vars_needed),
+            };
+            prompt_vars_or_commit(ctx, tpl, abs, section_override.take())
         }
         PickerOutcome::Cancelled => AppendStep::Transition(Box::new(AppendState::begin_no_target(
             ctx,
@@ -176,6 +243,80 @@ fn handle_file_picker_key(
         ))),
         PickerOutcome::StillOpen => AppendStep::Stay,
         PickerOutcome::NotHandled => AppendStep::NotHandled,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_var_key(
+    k: KeyEvent,
+    template: &mut TemplatePick,
+    target_path: &Path,
+    section_override: &mut Option<String>,
+    vars_so_far: &mut BTreeMap<String, String>,
+    next_idx: &mut usize,
+    buf: &mut EditBuffer,
+    ctx: &TabCtx,
+) -> AppendStep {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match (k.code, ctrl) {
+        (KeyCode::Esc, _) => AppendStep::Finished,
+        (KeyCode::Enter, _) => {
+            let key_name = template
+                .vars_needed
+                .get(*next_idx)
+                .cloned()
+                .unwrap_or_default();
+            vars_so_far.insert(key_name, buf.text.clone());
+            *next_idx += 1;
+            if *next_idx >= template.vars_needed.len() {
+                // All vars collected — commit.
+                commit_append(
+                    ctx,
+                    template,
+                    target_path,
+                    section_override.as_deref(),
+                    vars_so_far,
+                );
+                AppendStep::Finished
+            } else {
+                buf.text.clear();
+                buf.cursor = 0;
+                AppendStep::Stay
+            }
+        }
+        (KeyCode::Char('w'), true) => {
+            buf.delete_word_backward();
+            AppendStep::Stay
+        }
+        (KeyCode::Char(c), false) => {
+            buf.insert(c);
+            AppendStep::Stay
+        }
+        (KeyCode::Backspace, _) => {
+            buf.backspace();
+            AppendStep::Stay
+        }
+        (KeyCode::Delete, _) => {
+            buf.delete();
+            AppendStep::Stay
+        }
+        (KeyCode::Left, _) => {
+            buf.left();
+            AppendStep::Stay
+        }
+        (KeyCode::Right, _) => {
+            buf.right();
+            AppendStep::Stay
+        }
+        (KeyCode::Home, _) => {
+            buf.home();
+            AppendStep::Stay
+        }
+        (KeyCode::End, _) => {
+            buf.end();
+            AppendStep::Stay
+        }
+        _ => AppendStep::NotHandled,
     }
 }
 
@@ -188,6 +329,7 @@ fn commit_append(
     template: &TemplatePick,
     target_path: &Path,
     section_override: Option<&str>,
+    vars: &BTreeMap<String, String>,
 ) {
     // Read the target file.
     let file_content = match std::fs::read_to_string(target_path) {
@@ -209,7 +351,7 @@ fn commit_append(
         .unwrap_or_default();
 
     // Render the template.
-    let tctx = create::build_template_context(title, ctx.today, Default::default());
+    let tctx = create::build_template_context(title, ctx.today, vars.clone());
     let rendered = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         render_template(&template.source, &tctx)
     })) {

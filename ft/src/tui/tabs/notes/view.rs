@@ -276,7 +276,93 @@ pub(crate) fn render_append_overlay(frame: &mut Frame, area: Rect, as_: &mut App
             APPEND_FILE_KEYS,
             None,
         ),
+        AppendState::VarPrompt {
+            template,
+            target_path,
+            vars_so_far,
+            next_idx,
+            buf,
+            ..
+        } => render_append_var_prompt(
+            frame,
+            area,
+            template,
+            target_path,
+            vars_so_far,
+            *next_idx,
+            buf,
+        ),
     }
+}
+
+fn render_append_var_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    template: &crate::tui::notes_actions::create::TemplatePick,
+    target_path: &std::path::Path,
+    _vars_so_far: &std::collections::BTreeMap<String, String>,
+    next_idx: usize,
+    buf: &crate::tui::widgets::EditBuffer,
+) {
+    let popup = centered_rect(60, 35, area);
+    frame.render_widget(Clear, popup);
+    let total = template.vars_needed.len();
+    let cur = next_idx + 1;
+    let key_name = template
+        .vars_needed
+        .get(next_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("?");
+    let target_label = target_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| target_path.display().to_string());
+    let title = format!(" append · var · {target_label} · {cur}/{total} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let prompt = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
+        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(prompt).alignment(Alignment::Left), chunks[1]);
+
+    let footer = keymap_line(&[
+        ("Enter", "confirm"),
+        ("Ctrl+W", "delete word"),
+        ("Esc", "cancel"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        chunks[3],
+    );
 }
 
 fn step_count(template: Option<&crate::tui::notes_actions::create::TemplatePick>) -> usize {
