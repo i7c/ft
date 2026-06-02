@@ -62,6 +62,17 @@ pub enum AppRequest {
     /// on Enter; the App finds the Graph tab and calls
     /// [`Tab::graph_jump_to_nodes`].
     GraphJumpToNodes(Vec<ft_core::graph::NoteId>),
+    /// Routed back to the Graph tab: apply a preset DSL string to the
+    /// currently-active view's query. Raised by the preset-picker
+    /// modal on Enter; the App calls [`Tab::graph_apply_preset`].
+    GraphApplyPreset(String),
+    /// Routed back to the Graph tab: focus the active view's query
+    /// bar (set `input_mode = true`). Legacy bridge until Section 5
+    /// migrates `input_mode` to `ActiveModal::QueryBar`. Raised by the
+    /// preset-picker modal when the user cancels a "new view with
+    /// presets" flow (`Ctrl+N`) so the freshly-pushed blank view
+    /// drops into edit mode.
+    GraphFocusQueryBar,
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -95,6 +106,10 @@ impl std::fmt::Debug for AppRequest {
                 .debug_tuple("GraphJumpToNodes")
                 .field(&path.len())
                 .finish(),
+            AppRequest::GraphApplyPreset(dsl) => {
+                f.debug_tuple("GraphApplyPreset").field(dsl).finish()
+            }
+            AppRequest::GraphFocusQueryBar => f.write_str("GraphFocusQueryBar"),
         }
     }
 }
@@ -208,6 +223,17 @@ pub trait Tab {
     /// ancestor chain and landing the cursor on the leaf. Other tabs
     /// ignore the request.
     fn graph_jump_to_nodes(&mut self, _path: Vec<ft_core::graph::NoteId>) {}
+
+    /// Hook for the preset picker (see [`AppRequest::GraphApplyPreset`]).
+    /// The Graph tab overrides this to apply the preset DSL string to
+    /// the active view. Other tabs ignore.
+    fn graph_apply_preset(&mut self, _dsl: String) {}
+
+    /// Hook for the preset picker's cancel-from-new-view path (see
+    /// [`AppRequest::GraphFocusQueryBar`]). The Graph tab overrides
+    /// this to enter input mode on the active view. Other tabs ignore.
+    /// Removed once Section 5 lands `ActiveModal::QueryBar`.
+    fn graph_focus_query_bar(&mut self) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

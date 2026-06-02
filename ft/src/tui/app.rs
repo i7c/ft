@@ -511,6 +511,18 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::GraphApplyPreset(dsl) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_apply_preset(dsl);
+                }
+                Ok(())
+            }
+            AppRequest::GraphFocusQueryBar => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_focus_query_bar();
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1029,6 +1041,16 @@ impl App {
                         self.tabs[idx].graph_jump_to_nodes(path);
                     }
                 }
+                Some(AppRequest::GraphApplyPreset(dsl)) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_apply_preset(dsl);
+                    }
+                }
+                Some(AppRequest::GraphFocusQueryBar) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_focus_query_bar();
+                    }
+                }
                 Some(other) => {
                     *self.pending_request.borrow_mut() = Some(other);
                     break;
@@ -1069,6 +1091,16 @@ impl App {
                 AppRequest::GraphJumpToNodes(path) => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                         self.tabs[idx].graph_jump_to_nodes(path);
+                    }
+                }
+                AppRequest::GraphApplyPreset(dsl) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_apply_preset(dsl);
+                    }
+                }
+                AppRequest::GraphFocusQueryBar => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_focus_query_bar();
                     }
                 }
                 // Other variants need terminal state; tests that exercise
@@ -1114,6 +1146,18 @@ impl App {
             AppRequest::GraphJumpToNodes(path) => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                     self.tabs[idx].graph_jump_to_nodes(path);
+                }
+                Ok(())
+            }
+            AppRequest::GraphApplyPreset(dsl) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_apply_preset(dsl);
+                }
+                Ok(())
+            }
+            AppRequest::GraphFocusQueryBar => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_focus_query_bar();
                 }
                 Ok(())
             }

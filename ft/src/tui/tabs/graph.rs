@@ -303,6 +303,88 @@ impl crate::tui::widgets::PickerSource for GraphSearchPickerSource {
     }
 }
 
+// ── PresetPickerModal ─────────────────────────────────────────────────
+
+/// Modal wrapper around the preset picker (extract-modal-driver §4).
+/// Two open paths: `Ctrl+N` opens with `for_active_view = false`
+/// (caller pre-pushed a blank view); `Ctrl+P` opens with
+/// `for_active_view = true` (applies to existing active view).
+///
+/// On `Enter`: resolve the picked preset name to its DSL string, post
+/// `AppRequest::GraphApplyPreset(dsl)` and return `Closed`.
+///
+/// On `Esc` with `for_active_view = false`: the pre-pushed blank view
+/// drops into edit mode via `AppRequest::GraphFocusQueryBar`. With
+/// `for_active_view = true`: no action — just close.
+pub struct PresetPickerModal {
+    inner: FuzzyPicker<PresetPickerSource>,
+    for_active_view: bool,
+}
+
+impl PresetPickerModal {
+    pub fn new(source: PresetPickerSource, for_active_view: bool) -> Self {
+        Self {
+            inner: FuzzyPicker::new(source),
+            for_active_view,
+        }
+    }
+}
+
+impl Modal for PresetPickerModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(name) => {
+                let dsl = ctx
+                    .vault
+                    .config
+                    .config
+                    .graph
+                    .presets
+                    .get(&name)
+                    .cloned()
+                    .or_else(|| preset::builtin(&name).map(|s| s.to_string()));
+                if let Some(dsl) = dsl {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphApplyPreset(dsl));
+                }
+                ModalOutcome::Closed
+            }
+            PickerOutcome::Cancelled => {
+                if !self.for_active_view {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphFocusQueryBar);
+                }
+                ModalOutcome::Closed
+            }
+            PickerOutcome::StillOpen => ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _ctx: &TabCtx) {
+        let popup_area = centered_rect(60, 60, area);
+        frame.render_widget(Clear, popup_area);
+        self.inner.render(frame, popup_area);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Preset picker",
+            &[
+                ("Type", "filter"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "apply preset"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "preset-picker"
+    }
+}
+
 // ── SearchPickerModal ─────────────────────────────────────────────────
 
 /// Modal wrapper around the in-tree fuzzy search picker
@@ -413,15 +495,6 @@ pub struct GraphTab {
     move_outer: Option<GraphMoveOuter>,
     /// Active rename-in-place modal. `Some` when Flow B is open.
     rename_state: Option<GraphRenameState>,
-    /// Active preset picker. `Some` after `Ctrl+N` or `Ctrl+P`;
-    /// selecting a preset applies the preset DSL. Dismissing falls
-    /// back to a blank view (`Ctrl+N`) or leaves the active view
-    /// unchanged (`Ctrl+P`).
-    preset_picker: Option<FuzzyPicker<PresetPickerSource>>,
-    /// When `true`, the open picker was triggered by `Ctrl+P` and
-    /// should apply the selected preset to the *existing* active view
-    /// rather than a newly-created one.
-    preset_picker_for_active_view: bool,
     /// Active Related-section updater modal. `Some` when open;
     /// captures the keyboard for the duration. Triggered by `R` on a
     /// Note row or by `ft notes update-related` via
@@ -558,8 +631,6 @@ impl GraphTab {
             capture_var_state: None,
             move_outer: None,
             rename_state: None,
-            preset_picker: None,
-            preset_picker_for_active_view: false,
             related_modal: None,
             queued_related_path: None,
         }
@@ -1454,28 +1525,33 @@ impl GraphTab {
     /// Open a new view. If graph presets exist (user or built-in), opens
     /// the preset picker first; on selection, pre-fills the query. On
     /// dismiss, creates a blank view.
+    /// `Ctrl+N` path: push a blank view, then open the preset picker
+    /// with `for_active_view = false`. If no presets exist, just push
+    /// the blank view and drop into input mode (no picker to open).
     fn add_view_with_presets(&mut self, ctx: &TabCtx) {
         let src = PresetPickerSource::new(ctx.vault);
         if src.items.is_empty() {
             self.add_view();
             return;
         }
-        self.preset_picker_for_active_view = false;
         self.views.push(ExpandedView::default());
         self.active = self.views.len() - 1;
-        self.preset_picker = Some(FuzzyPicker::new(src));
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+            ActiveModal::PresetPicker(PresetPickerModal::new(src, false)),
+        )));
     }
 
-    /// Open the preset picker bound to the *current* active view (the
-    /// `Ctrl+P` path). On selection the active view's query is replaced
+    /// `Ctrl+P` path: open the preset picker bound to the *current*
+    /// active view. On selection the active view's query is replaced
     /// in-place; on dismiss nothing changes.
     fn open_preset_picker_for_active_view(&mut self, ctx: &TabCtx) {
         let src = PresetPickerSource::new(ctx.vault);
         if src.items.is_empty() {
             return;
         }
-        self.preset_picker_for_active_view = true;
-        self.preset_picker = Some(FuzzyPicker::new(src));
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+            ActiveModal::PresetPicker(PresetPickerModal::new(src, true)),
+        )));
     }
 
     /// Open a new blank view and drop into input mode. Used when no
@@ -1486,45 +1562,9 @@ impl GraphTab {
         self.input_mode = true;
     }
 
-    /// Resolve a preset name to its DSL string, preferring user config over
-    /// built-ins.
-    fn resolve_preset(&self, name: &str, ctx: &TabCtx) -> Option<String> {
-        if let Some(user) = ctx.vault.config.config.graph.presets.get(name) {
-            return Some(user.clone());
-        }
-        preset::builtin(name).map(|s| s.to_string())
-    }
-
-    fn handle_preset_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(mut picker) = self.preset_picker.take() else {
-            return EventOutcome::NotHandled;
-        };
-        let for_active = self.preset_picker_for_active_view;
-        match picker.handle_key(k) {
-            PickerOutcome::Selected(name) => {
-                if let Some(dsl) = self.resolve_preset(&name, ctx) {
-                    self.apply_preset_to_active_view(&dsl);
-                }
-                self.input_mode = false;
-                self.preset_picker_for_active_view = false;
-            }
-            PickerOutcome::Cancelled => {
-                if !for_active {
-                    self.input_mode = true;
-                }
-                self.preset_picker_for_active_view = false;
-            }
-            PickerOutcome::StillOpen => {
-                self.preset_picker = Some(picker);
-            }
-            PickerOutcome::NotHandled => {
-                self.preset_picker = Some(picker);
-                return EventOutcome::NotHandled;
-            }
-        }
-        EventOutcome::Consumed
-    }
-
+    /// Apply a preset DSL string to the currently-active view. Called
+    /// by the `Tab::graph_apply_preset` hook when the preset-picker
+    /// modal commits.
     fn apply_preset_to_active_view(&mut self, dsl: &str) {
         let graph = self.graph.as_ref();
         let v = &mut self.views[self.active];
@@ -1832,6 +1872,14 @@ impl Tab for GraphTab {
         self.jump_to_path(path);
     }
 
+    fn graph_apply_preset(&mut self, dsl: String) {
+        self.apply_preset_to_active_view(&dsl);
+    }
+
+    fn graph_focus_query_bar(&mut self) {
+        self.input_mode = true;
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
@@ -1867,12 +1915,6 @@ impl Tab for GraphTab {
         // Related-section modal: captures keyboard while open.
         if self.related_modal.is_some() {
             return Ok(self.handle_related_modal_key(k, ctx));
-        }
-
-        // Preset picker: captures keyboard while open. On selection,
-        // pre-fills the new view's query; on dismiss, starts blank.
-        if self.preset_picker.is_some() {
-            return Ok(self.handle_preset_picker_key(k, ctx));
         }
 
         // Move-section flow: shared and tree-driven phases all funnel
@@ -2557,17 +2599,6 @@ impl Tab for GraphTab {
                 ))),
                 footer_area,
             );
-        }
-
-        if let Some(ref mut picker) = self.preset_picker {
-            // Percentage-based sizing so the picker grows with the
-            // terminal. At 80×24 this gives roughly 48×12 — enough to
-            // show all 5 built-in presets without scrolling; on a
-            // larger viewport the picker scales up so long preset
-            // names and user-defined presets fit comfortably.
-            let popup_area = centered_rect(60, 60, area);
-            frame.render_widget(Clear, popup_area);
-            picker.render(frame, popup_area);
         }
 
         if let Some(modal) = self.related_modal.as_ref() {
@@ -3840,7 +3871,9 @@ mod view_tests {
     }
 
     /// Ctrl+P opens the preset picker for the active view; selecting
-    /// a preset replaces the active view's query in-place.
+    /// a preset replaces the active view's query in-place. Updated
+    /// for extract-modal-driver §4: the picker is now an `ActiveModal`
+    /// variant and commits via `AppRequest::GraphApplyPreset`.
     #[test]
     fn ctrl_p_preset_replaces_active_view_query() {
         use chrono::NaiveDate;
@@ -3873,16 +3906,37 @@ mod view_tests {
         tab.graph = Some(graph);
         tab.views[0].query_text = "node where kind = Note;".to_string();
 
-        // Ctrl+P → open picker bound to the active view.
+        // Ctrl+P → tab posts OpenModal(PresetPicker(... for_active_view=true ...)).
         tab.open_preset_picker_for_active_view(&ctx);
-        assert!(tab.preset_picker.is_some());
-        assert!(tab.preset_picker_for_active_view);
+        let req = pending_request
+            .borrow_mut()
+            .take()
+            .expect("Ctrl+P must queue an OpenModal request");
+        let mut modal = match req {
+            AppRequest::OpenModal(m) => match *m {
+                ActiveModal::PresetPicker(p) => p,
+                other => panic!("expected PresetPicker, got {:?}", other.name()),
+            },
+            other => panic!("expected OpenModal, got {other:?}"),
+        };
 
-        // Simulate pressing Enter on the first match (alphabetically
-        // "crosslinks" → the crosslinks preset DSL).
+        // Feed Enter to the modal: should commit by posting GraphApplyPreset.
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let outcome = tab.handle_preset_picker_key(enter, &ctx);
-        assert!(matches!(outcome, EventOutcome::Consumed));
+        let outcome = modal.handle_event(Event::Key(enter), &ctx);
+        assert!(
+            matches!(outcome, ModalOutcome::Closed),
+            "Enter on a selected row must close the modal"
+        );
+
+        // The modal queued GraphApplyPreset(dsl). Apply it via the tab hook.
+        let req = pending_request
+            .borrow_mut()
+            .take()
+            .expect("Enter must queue GraphApplyPreset");
+        match req {
+            AppRequest::GraphApplyPreset(dsl) => tab.graph_apply_preset(dsl),
+            other => panic!("expected GraphApplyPreset, got {other:?}"),
+        }
 
         // The active view's query is replaced with the preset DSL.
         assert_eq!(
@@ -3890,10 +3944,6 @@ mod view_tests {
             r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into, link, embed};"#,
             "active view query should be replaced by the selected preset DSL"
         );
-
-        // Flag is reset after selection.
-        assert!(!tab.preset_picker_for_active_view);
-        assert!(tab.preset_picker.is_none());
     }
 
     // ── z (root-on-selected) tests ──────────────────────────────────

@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 6193
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
@@ -25,4 +26,4 @@ press / to edit query
                                                                                 
                                                                                 
 >                                                                               
- vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal
+ vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]   modal: preset-pi

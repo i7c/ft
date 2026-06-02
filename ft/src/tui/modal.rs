@@ -50,7 +50,7 @@ use crate::tui::notes_actions::section_move::{
 };
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::graph::{
-    GraphMoveOuter, GraphRenameState, PresetPickerSource, RelatedModal, SearchPickerModal,
+    GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal, SearchPickerModal,
 };
 use crate::tui::tabs::notes::view::render_periodic_leader;
 use crate::tui::widgets::{FuzzyPicker, PickerSource};
@@ -130,7 +130,7 @@ pub enum ActiveModal {
     /// the graph tab tree.
     Rename(GraphRenameState),
     /// Fuzzy picker over saved graph queries (user + built-in presets).
-    PresetPicker(FuzzyPicker<PresetPickerSource>),
+    PresetPicker(PresetPickerModal),
     /// Modal for editing a note's `## Related` section by toggling
     /// co-occurrence-scored candidates.
     Related(RelatedModal),
@@ -173,7 +173,7 @@ impl Modal for ActiveModal {
             ActiveModal::SectionMove(s) => s.render(frame, area, ctx),
             ActiveModal::MoveOuter(s) => s.render(frame, area, ctx),
             ActiveModal::Rename(s) => s.render(frame, area, ctx),
-            ActiveModal::PresetPicker(s) => <FuzzyPicker<_> as Modal>::render(s, frame, area, ctx),
+            ActiveModal::PresetPicker(s) => s.render(frame, area, ctx),
             ActiveModal::Related(s) => s.render(frame, area, ctx),
             ActiveModal::Search(s) => s.render(frame, area, ctx),
             ActiveModal::PeriodicLeader => PeriodicLeader.render(frame, area, ctx),
