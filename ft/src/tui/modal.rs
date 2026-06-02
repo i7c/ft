@@ -50,7 +50,7 @@ use crate::tui::notes_actions::section_move::{
 };
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::graph::{
-    GraphMoveOuter, GraphRenameState, GraphSearchPickerSource, PresetPickerSource, RelatedModal,
+    GraphMoveOuter, GraphRenameState, PresetPickerSource, RelatedModal, SearchPickerModal,
 };
 use crate::tui::tabs::notes::view::render_periodic_leader;
 use crate::tui::widgets::{FuzzyPicker, PickerSource};
@@ -136,7 +136,7 @@ pub enum ActiveModal {
     Related(RelatedModal),
     /// In-tree fuzzy search over the active graph view's reachable
     /// subgraph.
-    Search(FuzzyPicker<GraphSearchPickerSource>),
+    Search(SearchPickerModal),
     /// Leader chord for periodic-note open (`p` then `d`/`w`/`m`/…).
     PeriodicLeader,
     /// The active view's query-input bar owns the keyboard. The
@@ -175,7 +175,7 @@ impl Modal for ActiveModal {
             ActiveModal::Rename(s) => s.render(frame, area, ctx),
             ActiveModal::PresetPicker(s) => <FuzzyPicker<_> as Modal>::render(s, frame, area, ctx),
             ActiveModal::Related(s) => s.render(frame, area, ctx),
-            ActiveModal::Search(s) => <FuzzyPicker<_> as Modal>::render(s, frame, area, ctx),
+            ActiveModal::Search(s) => s.render(frame, area, ctx),
             ActiveModal::PeriodicLeader => PeriodicLeader.render(frame, area, ctx),
             ActiveModal::QueryBar { view_id } => {
                 QueryBar { view_id: *view_id }.render(frame, area, ctx)

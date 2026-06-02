@@ -505,6 +505,12 @@ impl App {
                 *self.active_modal.borrow_mut() = Some(*modal);
                 Ok(())
             }
+            AppRequest::GraphJumpToNodes(path) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_jump_to_nodes(path);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1007,24 +1013,28 @@ impl App {
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {
         self.handle_event(ev)?;
-        // Auto-service `OpenModal` between dispatches so tests that
-        // step the UI through `dispatch` + `render` see the modal go
-        // live without a separate `service_pending_for_test` call.
+        // Auto-service the requests that don't require terminal state:
+        // `OpenModal` (closing/opening modal slot) and graph-routed
+        // back-actions (`GraphJumpToNodes` and similar future ones).
         // Other request variants stay in `pending_request` so tests
         // that assert on them via `take_pending_request` keep working.
-        let modal = {
-            let mut slot = self.pending_request.borrow_mut();
-            match slot.take() {
-                Some(AppRequest::OpenModal(m)) => Some(m),
-                Some(other) => {
-                    *slot = Some(other);
-                    None
+        loop {
+            let req = self.pending_request.borrow_mut().take();
+            match req {
+                Some(AppRequest::OpenModal(m)) => {
+                    *self.active_modal.borrow_mut() = Some(*m);
                 }
-                None => None,
+                Some(AppRequest::GraphJumpToNodes(path)) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_jump_to_nodes(path);
+                    }
+                }
+                Some(other) => {
+                    *self.pending_request.borrow_mut() = Some(other);
+                    break;
+                }
+                None => break,
             }
-        };
-        if let Some(m) = modal {
-            *self.active_modal.borrow_mut() = Some(*m);
         }
         Ok(())
     }
@@ -1055,6 +1065,11 @@ impl App {
                 }
                 AppRequest::OpenModal(modal) => {
                     *self.active_modal.borrow_mut() = Some(*modal);
+                }
+                AppRequest::GraphJumpToNodes(path) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_jump_to_nodes(path);
+                    }
                 }
                 // Other variants need terminal state; tests that exercise
                 // them go through the real `service_request` path.
@@ -1094,6 +1109,12 @@ impl App {
             }
             AppRequest::OpenModal(modal) => {
                 *self.active_modal.borrow_mut() = Some(*modal);
+                Ok(())
+            }
+            AppRequest::GraphJumpToNodes(path) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_jump_to_nodes(path);
+                }
                 Ok(())
             }
             other => {

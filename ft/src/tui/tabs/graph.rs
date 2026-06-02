@@ -40,7 +40,7 @@ use ft_core::search::Hit;
 use crate::tui::{
     event::Event,
     help::HelpSection,
-    modal::ActiveModal,
+    modal::{ActiveModal, Modal, ModalOutcome},
     notes_actions::{
         append::{self, AppendState, AppendStep},
         capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
@@ -303,6 +303,73 @@ impl crate::tui::widgets::PickerSource for GraphSearchPickerSource {
     }
 }
 
+// ── SearchPickerModal ─────────────────────────────────────────────────
+
+/// Modal wrapper around the in-tree fuzzy search picker
+/// (extract-modal-driver §4). Owns the [`FuzzyPicker`] for the
+/// duration of the modal's lifetime; on `Enter` posts
+/// [`AppRequest::GraphJumpToNodes`] back to the Graph tab so the
+/// cursor jumps to the chosen node, auto-expanding ancestors.
+pub struct SearchPickerModal {
+    inner: FuzzyPicker<GraphSearchPickerSource>,
+}
+
+impl SearchPickerModal {
+    pub fn new(source: GraphSearchPickerSource) -> Self {
+        Self {
+            inner: FuzzyPicker::new(source),
+        }
+    }
+}
+
+impl Modal for SearchPickerModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(path) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphJumpToNodes(path));
+                ModalOutcome::Closed
+            }
+            PickerOutcome::Cancelled => ModalOutcome::Closed,
+            PickerOutcome::StillOpen => ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _ctx: &TabCtx) {
+        let popup_area = centered_rect(60, 60, area);
+        frame.render_widget(Clear, popup_area);
+        let [picker_area, footer_area] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(popup_area);
+        self.inner.render(frame, picker_area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Enter: jump · Esc: cancel",
+                Style::default().fg(Color::Gray),
+            ))),
+            footer_area,
+        );
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Graph search",
+            &[
+                ("Type", "filter"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "jump to node"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "search"
+    }
+}
+
 // ── GraphTab ──────────────────────────────────────────────────────────
 
 /// Fallback query the first view of the graph tab seeds itself with on
@@ -365,10 +432,6 @@ pub struct GraphTab {
     /// [`crate::tui::App`] when the TUI was launched via
     /// `ft notes update-related`.
     queued_related_path: Option<PathBuf>,
-    /// Active in-tree search picker (`f`). `Some` when the picker is
-    /// open over the active view's reachable subgraph; captures the
-    /// keyboard until Enter (jump) or Esc (cancel).
-    search_picker: Option<FuzzyPicker<GraphSearchPickerSource>>,
 }
 
 /// Inline rename-in-place state. `Some` while the rename modal is open.
@@ -499,7 +562,6 @@ impl GraphTab {
             preset_picker_for_active_view: false,
             related_modal: None,
             queued_related_path: None,
-            search_picker: None,
         }
     }
 
@@ -1471,32 +1533,12 @@ impl GraphTab {
         v.apply_query(graph);
     }
 
-    fn handle_search_picker_key(&mut self, k: KeyEvent, _ctx: &TabCtx) -> EventOutcome {
-        let Some(mut picker) = self.search_picker.take() else {
-            return EventOutcome::NotHandled;
-        };
-        match picker.handle_key(k) {
-            PickerOutcome::Selected(path) => {
-                self.jump_to_path(path);
-            }
-            PickerOutcome::Cancelled => {}
-            PickerOutcome::StillOpen => {
-                self.search_picker = Some(picker);
-            }
-            PickerOutcome::NotHandled => {
-                self.search_picker = Some(picker);
-                return EventOutcome::NotHandled;
-            }
-        }
-        EventOutcome::Consumed
-    }
-
     /// Land the cursor on the node at the end of `path`, auto-expanding
     /// every ancestor along the way. Writes the path components into
     /// `expanded_paths` and stores the full path in `selected_path` so the
     /// jump survives a subsequent graph refresh, then re-runs
     /// `restore_expansion` to materialize the tree.
-    fn jump_to_path(&mut self, path: Vec<NoteId>) {
+    pub fn jump_to_path(&mut self, path: Vec<NoteId>) {
         if path.is_empty() {
             return;
         }
@@ -1786,6 +1828,10 @@ impl Tab for GraphTab {
         self.queued_related_path = Some(note_path.to_path_buf());
     }
 
+    fn graph_jump_to_nodes(&mut self, path: Vec<NoteId>) {
+        self.jump_to_path(path);
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
@@ -1827,14 +1873,6 @@ impl Tab for GraphTab {
         // pre-fills the new view's query; on dismiss, starts blank.
         if self.preset_picker.is_some() {
             return Ok(self.handle_preset_picker_key(k, ctx));
-        }
-
-        // Search-in-tree picker: captures keyboard while open. On
-        // selection, jumps the cursor to the chosen node, expanding
-        // ancestors. Runs ahead of input_mode so typing in the picker
-        // can't drop into the query bar.
-        if self.search_picker.is_some() {
-            return Ok(self.handle_search_picker_key(k, ctx));
         }
 
         // Move-section flow: shared and tree-driven phases all funnel
@@ -1960,7 +1998,9 @@ impl Tab for GraphTab {
                 if let (Some(g), Some(q)) = (self.graph.as_ref(), self.active_view().query.as_ref())
                 {
                     let src = GraphSearchPickerSource::new(g, q);
-                    self.search_picker = Some(FuzzyPicker::new(src));
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                        ActiveModal::Search(SearchPickerModal::new(src)),
+                    )));
                 }
                 Ok(EventOutcome::Consumed)
             }
@@ -2528,23 +2568,6 @@ impl Tab for GraphTab {
             let popup_area = centered_rect(60, 60, area);
             frame.render_widget(Clear, popup_area);
             picker.render(frame, popup_area);
-        }
-
-        if let Some(ref mut picker) = self.search_picker {
-            let popup_area = centered_rect(60, 60, area);
-            frame.render_widget(Clear, popup_area);
-            // Split off a one-row footer at the bottom for the action
-            // hint, render the picker into the rest.
-            let [picker_area, footer_area] =
-                Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(popup_area);
-            picker.render(frame, picker_area);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    "Enter: jump · Esc: cancel",
-                    Style::default().fg(Color::Gray),
-                ))),
-                footer_area,
-            );
         }
 
         if let Some(modal) = self.related_modal.as_ref() {

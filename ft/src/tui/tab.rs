@@ -56,8 +56,12 @@ pub enum AppRequest {
     /// the modal ahead of the active tab. Tabs use this to launch
     /// flows (create, append, capture, picker, etc.) without owning
     /// per-tab modal state.
-    #[allow(dead_code)] // constructed in §3.3+ as GraphTab modal launches migrate
     OpenModal(Box<ActiveModal>),
+    /// Routed back to the Graph tab: jump the cursor to a node by path
+    /// (auto-expanding ancestors). Raised by the search-picker modal
+    /// on Enter; the App finds the Graph tab and calls
+    /// [`Tab::graph_jump_to_nodes`].
+    GraphJumpToNodes(Vec<ft_core::graph::NoteId>),
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -87,6 +91,10 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::OpenModal(modal) => {
                 f.debug_tuple("OpenModal").field(&modal.name()).finish()
             }
+            AppRequest::GraphJumpToNodes(path) => f
+                .debug_tuple("GraphJumpToNodes")
+                .field(&path.len())
+                .finish(),
         }
     }
 }
@@ -193,6 +201,13 @@ pub trait Tab {
     /// turned into a load on the tab's next `on_focus`. Default is a
     /// no-op: other tabs ignore the request.
     fn queue_journal_for(&mut self, _note_path: &std::path::Path) {}
+
+    /// Hook for the in-tree search picker (see
+    /// [`AppRequest::GraphJumpToNodes`]). The Graph tab overrides
+    /// this to call its own `jump_to_path` helper, materialising the
+    /// ancestor chain and landing the cursor on the leaf. Other tabs
+    /// ignore the request.
+    fn graph_jump_to_nodes(&mut self, _path: Vec<ft_core::graph::NoteId>) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this
