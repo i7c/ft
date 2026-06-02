@@ -7764,3 +7764,299 @@ fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
     );
     Ok(())
 }
+
+// ── Capture preset tests ─────────────────────────────────────────────
+
+#[test]
+fn capture_preset_config_loads_correctly() {
+    let (_dir, vault) = capture_preset_vault();
+    let presets = &vault.config.config.capture_presets;
+    assert!(presets.contains_key("log"), "presets: {presets:?}");
+    assert!(presets.contains_key("meeting"));
+    let log_preset = &presets["log"];
+    assert_eq!(log_preset.action, ft_core::config::CaptureAction::Append);
+    assert_eq!(log_preset.template, "log-entry");
+    assert_eq!(log_preset.note.as_deref(), Some("daily/log.md"));
+    assert_eq!(log_preset.section.as_deref(), Some("Log"));
+    let meeting_preset = &presets["meeting"];
+    assert_eq!(
+        meeting_preset.action,
+        ft_core::config::CaptureAction::Create
+    );
+    assert_eq!(meeting_preset.template, "meeting");
+    let tpl_path = vault.templates_dir().join("log-entry.md");
+    assert!(tpl_path.is_file(), "template should exist: {tpl_path:?}");
+    let target_path = vault.path.join("daily").join("log.md");
+    assert!(
+        target_path.is_file(),
+        "target should exist: {target_path:?}"
+    );
+}
+
+/// Build a vault with capture presets, templates, and a target note.
+fn capture_preset_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+
+    // Config with a create preset and an append preset.
+    let config_dir = vault_path.join(".ft");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_toml = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "[capture_presets.log]",
+        "action = \"append\"",
+        "template = \"log-entry\"",
+        "note = \"daily/log.md\"",
+        "section = \"Log\"",
+        "",
+        "[capture_presets.meeting]",
+        "action = \"create\"",
+        "template = \"meeting\"",
+        "path = \"%Y-%m-%d-meeting\"",
+        "folder = \"meetings\"",
+    );
+    std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
+
+    // Templates directory.
+    let tmpl_dir = vault_path.join("templates-ft");
+    std::fs::create_dir_all(&tmpl_dir).unwrap();
+
+    // Template without vars — should execute immediately.
+    std::fs::write(
+        tmpl_dir.join("log-entry.md"),
+        "- Log entry for {{ today }}\n",
+    )
+    .unwrap();
+
+    // Template with vars — should prompt.
+    std::fs::write(
+        tmpl_dir.join("meeting.md"),
+        "# {{ vars.topic }}\nDate: {{ today | date(format='%Y-%m-%d') }}\nAttendees: {{ vars.attendees }}\n",
+    )
+    .unwrap();
+
+    // Target note for append preset.
+    let daily_dir = vault_path.join("daily");
+    std::fs::create_dir_all(&daily_dir).unwrap();
+    std::fs::write(
+        daily_dir.join("log.md"),
+        "# Daily Log\n## Log\nexisting line\n",
+    )
+    .unwrap();
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn capture_append_no_vars_executes_immediately() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+
+    // Verify the vault config and templates are set up correctly.
+    {
+        assert!(
+            vault.config.config.capture_presets.contains_key("log"),
+            "log preset should be in config"
+        );
+        let log_preset = &vault.config.config.capture_presets["log"];
+        assert_eq!(log_preset.action, ft_core::config::CaptureAction::Append);
+        assert_eq!(log_preset.template, "log-entry");
+        let tpl_path = vault.templates_dir().join("log-entry.md");
+        assert!(
+            tpl_path.is_file(),
+            "template file should exist at {tpl_path:?}"
+        );
+    }
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+
+    // Switch to Notes tab (index 2 — Graph=0, Tasks=1, Notes=2).
+    app.switch_to(2)?;
+
+    // Press Q to open capture preset picker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+
+    // The picker should show "log" and "meeting".
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("log"),
+        "capture picker should list log preset: {frame}"
+    );
+    assert!(
+        frame.contains("meeting"),
+        "capture picker should list meeting preset: {frame}"
+    );
+
+    // Select "log" (first item).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // After Enter, the picker should be dismissed.
+    let frame_after = render(&mut app, 80, 24);
+    assert!(
+        !frame_after.contains("quick capture"),
+        "picker should be dismissed after Enter: {frame_after}"
+    );
+
+    // Since log-entry template has no vars, it should execute immediately.
+    // The picker should be dismissed and we're back on Notes idle.
+    // Verify the target file was modified.
+    let target = vault_path.join("daily").join("log.md");
+    let content = std::fs::read_to_string(&target)?;
+    assert!(
+        content.contains("Log entry for"),
+        "target should contain rendered log entry: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn capture_create_with_vars_prompts_before_committing() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+
+    // Switch to Notes tab.
+    app.switch_to(2)?;
+
+    // Press Q to open capture preset picker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+
+    // Move down to select "meeting" (second item).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+
+    // Select "meeting".
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Should now be showing the var prompt (not an error toast).
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("topic") || frame.contains("var"),
+        "should show var prompt after selecting meeting preset: {frame}"
+    );
+
+    // Type the first var: topic
+    for c in "Q2 Planning".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    // Press Enter to advance to next var.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Type the second var: attendees
+    for c in "Alice, Bob".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    // Press Enter to commit.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Verify the file was created with vars substituted.
+    let meetings_dir = vault_path.join("meetings");
+    let files: Vec<_> = std::fs::read_dir(&meetings_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+        .collect();
+    assert_eq!(files.len(), 1, "should have created one meeting note");
+    let content = std::fs::read_to_string(files[0].path())?;
+    assert!(
+        content.contains("# Q2 Planning"),
+        "should contain the topic var: {content}"
+    );
+    assert!(
+        content.contains("Alice, Bob"),
+        "should contain the attendees var: {content}"
+    );
+    assert!(
+        content.contains("2026-05-10"),
+        "should contain today's date: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn capture_var_prompt_esc_cancels() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+
+    // Switch to Notes tab.
+    app.switch_to(2)?;
+
+    // Press Q and select meeting (with vars).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Verify we're in the var prompt.
+    let frame = render(&mut app, 80, 24);
+    assert!(frame.contains("topic"), "should be in var prompt: {frame}");
+
+    // Press Esc to cancel.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+
+    // Should be back on Notes idle — no file should have been created.
+    let meetings_dir = vault_path.join("meetings");
+    let exists = meetings_dir.exists()
+        && std::fs::read_dir(&meetings_dir)
+            .map(|mut r| r.any(|e| e.is_ok()))
+            .unwrap_or(false);
+    assert!(
+        !exists,
+        "meetings dir should not have any files after cancel"
+    );
+    Ok(())
+}
+
+#[test]
+fn capture_var_prompt_snapshot() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+
+    // Switch to Notes tab.
+    app.switch_to(2)?;
+
+    // Press Q and select meeting (with vars).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("capture_var_prompt_80x24", frame);
+    Ok(())
+}

@@ -42,7 +42,7 @@ use crate::tui::{
     help::HelpSection,
     notes_actions::{
         append::{self, AppendState, AppendStep},
-        capture::{self, CapturePresetPickerSource},
+        capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
         create::{self, CreateState, CreateStep},
         periodic::run_periodic_open,
         queue_toast,
@@ -336,6 +336,9 @@ pub struct GraphTab {
     append_state: Option<AppendState>,
     /// Active quick-capture preset picker. `Some` after `Q`.
     capture_picker: Option<FuzzyPicker<CapturePresetPickerSource>>,
+    /// Active quick-capture var prompt. `Some` when the selected
+    /// preset's template has `vars.*` references.
+    capture_var_state: Option<CaptureVarPromptState>,
     /// Whether the periodic-note leader chord is awaiting its next
     /// keystroke (`d`/`w`/`m`/`q`/`y`). Mirrors `NotesState::PeriodicLeader`.
     /// Set by `p`; cleared on any subsequent keypress (the period letter
@@ -493,6 +496,7 @@ impl GraphTab {
             create_state: None,
             append_state: None,
             capture_picker: None,
+            capture_var_state: None,
             periodic_leader: false,
             move_outer: None,
             rename_state: None,
@@ -1199,8 +1203,11 @@ impl GraphTab {
             PickerOutcome::Selected(name) => {
                 self.capture_picker = None;
                 let target = self.selected_note_abs_path(ctx);
-                match capture::execute_preset(ctx, &name, target) {
-                    Ok(()) => {}
+                match capture::try_execute_preset(ctx, &name, target) {
+                    Ok(capture::CaptureResult::Executed) => {}
+                    Ok(capture::CaptureResult::NeedsVars(vs)) => {
+                        self.capture_var_state = Some(vs);
+                    }
                     Err(e) => queue_toast(ctx, &e, ToastStyle::Error),
                 }
                 EventOutcome::Consumed
@@ -1212,6 +1219,16 @@ impl GraphTab {
             PickerOutcome::StillOpen => EventOutcome::Consumed,
             PickerOutcome::NotHandled => EventOutcome::NotHandled,
         }
+    }
+
+    fn handle_capture_var_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let Some(vs) = self.capture_var_state.as_mut() else {
+            return EventOutcome::NotHandled;
+        };
+        if capture::handle_capture_var_key(vs, k, ctx) {
+            self.capture_var_state = None;
+        }
+        EventOutcome::Consumed
     }
 
     fn selected_note_abs_path(&self, ctx: &TabCtx) -> Option<PathBuf> {
@@ -1812,6 +1829,11 @@ impl Tab for GraphTab {
             return Ok(self.handle_capture_picker_key(k, ctx));
         }
 
+        // Capture var prompt.
+        if self.capture_var_state.is_some() {
+            return Ok(self.handle_capture_var_key(k, ctx));
+        }
+
         // Rename modal (Flow B): captures keyboard while open.
         if self.rename_state.is_some() {
             return Ok(self.handle_rename_key(k, ctx));
@@ -2383,6 +2405,11 @@ impl Tab for GraphTab {
                 &[("Enter", "run"), ("Esc", "cancel")],
                 None,
             );
+        }
+
+        // Capture var prompt.
+        if let Some(vs) = self.capture_var_state.as_mut() {
+            notes_view::render_capture_var_prompt(frame, area, vs);
         }
 
         // Periodic-leader popup. Same renderer as the Notes tab — a

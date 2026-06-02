@@ -157,6 +157,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut N
             &[("Enter", "run"), ("Esc", "cancel")],
             None,
         ),
+        NotesState::CaptureVarPrompt(vs) => render_capture_var_prompt(frame, area, vs),
         NotesState::PeriodicLeader => render_periodic_leader(frame, area),
     }
 }
@@ -345,6 +346,84 @@ fn render_append_var_prompt(
         ),
         Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
         Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(prompt).alignment(Alignment::Left), chunks[1]);
+
+    let footer = keymap_line(&[
+        ("Enter", "confirm"),
+        ("Ctrl+W", "delete word"),
+        ("Esc", "cancel"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        chunks[3],
+    );
+}
+
+/// Render the capture var-prompt popup. Shared by Notes and Graph tabs.
+pub(crate) fn render_capture_var_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    vs: &crate::tui::notes_actions::capture::CaptureVarPromptState,
+) {
+    let popup = centered_rect(60, 35, area);
+    frame.render_widget(Clear, popup);
+
+    let total = vs.commit.vars_needed.len();
+    let cur = vs.next_idx + 1;
+    let key_name = vs
+        .commit
+        .vars_needed
+        .get(vs.next_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("?");
+
+    let action_label = match vs.commit.action {
+        ft_core::config::CaptureAction::Append => "append",
+        ft_core::config::CaptureAction::Create => "create",
+    };
+
+    let target_label = vs
+        .commit
+        .target_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| vs.commit.target_path.display().to_string());
+
+    let title = format!(" capture · {action_label} · var · {target_label} · {cur}/{total} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let prompt = Line::from(vec![
+        Span::styled(
+            "▏ ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
+        Span::styled(vs.buf.text.clone(), Style::default().fg(Color::White)),
         Span::styled(
             "█",
             Style::default()

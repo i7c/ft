@@ -20,7 +20,7 @@ use crate::tui::{
     help::HelpSection,
     notes_actions::{
         append::{self, AppendState, AppendStep},
-        capture::{self, CapturePresetPickerSource},
+        capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
         create::{self, begin_folder_picking, begin_template_picking, CreateState, CreateStep},
         periodic::run_periodic_open,
         section_move::{self, MoveStep, SectionMoveState},
@@ -54,6 +54,8 @@ pub enum NotesState {
     CapturePicking {
         picker: FuzzyPicker<CapturePresetPickerSource>,
     },
+    /// Quick capture var prompt (template has `vars.*` references).
+    CaptureVarPrompt(CaptureVarPromptState),
     /// Plan 010 session 3 — transient modal entered by pressing `p` from
     /// idle. A second key (`d|w|m|q|y`) fires the periodic-open flow for
     /// the corresponding period and drops back to idle. Any other key
@@ -215,14 +217,15 @@ impl NotesTab {
         };
         match picker.handle_key(k) {
             PickerOutcome::Selected(name) => {
-                // Notes tab: pass None as target override — append presets
-                // without `note` will need a file picker (not yet wired).
-                // For now, only create presets and append presets with
-                // hardcoded `note` work from the notes tab.
-                self.state = NotesState::Idle;
-                match capture::execute_preset(ctx, &name, None) {
-                    Ok(()) => {}
+                match capture::try_execute_preset(ctx, &name, None) {
+                    Ok(capture::CaptureResult::Executed) => {
+                        self.state = NotesState::Idle;
+                    }
+                    Ok(capture::CaptureResult::NeedsVars(vs)) => {
+                        self.state = NotesState::CaptureVarPrompt(vs);
+                    }
                     Err(e) => {
+                        self.state = NotesState::Idle;
                         crate::tui::notes_actions::queue_toast(
                             ctx,
                             &e,
@@ -239,6 +242,16 @@ impl NotesTab {
             PickerOutcome::StillOpen => EventOutcome::Consumed,
             PickerOutcome::NotHandled => EventOutcome::NotHandled,
         }
+    }
+
+    fn handle_capture_var_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let NotesState::CaptureVarPrompt(vs) = &mut self.state else {
+            return EventOutcome::NotHandled;
+        };
+        if capture::handle_capture_var_key(vs, k, ctx) {
+            self.state = NotesState::Idle;
+        }
+        EventOutcome::Consumed
     }
 
     fn handle_move_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
@@ -276,6 +289,7 @@ impl Tab for NotesTab {
             NotesState::Creating(_) => self.handle_create_key(k, ctx),
             NotesState::Appending(_) => self.handle_append_key(k, ctx),
             NotesState::CapturePicking { .. } => self.handle_capture_picker_key(k, ctx),
+            NotesState::CaptureVarPrompt(_) => self.handle_capture_var_key(k, ctx),
             NotesState::PeriodicLeader => self.handle_periodic_leader_key(k, ctx),
         };
         Ok(outcome)

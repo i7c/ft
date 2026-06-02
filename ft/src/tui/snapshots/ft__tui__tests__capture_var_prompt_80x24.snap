@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
+┌ notes ───────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Notes — Obsidian-flavoured editing                                          │
+│                                                                              │
+│  o     open file / heading                                                   │
+│  m     move section(s) to another file                                       │
+│  c     create note (blank)                                                   │
+│  C     create ┌ capture · create · var · 2026-06-02-meeting.m┐               │
+│  t     open to│                                              │               │
+│  p     periodi│▏ topic = █                                   │               │
+│  ?     show th│                                              │               │
+│  Esc   close o│                                              │               │
+│               │ Enter confirm   Ctrl+W delete word   Esc canc│               │
+│               │                                              │               │
+│               └──────────────────────────────────────────────┘               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Notes           not yet refreshed      mode: normal
