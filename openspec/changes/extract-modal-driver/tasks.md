@@ -1,9 +1,15 @@
 ## 1. New `Modal` infrastructure
 
-- [ ] 1.1 Create `ft/src/tui/modal.rs` with the `ActiveModal` enum (variants: `Create`, `Append`, `CapturePicker`, `CaptureVar`, `MoveOuter`, `Rename`, `PresetPicker`, `Related`, `Search`, `PeriodicLeader`, `QueryBar`)
-- [ ] 1.2 Define the `Modal` trait (`handle_event`, `render`, `keymap_help`, `name`) and the `ModalOutcome` enum (`Consumed`, `Closed`, `OpenSibling(Box<ActiveModal>)`, `NotHandled`)
-- [ ] 1.3 Implement `Modal` for every `ActiveModal` variant — wrap the existing `handle_event` / `render` / `keymap_help` from each modal's source module (`notes_actions/create.rs`, `notes_actions/append.rs`, `notes_actions/capture.rs`, `notes_actions/section_move.rs`, `tabs/graph.rs` for the tab-specific ones)
-- [ ] 1.4 Add `impl<S: PickerSource> Modal for FuzzyPicker<S>` so the three picker variants share one implementation; map `PickerOutcome` → `ModalOutcome`
+- [x] 1.1 Create `ft/src/tui/modal.rs` with the `ActiveModal` enum (variants: `Create`, `Append`, `CapturePicker`, `CaptureVar`, `MoveOuter`, `Rename`, `PresetPicker`, `Related`, `Search`, `PeriodicLeader`, `QueryBar`)
+- [x] 1.2 Define the `Modal` trait (`handle_event`, `render`, `keymap_help`, `name`) and the `ModalOutcome` enum (`Consumed`, `Closed`, `OpenSibling(Box<ActiveModal>)`, `NotHandled`)
+- [x] 1.3 Implement `Modal` for every `ActiveModal` variant — wrap the existing `handle_event` / `render` / `keymap_help` from each modal's source module (`notes_actions/create.rs`, `notes_actions/append.rs`, `notes_actions/capture.rs`, `notes_actions/section_move.rs`, `tabs/graph.rs` for the tab-specific ones)
+- [x] 1.4 Add `impl<S: PickerSource> Modal for FuzzyPicker<S>` so the three picker variants share one implementation; map `PickerOutcome` → `ModalOutcome`
+
+Notes from implementation:
+- Tab-resident state types in `tabs/graph.rs` (`PresetPickerSource`, `GraphSearchPickerSource`, `GraphRenameState`, `RelatedModal`) were made `pub` so `ActiveModal` can wrap them. Field visibility is unchanged.
+- `Modal::render` for variants without a free-function renderer (`CreateState`, `AppendState`, `SectionMoveState`, `CaptureVarPromptState`, the tab-resident variants, `PeriodicLeader`, `QueryBar`) is a stub today; the host tab still owns rendering. Section 4 lifts the render arms out of `tabs/graph.rs` into these impls.
+- `FuzzyPicker::Modal::handle_event` is a placeholder that consumes the key but does not yet wire selection back to the host. The picker's typed `PickerOutcome<S::Item>` can't be erased to a bare `ModalOutcome` without knowing the host context; Section 4 routes selection through the same plumbing.
+- `#![allow(dead_code)]` at the top of `modal.rs` keeps clippy quiet until Section 2 routes events through this module.
 
 ## 2. App-level slot + dispatch
 

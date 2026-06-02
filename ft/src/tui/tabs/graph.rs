@@ -58,7 +58,7 @@ use crate::tui::{
 
 // ── Preset picker source ──────────────────────────────────────────────
 
-struct PresetPickerSource {
+pub struct PresetPickerSource {
     items: Vec<(String, String)>,
     matcher: nucleo_matcher::Matcher,
     buf: Vec<char>,
@@ -210,7 +210,7 @@ fn collect_search_candidates(graph: &Graph, query: &GraphQuery) -> Vec<Candidate
     out
 }
 
-struct GraphSearchPickerSource {
+pub struct GraphSearchPickerSource {
     candidates: Vec<Candidate>,
     matcher: nucleo_matcher::Matcher,
     buf: Vec<char>,
@@ -377,7 +377,7 @@ pub struct GraphTab {
 
 /// Inline rename-in-place state. `Some` while the rename modal is open.
 #[derive(Debug)]
-struct GraphRenameState {
+pub struct GraphRenameState {
     note_id: NoteId,
     is_directory: bool,
     buffer: EditBuffer,
@@ -390,7 +390,7 @@ struct GraphRenameState {
 /// section (non-interactive, marked) followed by suggested candidates
 /// the user toggles with Space.
 #[derive(Debug)]
-struct RelatedModal {
+pub struct RelatedModal {
     /// The note whose Related section is being updated.
     target_path: PathBuf,
     target_title: String,

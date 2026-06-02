@@ -3,6 +3,7 @@ mod editor;
 mod event;
 mod help;
 mod jobs;
+mod modal;
 mod notes_actions;
 mod tab;
 mod tabs;
