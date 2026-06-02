@@ -6194,6 +6194,126 @@ fn graph_tab_preset_picker_opens_on_ctrl_n() -> Result<()> {
     Ok(())
 }
 
+// 7.7 — end-to-end: open Graph, press `f`, type a leaf name from a
+// deep directory, press Enter, verify the cursor lands on that node
+// and ancestors are expanded.
+#[test]
+fn graph_f_opens_search_picker_and_jumps_to_typed_target() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    // Default tree has only the root row; pressing `f` opens the
+    // search picker over the dirs subgraph (root, Areas/, Projects/,
+    // Areas/operations/, the notes, …).
+    app.dispatch(key('f'))?;
+    let opened = render(&mut app, 80, 24);
+    assert!(
+        opened.contains("find"),
+        "search picker should be open and show its 'find' chrome — got:\n{opened}"
+    );
+
+    // Type "shifts" → matches the deep note Areas/operations/shifts.md.
+    for c in "shifts".chars() {
+        app.dispatch(key(c))?;
+    }
+    let typed = render(&mut app, 80, 24);
+    assert!(
+        typed.contains("shifts"),
+        "picker rows should include the typed target — got:\n{typed}"
+    );
+
+    // Enter → jump.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let after = render(&mut app, 80, 24);
+
+    // Picker is closed (no more "find" border title), root is expanded
+    // (▼ on the `/` row), Areas/ is expanded (▼ on the `Areas/` row),
+    // and the highlighted (selected) row in the tree carries "shifts".
+    assert!(
+        !after.contains(" find "),
+        "search picker should be closed after Enter — got:\n{after}"
+    );
+    assert!(
+        after.contains("▼   D /"),
+        "root directory should be expanded — got:\n{after}"
+    );
+    assert!(
+        after.contains("▼") && after.contains("Areas/"),
+        "Areas/ should be expanded — got:\n{after}"
+    );
+    assert!(
+        after.contains("shifts"),
+        "the target row should be visible — got:\n{after}"
+    );
+    Ok(())
+}
+
+// 7.8 — f then Esc leaves the view's spec unchanged.
+#[test]
+fn graph_f_then_esc_leaves_view_unchanged() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    let before = render(&mut app, 80, 24);
+    app.dispatch(key('f'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let after = render(&mut app, 80, 24);
+
+    assert_eq!(
+        before, after,
+        "f then Esc should round-trip the rendered frame exactly"
+    );
+    Ok(())
+}
+
+// 7.9 — f on an empty tree is a no-op.
+#[test]
+fn graph_f_on_empty_tree_is_noop() -> Result<()> {
+    // test_vault has no notes → BUILTIN_DEFAULT_QUERY's expand finds
+    // nothing below the root. The tree is still "non-empty" (the root
+    // dir row exists), so to truly test the empty-tree guard we clear
+    // the query via Ctrl+W (close view replaces with empty), then
+    // press `f`.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Ctrl+W closes the current view; since it's the only view, it
+    // gets replaced with a fresh empty view (no parsed query).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('w'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let before = render(&mut app, 80, 24);
+    app.dispatch(key('f'))?;
+    let after = render(&mut app, 80, 24);
+    assert_eq!(
+        before, after,
+        "f with no parsed query / empty tree must be a no-op"
+    );
+    Ok(())
+}
+
+// 7.10 — snapshot of the search picker overlay.
+#[test]
+fn graph_f_search_picker_snapshot() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    app.dispatch(key('f'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("graph_tab_search_picker_open", frame);
+    Ok(())
+}
+
 #[test]
 fn graph_c_opens_filename_prompt_seeded_from_directory_selection() -> Result<()> {
     // Default tree starts with the vault root directory selected.

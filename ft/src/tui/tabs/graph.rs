@@ -132,6 +132,176 @@ impl crate::tui::widgets::PickerSource for PresetPickerSource {
     }
 }
 
+// ── Search-in-tree picker ─────────────────────────────────────────────
+
+/// One reachable node in the active view's policy-induced subgraph,
+/// pre-computed at picker-open time. `path` is the shortest BFS path from
+/// some root to `id` (inclusive of both endpoints); `leaf` is the same
+/// string `TreeState::make_row` puts in `TreeRow.display`; `breadcrumb`
+/// is the ancestor leafs joined with `/`.
+#[derive(Debug, Clone)]
+struct Candidate {
+    path: Vec<NoteId>,
+    leaf: String,
+    breadcrumb: String,
+    kind_char: char,
+}
+
+/// Render `path[..len-1]` as a path-like breadcrumb. Directory leafs end
+/// with `/` and the vault root's leaf is `/`; naïve `join("/")` produces
+/// doubled separators. This walker trims trailing slashes from each leaf
+/// and prepends a single `/` when the ancestor chain starts at the root,
+/// so `[root, Areas, operations]` renders `/Areas/operations` (not
+/// `//Areas//operations/`).
+fn format_breadcrumb(graph: &Graph, path: &[NoteId]) -> String {
+    if path.len() <= 1 {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(path.len() - 1);
+    for &aid in &path[..path.len() - 1] {
+        let (s, _) = leaf_display(graph, aid);
+        parts.push(s.trim_end_matches('/').to_string());
+    }
+    let rooted = parts.first().map(|s| s.is_empty()).unwrap_or(false);
+    if rooted {
+        format!("/{}", parts[1..].join("/"))
+    } else {
+        parts.join("/")
+    }
+}
+
+/// BFS from `query.select(graph)` following `query.expand(graph, id)` as
+/// the successor function. Cycles are handled by a visited set. Each
+/// node is emitted at most once, at its shortest distance from a root;
+/// ties resolved by BFS visit order (which itself depends on `query`'s
+/// root ordering and the sorted child order in `query.expand`).
+fn collect_search_candidates(graph: &Graph, query: &GraphQuery) -> Vec<Candidate> {
+    use std::collections::VecDeque;
+
+    let roots = query.select(graph);
+    let mut visited: HashSet<NoteId> = HashSet::with_capacity(roots.len());
+    let mut queue: VecDeque<(NoteId, Vec<NoteId>)> = VecDeque::new();
+    for r in &roots {
+        if visited.insert(*r) {
+            queue.push_back((*r, vec![*r]));
+        }
+    }
+
+    let mut out: Vec<Candidate> = Vec::new();
+    while let Some((id, path)) = queue.pop_front() {
+        let (leaf, kind_char) = leaf_display(graph, id);
+        let breadcrumb = format_breadcrumb(graph, &path);
+        out.push(Candidate {
+            path: path.clone(),
+            leaf,
+            breadcrumb,
+            kind_char,
+        });
+        if let Some(children) = query.expand(graph, id) {
+            for child in children {
+                if visited.insert(child) {
+                    let mut child_path = path.clone();
+                    child_path.push(child);
+                    queue.push_back((child, child_path));
+                }
+            }
+        }
+    }
+    out
+}
+
+struct GraphSearchPickerSource {
+    candidates: Vec<Candidate>,
+    matcher: nucleo_matcher::Matcher,
+    buf: Vec<char>,
+}
+
+impl GraphSearchPickerSource {
+    fn new(graph: &Graph, query: &GraphQuery) -> Self {
+        Self {
+            candidates: collect_search_candidates(graph, query),
+            matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
+            buf: Vec::new(),
+        }
+    }
+
+    /// Build the rendered label string for a candidate: leaf, separator,
+    /// breadcrumb. Pure so the test for label-format invariants doesn't
+    /// have to construct a picker.
+    fn format_label(c: &Candidate) -> String {
+        if c.breadcrumb.is_empty() {
+            c.leaf.clone()
+        } else {
+            format!("{}  ·  {}", c.leaf, c.breadcrumb)
+        }
+    }
+}
+
+impl crate::tui::widgets::PickerSource for GraphSearchPickerSource {
+    type Item = Vec<NoteId>;
+
+    fn query(
+        &mut self,
+        q: &str,
+        limit: usize,
+    ) -> Vec<crate::tui::widgets::PickerItem<Vec<NoteId>>> {
+        let pat = nucleo_matcher::pattern::Pattern::parse(
+            q,
+            nucleo_matcher::pattern::CaseMatching::Smart,
+            nucleo_matcher::pattern::Normalization::Smart,
+        );
+        let mut ranked: Vec<(u32, usize, Vec<u32>)> = Vec::new();
+        for (i, c) in self.candidates.iter().enumerate() {
+            let haystack_str = if c.breadcrumb.is_empty() {
+                c.leaf.clone()
+            } else {
+                format!("{} {}", c.leaf, c.breadcrumb)
+            };
+            self.buf.clear();
+            let haystack = nucleo_matcher::Utf32Str::new(&haystack_str, &mut self.buf);
+            let mut indices = Vec::new();
+            if let Some(score) = pat.indices(haystack, &mut self.matcher, &mut indices) {
+                ranked.push((score, i, indices));
+            }
+        }
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.0));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, i, raw_indices)| {
+                let c = &self.candidates[i];
+                let leaf_chars = c.leaf.chars().count() as u32;
+                // Highlight indices in the haystack `"{leaf} {breadcrumb}"`
+                // line up with `format_label`'s `"{leaf}  ·  {breadcrumb}"`
+                // only inside the leaf portion (positions < leaf_chars).
+                // Drop matches that land in the breadcrumb to avoid
+                // misaligned highlights — the separator widths differ.
+                let match_indices: Vec<u32> = raw_indices
+                    .into_iter()
+                    .filter(|idx| *idx < leaf_chars)
+                    .collect();
+                crate::tui::widgets::PickerItem {
+                    label: GraphSearchPickerSource::format_label(c),
+                    match_indices,
+                    data: c.path.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn initial_items(&mut self, limit: usize) -> Vec<crate::tui::widgets::PickerItem<Vec<NoteId>>> {
+        self.candidates
+            .iter()
+            .take(limit)
+            .map(|c| crate::tui::widgets::PickerItem {
+                label: GraphSearchPickerSource::format_label(c),
+                match_indices: Vec::new(),
+                data: c.path.clone(),
+            })
+            .collect()
+    }
+}
+
 // ── GraphTab ──────────────────────────────────────────────────────────
 
 /// Fallback query the first view of the graph tab seeds itself with on
@@ -196,6 +366,10 @@ pub struct GraphTab {
     /// [`crate::tui::App`] when the TUI was launched via
     /// `ft notes update-related`.
     queued_related_path: Option<PathBuf>,
+    /// Active in-tree search picker (`f`). `Some` when the picker is
+    /// open over the active view's reachable subgraph; captures the
+    /// keyboard until Enter (jump) or Esc (cancel).
+    search_picker: Option<FuzzyPicker<GraphSearchPickerSource>>,
 }
 
 /// Inline rename-in-place state. `Some` while the rename modal is open.
@@ -326,6 +500,7 @@ impl GraphTab {
             preset_picker_for_active_view: false,
             related_modal: None,
             queued_related_path: None,
+            search_picker: None,
         }
     }
 
@@ -1300,6 +1475,49 @@ impl GraphTab {
         v.apply_query(graph);
     }
 
+    fn handle_search_picker_key(&mut self, k: KeyEvent, _ctx: &TabCtx) -> EventOutcome {
+        let Some(mut picker) = self.search_picker.take() else {
+            return EventOutcome::NotHandled;
+        };
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(path) => {
+                self.jump_to_path(path);
+            }
+            PickerOutcome::Cancelled => {}
+            PickerOutcome::StillOpen => {
+                self.search_picker = Some(picker);
+            }
+            PickerOutcome::NotHandled => {
+                self.search_picker = Some(picker);
+                return EventOutcome::NotHandled;
+            }
+        }
+        EventOutcome::Consumed
+    }
+
+    /// Land the cursor on the node at the end of `path`, auto-expanding
+    /// every ancestor along the way. Writes the path components into
+    /// `expanded_paths` and stores the full path in `selected_path` so the
+    /// jump survives a subsequent graph refresh, then re-runs
+    /// `restore_expansion` to materialize the tree.
+    fn jump_to_path(&mut self, path: Vec<NoteId>) {
+        if path.is_empty() {
+            return;
+        }
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let v = &mut self.views[self.active];
+        if path.len() > 1 {
+            v.add_expansion_path(path[..path.len() - 1].to_vec());
+        }
+        v.selected_path = Some(path);
+        v.restore_expansion(graph);
+        // Approximate visible-rows budget; render's scroll_to_selection
+        // corrects against the real area on the next draw.
+        v.scroll_to_selection(20);
+    }
+
     /// Rewrite the active view's query to root on the currently-selected
     /// node. Only works for Note and Directory nodes (which have paths).
     /// Ghost and Task nodes are no-ops.
@@ -1610,6 +1828,14 @@ impl Tab for GraphTab {
             return Ok(self.handle_preset_picker_key(k, ctx));
         }
 
+        // Search-in-tree picker: captures keyboard while open. On
+        // selection, jumps the cursor to the chosen node, expanding
+        // ancestors. Runs ahead of input_mode so typing in the picker
+        // can't drop into the query bar.
+        if self.search_picker.is_some() {
+            return Ok(self.handle_search_picker_key(k, ctx));
+        }
+
         // Move-section flow: shared and tree-driven phases all funnel
         // through one dispatcher. Most of them capture the keyboard,
         // but `TargetFromTree` deliberately returns `NotHandled` for
@@ -1734,6 +1960,14 @@ impl Tab for GraphTab {
             }
             (KeyCode::Char('z'), KeyModifiers::NONE) => {
                 self.rewrite_query_for_root();
+                Ok(EventOutcome::Consumed)
+            }
+            (KeyCode::Char('f'), KeyModifiers::NONE) => {
+                if let (Some(g), Some(q)) = (self.graph.as_ref(), self.active_view().query.as_ref())
+                {
+                    let src = GraphSearchPickerSource::new(g, q);
+                    self.search_picker = Some(FuzzyPicker::new(src));
+                }
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
@@ -2290,6 +2524,23 @@ impl Tab for GraphTab {
             picker.render(frame, popup_area);
         }
 
+        if let Some(ref mut picker) = self.search_picker {
+            let popup_area = centered_rect(60, 60, area);
+            frame.render_widget(Clear, popup_area);
+            // Split off a one-row footer at the bottom for the action
+            // hint, render the picker into the rest.
+            let [picker_area, footer_area] =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(popup_area);
+            picker.render(frame, picker_area);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Enter: jump · Esc: cancel",
+                    Style::default().fg(Color::Gray),
+                ))),
+                footer_area,
+            );
+        }
+
         if let Some(modal) = self.related_modal.as_ref() {
             render_related_modal(frame, area, modal);
         }
@@ -2313,6 +2564,7 @@ impl Tab for GraphTab {
                     ("g / G", "first / last row"),
                     ("Ctrl+D / Ctrl+U", "half-page down / up"),
                     ("z", "root view on selected node"),
+                    ("f", "search & jump to node in current view"),
                     ("r", "refresh graph from disk"),
                 ],
             ),
@@ -2851,27 +3103,7 @@ impl TreeState {
     }
 
     fn make_row(id: NoteId, depth: usize, graph: &Graph, query: &GraphQuery) -> TreeRow {
-        let (display, kind_char) = match graph.node(id) {
-            NodeKind::Note(n) => (
-                n.path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| n.path.to_string_lossy().into_owned()),
-                'N',
-            ),
-            NodeKind::Directory(d) => {
-                if d.path.as_os_str().is_empty() {
-                    ("/".to_string(), 'D')
-                } else {
-                    (format!("{}/", d.name), 'D')
-                }
-            }
-            NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
-            NodeKind::Task(t) => (t.description.clone(), 'T'),
-            NodeKind::Paragraph(p) => {
-                (format!("{}:{}", p.source_file.display(), p.line_start), 'P')
-            }
-        };
+        let (display, kind_char) = leaf_display(graph, id);
         // Compute expandability up-front by asking the policy how many
         // children this node has. None = no expand block at all (still
         // not expandable). Some(empty) = policy says zero children.
@@ -2886,6 +3118,32 @@ impl TreeState {
             expanded: false,
             expandable,
         }
+    }
+}
+
+/// Leaf row text + kind char for a node. Single source of truth shared by
+/// `TreeState::make_row` (tree rendering) and `collect_search_candidates`
+/// (jump-to-node picker), so search labels always match what's visible in
+/// the tree.
+fn leaf_display(graph: &Graph, id: NoteId) -> (String, char) {
+    match graph.node(id) {
+        NodeKind::Note(n) => (
+            n.path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| n.path.to_string_lossy().into_owned()),
+            'N',
+        ),
+        NodeKind::Directory(d) => {
+            if d.path.as_os_str().is_empty() {
+                ("/".to_string(), 'D')
+            } else {
+                (format!("{}/", d.name), 'D')
+            }
+        }
+        NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
+        NodeKind::Task(t) => (t.description.clone(), 'T'),
+        NodeKind::Paragraph(p) => (format!("{}:{}", p.source_file.display(), p.line_start), 'P'),
     }
 }
 
@@ -3741,5 +3999,195 @@ mod view_tests {
             tab.views[0].query_text,
             "node where kind = Note and path = \"foo.md\";"
         );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use std::path::PathBuf;
+
+    use assert_fs::prelude::*;
+    use ft_core::graph::query::parse as parse_query;
+    use ft_core::graph::Graph;
+    use ft_core::vault::{Scan, Vault};
+
+    use super::*;
+    use crate::tui::widgets::PickerSource;
+
+    fn dirs_graph() -> Graph {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
+        let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
+        Graph::build(&v, &Scan::default()).unwrap()
+    }
+
+    fn dirs_query() -> GraphQuery {
+        parse_query(
+            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;",
+        )
+        .unwrap()
+    }
+
+    // 7.1
+    #[test]
+    fn collect_finds_root_and_deeper_with_shortest_paths() {
+        let g = dirs_graph();
+        let q = dirs_query();
+        let candidates = collect_search_candidates(&g, &q);
+
+        let root_id = g.node_by_path(std::path::Path::new("")).unwrap();
+        let root = candidates
+            .iter()
+            .find(|c| c.path == vec![root_id])
+            .expect("root candidate present");
+        assert_eq!(root.leaf, "/");
+        assert!(root.breadcrumb.is_empty());
+
+        let areas_id = g.node_by_path(std::path::Path::new("Areas")).unwrap();
+        let areas = candidates
+            .iter()
+            .find(|c| *c.path.last().unwrap() == areas_id)
+            .expect("Areas candidate present");
+        assert_eq!(areas.path, vec![root_id, areas_id]);
+        assert_eq!(areas.leaf, "Areas/");
+        assert_eq!(areas.breadcrumb, "/");
+
+        let ops_id = g
+            .node_by_path(std::path::Path::new("Areas/operations"))
+            .unwrap();
+        let ops = candidates
+            .iter()
+            .find(|c| *c.path.last().unwrap() == ops_id)
+            .expect("Areas/operations candidate present");
+        assert_eq!(ops.path, vec![root_id, areas_id, ops_id]);
+        assert_eq!(ops.leaf, "operations/");
+        assert_eq!(ops.breadcrumb, "/Areas");
+    }
+
+    // 7.2
+    #[test]
+    fn bfs_terminates_on_cycle() {
+        // Build a tiny vault with two notes that link to each other:
+        // a.md → [[b]], b.md → [[a]]. With an expand policy that
+        // follows Link edges and no max_depth, naive traversal would
+        // loop. BFS with the visited set must return ≤ 2 candidates.
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("a.md").write_str("[[b]]\n").unwrap();
+        tmp.child("b.md").write_str("[[a]]\n").unwrap();
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&vault, &Scan::default()).unwrap();
+        let q = parse_query(
+            "node where kind = Note and path = \"a.md\"; expand where edge.kind = link;",
+        )
+        .unwrap();
+
+        let candidates = collect_search_candidates(&g, &q);
+        // a (depth 0) and b (depth 1); BFS must terminate.
+        assert_eq!(candidates.len(), 2);
+        let depths: Vec<usize> = candidates.iter().map(|c| c.path.len()).collect();
+        assert!(depths.contains(&1));
+        assert!(depths.contains(&2));
+    }
+
+    // 7.3
+    #[test]
+    fn no_expand_block_yields_only_roots() {
+        let g = dirs_graph();
+        // Two roots, no expand block.
+        let q = parse_query("node where kind = Note;").unwrap();
+        let candidates = collect_search_candidates(&g, &q);
+        assert!(!candidates.is_empty(), "dirs fixture has at least one note");
+        // Every candidate's path has length 1 (it's a root).
+        assert!(
+            candidates.iter().all(|c| c.path.len() == 1),
+            "without expand, every candidate is a root"
+        );
+        // Exactly equal to `query.select(graph)` length.
+        assert_eq!(candidates.len(), q.select(&g).len());
+    }
+
+    // 7.4 — the factor-out can't drift since make_row literally calls
+    // leaf_display, but we still assert it for every node in the dirs
+    // graph so any future divergence (e.g. someone re-inlining) is
+    // caught.
+    #[test]
+    fn leaf_display_matches_make_row_for_every_node() {
+        let g = dirs_graph();
+        let q = dirs_query();
+        for (id, _) in g.nodes() {
+            let row = TreeState::make_row(id, 0, &g, &q);
+            let (display, kind_char) = leaf_display(&g, id);
+            assert_eq!(row.display, display, "display mismatch for {:?}", id);
+            assert_eq!(row.kind_char, kind_char, "kind mismatch for {:?}", id);
+        }
+    }
+
+    // 7.5
+    #[test]
+    fn nucleo_ranks_leaf_match_over_unrelated() {
+        // Synthesize two candidates with known haystacks; pick the
+        // first NoteId from the dirs graph as a stand-in id (we don't
+        // actually use it for matching).
+        let g = dirs_graph();
+        let some_id = g.nodes().next().unwrap().0;
+        let mut src = GraphSearchPickerSource {
+            candidates: vec![
+                Candidate {
+                    path: vec![some_id, some_id],
+                    leaf: "bar".to_string(),
+                    breadcrumb: "foo".to_string(),
+                    kind_char: 'D',
+                },
+                Candidate {
+                    path: vec![some_id, some_id],
+                    leaf: "quux".to_string(),
+                    breadcrumb: "foo".to_string(),
+                    kind_char: 'D',
+                },
+            ],
+            matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
+            buf: Vec::new(),
+        };
+        let items = src.query("bar", 10);
+        assert!(!items.is_empty(), "matcher must produce at least one row");
+        // First (highest-ranked) item is the `bar` candidate, not `quux`.
+        assert!(items[0].label.starts_with("bar"));
+    }
+
+    // 7.6
+    #[test]
+    fn jump_to_path_lands_cursor_at_target_with_ancestors_expanded() {
+        let g = dirs_graph();
+        let root_id = g.node_by_path(std::path::Path::new("")).unwrap();
+        let areas_id = g.node_by_path(std::path::Path::new("Areas")).unwrap();
+        let ops_id = g
+            .node_by_path(std::path::Path::new("Areas/operations"))
+            .unwrap();
+        let shifts_id = g
+            .note_by_path(std::path::Path::new("Areas/operations/shifts.md"))
+            .unwrap();
+
+        let mut tab = GraphTab::new();
+        tab.graph = Some(g);
+        tab.views[0].query_text =
+            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
+                .to_string();
+        let graph_ref = tab.graph.as_ref().unwrap();
+        tab.views[0].apply_query(Some(graph_ref));
+
+        let path = vec![root_id, areas_id, ops_id, shifts_id];
+        tab.jump_to_path(path.clone());
+
+        let v = &tab.views[0];
+        let row = v.tree.rows().get(v.selected).expect("a row is selected");
+        assert_eq!(row.note_id, shifts_id, "cursor landed on shifts.md");
+        assert_eq!(row.depth, 3, "shifts.md is at depth 3");
+        assert_eq!(v.selected_path.as_deref(), Some(path.as_slice()));
+        // Ancestors are recorded in expanded_paths (closed under prefixes).
+        assert!(v.expanded_paths.contains(&vec![root_id]));
+        assert!(v.expanded_paths.contains(&vec![root_id, areas_id]));
+        assert!(v.expanded_paths.contains(&vec![root_id, areas_id, ops_id]));
+        // Target itself is NOT in expanded_paths.
+        assert!(!v.expanded_paths.contains(&path));
     }
 }

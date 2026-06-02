@@ -20,9 +20,9 @@ press / to│  Global                                                  │
           │  g / G                   first / last row                │          
           │  Ctrl+D / Ctrl+U         half-page down / up             │          
           │  z                       root view on selected node      │          
+          │  f                       search & jump to node in current│          
           │  r                       refresh graph from disk         │          
           │                                                          │          
           │  Query                                                   │          
-          │  /                       edit query (this view)          │          
 >         └──────────────────────────────────────────────────────────┘          
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help
