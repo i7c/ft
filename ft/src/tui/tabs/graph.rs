@@ -2277,12 +2277,8 @@ impl Tab for GraphTab {
                 } else {
                     ' '
                 };
-                let line = format!(
-                    "{indent}{indicator} {sel_marker} {kind} {display}",
-                    kind = row.kind_char,
-                    display = row.display,
-                );
-                let style = if i == v.selected {
+                let prefix = format!("{indent}{indicator} {sel_marker} ");
+                let base_style = if i == v.selected {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::White)
@@ -2290,7 +2286,23 @@ impl Tab for GraphTab {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                ListItem::new(Line::from(Span::styled(line, style)))
+                let graph = self.graph.as_ref();
+                let kind_color = graph
+                    .map(|g| node_kind_color(g.node(row.note_id)))
+                    .unwrap_or(Color::White);
+                let kind_style = base_style.fg(kind_color);
+                let kind_span = Span::styled(row.kind_char.to_string(), kind_style);
+                let display_span = Span::styled(row.display.clone(), kind_style);
+                let space = Span::styled(" ", base_style);
+                // Build a Line from multiple Spans so that type-color
+                // is layered with selection highlighting.
+                let line = Line::from(vec![
+                    Span::styled(prefix, base_style),
+                    kind_span,
+                    space,
+                    display_span,
+                ]);
+                ListItem::new(line)
             })
             .collect();
 
@@ -3118,6 +3130,18 @@ impl TreeState {
             expanded: false,
             expandable,
         }
+    }
+}
+
+/// Foreground color for a node kind, used to visually differentiate types
+/// in the tree view.
+fn node_kind_color(kind: &NodeKind) -> Color {
+    match kind {
+        NodeKind::Note(_) => Color::Cyan,
+        NodeKind::Directory(_) => Color::Blue,
+        NodeKind::Ghost(_) => Color::DarkGray,
+        NodeKind::Task(_) => Color::Yellow,
+        NodeKind::Paragraph(_) => Color::Gray,
     }
 }
 
