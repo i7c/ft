@@ -40,6 +40,7 @@ use ft_core::search::Hit;
 use crate::tui::{
     event::Event,
     help::HelpSection,
+    modal::ActiveModal,
     notes_actions::{
         append::{self, AppendState, AppendStep},
         capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
@@ -339,11 +340,6 @@ pub struct GraphTab {
     /// Active quick-capture var prompt. `Some` when the selected
     /// preset's template has `vars.*` references.
     capture_var_state: Option<CaptureVarPromptState>,
-    /// Whether the periodic-note leader chord is awaiting its next
-    /// keystroke (`d`/`w`/`m`/`q`/`y`). Mirrors `NotesState::PeriodicLeader`.
-    /// Set by `p`; cleared on any subsequent keypress (the period letter
-    /// fires the open flow; everything else cancels silently).
-    periodic_leader: bool,
     /// Active move-section flow. `None` outside the flow; `Some` while
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
@@ -497,7 +493,6 @@ impl GraphTab {
             append_state: None,
             capture_picker: None,
             capture_var_state: None,
-            periodic_leader: false,
             move_outer: None,
             rename_state: None,
             preset_picker: None,
@@ -1105,22 +1100,6 @@ impl GraphTab {
     /// and a re-press of `p`) cancels silently. The flag is cleared
     /// before the open flow so a toast from `run_periodic_open` lands
     /// cleanly in the normal-mode UI.
-    fn handle_periodic_leader_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let period = match (k.code, k.modifiers) {
-            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Period::Daily),
-            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(Period::Weekly),
-            (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Period::Monthly),
-            (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Period::Quarterly),
-            (KeyCode::Char('y'), KeyModifiers::NONE) => Some(Period::Yearly),
-            _ => None,
-        };
-        self.periodic_leader = false;
-        if let Some(p) = period {
-            run_periodic_open(ctx, p);
-        }
-        EventOutcome::Consumed
-    }
-
     /// Derive the folder the create flow should start in from the
     /// currently-selected row:
     /// - Note row → containing folder of that note.
@@ -1872,13 +1851,6 @@ impl Tab for GraphTab {
             // input-mode / etc. while keeping move_outer alive.
         }
 
-        // Periodic-leader chord: a single keystroke fires (or cancels)
-        // the open flow. Runs ahead of input mode and the outer-tab
-        // passthrough so the period letters can't leak through.
-        if self.periodic_leader {
-            return Ok(self.handle_periodic_leader_key(k, ctx));
-        }
-
         // Input mode owns the keyboard — digits and every other char
         // should land as text in the query, not trigger a tab switch.
         // This must run BEFORE the tab-passthrough check below.
@@ -2112,7 +2084,8 @@ impl Tab for GraphTab {
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => {
-                self.periodic_leader = true;
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::PeriodicLeader)));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
@@ -2410,12 +2383,6 @@ impl Tab for GraphTab {
         // Capture var prompt.
         if let Some(vs) = self.capture_var_state.as_mut() {
             notes_view::render_capture_var_prompt(frame, area, vs);
-        }
-
-        // Periodic-leader popup. Same renderer as the Notes tab — a
-        // centered modal listing the period choices (d/w/m/q/y).
-        if self.periodic_leader {
-            notes_view::render_periodic_leader(frame, area);
         }
 
         // Move-section overlay. Inner(...) defers to the shared Notes

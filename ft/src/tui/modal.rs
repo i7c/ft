@@ -32,7 +32,8 @@
 
 #![allow(dead_code)] // wired up in Section 2; nothing calls into here yet
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
+use ft_core::periodic::Period;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
@@ -43,6 +44,7 @@ use crate::tui::notes_actions::capture::{
     handle_capture_var_key, CapturePresetPickerSource, CaptureVarPromptState,
 };
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
+use crate::tui::notes_actions::periodic::run_periodic_open;
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
@@ -50,6 +52,7 @@ use crate::tui::tab::TabCtx;
 use crate::tui::tabs::graph::{
     GraphMoveOuter, GraphRenameState, GraphSearchPickerSource, PresetPickerSource, RelatedModal,
 };
+use crate::tui::tabs::notes::view::render_periodic_leader;
 use crate::tui::widgets::{FuzzyPicker, PickerSource};
 
 // ── Trait ────────────────────────────────────────────────────────────
@@ -433,14 +436,34 @@ impl Modal for RelatedModal {
 
 /// Unit modal: the periodic-note leader is "awaiting the next
 /// keystroke" — `d`/`w`/`m`/`q`/`y` open the matching period; any other
-/// key cancels.
+/// key cancels. Mirrors the pre-migration semantics in `GraphTab`
+/// (any key closes the modal; period letters also fire the open).
 struct PeriodicLeader;
 
 impl Modal for PeriodicLeader {
-    fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
-        ModalOutcome::NotHandled
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        let period = match k.code {
+            KeyCode::Char('d') => Some(Period::Daily),
+            KeyCode::Char('w') => Some(Period::Weekly),
+            KeyCode::Char('m') => Some(Period::Monthly),
+            KeyCode::Char('q') => Some(Period::Quarterly),
+            KeyCode::Char('y') => Some(Period::Yearly),
+            _ => None,
+        };
+        if let Some(p) = period {
+            run_periodic_open(ctx, p);
+        }
+        // Any key (period letter, Esc, or anything else) closes the
+        // leader modal — matches the pre-migration "any key clears"
+        // behaviour in `GraphTab::handle_periodic_leader_key`.
+        ModalOutcome::Closed
     }
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {}
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_periodic_leader(frame, area);
+    }
     fn keymap_help(&self) -> HelpSection {
         HelpSection::new(
             "Periodic note",

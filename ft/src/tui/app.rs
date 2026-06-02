@@ -1005,7 +1005,27 @@ impl App {
     }
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {
-        self.handle_event(ev)
+        self.handle_event(ev)?;
+        // Auto-service `OpenModal` between dispatches so tests that
+        // step the UI through `dispatch` + `render` see the modal go
+        // live without a separate `service_pending_for_test` call.
+        // Other request variants stay in `pending_request` so tests
+        // that assert on them via `take_pending_request` keep working.
+        let modal = {
+            let mut slot = self.pending_request.borrow_mut();
+            match slot.take() {
+                Some(AppRequest::OpenModal(m)) => Some(m),
+                Some(other) => {
+                    *slot = Some(other);
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some(m) = modal {
+            *self.active_modal.borrow_mut() = Some(*m);
+        }
+        Ok(())
     }
 
     pub fn is_quit(&self) -> bool {
