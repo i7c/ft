@@ -1306,7 +1306,10 @@ fn child_sort_key(graph: &Graph, id: NoteId) -> (u8, String) {
         NodeKind::Note(n) => (1, n.path.to_string_lossy().into_owned()),
         NodeKind::Ghost(g) => (2, g.raw.clone()),
         NodeKind::Task(t) => (3, format!("{}:{}", t.source_file.display(), t.source_line)),
-        NodeKind::Paragraph(p) => (4, format!("{}:{}", p.source_file.display(), p.line_start)),
+        NodeKind::Paragraph(p) => (
+            4,
+            format!("{}:{:08}", p.source_file.display(), p.line_start),
+        ),
     }
 }
 
