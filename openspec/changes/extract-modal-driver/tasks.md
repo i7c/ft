@@ -27,10 +27,36 @@ Notes from implementation:
 
 ## 4. Migrate `GraphTab` modal slots
 
-- [ ] 4.1 Remove fields: `input_mode`, `create_state`, `append_state`, `capture_picker`, `capture_var_state`, `periodic_leader`, `move_outer`, `rename_state`, `preset_picker`, `preset_picker_for_active_view` (keep as state inside `PresetPicker` variant), `related_modal`, `queued_related_path` (stays — it's queue, not modal), `search_picker`
-- [ ] 4.2 Remove the `is_some()` dispatch chain in `GraphTab::handle_event` for these slots; tab-level `handle_event` now only handles tree-navigation keys + modal-launch keys
-- [ ] 4.3 Remove the `render_*_overlay` calls in `GraphTab::render` for migrated modals; rendering happens at the App level
-- [ ] 4.4 Replace `selected_is_note_for_test` with use of `App::active_modal_name()` in cross-tab tests
+### Per-modal migration progress
+
+- [x] **PeriodicLeader** — fully migrated end-to-end as proof of pattern (commit `22cb319`)
+- [ ] **CreateState** — handler already in `notes_actions/create.rs`; needs render lift + `c`/`C` arm rewire
+- [ ] **AppendState** — handler in `notes_actions/append.rs`; needs render lift + `A` arm rewire
+- [ ] **SectionMoveState** — handler in `notes_actions/section_move.rs`; needs render lift + integration with `MoveOuter`
+- [ ] **CaptureVarPromptState** — handler in `notes_actions/capture.rs`; needs render lift + `OpenSibling` from CapturePicker
+- [ ] **CapturePresetPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
+- [ ] **PresetPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
+- [ ] **GraphSearchPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
+- [ ] **GraphRenameState** — tab-resident; needs handler + render lifted from `tabs/graph.rs`
+- [ ] **RelatedModal** — tab-resident; needs handler + render lifted from `tabs/graph.rs`
+- [ ] **GraphMoveOuter** — complex multi-phase; needs handler + render lifted
+
+### Aggregate task status
+
+- [ ] 4.1 Remove fields: ~~`periodic_leader`~~ done; `input_mode`, `create_state`, `append_state`, `capture_picker`, `capture_var_state`, `move_outer`, `rename_state`, `preset_picker`, `preset_picker_for_active_view`, `related_modal`, `search_picker` (12 of 13 still to migrate; `queued_related_path` stays)
+- [ ] 4.2 Remove the `is_some()` dispatch chain — 1 of ~10 arms removed
+- [ ] 4.3 Remove `render_*_overlay` calls — 1 of ~10 render arms removed
+- [ ] 4.4 Replace `selected_is_note_for_test` with `App::active_modal_name()` in cross-tab tests
+
+### Design issue surfaced during PeriodicLeader migration
+
+**Picker selection routing.** `FuzzyPicker<S>::handle_event` returns a typed `PickerOutcome<S::Item>`. The host tab acts on `Selected(item)` (e.g. apply preset DSL, jump to node, open capture flow). When the picker becomes a Modal, that typed outcome cannot be erased into the bare `ModalOutcome` enum without losing the payload. Three options for the picker variants (Search / Preset / Capture):
+
+1. **New `AppRequest` variants per outcome** (e.g. `AppRequest::GraphApplyPreset { dsl }`, `AppRequest::GraphJumpToPath(Vec<NoteId>)`). App routes them back to GraphTab via tab-id lookup. Clean separation but grows the AppRequest surface significantly.
+2. **Move the action into the picker source**. The source holds a callback / state ref that fires on selection. Couples the picker to the host.
+3. **Custom outcome enum per picker**. Each picker variant has its own outcome → tab dispatch. Breaks the uniform `Modal` interface.
+
+The original design.md did not solve this. It needs a decision before the picker variants can migrate.
 
 ## 5. Map `input_mode` → `ActiveModal::QueryBar`
 
