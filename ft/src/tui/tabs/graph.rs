@@ -3134,14 +3134,14 @@ impl TreeState {
 }
 
 /// Foreground color for a node kind, used to visually differentiate types
-/// in the tree view.
+/// in the tree view. Palette inspired by the Monokai theme.
 fn node_kind_color(kind: &NodeKind) -> Color {
     match kind {
-        NodeKind::Note(_) => Color::Cyan,
-        NodeKind::Directory(_) => Color::Blue,
-        NodeKind::Ghost(_) => Color::DarkGray,
-        NodeKind::Task(_) => Color::Yellow,
-        NodeKind::Paragraph(_) => Color::Gray,
+        NodeKind::Note(_) => Color::Rgb(166, 226, 46), // green
+        NodeKind::Directory(_) => Color::Rgb(102, 217, 239), // blue
+        NodeKind::Ghost(_) => Color::Rgb(117, 113, 94), // dim gray
+        NodeKind::Task(_) => Color::Rgb(253, 151, 31), // orange
+        NodeKind::Paragraph(_) => Color::Rgb(174, 129, 255), // purple
     }
 }
 
