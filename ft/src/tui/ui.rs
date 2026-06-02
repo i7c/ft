@@ -104,6 +104,11 @@ pub struct StatusBarState<'a> {
     pub toast: Option<&'a crate::tui::app::Toast>,
     pub mode: Mode,
     pub in_flight: Option<JobKind>,
+    /// Name of the active modal, if any (`App::active_modal_name()`).
+    /// When `Some`, the right cell renders `modal: <name>` instead of
+    /// `mode: <label>` so users always know which keymap context owns
+    /// the keyboard. Added in extract-modal-driver §6.
+    pub active_modal: Option<&'a str>,
 }
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_>) {
@@ -114,6 +119,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         toast,
         mode,
         in_flight,
+        active_modal,
     } = state;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -157,12 +163,14 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         .alignment(Alignment::Center)
     };
 
-    // Right cell composes either `mode: <label>` (default) or
-    // `⟳ <job> · <label>` (in-flight). The "mode:" prefix is dropped
-    // when an indicator is present so the line still fits the 16-char
-    // right cell at 80 cols. The indicator is orthogonal to mode —
-    // it persists across help, git leader, and conflict modes so the
-    // user always knows a sync is running.
+    // Right cell composes `mode: <label>` (default), `⟳ <job> · <label>`
+    // (in-flight), or `modal: <name>` (when a modal is active — extract-
+    // modal-driver §6). The "mode:" prefix is dropped when an indicator
+    // is present so the line still fits the 16-char right cell at 80
+    // cols. The modal indicator persists across help, git leader, and
+    // conflict modes so the user always knows which keymap context
+    // owns the keyboard. The in-flight indicator takes priority over
+    // modal (background jobs are higher-stakes than which modal is up).
     let right = if let Some(kind) = in_flight {
         Line::from(vec![
             Span::styled(
@@ -176,6 +184,17 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
                 mode.label(),
                 Style::default()
                     .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    } else if let Some(name) = active_modal {
+        Line::from(vec![
+            Span::styled("modal: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),

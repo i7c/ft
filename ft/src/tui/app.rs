@@ -139,9 +139,8 @@ impl App {
     }
 
     /// Name of the currently-active modal, if any. Used by the status-bar
-    /// modal indicator (added in §6) and by cross-tab tests that want to
-    /// assert which modal is up without reaching for private fields.
-    #[allow(dead_code)] // wired up in §6 (status bar) and §7 (new tests)
+    /// modal indicator (§6) and by cross-tab tests that want to assert
+    /// which modal is up without reaching for private fields.
     pub fn active_modal_name(&self) -> Option<&'static str> {
         self.active_modal.borrow().as_ref().map(|m| m.name())
     }
@@ -257,6 +256,7 @@ impl App {
             }
             slot.clone()
         };
+        let modal_name = self.active_modal_name();
         ui::render_status_bar(
             frame,
             status_bar,
@@ -267,6 +267,7 @@ impl App {
                 toast: active_toast.as_ref(),
                 mode: self.mode,
                 in_flight: self.in_flight_job(),
+                active_modal: modal_name,
             },
         );
 
