@@ -1,0 +1,55 @@
+## 1. New `Modal` infrastructure
+
+- [ ] 1.1 Create `ft/src/tui/modal.rs` with the `ActiveModal` enum (variants: `Create`, `Append`, `CapturePicker`, `CaptureVar`, `MoveOuter`, `Rename`, `PresetPicker`, `Related`, `Search`, `PeriodicLeader`, `QueryBar`)
+- [ ] 1.2 Define the `Modal` trait (`handle_event`, `render`, `keymap_help`, `name`) and the `ModalOutcome` enum (`Consumed`, `Closed`, `OpenSibling(Box<ActiveModal>)`, `NotHandled`)
+- [ ] 1.3 Implement `Modal` for every `ActiveModal` variant — wrap the existing `handle_event` / `render` / `keymap_help` from each modal's source module (`notes_actions/create.rs`, `notes_actions/append.rs`, `notes_actions/capture.rs`, `notes_actions/section_move.rs`, `tabs/graph.rs` for the tab-specific ones)
+- [ ] 1.4 Add `impl<S: PickerSource> Modal for FuzzyPicker<S>` so the three picker variants share one implementation; map `PickerOutcome` → `ModalOutcome`
+
+## 2. App-level slot + dispatch
+
+- [ ] 2.1 Add `active_modal: RefCell<Option<ActiveModal>>` to `App`; initialize `None` in `App::with_tabs`
+- [ ] 2.2 Add `App::active_modal_name(&self) -> Option<&'static str>` accessor for status-bar + tests
+- [ ] 2.3 In `App::handle_event`, before tab dispatch, call `active_modal.handle_event` and act on the returned `ModalOutcome` (consume / clear / replace / fall through)
+- [ ] 2.4 In `App::draw`, after the tab renders, render the active modal (if any) over the same body area
+- [ ] 2.5 In `App::enter_help`, when a modal is active, return the modal's `keymap_help()` instead of the tab's `help_sections()`
+
+## 3. `AppRequest::OpenModal` plumbing
+
+- [ ] 3.1 Add `AppRequest::OpenModal(ActiveModal)` variant in `ft/src/tui/tab.rs`
+- [ ] 3.2 Service the request in `App::service_request` by writing into `active_modal`
+- [ ] 3.3 Replace the implicit `self.<modal> = Some(state)` lines in `GraphTab` with `ctx.pending_request.set(AppRequest::OpenModal(ActiveModal::<X>(state)))`
+
+## 4. Migrate `GraphTab` modal slots
+
+- [ ] 4.1 Remove fields: `input_mode`, `create_state`, `append_state`, `capture_picker`, `capture_var_state`, `periodic_leader`, `move_outer`, `rename_state`, `preset_picker`, `preset_picker_for_active_view` (keep as state inside `PresetPicker` variant), `related_modal`, `queued_related_path` (stays — it's queue, not modal), `search_picker`
+- [ ] 4.2 Remove the `is_some()` dispatch chain in `GraphTab::handle_event` for these slots; tab-level `handle_event` now only handles tree-navigation keys + modal-launch keys
+- [ ] 4.3 Remove the `render_*_overlay` calls in `GraphTab::render` for migrated modals; rendering happens at the App level
+- [ ] 4.4 Replace `selected_is_note_for_test` with use of `App::active_modal_name()` in cross-tab tests
+
+## 5. Map `input_mode` → `ActiveModal::QueryBar`
+
+- [ ] 5.1 `/` key arm raises `OpenModal(ActiveModal::QueryBar { view_id: active })`
+- [ ] 5.2 `Modal::handle_event` for `QueryBar` reads/writes the active view's query buffer (unchanged buffer location)
+- [ ] 5.3 Esc returns `ModalOutcome::Closed`; Enter applies the query and returns `ModalOutcome::Closed`
+- [ ] 5.4 Remove the `input_mode` flag from `GraphTab`; remove all `if !self.input_mode` guards in the tree-key arms
+
+## 6. Status-bar modal indicator (preview)
+
+- [ ] 6.1 Add a single status-bar cell that renders `App::active_modal_name()` when `Some`. Render an empty cell when `None`
+- [ ] 6.2 Test: open each modal, assert the indicator cell renders the expected name
+
+## 7. Tests
+
+- [ ] 7.1 Unit: `ModalDispatch` returns `Consumed` for a key the modal handles, lets others fall through
+- [ ] 7.2 Unit: opening modal A then receiving `OpenSibling(B)` from A produces an active modal of B and clears A
+- [ ] 7.3 Snapshot baseline: run `ft/src/tui/tests.rs` before migration, capture the snapshot inventory; re-run after migration, diff = zero
+- [ ] 7.4 Snapshot baseline: same for `ft/src/tui/tabs/graph.rs` `mod tests`
+- [ ] 7.5 New: integration test asserting `?` overlay content while a modal is active matches the modal's `keymap_help`, not the tab's
+- [ ] 7.6 New: integration test asserting status-bar modal indicator renders the correct name when each `ActiveModal` variant is active
+
+## 8. Build validation
+
+- [ ] 8.1 `cargo build --release` — clean
+- [ ] 8.2 `cargo test --workspace` — all tests pass, no snapshot diffs
+- [ ] 8.3 `cargo clippy --workspace --tests -- -D warnings` — clean
+- [ ] 8.4 `cargo fmt --check` — clean
