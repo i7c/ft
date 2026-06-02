@@ -130,7 +130,7 @@ fn execute_append_preset(
     target_note_override: Option<PathBuf>,
 ) -> Result<(), String> {
     let target_path = match (preset.note.as_deref(), target_note_override) {
-        (Some(note), _) => resolve_note_path(&ctx.vault.path, note),
+        (Some(note), _) => resolve_note_path(&ctx.vault.path, note, ctx.today),
         (None, Some(path)) => path,
         (None, None) => {
             return Err("no target note for append preset".to_string());
@@ -243,8 +243,9 @@ fn resolve_template_for_preset(vault: &Vault, template_name: &str) -> Result<Pat
     ))
 }
 
-fn resolve_note_path(vault_root: &Path, note: &str) -> PathBuf {
-    let p = Path::new(note);
+fn resolve_note_path(vault_root: &Path, note: &str, today: chrono::NaiveDate) -> PathBuf {
+    let note = today.format(note).to_string();
+    let p = Path::new(&note);
     let with_ext = if p.extension().is_some_and(|e| e == "md") {
         p.to_path_buf()
     } else {

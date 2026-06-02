@@ -119,7 +119,7 @@ folder = "Inbox"
 |------------|----------|---------------|-------------------------------------------------------------------------------------------------|
 | `action`   | yes      | both          | `"append"` or `"create"`.                                                                      |
 | `template` | yes      | both          | Template name resolved under `[notes].templates_dir`. `.md` auto-appended.                      |
-| `note`     | no       | append        | Hardcoded target note (vault-relative path). When absent, the target comes from tab context.     |
+| `note`     | no       | append        | Hardcoded target note (vault-relative path). Supports strftime tokens (`%Y`, `%m`, `%d`, etc.). When absent, the target comes from tab context.     |
 | `section`  | no       | append        | Section heading to append under. Case-insensitive, any ATX level. Takes precedence over `ft-append-section` frontmatter. |
 | `path`     | no       | create        | Filename pattern with strftime tokens (`%Y`, `%m`, `%d`, `%q`, `%Q`). `.md` auto-appended. When absent, opens a filename prompt. |
 | `folder`   | no       | create        | Target folder (vault-relative). Defaults to vault root when absent.                             |
@@ -308,6 +308,24 @@ template = "quick-log"
 **Usage:** Graph tab → select any note → `Q` → `log`. The template
 lands at end-of-file (no `section` and no frontmatter configured).
 Editor opens at the new line.
+
+### Daily journal append (dated note path)
+
+Goal: always append to today's daily note without configuring periodic
+notes or selecting a target.
+
+**Config:**
+
+```toml
+[capture_presets.jot]
+action = "append"
+template = "quick-log"
+note = "journal/%Y/%Y-%m-%d"
+```
+
+**Usage:** Press `Q` → `jot` from any tab. The template is appended to
+`journal/2026/2026-06-01.md` (today's date), regardless of which note
+is selected.
 
 ---
 
