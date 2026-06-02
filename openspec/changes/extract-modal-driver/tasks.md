@@ -13,17 +13,17 @@ Notes from implementation:
 
 ## 2. App-level slot + dispatch
 
-- [ ] 2.1 Add `active_modal: RefCell<Option<ActiveModal>>` to `App`; initialize `None` in `App::with_tabs`
-- [ ] 2.2 Add `App::active_modal_name(&self) -> Option<&'static str>` accessor for status-bar + tests
-- [ ] 2.3 In `App::handle_event`, before tab dispatch, call `active_modal.handle_event` and act on the returned `ModalOutcome` (consume / clear / replace / fall through)
-- [ ] 2.4 In `App::draw`, after the tab renders, render the active modal (if any) over the same body area
-- [ ] 2.5 In `App::enter_help`, when a modal is active, return the modal's `keymap_help()` instead of the tab's `help_sections()`
+- [x] 2.1 Add `active_modal: RefCell<Option<ActiveModal>>` to `App`; initialize `None` in `App::with_tabs`
+- [x] 2.2 Add `App::active_modal_name(&self) -> Option<&'static str>` accessor for status-bar + tests
+- [x] 2.3 In `App::handle_event`, before tab dispatch, call `active_modal.handle_event` and act on the returned `ModalOutcome` (consume / clear / replace / fall through)
+- [x] 2.4 In `App::draw`, after the tab renders, render the active modal (if any) over the same body area
+- [x] 2.5 In `App::enter_help`, when a modal is active, return the modal's `keymap_help()` instead of the tab's `help_sections()` (implemented in `App::draw`'s `Mode::Help` arm — the `enter_help` test helper just toggles mode)
 
 ## 3. `AppRequest::OpenModal` plumbing
 
-- [ ] 3.1 Add `AppRequest::OpenModal(ActiveModal)` variant in `ft/src/tui/tab.rs`
-- [ ] 3.2 Service the request in `App::service_request` by writing into `active_modal`
-- [ ] 3.3 Replace the implicit `self.<modal> = Some(state)` lines in `GraphTab` with `ctx.pending_request.set(AppRequest::OpenModal(ActiveModal::<X>(state)))`
+- [x] 3.1 Add `AppRequest::OpenModal(ActiveModal)` variant in `ft/src/tui/tab.rs` (boxed: `OpenModal(Box<ActiveModal>)` per clippy `large_enum_variant`; `Clone` derive dropped on `AppRequest` since `ActiveModal` isn't `Clone`; manual `Debug` impl provided so `Option<AppRequest>` test assertions keep working)
+- [x] 3.2 Service the request in `App::service_request` by writing into `active_modal` (also added to `service_pending_for_test` and `service_request_for_test`)
+- [ ] 3.3 Replace the implicit `self.<modal> = Some(state)` lines in `GraphTab` with `ctx.pending_request.set(AppRequest::OpenModal(ActiveModal::<X>(state)))` *(deferred to Section 4 — coupled with field removal; doing 3.3 alone would create two sources of truth for the same modal state)*
 
 ## 4. Migrate `GraphTab` modal slots
 

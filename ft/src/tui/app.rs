@@ -23,8 +23,9 @@ use ft_core::config::EditorStrategy;
 use crate::tui::{
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
     event::{BgEvent, Event, EventStream, SyncJobResult},
-    help::global_section,
+    help::{global_section, HelpSection},
     jobs::{JobHandle, JobKind},
+    modal::{ActiveModal, Modal, ModalOutcome},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{
         graph::GraphTab, journal::JournalTab, notes::NotesTab, tasks::TasksTab,
@@ -76,6 +77,14 @@ pub struct App {
     /// status bar renders an in-flight indicator and re-entrant
     /// submissions are rejected with a toast.
     jobs: RefCell<Option<JobHandle>>,
+    /// Single-slot tracker for the currently-active modal overlay
+    /// (extract-modal-driver §2). When `Some`, key events route
+    /// through the modal's `Modal::handle_event` ahead of the active
+    /// tab; the modal also renders on top of the tab body and owns
+    /// the `?` overlay's keymap help. `RefCell` so tab dispatch can
+    /// post `AppRequest::OpenModal` and have the App service it
+    /// after the event returns.
+    active_modal: RefCell<Option<ActiveModal>>,
     /// Optional action to apply once the first frame is about to draw.
     /// Set by `App::set_initial_action` before `run`; consumed on the
     /// first iteration of the event loop.
@@ -123,9 +132,18 @@ impl App {
             toast: RefCell::new(None),
             sync_conflict: RefCell::new(None),
             jobs: RefCell::new(None),
+            active_modal: RefCell::new(None),
             initial_action: RefCell::new(None),
             should_quit: false,
         }
+    }
+
+    /// Name of the currently-active modal, if any. Used by the status-bar
+    /// modal indicator (added in §6) and by cross-tab tests that want to
+    /// assert which modal is up without reaching for private fields.
+    #[allow(dead_code)] // wired up in §6 (status bar) and §7 (new tests)
+    pub fn active_modal_name(&self) -> Option<&'static str> {
+        self.active_modal.borrow().as_ref().map(|m| m.name())
     }
 
     /// Queue a startup action to apply on first event-loop iteration.
@@ -216,6 +234,17 @@ impl App {
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
+        // Modal overlay (§2): if a modal is active, render it on top of
+        // the body area so the tab's draw acts as backdrop. The modal's
+        // own render decides on geometry (centered popup, full-width
+        // banner, etc.) — the App just hands it the body rect.
+        {
+            let mut slot = self.active_modal.borrow_mut();
+            if let Some(modal) = slot.as_mut() {
+                modal.render(frame, body, &ctx);
+            }
+        }
+
         // Expire stale toasts before drawing so the cell falls back to
         // the refresh time on the very tick the deadline passes.
         let toast_now = std::time::Instant::now();
@@ -244,7 +273,13 @@ impl App {
         match self.mode {
             Mode::Help => {
                 let global = global_section();
-                let sections = self.tabs[self.active].help_sections();
+                // When a modal is active, the `?` overlay shows the
+                // modal's keymap_help instead of the tab's
+                // help_sections (extract-modal-driver §2.5).
+                let sections: Vec<HelpSection> = match self.active_modal.borrow().as_ref() {
+                    Some(modal) => vec![modal.keymap_help()],
+                    None => self.tabs[self.active].help_sections(),
+                };
                 ui::render_help_overlay(
                     frame,
                     frame.area(),
@@ -311,6 +346,42 @@ impl App {
                 }
             }
             return Ok(());
+        }
+
+        // Modal dispatch (§2). When `active_modal` is Some, the modal
+        // gets first crack at the key; only `NotHandled` falls through
+        // to the tab. `Consumed` returns immediately; `Closed` clears
+        // the slot; `OpenSibling` swaps the slot for a new modal.
+        let modal_outcome = {
+            let mut slot = self.active_modal.borrow_mut();
+            if let Some(modal) = slot.as_mut() {
+                let ctx = TabCtx {
+                    vault: &self.vault,
+                    recents: &self.recents,
+                    today: self.today,
+                    last_refresh: &self.last_refresh,
+                    pending_request: &self.pending_request,
+                };
+                Some(modal.handle_event(ev.clone(), &ctx))
+            } else {
+                None
+            }
+        };
+        if let Some(outcome) = modal_outcome {
+            match outcome {
+                ModalOutcome::Consumed => return Ok(()),
+                ModalOutcome::Closed => {
+                    *self.active_modal.borrow_mut() = None;
+                    return Ok(());
+                }
+                ModalOutcome::OpenSibling(next) => {
+                    *self.active_modal.borrow_mut() = Some(*next);
+                    return Ok(());
+                }
+                ModalOutcome::NotHandled => {
+                    // Fall through to tab dispatch.
+                }
+            }
         }
 
         // Route to the active tab first.
@@ -427,6 +498,10 @@ impl App {
                     self.tabs[idx].queue_journal_for(&path);
                     self.switch_tab(idx)?;
                 }
+                Ok(())
+            }
+            AppRequest::OpenModal(modal) => {
+                *self.active_modal.borrow_mut() = Some(*modal);
                 Ok(())
             }
         }
@@ -957,10 +1032,13 @@ impl App {
                         deadline: std::time::Instant::now() + TOAST_DURATION,
                     });
                 }
+                AppRequest::OpenModal(modal) => {
+                    *self.active_modal.borrow_mut() = Some(*modal);
+                }
                 // Other variants need terminal state; tests that exercise
                 // them go through the real `service_request` path.
-                _ => {
-                    *self.pending_request.borrow_mut() = Some(req);
+                other => {
+                    *self.pending_request.borrow_mut() = Some(other);
                 }
             }
         }
@@ -991,6 +1069,10 @@ impl App {
                     style,
                     deadline: std::time::Instant::now() + TOAST_DURATION,
                 });
+                Ok(())
+            }
+            AppRequest::OpenModal(modal) => {
+                *self.active_modal.borrow_mut() = Some(*modal);
                 Ok(())
             }
             other => {

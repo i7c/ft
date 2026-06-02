@@ -10,11 +10,17 @@ use ratatui::{layout::Rect, Frame};
 
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
+use crate::tui::modal::ActiveModal;
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
 /// a status-bar toast) without each tab reaching for terminal state.
-#[derive(Debug, Clone)]
+///
+/// `Clone` is dropped because [`ActiveModal`] (in
+/// [`AppRequest::OpenModal`]) wraps state types like [`FuzzyPicker`] that
+/// aren't `Clone`. `Debug` is implemented manually so the
+/// `Option<AppRequest>` assertions in TUI tests keep working — the
+/// `OpenModal` variant prints its inner modal name and elides the rest.
 pub enum AppRequest {
     OpenInEditor {
         path: PathBuf,
@@ -45,6 +51,44 @@ pub enum AppRequest {
     JournalForNote {
         path: PathBuf,
     },
+    /// Install a new active modal. The App writes the variant into its
+    /// `active_modal` slot and, on the next event, dispatches keys to
+    /// the modal ahead of the active tab. Tabs use this to launch
+    /// flows (create, append, capture, picker, etc.) without owning
+    /// per-tab modal state.
+    #[allow(dead_code)] // constructed in §3.3+ as GraphTab modal launches migrate
+    OpenModal(Box<ActiveModal>),
+}
+
+impl std::fmt::Debug for AppRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::tui::modal::Modal;
+        match self {
+            AppRequest::OpenInEditor { path, line } => f
+                .debug_struct("OpenInEditor")
+                .field("path", path)
+                .field("line", line)
+                .finish(),
+            AppRequest::OpenInObsidian { url } => {
+                f.debug_struct("OpenInObsidian").field("url", url).finish()
+            }
+            AppRequest::Toast { text, style } => f
+                .debug_struct("Toast")
+                .field("text", text)
+                .field("style", style)
+                .finish(),
+            AppRequest::SyncGit { message } => {
+                f.debug_struct("SyncGit").field("message", message).finish()
+            }
+            AppRequest::JournalForNote { path } => f
+                .debug_struct("JournalForNote")
+                .field("path", path)
+                .finish(),
+            AppRequest::OpenModal(modal) => {
+                f.debug_tuple("OpenModal").field(&modal.name()).finish()
+            }
+        }
+    }
 }
 
 /// Visual styling for a [`Toast`]. Green for success (create, save),
