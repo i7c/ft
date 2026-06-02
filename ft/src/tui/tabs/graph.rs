@@ -3166,8 +3166,40 @@ fn leaf_display(graph: &Graph, id: NoteId) -> (String, char) {
             }
         }
         NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
-        NodeKind::Task(t) => (t.description.clone(), 'T'),
-        NodeKind::Paragraph(p) => (format!("{}:{}", p.source_file.display(), p.line_start), 'P'),
+        NodeKind::Task(t) => {
+            let marker = match t.status.as_str() {
+                "Open" => "[ ]",
+                "Done" => "[x]",
+                "InProgress" => "[/]",
+                "Cancelled" => "[-]",
+                _ => "[ ]",
+            };
+            (format!("{marker} {}", t.description), 'T')
+        }
+        NodeKind::Paragraph(p) => {
+            let snippet: String = p.text.chars().take(60).collect();
+            let trunc = if p.text.chars().count() > 60 {
+                format!("{snippet}…")
+            } else {
+                snippet
+            };
+            if p.line_start == p.line_end {
+                (
+                    format!("{}:{}  {trunc}", p.source_file.display(), p.line_start),
+                    'P',
+                )
+            } else {
+                (
+                    format!(
+                        "{}:{}-{}  {trunc}",
+                        p.source_file.display(),
+                        p.line_start,
+                        p.line_end
+                    ),
+                    'P',
+                )
+            }
+        }
     }
 }
 
@@ -3490,9 +3522,9 @@ mod tree_tests {
 
         assert_eq!(state.rows.len(), 2);
         assert_eq!(state.rows[0].kind_char, 'T');
-        assert_eq!(state.rows[0].display, "Task one");
+        assert_eq!(state.rows[0].display, "[ ] Task one");
         assert_eq!(state.rows[1].kind_char, 'T');
-        assert_eq!(state.rows[1].display, "Task two");
+        assert_eq!(state.rows[1].display, "[x] Task two");
     }
 }
 
