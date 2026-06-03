@@ -19,12 +19,48 @@ use ratatui::{
     Frame,
 };
 
+use std::sync::LazyLock;
+
 use crate::tui::{
+    command::{Command, CommandOutcome},
     event::Event,
+    keymap::{KeyChord, KeyMap},
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{quickline::parse_quickline, view::View},
     widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
+
+/// Idle-state keymap for the SearchView (the only view under TasksTab
+/// today). Sub-modes (popup, quickline, edit_state, target picker)
+/// capture keys at the top of `handle_event` and bypass this map.
+/// Command names live in `tabs::tasks::TASKS_COMMANDS` (see
+/// `tabs/tasks/mod.rs`).
+pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        // Navigation
+        .bind("/", "tasks.edit-query")
+        .bind("Up", "tasks.cursor-up")
+        .bind("k", "tasks.cursor-up")
+        .bind("Down", "tasks.cursor-down")
+        .bind("j", "tasks.cursor-down")
+        .bind("R", "tasks.reload")
+        .bind("Enter", "tasks.open-in-editor")
+        // Mutations — special-char bindings (normalization strips SHIFT
+        // for non-alpha chars).
+        .bind("]", "tasks.due-next-day")
+        .bind("[", "tasks.due-prev-day")
+        .bind("}", "tasks.scheduled-next-day")
+        .bind("{", "tasks.scheduled-prev-day")
+        .bind("p", "tasks.priority-next")
+        .bind("P", "tasks.priority-prev")
+        .bind("x", "tasks.complete")
+        .bind("X", "tasks.cancel")
+        .bind("t", "tasks.due-today")
+        .bind("e", "tasks.edit-popup")
+        // Create / edit
+        .bind("c", "tasks.quickline")
+        .bind("C", "tasks.new-blank-form")
+});
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
 /// split into "overdue" and "upcoming" buckets. Quick mutations and editor
@@ -786,58 +822,102 @@ impl View for SearchView {
             return Ok(self.handle_edit_key(k, ctx));
         }
 
-        match (k.code, k.modifiers) {
-            // Plan lists `/` and `q` as edit-mode triggers, but `q` is the
-            // global quit keybinding. `/` alone (vi/less convention) avoids
-            // the conflict; `q` remains quit.
-            (KeyCode::Char('/'), _) => {
+        // Idle keymap lookup → SearchView::dispatch_command. Sub-modes
+        // (popup, quickline, edit_state) handled their keys above and
+        // returned early — only Idle reaches this point.
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = SEARCH_KEYMAP.lookup(chord).cloned() else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        match self.dispatch_idle_command(&cmd, ctx)? {
+            CommandOutcome::Handled => Ok(EventOutcome::Consumed),
+            CommandOutcome::NotHandled => Ok(EventOutcome::NotHandled),
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
+        SearchView::render(self, frame, area, ctx)
+    }
+
+    fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        SearchView::refresh(self, ctx)
+    }
+}
+
+impl SearchView {
+    /// Apply one Idle-state command. Returns `Result` because `reload`
+    /// can fail; other arms are infallible.
+    fn dispatch_idle_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> Result<CommandOutcome> {
+        match cmd.name {
+            "tasks.edit-query" => {
                 self.enter_edit_mode();
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+            "tasks.cursor-up" => {
                 self.select_prev();
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+            "tasks.cursor-down" => {
                 self.select_next();
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Char('R'), _) => {
+            "tasks.reload" => {
                 self.reload(ctx)?;
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            // Quick mutations on the selected task. Each writes atomically
-            // through ft-core, then re-scans so the row reflects the new
-            // state and overdue/upcoming bucketing stays correct.
-            (KeyCode::Char(']'), _) => self.nudge_field(ctx, Field::Due, 1),
-            (KeyCode::Char('['), _) => self.nudge_field(ctx, Field::Due, -1),
-            (KeyCode::Char('}'), _) => self.nudge_field(ctx, Field::Scheduled, 1),
-            (KeyCode::Char('{'), _) => self.nudge_field(ctx, Field::Scheduled, -1),
-            (KeyCode::Char('p'), KeyModifiers::NONE) => self.cycle_priority(ctx, 1),
-            (KeyCode::Char('P'), _) => self.cycle_priority(ctx, -1),
-            (KeyCode::Char('x'), KeyModifiers::NONE) => self.complete_selected(ctx),
-            (KeyCode::Char('X'), _) => self.cancel_selected(ctx),
-            (KeyCode::Char('t'), KeyModifiers::NONE) => self.set_due_today(ctx),
-            (KeyCode::Char('e'), KeyModifiers::NONE) => {
+            "tasks.due-next-day" => {
+                let _ = self.nudge_field(ctx, Field::Due, 1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.due-prev-day" => {
+                let _ = self.nudge_field(ctx, Field::Due, -1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.scheduled-next-day" => {
+                let _ = self.nudge_field(ctx, Field::Scheduled, 1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.scheduled-prev-day" => {
+                let _ = self.nudge_field(ctx, Field::Scheduled, -1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.priority-next" => {
+                let _ = self.cycle_priority(ctx, 1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.priority-prev" => {
+                let _ = self.cycle_priority(ctx, -1)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.complete" => {
+                let _ = self.complete_selected(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.cancel" => {
+                let _ = self.cancel_selected(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.due-today" => {
+                let _ = self.set_due_today(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.edit-popup" => {
                 self.open_edit_popup();
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+            "tasks.quickline" => {
                 self.quickline = Some(Quickline::default());
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Char('C'), _) => {
-                // Shift+C — skip the quickline and go straight to the
-                // full form (useful when you already know you want
-                // priority/tags/recurrence/target).
+            "tasks.new-blank-form" => {
                 self.popup = Some(EditPopup::new_blank());
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            (KeyCode::Enter, _) => {
+            "tasks.open-in-editor" => {
                 self.request_editor_open(ctx);
-                Ok(EventOutcome::Consumed)
+                Ok(CommandOutcome::Handled)
             }
-            _ => Ok(EventOutcome::NotHandled),
+            _ => Ok(CommandOutcome::NotHandled),
         }
     }
 

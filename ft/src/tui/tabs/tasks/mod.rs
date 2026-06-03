@@ -2,9 +2,10 @@ mod quickline;
 mod search;
 mod view;
 
+use std::sync::LazyLock;
+
 use anyhow::Result;
 use chrono::{DateTime, Local};
-use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -14,13 +15,220 @@ use ratatui::{
 };
 
 use crate::tui::{
+    command::{Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
+    keymap::{KeyChord, KeyMap},
     tab::{EventOutcome, Tab, TabCtx},
 };
 
 use search::SearchView;
 use view::View;
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+/// Every command the Tasks tab exposes. Includes both the tab-level
+/// sidebar commands (handled by `TasksTab::dispatch_command` directly)
+/// and the SearchView commands (delegated to the active view's
+/// `dispatch_command`). Pre-declared here so the build-time
+/// `CommandRegistry` sees the full surface in one slice.
+pub(super) static TASKS_COMMANDS: &[CommandDef] = &[
+    // Tab-level: sidebar view selection.
+    CommandDef {
+        name: "tasks.select-prev-view",
+        description: "Select the previous view in the sidebar",
+        scope: CommandScope::Tab("tasks"),
+        group: "Sidebar",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.select-next-view",
+        description: "Select the next view in the sidebar",
+        scope: CommandScope::Tab("tasks"),
+        group: "Sidebar",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.confirm-view",
+        description: "Confirm the sidebar's selected view (no-op for now)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Sidebar",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // SearchView: see `tabs/tasks/search.rs::SEARCH_COMMANDS` for the
+    // canonical declarations. They're collected into this single slice
+    // so the registry sees them.
+    CommandDef {
+        name: "tasks.edit-query",
+        description: "Open the query editor",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.cursor-up",
+        description: "Move the cursor up one task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.cursor-down",
+        description: "Move the cursor down one task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.reload",
+        description: "Reload the task list from the vault",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.open-in-editor",
+        description: "Open the selected task in $EDITOR",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.due-next-day",
+        description: "Bump the due date forward by one day",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.due-prev-day",
+        description: "Bump the due date back by one day",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.scheduled-next-day",
+        description: "Bump the scheduled date forward by one day",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.scheduled-prev-day",
+        description: "Bump the scheduled date back by one day",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.priority-next",
+        description: "Cycle priority forward",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.priority-prev",
+        description: "Cycle priority back",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.complete",
+        description: "Complete the selected task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.cancel",
+        description: "Cancel the selected task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.due-today",
+        description: "Set due date to today",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.edit-popup",
+        description: "Open the edit-popup for the selected task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Create / edit",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.quickline",
+        description: "Open the quickline new-task entry",
+        scope: CommandScope::Tab("tasks"),
+        group: "Create / edit",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.new-blank-form",
+        description: "Open the new-task form (blank)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Create / edit",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+];
+
+/// Tab-level keymap — sidebar navigation only. Looked up when the
+/// active view returns `NotHandled` for an event (mirrors the
+/// pre-migration fall-through). The view-level keymap lives in
+/// `search::SEARCH_KEYMAP`.
+static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Up", "tasks.select-prev-view")
+        .bind("Down", "tasks.select-next-view")
+        .bind("Enter", "tasks.confirm-view")
+});
 
 /// Function pointer for "what time is it now?". Production uses
 /// [`Local::now`]; tests inject a fixed value for deterministic snapshots.
@@ -138,6 +346,37 @@ impl Tab for TasksTab {
         Ok(())
     }
 
+    fn commands(&self) -> &'static [CommandDef] {
+        TASKS_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &TASKS_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
+        // Tab-level commands only — view-level (`tasks.cursor-up` etc.)
+        // are dispatched by SearchView before the keymap fall-through
+        // reaches the tab. `_ctx` is unused because the sidebar
+        // selection is purely tab-local state.
+        match cmd.name {
+            "tasks.select-prev-view" => {
+                self.select_prev_view();
+                CommandOutcome::Handled
+            }
+            "tasks.select-next-view" => {
+                self.select_next_view();
+                CommandOutcome::Handled
+            }
+            "tasks.confirm-view" => {
+                // No-op for now; the sidebar dropdown is in-place
+                // selection, not a confirm-then-apply flow.
+                CommandOutcome::Handled
+            }
+            _ => CommandOutcome::NotHandled,
+        }
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         // The active view gets first dibs — its selection model owns the same
         // keys (↑/↓/Enter) as the sidebar dropdown. The dropdown only handles
@@ -152,23 +391,18 @@ impl Tab for TasksTab {
             return Ok(view_outcome);
         }
 
-        if let Event::Key(k) = ev {
-            match k.code {
-                KeyCode::Up => {
-                    self.select_prev_view();
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Down => {
-                    self.select_next_view();
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Enter => {
-                    return Ok(EventOutcome::Consumed);
-                }
-                _ => {}
-            }
-        }
-        Ok(EventOutcome::NotHandled)
+        // View didn't handle — try the tab-level keymap (sidebar).
+        let Event::Key(k) = ev else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = TASKS_KEYMAP.lookup(chord).cloned() else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        Ok(match self.dispatch_command(&cmd, ctx) {
+            CommandOutcome::Handled => EventOutcome::Consumed,
+            CommandOutcome::NotHandled => EventOutcome::NotHandled,
+        })
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
