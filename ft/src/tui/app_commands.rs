@@ -1,3 +1,5 @@
+#![allow(dead_code)] // APP_COMMANDS wired into CommandRegistry::build in §8 (ft commands list)
+
 //! App-global commands and keymap.
 //!
 //! Cross-cutting bindings (tab cycling, quit, help, git-leader) live

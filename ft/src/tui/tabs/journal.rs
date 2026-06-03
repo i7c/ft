@@ -18,9 +18,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -35,10 +36,135 @@ use ft_core::graph::Graph;
 use ft_core::journal::{build_journal, JournalEntry};
 use ft_core::search::Hit;
 
+use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
+use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle};
 use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSource};
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+/// Every action the Journal tab exposes through the command/keymap
+/// layer. Pulled out of the tab impl so the registry can include them
+/// at build time and `?` / `ft commands list` can introspect them.
+static JOURNAL_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "journal.open-picker",
+        description: "Open the fuzzy note picker to choose a journal source",
+        scope: CommandScope::Tab("journal"),
+        group: "Source",
+        args_schema: &[],
+        // Picker captures the keyboard for the duration of its session,
+        // so `ft do` can't reasonably drive it headlessly.
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.reload",
+        description: "Reload the current note's journal",
+        scope: CommandScope::Tab("journal"),
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.clear",
+        description: "Clear the current journal and return to the picker prompt",
+        scope: CommandScope::Tab("journal"),
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-up",
+        description: "Move the cursor up one entry",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-down",
+        description: "Move the cursor down one entry",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-first",
+        description: "Move the cursor to the first entry",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-last",
+        description: "Move the cursor to the last entry",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-half-page-down",
+        description: "Move the cursor down half a page (10 entries)",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.cursor-half-page-up",
+        description: "Move the cursor up half a page (10 entries)",
+        scope: CommandScope::Tab("journal"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.open-selected",
+        description: "Open the selected entry's note in $EDITOR",
+        scope: CommandScope::Tab("journal"),
+        group: "Open",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+];
+
+/// Default keymap for the Journal tab. Aliases (e.g. `Up`/`k`,
+/// `Down`/`j`) bind the same command to multiple chords. The
+/// picker-open state captures keys before this keymap is consulted
+/// (see `handle_event`).
+static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        // Source
+        .bind("/", "journal.open-picker")
+        .bind("R", "journal.reload")
+        .bind("c", "journal.clear")
+        // Navigation — vim aliases
+        .bind("Up", "journal.cursor-up")
+        .bind("k", "journal.cursor-up")
+        .bind("Down", "journal.cursor-down")
+        .bind("j", "journal.cursor-down")
+        .bind("g", "journal.cursor-first")
+        .bind("G", "journal.cursor-last")
+        .bind("Ctrl+d", "journal.cursor-half-page-down")
+        .bind("Ctrl+u", "journal.cursor-half-page-up")
+        // Open
+        .bind("Enter", "journal.open-selected")
+});
 
 pub struct JournalTab {
     /// Vault-relative path of the note currently loaded. `None` puts
@@ -249,65 +375,86 @@ impl Tab for JournalTab {
         self.queued_for = Some(note_path.to_path_buf());
     }
 
-    fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
-        let Event::Key(k) = ev else {
-            return Ok(EventOutcome::NotHandled);
-        };
+    fn commands(&self) -> &'static [CommandDef] {
+        JOURNAL_COMMANDS
+    }
 
-        // Picker overlay captures the keyboard while open.
-        if self.picker.is_some() {
-            return Ok(self.handle_picker_key(k, ctx));
-        }
+    fn keymap(&self) -> &KeyMap {
+        &JOURNAL_KEYMAP
+    }
 
-        match (k.code, k.modifiers) {
-            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+    fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
+        match cmd.name {
+            "journal.open-picker" => {
                 self.open_picker(ctx);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('R'), m) if m == KeyModifiers::SHIFT => {
+            "journal.reload" => {
                 if let Some(path) = self.target_path.clone() {
                     self.load_for(path, ctx);
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+            "journal.clear" => {
                 self.target_path = None;
                 self.entries.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
                 self.last_error = None;
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
+            "journal.cursor-up" => {
                 self.move_selection(-1);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => {
+            "journal.cursor-down" => {
                 self.move_selection(1);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+            "journal.cursor-first" => {
                 self.jump_first();
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
+            "journal.cursor-last" => {
                 self.jump_last();
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('d'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "journal.cursor-half-page-down" => {
                 self.move_selection(10);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "journal.cursor-half-page-up" => {
                 self.move_selection(-10);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Enter, _) => {
+            "journal.open-selected" => {
                 self.request_open_selected(ctx);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            _ => Ok(EventOutcome::NotHandled),
+            _ => CommandOutcome::NotHandled,
         }
+    }
+
+    fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Event::Key(k) = ev else {
+            return Ok(EventOutcome::NotHandled);
+        };
+
+        // Picker overlay captures the keyboard while open — the picker
+        // is tab-resident here (not in `ActiveModal`), so we route raw
+        // events to it before consulting the tab keymap.
+        if self.picker.is_some() {
+            return Ok(self.handle_picker_key(k, ctx));
+        }
+
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = JOURNAL_KEYMAP.lookup(chord).cloned() else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        Ok(match self.dispatch_command(&cmd, ctx) {
+            CommandOutcome::Handled => EventOutcome::Consumed,
+            CommandOutcome::NotHandled => EventOutcome::NotHandled,
+        })
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {

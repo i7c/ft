@@ -25,7 +25,15 @@
 - [ ] 4.2 TasksTab: same conversion
 - [ ] 4.3 NotesTab: same conversion
 - [ ] 4.4 TimeblocksTab: same conversion
-- [ ] 4.5 JournalTab: same conversion
+- [x] 4.5 JournalTab — pilot conversion to validate the pattern. `JOURNAL_COMMANDS` (10 commands across Source/Navigation/Open groups) + `JOURNAL_KEYMAP` (12 bindings; `Up`/`k` and `Down`/`j` aliases share commands) + `dispatch_command` arm-per-command. `handle_event` keeps the picker-overlay bypass at the top (the tab-resident `FuzzyPicker` captures keys before the keymap is consulted) then does `KEYMAP.lookup → dispatch_command → EventOutcome`. Tests pass without changes; the pre-migration `help_sections()` stays in place (§6 replaces it with keymap-derived rendering)
+
+### Lessons from the pilot
+1. **Tab-resident sub-modals (picker, leader chord, etc.) bypass the keymap** — convert by routing raw events to the sub-modal first, then keymap lookup. Same pattern will apply to the GraphTab's `m`-leader and the periodic-leader if those stay tab-resident; ActiveModal-driven pickers (Search, Preset) don't need this.
+2. **Modifier-loose matching becomes strict** — the original `m if m.contains(KeyModifiers::CONTROL)` is replaced by exact `Ctrl+d` binding. `Ctrl+Shift+d` no longer fires the command (no tests caught this; accepting as minor behavior tightening).
+3. **`Shift+Letter` works automatically** — `bind("R", ...)` and `bind("G", ...)` rely on KeyChord normalization (`Char('R')+NONE` → `Char('r')+SHIFT` matches the bound chord).
+4. **Multi-chord aliases** are two `.bind()` calls to the same command name. No keymap-level aliasing primitive needed.
+5. **Net code growth ≈ +90 LoC per tab** — the static `CommandDef` slice is the bulk (~80 lines for 10 commands). Match arms shrink by ~30 LoC. The trade is intentional: the metadata powers `?`, docs, the registry, and the eventual user-keymap config.
+6. **Tasks 2.4 deferred again** — Journal's `handle_event` has the picker-overlay bypass that the trait default can't express. Per-tab `handle_event` overrides will remain typical for any tab with tab-resident sub-modals; the default's value is for tabs whose dispatch is purely keymap-driven (potentially none, given the picker pattern is common).
 
 ## 5. Convert modals
 
