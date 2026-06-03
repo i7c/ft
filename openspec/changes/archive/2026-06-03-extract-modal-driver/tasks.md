@@ -23,7 +23,7 @@ Notes from implementation:
 
 - [x] 3.1 Add `AppRequest::OpenModal(ActiveModal)` variant in `ft/src/tui/tab.rs` (boxed: `OpenModal(Box<ActiveModal>)` per clippy `large_enum_variant`; `Clone` derive dropped on `AppRequest` since `ActiveModal` isn't `Clone`; manual `Debug` impl provided so `Option<AppRequest>` test assertions keep working)
 - [x] 3.2 Service the request in `App::service_request` by writing into `active_modal` (also added to `service_pending_for_test` and `service_request_for_test`)
-- [ ] 3.3 Replace the implicit `self.<modal> = Some(state)` lines in `GraphTab` with `ctx.pending_request.set(AppRequest::OpenModal(ActiveModal::<X>(state)))` *(deferred to Section 4 — coupled with field removal; doing 3.3 alone would create two sources of truth for the same modal state)*
+- [x] 3.3 Replace the implicit `self.<modal> = Some(state)` lines in `GraphTab` with `ctx.pending_request.set(AppRequest::OpenModal(ActiveModal::<X>(state)))` — completed inline as part of every §4 per-modal migration commit (each modal's assignment site became an `OpenModal` post when the field was removed); the final two sites (`m` + `r`-with-selection) were rewired by `migrate-move-outer-modal`
 
 ## 4. Migrate `GraphTab` modal slots
 
@@ -37,7 +37,7 @@ Notes from implementation:
 - [x] **GraphRenameState** — tab-resident `Modal` impl in `tabs/graph.rs`; commits via `AppRequest::GraphCommitRename`; re-opens on recoverable error (commit `02e477f`)
 - [x] **RelatedModal** — tab-resident `Modal` impl in `tabs/graph.rs`; commits via `AppRequest::GraphConfirmRelated` (commit `fe11de1`)
 - [x] **SectionMoveState** — `Modal` impl in `modal.rs` real (used directly by `ActiveModal::SectionMove` when the host opens it; also wrapped by `GraphMoveOuter::Inner` once that migrates)
-- [ ] **GraphMoveOuter** — *deferred to a follow-up change*. 7-variant state machine with multiple tree-driven phases, three internal fuzzy pickers, and handler logic that's deeply entangled with view/graph state on GraphTab. Migrating it cleanly needs ~6–8 new state-transition AppRequest variants and refactoring of `confirm_target_from_tree` / `confirm_move_target` / `apply_inner_step`. Estimated ~250 LoC handler + ~80 LoC render lift. The current `ActiveModal::MoveOuter(GraphMoveOuter)` variant + stub `Modal` impl in `modal.rs` is kept so the enum stays closed; GraphTab still owns `move_outer: Option<GraphMoveOuter>` and dispatches via the legacy `is_some()` check.
+- [x] **GraphMoveOuter** — *completed in follow-up change `migrate-move-outer-modal`* (archived 2026-06-03 at `openspec/changes/archive/2026-06-03-migrate-move-outer-modal/`). The 7-variant state machine now flows through `ActiveModal::MoveOuter` like every other modal: GraphTab lost `move_outer` + the `is_some()` dispatch + the render arm; a full `impl Modal for GraphMoveOuter` lives in `tabs/graph.rs`; four `AppRequest::GraphMove*` variants + the shared `OpenModalWithToast` route state-touching commits back to the host.
 
 ### Aggregate task status
 
