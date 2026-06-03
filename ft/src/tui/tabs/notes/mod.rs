@@ -8,6 +8,7 @@
 //! `move_sections` + `write_pair` commit.
 
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -16,8 +17,10 @@ use ft_core::search::Hit;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
+    command::{Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
+    keymap::{KeyChord, KeyMap},
     notes_actions::{
         append::{self, AppendState, AppendStep},
         capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
@@ -28,6 +31,101 @@ use crate::tui::{
     tab::{AppRequest, EventOutcome, Tab, TabCtx},
     widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+/// Every Idle-state action the Notes tab exposes. Sub-state handlers
+/// (OpenPicking, MoveSection, Creating, Appending, CapturePicking,
+/// CaptureVarPrompt, PeriodicLeader) capture raw keys and bypass the
+/// keymap — same pattern as JournalTab's picker overlay.
+static NOTES_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "notes.open-picker",
+        description: "Open the fuzzy file / heading picker to open a note",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.move-section",
+        description: "Enter the move-section flow",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.create-blank",
+        description: "Create a new note (blank)",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.append",
+        description: "Append a template to a note",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.quick-capture",
+        description: "Quick capture (run a preset)",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.create-from-template",
+        description: "Create a new note from a template",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.today",
+        description: "Open today's daily note",
+        scope: CommandScope::Tab("notes"),
+        group: "Periodic notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.periodic-leader",
+        description: "Enter the periodic-note leader (then d/w/m/q/y)",
+        scope: CommandScope::Tab("notes"),
+        group: "Periodic notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+];
+
+/// Default keymap for the Notes tab's Idle state. Sub-states are
+/// handled by `handle_*_key` methods, bypassing the keymap.
+static NOTES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("o", "notes.open-picker")
+        .bind("m", "notes.move-section")
+        .bind("c", "notes.create-blank")
+        .bind("a", "notes.append")
+        .bind("Q", "notes.quick-capture")
+        .bind("C", "notes.create-from-template")
+        .bind("t", "notes.today")
+        .bind("p", "notes.periodic-leader")
+});
 
 pub(crate) mod view;
 
@@ -82,44 +180,58 @@ impl NotesTab {
     }
 
     fn handle_idle_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        match (k.code, k.modifiers) {
-            (KeyCode::Char('o'), KeyModifiers::NONE) => {
+        // The Idle keymap is the only one declared in `NOTES_KEYMAP` —
+        // sub-state handlers (open-picker, create, append, capture,
+        // periodic leader) capture raw keys and bypass this path.
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = NOTES_KEYMAP.lookup(chord).cloned() else {
+            return EventOutcome::NotHandled;
+        };
+        self.dispatch_idle_command(&cmd, ctx)
+    }
+
+    /// Apply one Idle-state command. Split off from `Tab::dispatch_command`
+    /// so callers with `&TabCtx` (not `&mut TabCtx`) can invoke it —
+    /// `handle_idle_key` receives `&TabCtx` from `handle_event` to keep
+    /// the per-state borrow shape stable.
+    fn dispatch_idle_command(&mut self, cmd: &Command, ctx: &TabCtx) -> EventOutcome {
+        match cmd.name {
+            "notes.open-picker" => {
                 self.state = NotesState::OpenPicking {
                     picker: Self::new_vault_picker(ctx),
                 };
                 EventOutcome::Consumed
             }
-            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+            "notes.move-section" => {
                 self.state = NotesState::MoveSection(section_move::begin_with_picker(ctx));
                 EventOutcome::Consumed
             }
-            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+            "notes.create-blank" => {
                 self.state = NotesState::Creating(begin_folder_picking(ctx, None));
                 EventOutcome::Consumed
             }
-            (KeyCode::Char('a'), KeyModifiers::NONE) => {
+            "notes.append" => {
                 self.state = NotesState::Appending(AppendState::begin_no_target(ctx, None));
                 EventOutcome::Consumed
             }
-            (KeyCode::Char('Q'), _) => {
+            "notes.quick-capture" => {
                 let src = CapturePresetPickerSource::new(ctx.vault);
                 self.state = NotesState::CapturePicking {
                     picker: FuzzyPicker::new(src),
                 };
                 EventOutcome::Consumed
             }
-            (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
+            "notes.create-from-template" => {
                 self.state = NotesState::Creating(begin_template_picking(ctx, None));
                 EventOutcome::Consumed
             }
-            // `t` is a one-shot synonym for `p` then `d` — opens today's
-            // daily note directly without entering the leader modal.
-            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+            "notes.today" => {
+                // One-shot synonym for `p` then `d` — opens today's
+                // daily note directly without entering the leader.
                 run_periodic_open(ctx, Period::Daily);
                 EventOutcome::Consumed
             }
-            // `p` enters the leader; the next key chooses a period.
-            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+            "notes.periodic-leader" => {
                 self.state = NotesState::PeriodicLeader;
                 EventOutcome::Consumed
             }
@@ -276,6 +388,26 @@ impl NotesTab {
 impl Tab for NotesTab {
     fn title(&self) -> &str {
         "Notes"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        NOTES_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &NOTES_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
+        // The keymap exposes only Idle-state commands; sub-state
+        // handlers are reached via `handle_event` and not via the
+        // command registry. `ft do` callers that try to invoke
+        // `notes.open-picker` etc. get the `opens_modal=true` rejection
+        // upstream (the picker captures the keyboard headlessly).
+        match self.dispatch_idle_command(cmd, &*ctx) {
+            EventOutcome::Consumed => CommandOutcome::Handled,
+            _ => CommandOutcome::NotHandled,
+        }
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
