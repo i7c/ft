@@ -46,7 +46,7 @@ use crate::tui::notes_actions::periodic::run_periodic_open;
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
-use crate::tui::tab::TabCtx;
+use crate::tui::tab::{AppRequest, TabCtx};
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
     SearchPickerModal,
@@ -439,21 +439,63 @@ impl Modal for PeriodicLeader {
     }
 }
 
-/// Unit modal: the active view's query bar owns the keyboard. The real
-/// dispatch reads/writes the view's existing query buffer; this stub
-/// exists so `ActiveModal::QueryBar` can compile in Section 1.
+/// Marker modal: the active view's query bar owns the keyboard. The
+/// actual buffer state stays on the view; this modal just owns the
+/// keyboard and forwards each editing keystroke back to the host tab
+/// via `AppRequest::GraphQueryBarKey`. Render is a no-op — the host
+/// tab renders the prompt cell and cursor (the host checks
+/// `ctx.active_modal_name == Some("query-bar")` to apply input-mode
+/// styling).
 struct QueryBar {
-    #[allow(dead_code)]
     view_id: usize,
 }
 
 impl Modal for QueryBar {
-    fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
-        ModalOutcome::NotHandled
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) => ModalOutcome::Closed,
+            (KeyCode::Enter, _) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphApplyQueryBar {
+                    view_id: self.view_id,
+                });
+                ModalOutcome::Closed
+            }
+            // Forward editing keys to the host. `Char | Backspace |
+            // Delete | Left | Right | Home | End` mirror the
+            // pre-migration `handle_input_event` set; other keys fall
+            // through.
+            (
+                KeyCode::Char(_)
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End,
+                _,
+            ) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphQueryBarKey {
+                    view_id: self.view_id,
+                    key: k,
+                });
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
     }
     fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {}
     fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Query bar", &[("Enter", "apply"), ("Esc", "cancel")])
+        HelpSection::new(
+            "Query bar",
+            &[
+                ("Type", "edit query"),
+                ("Enter", "apply"),
+                ("Esc", "cancel"),
+            ],
+        )
     }
     fn name(&self) -> &'static str {
         "query-bar"

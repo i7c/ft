@@ -553,11 +553,6 @@ pub struct GraphTab {
     graph: Option<Graph>,
     views: Vec<ExpandedView>,
     active: usize,
-    /// Whether the query input bar of the active view owns the keyboard.
-    /// Global rather than per-view — there's no meaningful notion of
-    /// "editing an inactive view", and the App-level keymap wants one
-    /// place to look to decide if printable characters are being captured.
-    input_mode: bool,
     /// Active move-section flow. `None` outside the flow; `Some` while
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
@@ -896,7 +891,6 @@ impl GraphTab {
             graph: None,
             views: vec![ExpandedView::default()],
             active: 0,
-            input_mode: false,
             move_outer: None,
             queued_related_path: None,
         }
@@ -1333,9 +1327,14 @@ impl GraphTab {
                     // `/` falls back to the tab's query-input mode so
                     // the user can refine the visible tree. We keep the
                     // move state alive — exiting input mode returns
-                    // here.
-                    self.input_mode = true;
+                    // here. With §5 the query bar is the App-level
+                    // `QueryBar` modal which renders over the move
+                    // outer (modal dispatch runs ahead of the tab).
                     self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
+                            view_id: self.active,
+                        })));
                     EventOutcome::Consumed
                 }
                 (KeyCode::Esc, _) => {
@@ -1675,12 +1674,14 @@ impl GraphTab {
         )));
     }
 
-    /// Open a new blank view and drop into input mode. Used when no
-    /// presets exist (or by test code).
+    /// Open a new blank view. Used when no presets exist (or by test
+    /// code). The caller is responsible for posting
+    /// `OpenModal(QueryBar)` if they want the new view to drop into
+    /// input mode (the production `Ctrl+N` path does this; test code
+    /// often doesn't).
     fn add_view(&mut self) {
         self.views.push(ExpandedView::default());
         self.active = self.views.len() - 1;
-        self.input_mode = true;
     }
 
     /// Apply a preset DSL string to the currently-active view. Called
@@ -1775,14 +1776,12 @@ impl GraphTab {
     fn close_view(&mut self) {
         if self.views.len() == 1 {
             self.views[0] = ExpandedView::default();
-            self.input_mode = false;
             return;
         }
         self.views.remove(self.active);
         if self.active >= self.views.len() {
             self.active = self.views.len() - 1;
         }
-        self.input_mode = false;
     }
 
     fn next_view(&mut self) {
@@ -1790,7 +1789,6 @@ impl GraphTab {
             return;
         }
         self.active = (self.active + 1) % self.views.len();
-        self.input_mode = false;
     }
 
     fn prev_view(&mut self) {
@@ -1798,13 +1796,11 @@ impl GraphTab {
             return;
         }
         self.active = (self.active + self.views.len() - 1) % self.views.len();
-        self.input_mode = false;
     }
 
     fn switch_view(&mut self, idx: usize) {
         if idx < self.views.len() {
             self.active = idx;
-            self.input_mode = false;
         }
     }
 
@@ -1855,91 +1851,6 @@ impl GraphTab {
             let url = ft_core::notes::obsidian_url(&vault_name, &n.path, None);
             ctx.recents.record_open(&n.path);
             *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInObsidian { url });
-        }
-    }
-
-    fn handle_input_event(&mut self, ev: &crossterm::event::KeyEvent) -> Result<EventOutcome> {
-        match (ev.code, ev.modifiers) {
-            (KeyCode::Enter, _) => {
-                let graph = self.graph.as_ref();
-                self.views[self.active].apply_query(graph);
-                self.input_mode = false;
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Esc, _) => {
-                self.input_mode = false;
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                let v = self.active_view_mut();
-                v.query_text.insert(v.input_cursor, c);
-                v.input_cursor += c.len_utf8();
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Backspace, _) => {
-                let v = self.active_view_mut();
-                if v.input_cursor > 0 {
-                    let prev = v
-                        .query_text
-                        .char_indices()
-                        .rev()
-                        .find(|(i, _)| *i < v.input_cursor)
-                        .map(|(i, c)| (i, c.len_utf8()));
-                    if let Some((_, len)) = prev {
-                        let start = v.input_cursor - len;
-                        v.query_text.replace_range(start..v.input_cursor, "");
-                        v.input_cursor = start;
-                    }
-                }
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Delete, _) => {
-                let v = self.active_view_mut();
-                if v.input_cursor < v.query_text.len() {
-                    let ch = v.query_text[v.input_cursor..].chars().next().unwrap();
-                    let end = v.input_cursor + ch.len_utf8();
-                    v.query_text.replace_range(v.input_cursor..end, "");
-                }
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Left, _) => {
-                let v = self.active_view_mut();
-                if v.input_cursor > 0 {
-                    let prev = v
-                        .query_text
-                        .char_indices()
-                        .rev()
-                        .find(|(i, _)| *i < v.input_cursor)
-                        .map(|(i, _)| i);
-                    if let Some(i) = prev {
-                        v.input_cursor = i;
-                    }
-                }
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Right, _) => {
-                let v = self.active_view_mut();
-                if v.input_cursor < v.query_text.len() {
-                    let next = v.query_text[v.input_cursor..]
-                        .chars()
-                        .next()
-                        .map(|c| v.input_cursor + c.len_utf8());
-                    if let Some(i) = next {
-                        v.input_cursor = i;
-                    }
-                }
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Home, _) => {
-                self.active_view_mut().input_cursor = 0;
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::End, _) => {
-                let v = self.active_view_mut();
-                v.input_cursor = v.query_text.len();
-                Ok(EventOutcome::Consumed)
-            }
-            _ => Ok(EventOutcome::NotHandled),
         }
     }
 }
@@ -2000,8 +1911,88 @@ impl Tab for GraphTab {
         self.apply_preset_to_active_view(&dsl);
     }
 
-    fn graph_focus_query_bar(&mut self) {
-        self.input_mode = true;
+    fn graph_focus_query_bar(&mut self, ctx: &TabCtx) {
+        *ctx.pending_request.borrow_mut() =
+            Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
+                view_id: self.active,
+            })));
+    }
+
+    fn graph_query_bar_key(&mut self, view_id: usize, key: crossterm::event::KeyEvent) {
+        // Per-key forwarding from the `QueryBar` modal. Mirrors the
+        // pre-migration `handle_input_event` editing rules: insert,
+        // backspace, delete, arrows, home/end. Ignores keys for
+        // non-active views so a `view_id` racing a view-close becomes
+        // a no-op rather than a panic.
+        if view_id >= self.views.len() {
+            return;
+        }
+        // Switch active view to the targeted one for consistency with
+        // the pre-migration behaviour (`/` always edited the active
+        // view's buffer; multi-view layouts may have shifted active
+        // between modal open and key forward).
+        self.active = view_id;
+        let v = self.active_view_mut();
+        match (key.code, key.modifiers) {
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                v.query_text.insert(v.input_cursor, c);
+                v.input_cursor += c.len_utf8();
+            }
+            (KeyCode::Backspace, _) if v.input_cursor > 0 => {
+                let prev = v
+                    .query_text
+                    .char_indices()
+                    .rev()
+                    .find(|(i, _)| *i < v.input_cursor)
+                    .map(|(_, c)| c.len_utf8());
+                if let Some(len) = prev {
+                    let start = v.input_cursor - len;
+                    v.query_text.replace_range(start..v.input_cursor, "");
+                    v.input_cursor = start;
+                }
+            }
+            (KeyCode::Delete, _) if v.input_cursor < v.query_text.len() => {
+                let ch = v.query_text[v.input_cursor..].chars().next().unwrap();
+                let end = v.input_cursor + ch.len_utf8();
+                v.query_text.replace_range(v.input_cursor..end, "");
+            }
+            (KeyCode::Left, _) if v.input_cursor > 0 => {
+                let prev = v
+                    .query_text
+                    .char_indices()
+                    .rev()
+                    .find(|(i, _)| *i < v.input_cursor)
+                    .map(|(i, _)| i);
+                if let Some(i) = prev {
+                    v.input_cursor = i;
+                }
+            }
+            (KeyCode::Right, _) if v.input_cursor < v.query_text.len() => {
+                let next = v.query_text[v.input_cursor..]
+                    .chars()
+                    .next()
+                    .map(|c| v.input_cursor + c.len_utf8());
+                if let Some(i) = next {
+                    v.input_cursor = i;
+                }
+            }
+            (KeyCode::Home, _) => {
+                v.input_cursor = 0;
+            }
+            (KeyCode::End, _) => {
+                v.input_cursor = v.query_text.len();
+            }
+            _ => {}
+        }
+    }
+
+    fn graph_apply_query_bar(&mut self, view_id: usize) {
+        if view_id >= self.views.len() {
+            return;
+        }
+        self.active = view_id;
+        let graph = self.graph.as_ref();
+        self.views[self.active].apply_query(graph);
     }
 
     fn graph_commit_rename(
@@ -2046,13 +2037,6 @@ impl Tab for GraphTab {
             }
             // outcome == NotHandled — fall through to tree-navigation /
             // input-mode / etc. while keeping move_outer alive.
-        }
-
-        // Input mode owns the keyboard — digits and every other char
-        // should land as text in the query, not trigger a tab switch.
-        // This must run BEFORE the tab-passthrough check below.
-        if self.input_mode {
-            return self.handle_input_event(&k);
         }
 
         // Multi-view bindings — checked before the outer-tab passthrough
@@ -2140,7 +2124,10 @@ impl Tab for GraphTab {
         let graph_missing = self.graph.is_none();
         if graph_missing || self.active_view().tree.is_empty() {
             if let (KeyCode::Char('/'), KeyModifiers::NONE) = (k.code, k.modifiers) {
-                self.input_mode = true;
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
+                        view_id: self.active,
+                    })));
                 return Ok(EventOutcome::Consumed);
             }
             return Ok(EventOutcome::NotHandled);
@@ -2149,7 +2136,10 @@ impl Tab for GraphTab {
         let vis = 20; // approximation; render's scroll_to_selection corrects
         match (k.code, k.modifiers) {
             (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                self.input_mode = true;
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
+                        view_id: self.active,
+                    })));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('z'), KeyModifiers::NONE) => {
@@ -2456,7 +2446,7 @@ impl Tab for GraphTab {
 
         // ── Tree ─────────────────────────────────────────────────────
         let visible = tree_area.height.saturating_sub(1).max(1) as usize;
-        let input_mode = self.input_mode;
+        let input_mode = ctx.active_modal_name == Some("query-bar");
         let active = self.active;
         let v = &mut self.views[active];
 
@@ -3861,7 +3851,6 @@ mod view_tests {
         assert_eq!(tab.views.len(), 1);
         assert_eq!(tab.active, 0);
         assert!(tab.views[0].query_text.is_empty());
-        assert!(!tab.input_mode);
     }
 
     #[test]
@@ -3870,7 +3859,9 @@ mod view_tests {
         tab.add_view();
         assert_eq!(tab.views.len(), 2);
         assert_eq!(tab.active, 1);
-        assert!(tab.input_mode);
+        // Input-mode focus is now expressed via `OpenModal(QueryBar)`
+        // posted by the production `Ctrl+N` path; `add_view` itself
+        // is a pure state-mutator and no longer sets a flag.
     }
 
     #[test]
@@ -3944,6 +3935,7 @@ mod view_tests {
             today,
             last_refresh: &last_refresh,
             pending_request: &pending_request,
+            active_modal_name: None,
         };
 
         // Build graph so views can resolve queries.

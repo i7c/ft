@@ -93,6 +93,19 @@ pub enum AppRequest {
         target_path: PathBuf,
         selected_titles: Vec<String>,
     },
+    /// Routed back to the Graph tab: forward a single key event to
+    /// the view's query buffer (printable chars, Backspace, Delete,
+    /// arrows, Home/End). Raised by the `QueryBar` modal on each
+    /// editing keystroke.
+    GraphQueryBarKey {
+        view_id: usize,
+        key: crossterm::event::KeyEvent,
+    },
+    /// Routed back to the Graph tab: parse and apply the active
+    /// view's query buffer (Enter from the `QueryBar` modal).
+    GraphApplyQueryBar {
+        view_id: usize,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -149,6 +162,15 @@ impl std::fmt::Debug for AppRequest {
                 .debug_struct("GraphConfirmRelated")
                 .field("target_path", target_path)
                 .field("selected_titles", selected_titles)
+                .finish(),
+            AppRequest::GraphQueryBarKey { view_id, key } => f
+                .debug_struct("GraphQueryBarKey")
+                .field("view_id", view_id)
+                .field("key", key)
+                .finish(),
+            AppRequest::GraphApplyQueryBar { view_id } => f
+                .debug_struct("GraphApplyQueryBar")
+                .field("view_id", view_id)
                 .finish(),
         }
     }
@@ -212,6 +234,12 @@ pub struct TabCtx<'a> {
     /// Pending side-effect for the App to handle after `handle_event` returns.
     /// `RefCell` rather than `Cell` because [`AppRequest`] isn't `Copy`.
     pub pending_request: &'a RefCell<Option<AppRequest>>,
+    /// Name of the App's currently-active modal, if any (e.g.
+    /// `Some("query-bar")` when `ActiveModal::QueryBar` is up). Used
+    /// by tabs to render input cues without owning a parallel state
+    /// flag (extract-modal-driver §5). Populated by the App when
+    /// building the context for `handle_event` and `render`.
+    pub active_modal_name: Option<&'static str>,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
@@ -271,9 +299,9 @@ pub trait Tab {
 
     /// Hook for the preset picker's cancel-from-new-view path (see
     /// [`AppRequest::GraphFocusQueryBar`]). The Graph tab overrides
-    /// this to enter input mode on the active view. Other tabs ignore.
-    /// Removed once Section 5 lands `ActiveModal::QueryBar`.
-    fn graph_focus_query_bar(&mut self) {}
+    /// this to open the `QueryBar` modal on the freshly-pushed view
+    /// (extract-modal-driver §5).
+    fn graph_focus_query_bar(&mut self, _ctx: &TabCtx) {}
 
     /// Hook for the rename modal commit (see
     /// [`AppRequest::GraphCommitRename`]). The Graph tab overrides
@@ -299,6 +327,17 @@ pub trait Tab {
         _selected_titles: Vec<String>,
     ) {
     }
+
+    /// Hook for the QueryBar modal's per-key forwarding (see
+    /// [`AppRequest::GraphQueryBarKey`]). The Graph tab overrides
+    /// this to mutate the view's query buffer (insert / backspace /
+    /// arrows / etc.).
+    fn graph_query_bar_key(&mut self, _view_id: usize, _key: crossterm::event::KeyEvent) {}
+
+    /// Hook for the QueryBar modal's commit (see
+    /// [`AppRequest::GraphApplyQueryBar`]). The Graph tab overrides
+    /// this to parse and apply the view's current query buffer.
+    fn graph_apply_query_bar(&mut self, _view_id: usize) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

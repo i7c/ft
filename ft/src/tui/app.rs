@@ -184,6 +184,7 @@ impl App {
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
+                active_modal_name: self.active_modal_name(),
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
         }
@@ -230,6 +231,7 @@ impl App {
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
+            active_modal_name: self.active_modal_name(),
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
@@ -356,12 +358,17 @@ impl App {
         let modal_outcome = {
             let mut slot = self.active_modal.borrow_mut();
             if let Some(modal) = slot.as_mut() {
+                // `modal.name()` instead of `self.active_modal_name()`
+                // to avoid a second borrow of `self.active_modal`
+                // while we already hold a mutable borrow.
+                let active_modal_name = Some(modal.name());
                 let ctx = TabCtx {
                     vault: &self.vault,
                     recents: &self.recents,
                     today: self.today,
                     last_refresh: &self.last_refresh,
                     pending_request: &self.pending_request,
+                    active_modal_name,
                 };
                 Some(modal.handle_event(ev.clone(), &ctx))
             } else {
@@ -393,6 +400,7 @@ impl App {
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
+                active_modal_name: self.active_modal_name(),
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
         };
@@ -459,6 +467,7 @@ impl App {
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
+            active_modal_name: self.active_modal_name(),
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
@@ -519,7 +528,15 @@ impl App {
             }
             AppRequest::GraphFocusQueryBar => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_focus_query_bar();
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_focus_query_bar(&ctx);
                 }
                 Ok(())
             }
@@ -536,6 +553,7 @@ impl App {
                         today: self.today,
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_commit_rename(
                         &ctx,
@@ -558,8 +576,21 @@ impl App {
                         today: self.today,
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                }
+                Ok(())
+            }
+            AppRequest::GraphQueryBarKey { view_id, key } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_query_bar_key(view_id, key);
+                }
+                Ok(())
+            }
+            AppRequest::GraphApplyQueryBar { view_id } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_apply_query_bar(view_id);
                 }
                 Ok(())
             }
@@ -639,6 +670,7 @@ impl App {
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
+                active_modal_name: self.active_modal_name(),
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
         }
@@ -776,6 +808,7 @@ impl App {
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
+                active_modal_name: self.active_modal_name(),
             };
             self.tabs[self.active].refresh(&mut ctx)?;
         }
@@ -1047,6 +1080,7 @@ impl App {
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
+            active_modal_name: self.active_modal_name(),
         };
         self.tabs[self.active].on_focus(&mut ctx)?;
         self.drain_simple_requests();
@@ -1098,7 +1132,15 @@ impl App {
                 }
                 Some(AppRequest::GraphFocusQueryBar) => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_focus_query_bar();
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_focus_query_bar(&ctx);
                     }
                 }
                 Some(AppRequest::GraphCommitRename {
@@ -1114,6 +1156,7 @@ impl App {
                             today: self.today,
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
                         };
                         self.tabs[idx].graph_commit_rename(
                             &ctx,
@@ -1135,8 +1178,19 @@ impl App {
                             today: self.today,
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
                         };
                         self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                    }
+                }
+                Some(AppRequest::GraphQueryBarKey { view_id, key }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_query_bar_key(view_id, key);
+                    }
+                }
+                Some(AppRequest::GraphApplyQueryBar { view_id }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_apply_query_bar(view_id);
                     }
                 }
                 Some(other) => {
@@ -1187,7 +1241,15 @@ impl App {
                 }
                 AppRequest::GraphFocusQueryBar => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_focus_query_bar();
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_focus_query_bar(&ctx);
                     }
                 }
                 AppRequest::GraphCommitRename {
@@ -1203,6 +1265,7 @@ impl App {
                             today: self.today,
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
                         };
                         self.tabs[idx].graph_commit_rename(
                             &ctx,
@@ -1224,8 +1287,19 @@ impl App {
                             today: self.today,
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
                         };
                         self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                    }
+                }
+                AppRequest::GraphQueryBarKey { view_id, key } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_query_bar_key(view_id, key);
+                    }
+                }
+                AppRequest::GraphApplyQueryBar { view_id } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        self.tabs[idx].graph_apply_query_bar(view_id);
                     }
                 }
                 // Other variants need terminal state; tests that exercise
@@ -1282,7 +1356,15 @@ impl App {
             }
             AppRequest::GraphFocusQueryBar => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_focus_query_bar();
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_focus_query_bar(&ctx);
                 }
                 Ok(())
             }
@@ -1299,6 +1381,7 @@ impl App {
                         today: self.today,
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_commit_rename(
                         &ctx,
@@ -1321,8 +1404,21 @@ impl App {
                         today: self.today,
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                }
+                Ok(())
+            }
+            AppRequest::GraphQueryBarKey { view_id, key } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_query_bar_key(view_id, key);
+                }
+                Ok(())
+            }
+            AppRequest::GraphApplyQueryBar { view_id } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    self.tabs[idx].graph_apply_query_bar(view_id);
                 }
                 Ok(())
             }
