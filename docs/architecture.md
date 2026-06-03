@@ -200,6 +200,122 @@ DSL with flag filters by AND-ing the parsed expression with a typed
 2. Add a variant to `output::Format`.
 3. Wire it into the match in `ft/src/cmd/tasks.rs::run_list`.
 
+## Modal driver (TUI)
+
+The TUI's overlay/popup pattern (pickers, multi-step flows,
+confirmation modals, the query-bar input mode) is unified behind a
+single `Modal` trait and an App-level slot. Before this pattern,
+every tab held an `Option<...>` field per modal kind and a long
+`is_some()` dispatch chain prioritised them by ordering. The driver
+collapses that to one `Option<ActiveModal>` on `App` and a uniform
+dispatch precedence: **modal first, tab second, App-global third**.
+
+### Trait + enum
+
+`ft/src/tui/modal.rs` defines:
+
+```rust
+pub trait Modal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome;
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx);
+    fn keymap_help(&self) -> HelpSection;
+    fn name(&self) -> &'static str;
+}
+
+pub enum ModalOutcome {
+    Consumed,                       // modal handled the key, stays open
+    Closed,                         // drop the slot
+    OpenSibling(Box<ActiveModal>),  // swap the slot for a new modal
+    NotHandled,                     // fall through to the tab
+}
+
+pub enum ActiveModal {
+    Create(CreateState), Append(AppendState),
+    CapturePicker(CapturePickerModal), CaptureVar(CaptureVarPromptState),
+    SectionMove(SectionMoveState), MoveOuter(GraphMoveOuter),
+    Rename(GraphRenameState), PresetPicker(PresetPickerModal),
+    Related(RelatedModal), Search(SearchPickerModal),
+    PeriodicLeader, QueryBar { view_id: usize },
+}
+```
+
+`App` holds `active_modal: RefCell<Option<ActiveModal>>` and exposes
+`active_modal_name() -> Option<&'static str>` for the status-bar
+indicator and tests.
+
+### Three patterns by modal shape
+
+- **Flow modals with free-function handlers**
+  (`CreateState`, `AppendState`, `SectionMoveState`,
+  `CaptureVarPromptState`): handler lives in
+  `notes_actions/*::handle_key`; render lives in
+  `notes_view::render_*_overlay`. `Modal::handle_event` wraps the
+  handler; `Modal::render` calls the renderer. Modal impls live in
+  `modal.rs`.
+- **Pickers** (`SearchPickerModal`, `PresetPickerModal`,
+  `CapturePickerModal`): each is a newtype wrapping
+  `FuzzyPicker<S>` plus modal-specific metadata. On
+  `PickerOutcome::Selected(item)`, the modal posts a tab-specific
+  `AppRequest::Graph*` (e.g. `GraphJumpToNodes`,
+  `GraphApplyPreset`, `RunCapturePreset`) with the typed payload.
+  The newtypes live in `tabs/graph.rs` so they can reach
+  graph-internal types.
+- **Tab-resident state** (`GraphRenameState`, `RelatedModal`,
+  `GraphMoveOuter`): state types stay in `tabs/graph.rs`; their
+  `Modal` impls live there too. Commits post tab-specific
+  `AppRequest::Graph*` variants (e.g. `GraphCommitRename`,
+  `GraphConfirmRelated`) so the host can plan/apply against
+  in-memory graph state. On recoverable error, the host re-posts
+  `OpenModal` with the modal's last-typed state preserved.
+
+### App ↔ Tab routing
+
+Tab-specific actions raised by modals route through `AppRequest`
+variants. `App::service_request` (and `drain_simple_requests` for
+the test path) looks up the active tab by `title()` and calls a
+typed `Tab::graph_*` hook. This is the same shape as the existing
+`Tab::queue_journal_for` precedent — typed hooks per action, default
+no-op, host overrides. The recipe for adding a new modal action:
+
+1. Add `AppRequest::Graph<Action> { … }`.
+2. Add `Tab::graph_<action>(&mut self, …)` default no-op.
+3. Override on `GraphTab` (or wherever the modal is hosted).
+4. Service the variant in `App::service_request`,
+   `service_pending_for_test`, `service_request_for_test`, and
+   `drain_simple_requests`.
+
+### TabCtx exposes modal state for render cues
+
+`TabCtx::active_modal_name: Option<&'static str>` lets a tab's
+`render` decide whether a modal is up without owning a parallel
+flag. Used by `GraphTab::render` to style the query prompt yellow
+and position the cursor when `Some("query-bar")`.
+
+### Status-bar modal indicator
+
+When a modal is active, the status bar's right cell renders
+`modal: <name>` in magenta instead of `mode: <label>` in yellow.
+The in-flight sync indicator still takes priority over the modal
+indicator.
+
+### Adding a new modal
+
+1. Define the state type (newtype if wrapping a picker, struct if
+   tab-resident, or use an existing notes_actions flow type).
+2. Implement `Modal` for it. Pickers post `AppRequest::Graph*` on
+   selection. Tab-resident commit modals post a typed request and
+   close.
+3. Add a variant to `ActiveModal`.
+4. Wire `ActiveModal::handle_event`/`render`/`keymap_help`/`name` to
+   delegate to the new variant.
+5. The launch site posts `OpenModal(Box::new(ActiveModal::<X>(state)))`
+   via `ctx.pending_request`.
+
+The plan-extract-modal-driver work is the reference implementation;
+`GraphMoveOuter` is the one modal still using the legacy
+tab-resident dispatch path and is the subject of a follow-up
+migration.
+
 ## Concurrency model
 
 The codebase is deliberately single-threaded everywhere except for two

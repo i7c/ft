@@ -68,14 +68,26 @@ The Graph tab's query-bar focus (previously the `input_mode` boolean) SHALL be e
 - **WHEN** no modal is active and the user presses `j` / `k` / `l` / `h`
 - **THEN** the keys reach the tab and operate on the tree (unchanged from baseline)
 
-### Requirement: Snapshot baseline preserved
+### Requirement: Snapshot baseline preserved with one deliberate diff
 
-All TUI snapshot tests in `ft/src/tui/tests.rs` and any per-module snapshot tests SHALL pass without snapshot diffs after the migration, except for mechanical name changes covered by an explicit re-bless step in tasks.
+All TUI snapshot tests in `ft/src/tui/tests.rs` and any per-module snapshot tests SHALL pass after the migration. The only allowed snapshot diff is the right-cell status-bar text changing from `mode: <label>` to `modal: <name>` when a modal is active — this is itself a specified requirement of §6 (the modal indicator) and is re-blessed deliberately per migration commit. No other behavior may change.
 
-#### Scenario: Graph tab tests pass unchanged
+#### Scenario: Graph tab tests pass with only the §6 status-bar diff
 - **WHEN** the Graph tab snapshot tests are run after migration
-- **THEN** every snapshot matches its committed baseline byte-for-byte
+- **THEN** every snapshot matches its committed baseline byte-for-byte EXCEPT for the right-cell status-bar text on tests that exercise an active modal (which renders `modal: <name>` per §6)
 
 #### Scenario: Cross-tab tests pass unchanged
 - **WHEN** the cross-tab tests (e.g., Graph → Journal jump) are run after migration
-- **THEN** every assertion holds and every snapshot matches
+- **THEN** every assertion holds and every snapshot matches its baseline (cross-tab navigation does not involve modal state)
+
+### Requirement: GraphMoveOuter is explicitly out of scope
+
+The 7-variant `GraphMoveOuter` state machine SHALL remain a tab-resident `Option<GraphMoveOuter>` field on `GraphTab` after this change, with its existing dispatch and render path intact. The `ActiveModal::MoveOuter` enum variant and stub `Modal` impl exist so the enum is closed and the trait dispatch is total; no `OpenModal` call in this change wraps `MoveOuter`. Migrating it follows the patterns established by this change and is the subject of a separate follow-up.
+
+#### Scenario: MoveOuter dispatch is unchanged
+- **WHEN** the user presses `m` to start a move-section flow on the Graph tab
+- **THEN** the existing `move_outer = Some(GraphMoveOuter::SourceFromTree)` path runs (no `OpenModal` posted) and the rest of the flow operates through the legacy `if self.move_outer.is_some()` dispatch arm and render arm
+
+#### Scenario: MoveOuter does not surface a modal-indicator
+- **WHEN** any `GraphMoveOuter` variant is active
+- **THEN** the right-cell status bar continues to show `mode: <label>` (no `modal: move` indicator), because `App::active_modal` is `None` during a move flow
