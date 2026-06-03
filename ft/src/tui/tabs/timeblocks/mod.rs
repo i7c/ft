@@ -44,14 +44,277 @@ use ft_core::timeblock::{
 };
 use ratatui::{layout::Rect, Frame};
 
+use std::sync::LazyLock;
+
 use crate::tui::{
+    command::{Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
+    keymap::{KeyChord, KeyMap},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     widgets::EditBuffer,
 };
 
 mod view;
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+/// Every action the Timeblocks tab exposes through the command/keymap
+/// layer. Idle-mode keys only — the per-mode handlers (DeleteConfirm,
+/// Quickline, EditDesc, Form, Tagging) capture their own keys raw and
+/// bypass the keymap in `handle_event`.
+static TIMEBLOCKS_COMMANDS: &[CommandDef] = &[
+    // Navigation
+    CommandDef {
+        name: "timeblocks.cursor-up",
+        description: "Move the cursor up one block",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.cursor-down",
+        description: "Move the cursor down one block",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.cursor-first",
+        description: "Jump to the first block",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.cursor-last",
+        description: "Jump to the last block",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.toggle-pane-back",
+        description: "Toggle focus to the previous pane (Split) / previous day (Single)",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.toggle-pane-forward",
+        description: "Toggle focus to the next pane (Split) / next day (Single)",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.toggle-view",
+        description: "Toggle between Split and Single view",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.anchor-back",
+        description: "Slide the anchor day back by one day",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.anchor-forward",
+        description: "Slide the anchor day forward by one day",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.anchor-today",
+        description: "Jump the anchor day to today",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.reload",
+        description: "Reload the visible panes from disk",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Edit times
+    CommandDef {
+        name: "timeblocks.end-later",
+        description: "Shift the focused block's end +5 minutes",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.end-earlier",
+        description: "Shift the focused block's end -5 minutes",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.start-later",
+        description: "Shift the focused block's start +5 minutes",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.start-earlier",
+        description: "Shift the focused block's start -5 minutes",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.block-later",
+        description: "Shift the focused block ±5 minutes (duration preserved)",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.block-earlier",
+        description: "Shift the focused block -5 minutes (duration preserved)",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Edit times",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Create / edit / delete
+    CommandDef {
+        name: "timeblocks.create-daily",
+        description: "Create the missing daily note",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.add-quickline",
+        description: "Add a new block via quickline entry",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.add-form",
+        description: "Add a new block via the multi-field form",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.edit-desc",
+        description: "Edit the focused block's description inline",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.start-tagging",
+        description: "Add or remove @tags on the focused block",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "timeblocks.delete-start",
+        description: "Arm the two-stroke `d d` delete chord",
+        scope: CommandScope::Tab("timeblocks"),
+        group: "Create / edit / delete",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+];
+
+/// Default keymap for the Timeblocks tab's Idle mode. Per-mode
+/// handlers (DeleteConfirm, Quickline, EditDesc, Form, Tagging) are
+/// reached via the bypass at the top of `handle_event` and do NOT
+/// resolve through this map.
+static TIMEBLOCKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        // Navigation — vim aliases
+        .bind("Up", "timeblocks.cursor-up")
+        .bind("k", "timeblocks.cursor-up")
+        .bind("Down", "timeblocks.cursor-down")
+        .bind("j", "timeblocks.cursor-down")
+        .bind("g", "timeblocks.cursor-first")
+        .bind("G", "timeblocks.cursor-last")
+        .bind("Left", "timeblocks.toggle-pane-back")
+        .bind("h", "timeblocks.toggle-pane-back")
+        .bind("Right", "timeblocks.toggle-pane-forward")
+        .bind("l", "timeblocks.toggle-pane-forward")
+        .bind("f", "timeblocks.toggle-view")
+        .bind("H", "timeblocks.anchor-back")
+        .bind("L", "timeblocks.anchor-forward")
+        .bind("T", "timeblocks.anchor-today")
+        .bind("r", "timeblocks.reload")
+        // Edit times — special-char bindings (normalization strips SHIFT
+        // for non-alpha chars so `]` arrives the same way regardless of
+        // whether the terminal sent it with or without SHIFT).
+        .bind("]", "timeblocks.end-later")
+        .bind("[", "timeblocks.end-earlier")
+        .bind("}", "timeblocks.start-later")
+        .bind("{", "timeblocks.start-earlier")
+        .bind(">", "timeblocks.block-later")
+        .bind("<", "timeblocks.block-earlier")
+        // Create / edit / delete
+        .bind("c", "timeblocks.create-daily")
+        .bind("a", "timeblocks.add-quickline")
+        .bind("A", "timeblocks.add-form")
+        .bind("e", "timeblocks.edit-desc")
+        .bind("t", "timeblocks.start-tagging")
+        .bind("d", "timeblocks.delete-start")
+});
 
 /// Function pointer for "what time is it now?". Production uses
 /// [`Local::now`]; tests inject a fixed value for deterministic snapshots.
@@ -323,42 +586,9 @@ impl TimeblocksTab {
         };
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> EventOutcome {
-        // Tab / Shift+Tab are deliberately NOT consumed here — they belong
-        // to the App's global tab-cycle. `h`/`l` (or `←`/`→`) toggle pane
-        // focus instead.
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_selection(1);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_selection(-1);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('g') => {
-                self.jump_selection(false);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('G') => {
-                self.jump_selection(true);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.toggle_focus(false);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.toggle_focus(true);
-                EventOutcome::Consumed
-            }
-            KeyCode::Char('r') => {
-                // Refresh happens in handle_event so the ctx is available.
-                EventOutcome::NotHandled
-            }
-            _ => EventOutcome::NotHandled,
-        }
-    }
+    // `handle_key` (the navigation-only no-ctx dispatcher) was removed
+    // — its arms now live in `TIMEBLOCKS_KEYMAP` + `dispatch_command`
+    // alongside the mutation arms.
 
     // ── mutation chord handlers ────────────────────────────────────────
 
@@ -1172,15 +1402,127 @@ impl Tab for TimeblocksTab {
         Ok(())
     }
 
+    fn commands(&self) -> &'static [CommandDef] {
+        TIMEBLOCKS_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &TIMEBLOCKS_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
+        match cmd.name {
+            // Navigation
+            "timeblocks.cursor-up" => {
+                self.move_selection(-1);
+                CommandOutcome::Handled
+            }
+            "timeblocks.cursor-down" => {
+                self.move_selection(1);
+                CommandOutcome::Handled
+            }
+            "timeblocks.cursor-first" => {
+                self.jump_selection(false);
+                CommandOutcome::Handled
+            }
+            "timeblocks.cursor-last" => {
+                self.jump_selection(true);
+                CommandOutcome::Handled
+            }
+            "timeblocks.toggle-pane-back" => {
+                self.toggle_focus(false);
+                CommandOutcome::Handled
+            }
+            "timeblocks.toggle-pane-forward" => {
+                self.toggle_focus(true);
+                CommandOutcome::Handled
+            }
+            "timeblocks.toggle-view" => {
+                self.view = match self.view {
+                    ViewMode::Split => ViewMode::Single,
+                    ViewMode::Single => ViewMode::Split,
+                };
+                CommandOutcome::Handled
+            }
+            "timeblocks.anchor-back" => {
+                self.shift_anchor(ctx, -1);
+                CommandOutcome::Handled
+            }
+            "timeblocks.anchor-forward" => {
+                self.shift_anchor(ctx, 1);
+                CommandOutcome::Handled
+            }
+            "timeblocks.anchor-today" => {
+                self.anchor = Some(ctx.today);
+                self.reload(ctx);
+                CommandOutcome::Handled
+            }
+            "timeblocks.reload" => {
+                self.reload(ctx);
+                CommandOutcome::Handled
+            }
+            // Edit times
+            "timeblocks.end-later" => {
+                self.shift_end(ctx, 5);
+                CommandOutcome::Handled
+            }
+            "timeblocks.end-earlier" => {
+                self.shift_end(ctx, -5);
+                CommandOutcome::Handled
+            }
+            "timeblocks.start-later" => {
+                self.shift_start(ctx, 5);
+                CommandOutcome::Handled
+            }
+            "timeblocks.start-earlier" => {
+                self.shift_start(ctx, -5);
+                CommandOutcome::Handled
+            }
+            "timeblocks.block-later" => {
+                self.shift_block(ctx, 5);
+                CommandOutcome::Handled
+            }
+            "timeblocks.block-earlier" => {
+                self.shift_block(ctx, -5);
+                CommandOutcome::Handled
+            }
+            // Create / edit / delete
+            "timeblocks.create-daily" => {
+                self.handle_create_daily(ctx);
+                CommandOutcome::Handled
+            }
+            "timeblocks.add-quickline" => {
+                self.mode = Mode::Quickline(EditBuffer::default());
+                CommandOutcome::Handled
+            }
+            "timeblocks.add-form" => {
+                self.mode = Mode::Form(self.default_form());
+                CommandOutcome::Handled
+            }
+            "timeblocks.edit-desc" => {
+                self.start_edit_desc(ctx);
+                CommandOutcome::Handled
+            }
+            "timeblocks.start-tagging" => {
+                self.start_tagging(ctx);
+                CommandOutcome::Handled
+            }
+            "timeblocks.delete-start" => {
+                self.start_delete_confirm(ctx);
+                CommandOutcome::Handled
+            }
+            _ => CommandOutcome::NotHandled,
+        }
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
 
-        // Modal input (quickline / edit-desc / form) eats everything
-        // except its own commit / cancel keys. The two-stroke `d d`
-        // chord is also handled at the top so the inter-stroke window
-        // can short-circuit before the navigation keymap runs.
+        // Per-mode handlers (DeleteConfirm, Quickline, EditDesc, Form,
+        // Tagging) capture raw keys before the Idle keymap is consulted
+        // — same pattern as JournalTab's picker-overlay bypass.
         match &mut self.mode {
             Mode::Idle => {}
             Mode::DeleteConfirm { .. } => {
@@ -1200,88 +1542,15 @@ impl Tab for TimeblocksTab {
             }
         }
 
-        // Idle keymap. `r` and the mutation chords need ctx for I/O
-        // so they're handled here before delegating to the
-        // navigation-only keymap.
-        if k.modifiers == KeyModifiers::NONE || k.modifiers == KeyModifiers::SHIFT {
-            match k.code {
-                KeyCode::Char('r') => {
-                    self.reload(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('c') => {
-                    self.handle_create_daily(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('a') => {
-                    self.mode = Mode::Quickline(EditBuffer::default());
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('A') => {
-                    self.mode = Mode::Form(self.default_form());
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('e') => {
-                    self.start_edit_desc(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('d') => {
-                    self.start_delete_confirm(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char(']') => {
-                    self.shift_end(ctx, 5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('[') => {
-                    self.shift_end(ctx, -5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('}') => {
-                    self.shift_start(ctx, 5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('{') => {
-                    self.shift_start(ctx, -5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('>') => {
-                    self.shift_block(ctx, 5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('<') => {
-                    self.shift_block(ctx, -5);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('f') => {
-                    self.view = match self.view {
-                        ViewMode::Split => ViewMode::Single,
-                        ViewMode::Single => ViewMode::Split,
-                    };
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('H') => {
-                    self.shift_anchor(ctx, -1);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('L') => {
-                    self.shift_anchor(ctx, 1);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('T') => {
-                    self.anchor = Some(ctx.today);
-                    self.reload(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char('t') => {
-                    self.start_tagging(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(self.handle_key(k))
+        // Idle keymap.
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = TIMEBLOCKS_KEYMAP.lookup(chord).cloned() else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        Ok(match self.dispatch_command(&cmd, ctx) {
+            CommandOutcome::Handled => EventOutcome::Consumed,
+            CommandOutcome::NotHandled => EventOutcome::NotHandled,
+        })
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {

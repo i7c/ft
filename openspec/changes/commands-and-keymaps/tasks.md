@@ -24,7 +24,7 @@
 - [ ] 4.1 GraphTab: define `GRAPH_COMMANDS`, `GRAPH_KEYMAP`, `dispatch_command`; remove the per-key match arms; the modal-launch keys now produce `CommandOutcome::OpenModal(...)`
 - [ ] 4.2 TasksTab: same conversion
 - [ ] 4.3 NotesTab: same conversion
-- [ ] 4.4 TimeblocksTab: same conversion
+- [x] 4.4 TimeblocksTab — converted. `TIMEBLOCKS_COMMANDS` (23 commands across Navigation/Edit times/Create-edit-delete groups) + `TIMEBLOCKS_KEYMAP` (29 bindings; `Up`/`k`, `Down`/`j`, `Left`/`h`, `Right`/`l` arrow+vim aliases). `dispatch_command` covers all 23 commands. `handle_event` keeps the per-mode bypass at the top (DeleteConfirm/Quickline/EditDesc/Form/Tagging route raw to their handlers) then does `KEYMAP.lookup → dispatch_command → EventOutcome`. The old `handle_key` no-ctx navigation helper was deleted (its arms moved into the keymap). 41 timeblocks tests pass; net code change: ~+220 LoC (large because of the 23 commands × ~9 LoC `CommandDef`s)
 - [x] 4.5 JournalTab — pilot conversion to validate the pattern. `JOURNAL_COMMANDS` (10 commands across Source/Navigation/Open groups) + `JOURNAL_KEYMAP` (12 bindings; `Up`/`k` and `Down`/`j` aliases share commands) + `dispatch_command` arm-per-command. `handle_event` keeps the picker-overlay bypass at the top (the tab-resident `FuzzyPicker` captures keys before the keymap is consulted) then does `KEYMAP.lookup → dispatch_command → EventOutcome`. Tests pass without changes; the pre-migration `help_sections()` stays in place (§6 replaces it with keymap-derived rendering)
 
 ### Lessons from the pilot
