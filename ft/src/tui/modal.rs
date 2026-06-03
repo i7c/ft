@@ -40,9 +40,7 @@ use ratatui::Frame;
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::notes_actions::append::{handle_key as append_handle_key, AppendState, AppendStep};
-use crate::tui::notes_actions::capture::{
-    handle_capture_var_key, CapturePresetPickerSource, CaptureVarPromptState,
-};
+use crate::tui::notes_actions::capture::{handle_capture_var_key, CaptureVarPromptState};
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
 use crate::tui::notes_actions::periodic::run_periodic_open;
 use crate::tui::notes_actions::section_move::{
@@ -50,9 +48,10 @@ use crate::tui::notes_actions::section_move::{
 };
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::graph::{
-    GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal, SearchPickerModal,
+    CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
+    SearchPickerModal,
 };
-use crate::tui::tabs::notes::view::render_periodic_leader;
+use crate::tui::tabs::notes::view::{render_capture_var_prompt, render_periodic_leader};
 use crate::tui::widgets::{FuzzyPicker, PickerSource};
 
 // ── Trait ────────────────────────────────────────────────────────────
@@ -117,7 +116,7 @@ pub enum ActiveModal {
     /// Multi-step "append a template into a note" flow.
     Append(AppendState),
     /// Fuzzy picker over quick-capture presets.
-    CapturePicker(FuzzyPicker<CapturePresetPickerSource>),
+    CapturePicker(CapturePickerModal),
     /// Per-variable prompt for capture-preset templates that reference
     /// `vars.KEY`.
     CaptureVar(CaptureVarPromptState),
@@ -168,7 +167,7 @@ impl Modal for ActiveModal {
         match self {
             ActiveModal::Create(s) => s.render(frame, area, ctx),
             ActiveModal::Append(s) => s.render(frame, area, ctx),
-            ActiveModal::CapturePicker(s) => <FuzzyPicker<_> as Modal>::render(s, frame, area, ctx),
+            ActiveModal::CapturePicker(s) => s.render(frame, area, ctx),
             ActiveModal::CaptureVar(s) => s.render(frame, area, ctx),
             ActiveModal::SectionMove(s) => s.render(frame, area, ctx),
             ActiveModal::MoveOuter(s) => s.render(frame, area, ctx),
@@ -324,12 +323,15 @@ impl Modal for CaptureVarPromptState {
         }
     }
 
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {
-        // Rendering owned by the host tab; see CreateState above.
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_capture_var_prompt(frame, area, self);
     }
 
     fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Capture var prompt", &[])
+        HelpSection::new(
+            "Capture var prompt",
+            &[("Enter", "next / commit"), ("Esc", "cancel")],
+        )
     }
 
     fn name(&self) -> &'static str {

@@ -43,7 +43,7 @@ use crate::tui::{
     modal::{ActiveModal, Modal, ModalOutcome},
     notes_actions::{
         append::{self, AppendState, AppendStep},
-        capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
+        capture::{self, CapturePresetPickerSource},
         create::{self, CreateState, CreateStep},
         periodic::run_periodic_open,
         queue_toast,
@@ -303,6 +303,88 @@ impl crate::tui::widgets::PickerSource for GraphSearchPickerSource {
     }
 }
 
+// ── CapturePickerModal ────────────────────────────────────────────────
+
+/// Modal wrapper around the quick-capture preset picker
+/// (extract-modal-driver §4). Carries an optional `target_note_override`
+/// so the modal can pass the selected note (if any) into
+/// [`capture::try_execute_preset`] without reaching back into the host
+/// tab's selection state.
+///
+/// On `Enter`:
+/// - `Executed` → return `Closed`. The preset committed via the
+///   `AppRequest::OpenInEditor` it queued.
+/// - `NeedsVars(state)` → return `OpenSibling(ActiveModal::CaptureVar(state))`.
+///   First real use of `OpenSibling`; the modal driver swaps the slot
+///   in one event-loop iteration so the user goes straight from the
+///   picker selection to the first var prompt.
+/// - `Err(msg)` → queue an error toast and return `Closed`.
+pub struct CapturePickerModal {
+    inner: FuzzyPicker<CapturePresetPickerSource>,
+    target_note_override: Option<PathBuf>,
+}
+
+impl CapturePickerModal {
+    pub fn new(source: CapturePresetPickerSource, target_note_override: Option<PathBuf>) -> Self {
+        Self {
+            inner: FuzzyPicker::new(source),
+            target_note_override,
+        }
+    }
+}
+
+impl Modal for CapturePickerModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(name) => {
+                match capture::try_execute_preset(ctx, &name, self.target_note_override.clone()) {
+                    Ok(capture::CaptureResult::Executed) => ModalOutcome::Closed,
+                    Ok(capture::CaptureResult::NeedsVars(vs)) => {
+                        ModalOutcome::OpenSibling(Box::new(ActiveModal::CaptureVar(vs)))
+                    }
+                    Err(e) => {
+                        queue_toast(ctx, &e, ToastStyle::Error);
+                        ModalOutcome::Closed
+                    }
+                }
+            }
+            PickerOutcome::Cancelled => ModalOutcome::Closed,
+            PickerOutcome::StillOpen => ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _ctx: &TabCtx) {
+        notes_view::render_picker_popup(
+            frame,
+            area,
+            " quick capture · preset ",
+            &mut self.inner,
+            &[("Enter", "run"), ("Esc", "cancel")],
+            None,
+        );
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Quick capture",
+            &[
+                ("Type", "filter"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "run preset"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "capture-picker"
+    }
+}
+
 // ── PresetPickerModal ─────────────────────────────────────────────────
 
 /// Modal wrapper around the preset picker (extract-modal-driver §4).
@@ -484,11 +566,6 @@ pub struct GraphTab {
     /// Active append-with-template flow. `Some` when the user presses `A`
     /// on a note row. Uses the shared [`AppendState`] machine.
     append_state: Option<AppendState>,
-    /// Active quick-capture preset picker. `Some` after `Q`.
-    capture_picker: Option<FuzzyPicker<CapturePresetPickerSource>>,
-    /// Active quick-capture var prompt. `Some` when the selected
-    /// preset's template has `vars.*` references.
-    capture_var_state: Option<CaptureVarPromptState>,
     /// Active move-section flow. `None` outside the flow; `Some` while
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
@@ -627,8 +704,6 @@ impl GraphTab {
             input_mode: false,
             create_state: None,
             append_state: None,
-            capture_picker: None,
-            capture_var_state: None,
             move_outer: None,
             rename_state: None,
             related_modal: None,
@@ -1307,42 +1382,6 @@ impl GraphTab {
         }
     }
 
-    fn handle_capture_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(picker) = self.capture_picker.as_mut() else {
-            return EventOutcome::NotHandled;
-        };
-        match picker.handle_key(k) {
-            PickerOutcome::Selected(name) => {
-                self.capture_picker = None;
-                let target = self.selected_note_abs_path(ctx);
-                match capture::try_execute_preset(ctx, &name, target) {
-                    Ok(capture::CaptureResult::Executed) => {}
-                    Ok(capture::CaptureResult::NeedsVars(vs)) => {
-                        self.capture_var_state = Some(vs);
-                    }
-                    Err(e) => queue_toast(ctx, &e, ToastStyle::Error),
-                }
-                EventOutcome::Consumed
-            }
-            PickerOutcome::Cancelled => {
-                self.capture_picker = None;
-                EventOutcome::Consumed
-            }
-            PickerOutcome::StillOpen => EventOutcome::Consumed,
-            PickerOutcome::NotHandled => EventOutcome::NotHandled,
-        }
-    }
-
-    fn handle_capture_var_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(vs) = self.capture_var_state.as_mut() else {
-            return EventOutcome::NotHandled;
-        };
-        if capture::handle_capture_var_key(vs, k, ctx) {
-            self.capture_var_state = None;
-        }
-        EventOutcome::Consumed
-    }
-
     fn selected_note_abs_path(&self, ctx: &TabCtx) -> Option<PathBuf> {
         let graph = self.graph.as_ref()?;
         let id = self.selected_note_id()?;
@@ -1897,16 +1936,6 @@ impl Tab for GraphTab {
             return Ok(self.handle_append_key(k, ctx));
         }
 
-        // Capture preset picker.
-        if self.capture_picker.is_some() {
-            return Ok(self.handle_capture_picker_key(k, ctx));
-        }
-
-        // Capture var prompt.
-        if self.capture_var_state.is_some() {
-            return Ok(self.handle_capture_var_key(k, ctx));
-        }
-
         // Rename modal (Flow B): captures keyboard while open.
         if self.rename_state.is_some() {
             return Ok(self.handle_rename_key(k, ctx));
@@ -2200,7 +2229,10 @@ impl Tab for GraphTab {
             }
             (KeyCode::Char('Q'), _) => {
                 let src = CapturePresetPickerSource::new(ctx.vault);
-                self.capture_picker = Some(FuzzyPicker::new(src));
+                let target = self.selected_note_abs_path(ctx);
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::CapturePicker(CapturePickerModal::new(src, target)),
+                )));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -2448,23 +2480,6 @@ impl Tab for GraphTab {
         // Append overlay.
         if let Some(as_) = self.append_state.as_mut() {
             notes_view::render_append_overlay(frame, area, as_);
-        }
-
-        // Capture preset picker.
-        if let Some(picker) = self.capture_picker.as_mut() {
-            notes_view::render_picker_popup(
-                frame,
-                area,
-                " quick capture · preset ",
-                picker,
-                &[("Enter", "run"), ("Esc", "cancel")],
-                None,
-            );
-        }
-
-        // Capture var prompt.
-        if let Some(vs) = self.capture_var_state.as_mut() {
-            notes_view::render_capture_var_prompt(frame, area, vs);
         }
 
         // Move-section overlay. Inner(...) defers to the shared Notes
