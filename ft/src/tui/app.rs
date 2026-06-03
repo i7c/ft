@@ -523,6 +523,30 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::GraphCommitRename {
+                note_id,
+                is_directory,
+                source_rel,
+                new_name,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                    };
+                    self.tabs[idx].graph_commit_rename(
+                        &ctx,
+                        note_id,
+                        is_directory,
+                        source_rel,
+                        new_name,
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1051,6 +1075,29 @@ impl App {
                         self.tabs[idx].graph_focus_query_bar();
                     }
                 }
+                Some(AppRequest::GraphCommitRename {
+                    note_id,
+                    is_directory,
+                    source_rel,
+                    new_name,
+                }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                        };
+                        self.tabs[idx].graph_commit_rename(
+                            &ctx,
+                            note_id,
+                            is_directory,
+                            source_rel,
+                            new_name,
+                        );
+                    }
+                }
                 Some(other) => {
                     *self.pending_request.borrow_mut() = Some(other);
                     break;
@@ -1101,6 +1148,29 @@ impl App {
                 AppRequest::GraphFocusQueryBar => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                         self.tabs[idx].graph_focus_query_bar();
+                    }
+                }
+                AppRequest::GraphCommitRename {
+                    note_id,
+                    is_directory,
+                    source_rel,
+                    new_name,
+                } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                        };
+                        self.tabs[idx].graph_commit_rename(
+                            &ctx,
+                            note_id,
+                            is_directory,
+                            source_rel,
+                            new_name,
+                        );
                     }
                 }
                 // Other variants need terminal state; tests that exercise
@@ -1158,6 +1228,30 @@ impl App {
             AppRequest::GraphFocusQueryBar => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                     self.tabs[idx].graph_focus_query_bar();
+                }
+                Ok(())
+            }
+            AppRequest::GraphCommitRename {
+                note_id,
+                is_directory,
+                source_rel,
+                new_name,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                    };
+                    self.tabs[idx].graph_commit_rename(
+                        &ctx,
+                        note_id,
+                        is_directory,
+                        source_rel,
+                        new_name,
+                    );
                 }
                 Ok(())
             }

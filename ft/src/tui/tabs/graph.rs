@@ -562,8 +562,6 @@ pub struct GraphTab {
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
     move_outer: Option<GraphMoveOuter>,
-    /// Active rename-in-place modal. `Some` when Flow B is open.
-    rename_state: Option<GraphRenameState>,
     /// Active Related-section updater modal. `Some` when open;
     /// captures the keyboard for the duration. Triggered by `R` on a
     /// Note row or by `ft notes update-related` via
@@ -576,13 +574,169 @@ pub struct GraphTab {
     queued_related_path: Option<PathBuf>,
 }
 
-/// Inline rename-in-place state. `Some` while the rename modal is open.
+/// Inline rename-in-place state — the modal owns its edit buffer and
+/// the node identity. Migrated through `ActiveModal` in
+/// extract-modal-driver §4; commits via `AppRequest::GraphCommitRename`
+/// so the host can plan/apply/refresh against the in-memory graph.
 #[derive(Debug)]
 pub struct GraphRenameState {
     note_id: NoteId,
     is_directory: bool,
     buffer: EditBuffer,
     source_rel: PathBuf,
+}
+
+impl GraphRenameState {
+    pub fn for_note(note_id: NoteId, title: &str, source_rel: PathBuf) -> Self {
+        Self {
+            note_id,
+            is_directory: false,
+            buffer: EditBuffer::from(title),
+            source_rel,
+        }
+    }
+
+    pub fn for_directory(note_id: NoteId, name: &str, source_rel: PathBuf) -> Self {
+        Self {
+            note_id,
+            is_directory: true,
+            buffer: EditBuffer::from(name),
+            source_rel,
+        }
+    }
+}
+
+impl Modal for GraphRenameState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) => ModalOutcome::Closed,
+            (KeyCode::Enter, _) => {
+                let new_name = self.buffer.text.trim().to_string();
+                if new_name.is_empty() {
+                    queue_toast(ctx, "name cannot be empty", ToastStyle::Error);
+                    return ModalOutcome::Consumed;
+                }
+                if new_name.contains('/') {
+                    queue_toast(
+                        ctx,
+                        "name cannot contain / — use move (Space-select + r) to change directories",
+                        ToastStyle::Error,
+                    );
+                    return ModalOutcome::Consumed;
+                }
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphCommitRename {
+                    note_id: self.note_id,
+                    is_directory: self.is_directory,
+                    source_rel: self.source_rel.clone(),
+                    new_name,
+                });
+                // The modal closes here; if the host's commit hits a
+                // recoverable error (target exists, plan failure, etc.)
+                // it re-opens the modal via OpenModal so the user can
+                // edit the name and retry — preserving the
+                // pre-migration UX (`reopen_on_error` in `commit_rename`).
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+                self.buffer.insert(c);
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Backspace, _) => {
+                self.buffer.backspace();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Delete, _) => {
+                self.buffer.delete();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Left, _) => {
+                self.buffer.left();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Right, _) => {
+                self.buffer.right();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Home, _) => {
+                self.buffer.home();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::End, _) => {
+                self.buffer.end();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                self.buffer.delete_word_backward();
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _ctx: &TabCtx) {
+        let popup_area = centered_rect(60, 30, area);
+        frame.render_widget(Clear, popup_area);
+        let [title_area, buf_area, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(popup_area);
+        let title = if self.is_directory {
+            "Rename directory"
+        } else {
+            "Rename note"
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            title_area,
+        );
+        let buf_text = &self.buffer.text;
+        let buf_display = if buf_text.is_empty() {
+            " ".to_string()
+        } else {
+            buf_text.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                buf_display,
+                Style::default().fg(Color::Yellow),
+            ))),
+            buf_area,
+        );
+        let footer = "Enter: commit · Esc: discard";
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                footer,
+                Style::default().fg(Color::Gray),
+            ))),
+            footer_area,
+        );
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Rename",
+            &[
+                ("Type", "edit name"),
+                ("Enter", "commit"),
+                ("Esc", "discard"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "rename"
+    }
 }
 
 /// Related-section updater modal state. Built on `R` keypress against
@@ -695,7 +849,6 @@ impl GraphTab {
             active: 0,
             input_mode: false,
             move_outer: None,
-            rename_state: None,
             related_modal: None,
             queued_related_path: None,
         }
@@ -1345,91 +1498,52 @@ impl GraphTab {
         }
     }
 
-    /// Dispatch a keystroke while the rename-in-place modal (Flow B) is
-    /// open. EditBuffer keys are routed; Enter commits, Esc discards.
-    fn handle_rename_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(rs) = self.rename_state.as_mut() else {
-            return EventOutcome::NotHandled;
-        };
-        match (k.code, k.modifiers) {
-            (KeyCode::Esc, _) => {
-                self.rename_state = None;
-                EventOutcome::Consumed
-            }
-            (KeyCode::Enter, _) => {
-                let new_name = rs.buffer.text.trim().to_string();
-                if new_name.is_empty() {
-                    queue_toast(ctx, "name cannot be empty", ToastStyle::Error);
-                    return EventOutcome::Consumed;
-                }
-                if new_name.contains('/') {
-                    queue_toast(
-                        ctx,
-                        "name cannot contain / — use move (Space-select + r) to change directories",
-                        ToastStyle::Error,
-                    );
-                    return EventOutcome::Consumed;
-                }
-                self.commit_rename(ctx, &new_name);
-                EventOutcome::Consumed
-            }
-            (KeyCode::Char(c), KeyModifiers::NONE) => {
-                rs.buffer.insert(c);
-                EventOutcome::Consumed
-            }
-            (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-                rs.buffer.insert(c);
-                EventOutcome::Consumed
-            }
-            (KeyCode::Backspace, _) => {
-                rs.buffer.backspace();
-                EventOutcome::Consumed
-            }
-            (KeyCode::Delete, _) => {
-                rs.buffer.delete();
-                EventOutcome::Consumed
-            }
-            (KeyCode::Left, _) => {
-                rs.buffer.left();
-                EventOutcome::Consumed
-            }
-            (KeyCode::Right, _) => {
-                rs.buffer.right();
-                EventOutcome::Consumed
-            }
-            (KeyCode::Home, _) => {
-                rs.buffer.home();
-                EventOutcome::Consumed
-            }
-            (KeyCode::End, _) => {
-                rs.buffer.end();
-                EventOutcome::Consumed
-            }
-            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
-                rs.buffer.delete_word_backward();
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
-        }
-    }
-
-    /// Build and apply the rename plan for the current rename modal.
-    /// On success, refreshes the graph and closes the modal. On error,
-    /// toasts and leaves the modal open.
-    fn commit_rename(&mut self, ctx: &TabCtx, new_name: &str) {
-        let Some(rs) = self.rename_state.take() else {
-            return;
-        };
+    /// Build and apply the rename plan for the given node. Called by
+    /// the `Tab::graph_commit_rename` hook when the rename modal
+    /// commits. Toasts on success or failure; on success, refreshes
+    /// the graph in place.
+    fn commit_rename(
+        &mut self,
+        ctx: &TabCtx,
+        note_id: NoteId,
+        is_directory: bool,
+        source_rel: PathBuf,
+        new_name: &str,
+    ) {
         let Some(graph) = self.graph.as_ref() else {
-            self.rename_state = Some(rs);
             return;
         };
         let vault_root = &ctx.vault.path;
+        // Reopen the rename modal with the typed-in name if commit fails
+        // for any recoverable reason (target already exists, plan
+        // failure, write failure). Mirrors the pre-migration UX where
+        // `handle_rename_key` kept `rename_state` alive on error.
+        let reopen_on_error = |ctx: &TabCtx, name: &str| {
+            let state = if is_directory {
+                GraphRenameState::for_directory(note_id, name, source_rel.clone())
+            } else {
+                GraphRenameState::for_note(note_id, name, source_rel.clone())
+            };
+            *ctx.pending_request.borrow_mut() =
+                Some(AppRequest::OpenModal(Box::new(ActiveModal::Rename(state))));
+        };
+        // Local alias-struct so the rest of the function stays
+        // structurally identical to its pre-migration form.
+        struct Rs<'a> {
+            note_id: NoteId,
+            is_directory: bool,
+            source_rel: &'a Path,
+        }
+        let rs = Rs {
+            note_id,
+            is_directory,
+            source_rel: &source_rel,
+        };
 
         if rs.is_directory {
             // Directory rename: collect all notes under old dir via BFS,
             // compute new paths, plan_multi_rename.
-            let dir_path = &rs.source_rel;
+            let dir_path = rs.source_rel;
             let new_dir = dir_path.parent().unwrap_or(Path::new("")).join(new_name);
             if vault_root.join(&new_dir).exists() {
                 queue_toast(
@@ -1437,7 +1551,7 @@ impl GraphTab {
                     &format!("target directory already exists: {}", new_dir.display()),
                     ToastStyle::Error,
                 );
-                self.rename_state = Some(rs);
+                reopen_on_error(ctx, new_name);
                 return;
             }
             let moves = collect_directory_notes(graph, rs.note_id, dir_path, &new_dir);
@@ -1445,7 +1559,7 @@ impl GraphTab {
                 Ok(plan) => {
                     if let Err(e) = apply_rename_plan(vault_root, &plan) {
                         queue_toast(ctx, &format!("rename failed: {e}"), ToastStyle::Error);
-                        self.rename_state = Some(rs);
+                        reopen_on_error(ctx, new_name);
                         return;
                     }
                     let n = moves.len();
@@ -1463,7 +1577,7 @@ impl GraphTab {
                 }
                 Err(e) => {
                     queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
-                    self.rename_state = Some(rs);
+                    reopen_on_error(ctx, new_name);
                     return;
                 }
             }
@@ -1480,7 +1594,7 @@ impl GraphTab {
                 Ok(plan) => {
                     if let Err(e) = apply_rename_plan(vault_root, &plan) {
                         queue_toast(ctx, &format!("rename failed: {e}"), ToastStyle::Error);
-                        self.rename_state = Some(rs);
+                        reopen_on_error(ctx, new_name);
                         return;
                     }
                     let old_display = rs.source_rel.display();
@@ -1493,7 +1607,7 @@ impl GraphTab {
                 }
                 Err(e) => {
                     queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
-                    self.rename_state = Some(rs);
+                    reopen_on_error(ctx, new_name);
                     return;
                 }
             }
@@ -1873,6 +1987,17 @@ impl Tab for GraphTab {
         self.input_mode = true;
     }
 
+    fn graph_commit_rename(
+        &mut self,
+        ctx: &TabCtx,
+        note_id: NoteId,
+        is_directory: bool,
+        source_rel: PathBuf,
+        new_name: String,
+    ) {
+        self.commit_rename(ctx, note_id, is_directory, source_rel, &new_name);
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
@@ -1882,11 +2007,6 @@ impl Tab for GraphTab {
         // outer, rename, related). The create / append / capture /
         // capture-var / preset / search / periodic flows are owned by
         // the App-level modal slot (extract-modal-driver §4).
-
-        // Rename modal (Flow B): captures keyboard while open.
-        if self.rename_state.is_some() {
-            return Ok(self.handle_rename_key(k, ctx));
-        }
 
         // Related-section modal: captures keyboard while open.
         if self.related_modal.is_some() {
@@ -2216,34 +2336,34 @@ impl Tab for GraphTab {
                 let Some(row) = v.tree.rows().get(v.selected) else {
                     return Ok(EventOutcome::Consumed);
                 };
-                match graph.map(|g| g.node(row.note_id)) {
-                    Some(NodeKind::Note(n)) => {
-                        self.rename_state = Some(GraphRenameState {
-                            note_id: row.note_id,
-                            is_directory: false,
-                            buffer: EditBuffer::from(&n.title),
-                            source_rel: n.path.clone(),
-                        });
-                    }
+                let modal = match graph.map(|g| g.node(row.note_id)) {
+                    Some(NodeKind::Note(n)) => Some(GraphRenameState::for_note(
+                        row.note_id,
+                        &n.title,
+                        n.path.clone(),
+                    )),
                     Some(NodeKind::Directory(d)) if d.path.as_os_str().is_empty() => {
                         queue_toast(ctx, "cannot rename vault root", ToastStyle::Error);
+                        None
                     }
-                    Some(NodeKind::Directory(d)) => {
-                        self.rename_state = Some(GraphRenameState {
-                            note_id: row.note_id,
-                            is_directory: true,
-                            buffer: EditBuffer::from(&d.name),
-                            source_rel: d.path.clone(),
-                        });
-                    }
+                    Some(NodeKind::Directory(d)) => Some(GraphRenameState::for_directory(
+                        row.note_id,
+                        &d.name,
+                        d.path.clone(),
+                    )),
                     Some(NodeKind::Ghost(_)) => {
                         queue_toast(
                             ctx,
                             "cannot rename a ghost — create the note first",
                             ToastStyle::Error,
                         );
+                        None
                     }
-                    _ => {}
+                    _ => None,
+                };
+                if let Some(state) = modal {
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::OpenModal(Box::new(ActiveModal::Rename(state))));
                 }
                 Ok(EventOutcome::Consumed)
             }
@@ -2507,55 +2627,6 @@ impl Tab for GraphTab {
                     picker.render(frame, area);
                 }
             }
-        }
-
-        // Rename-in-place modal (Flow B). Rendered as a centered overlay
-        // similar to the create flow.
-        if let Some(rs) = self.rename_state.as_mut() {
-            let popup_area = centered_rect(60, 30, area);
-            frame.render_widget(Clear, popup_area);
-            let [title_area, buf_area, footer_area] = Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .areas(popup_area);
-            let title = if rs.is_directory {
-                "Rename directory"
-            } else {
-                "Rename note"
-            };
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ))),
-                title_area,
-            );
-            let buf_text = &rs.buffer.text;
-            let buf_display = if buf_text.is_empty() {
-                " ".to_string()
-            } else {
-                buf_text.clone()
-            };
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    buf_display,
-                    Style::default().fg(Color::Yellow),
-                ))),
-                buf_area,
-            );
-            let footer = "Enter: commit · Esc: discard";
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    footer,
-                    Style::default().fg(Color::Gray),
-                ))),
-                footer_area,
-            );
         }
 
         if let Some(modal) = self.related_modal.as_ref() {

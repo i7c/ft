@@ -435,19 +435,6 @@ impl Modal for GraphMoveOuter {
     }
 }
 
-impl Modal for GraphRenameState {
-    fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
-        ModalOutcome::NotHandled
-    }
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {}
-    fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Rename", &[])
-    }
-    fn name(&self) -> &'static str {
-        "rename"
-    }
-}
-
 impl Modal for RelatedModal {
     fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
         ModalOutcome::NotHandled

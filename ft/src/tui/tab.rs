@@ -73,6 +73,17 @@ pub enum AppRequest {
     /// presets" flow (`Ctrl+N`) so the freshly-pushed blank view
     /// drops into edit mode.
     GraphFocusQueryBar,
+    /// Routed back to the Graph tab: commit a rename for the given
+    /// node. Raised by the rename modal on Enter. The host runs
+    /// `plan_rename` / `plan_multi_rename` against its in-memory
+    /// graph, applies the plan, and refreshes the graph on success
+    /// (or queues a toast on failure).
+    GraphCommitRename {
+        note_id: ft_core::graph::NoteId,
+        is_directory: bool,
+        source_rel: PathBuf,
+        new_name: String,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -110,6 +121,18 @@ impl std::fmt::Debug for AppRequest {
                 f.debug_tuple("GraphApplyPreset").field(dsl).finish()
             }
             AppRequest::GraphFocusQueryBar => f.write_str("GraphFocusQueryBar"),
+            AppRequest::GraphCommitRename {
+                note_id,
+                is_directory,
+                source_rel,
+                new_name,
+            } => f
+                .debug_struct("GraphCommitRename")
+                .field("note_id", note_id)
+                .field("is_directory", is_directory)
+                .field("source_rel", source_rel)
+                .field("new_name", new_name)
+                .finish(),
         }
     }
 }
@@ -234,6 +257,20 @@ pub trait Tab {
     /// this to enter input mode on the active view. Other tabs ignore.
     /// Removed once Section 5 lands `ActiveModal::QueryBar`.
     fn graph_focus_query_bar(&mut self) {}
+
+    /// Hook for the rename modal commit (see
+    /// [`AppRequest::GraphCommitRename`]). The Graph tab overrides
+    /// this to plan + apply a rename via its in-memory graph and
+    /// refresh on success. Other tabs ignore.
+    fn graph_commit_rename(
+        &mut self,
+        _ctx: &TabCtx,
+        _note_id: ft_core::graph::NoteId,
+        _is_directory: bool,
+        _source_rel: PathBuf,
+        _new_name: String,
+    ) {
+    }
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this
