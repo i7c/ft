@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -57,6 +58,17 @@ pub enum AppRequest {
     /// flows (create, append, capture, picker, etc.) without owning
     /// per-tab modal state.
     OpenModal(Box<ActiveModal>),
+    /// Like [`OpenModal`] but also pushes a status-bar toast in the
+    /// same App-side step. Used by retry-after-validation-failure
+    /// paths (e.g. the move-section host hooks) that need to re-open
+    /// a modal AND surface "why" to the user — `pending_request` is
+    /// a single slot, so combining the two avoids one overwriting
+    /// the other.
+    OpenModalWithToast {
+        modal: Box<ActiveModal>,
+        toast_text: String,
+        toast_style: ToastStyle,
+    },
     /// Routed back to the Graph tab: jump the cursor to a node by path
     /// (auto-expanding ancestors). Raised by the search-picker modal
     /// on Enter; the App finds the Graph tab and calls
@@ -104,6 +116,39 @@ pub enum AppRequest {
     GraphApplyQueryBar {
         view_id: usize,
     },
+    /// Routed back to the Graph tab: confirm the currently-selected
+    /// tree row as the move-section source. Raised by the
+    /// `MoveOuter::SourceFromTree` modal on `m`. The host calls
+    /// `selected_note_hit` + `advance_to_multiselect` and, on success,
+    /// posts a follow-up `OpenModal(MoveOuter(Inner(...)))`. On
+    /// non-Note selection it toasts and re-opens
+    /// `MoveOuter(SourceFromTree)` so the user can navigate and retry.
+    GraphMoveConfirmSourceFromTree,
+    /// Routed back to the Graph tab: confirm the currently-selected
+    /// tree row as the move-section target. Raised by the
+    /// `MoveOuter::TargetFromTree` modal on `m`. Carries the carry
+    /// state through the round-trip so the modal can be reopened on
+    /// a recoverable error (same-file, non-Note selection).
+    GraphMoveConfirmTargetFromTree {
+        carry: Box<crate::tui::notes_actions::section_move::MoveCarry>,
+    },
+    /// Routed back to the Graph tab: confirm the currently-selected
+    /// directory row as the Flow A move target. Raised by the
+    /// `MoveOuter::MoveTargetFromTree` modal on `m`/Enter. The host
+    /// plans + applies a multi-rename and refreshes the graph; on a
+    /// validation failure it re-opens `MoveTargetFromTree` so the
+    /// user can navigate to a different row and retry.
+    GraphMoveConfirmMoveTarget {
+        selected: HashSet<ft_core::graph::NoteId>,
+    },
+    /// Routed back to the Graph tab: execute a Flow A multi-move
+    /// against an explicit target directory (chosen from the fuzzy
+    /// picker rather than the tree). Raised by the
+    /// `MoveOuter::MoveTargetPicker` modal on `PickerOutcome::Selected`.
+    GraphMoveExecuteMultiMove {
+        selected: HashSet<ft_core::graph::NoteId>,
+        dir_path: PathBuf,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -133,6 +178,16 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::OpenModal(modal) => {
                 f.debug_tuple("OpenModal").field(&modal.name()).finish()
             }
+            AppRequest::OpenModalWithToast {
+                modal,
+                toast_text,
+                toast_style,
+            } => f
+                .debug_struct("OpenModalWithToast")
+                .field("modal", &modal.name())
+                .field("toast_text", toast_text)
+                .field("toast_style", toast_style)
+                .finish(),
             AppRequest::GraphJumpToNodes(path) => f
                 .debug_tuple("GraphJumpToNodes")
                 .field(&path.len())
@@ -169,6 +224,22 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::GraphApplyQueryBar { view_id } => f
                 .debug_struct("GraphApplyQueryBar")
                 .field("view_id", view_id)
+                .finish(),
+            AppRequest::GraphMoveConfirmSourceFromTree => {
+                f.write_str("GraphMoveConfirmSourceFromTree")
+            }
+            AppRequest::GraphMoveConfirmTargetFromTree { carry } => f
+                .debug_struct("GraphMoveConfirmTargetFromTree")
+                .field("source_rel", &carry.source_rel)
+                .finish(),
+            AppRequest::GraphMoveConfirmMoveTarget { selected } => f
+                .debug_struct("GraphMoveConfirmMoveTarget")
+                .field("selected_count", &selected.len())
+                .finish(),
+            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => f
+                .debug_struct("GraphMoveExecuteMultiMove")
+                .field("selected_count", &selected.len())
+                .field("dir_path", dir_path)
                 .finish(),
         }
     }
@@ -336,6 +407,48 @@ pub trait Tab {
     /// [`AppRequest::GraphApplyQueryBar`]). The Graph tab overrides
     /// this to parse and apply the view's current query buffer.
     fn graph_apply_query_bar(&mut self, _view_id: usize) {}
+
+    /// Hook for the move-section `SourceFromTree` confirm (see
+    /// [`AppRequest::GraphMoveConfirmSourceFromTree`]). The Graph tab
+    /// overrides this to advance the flow to the shared
+    /// heading-multi-select step (or toast + re-open the source modal
+    /// if the selection isn't a valid Note row).
+    fn graph_move_confirm_source_from_tree(&mut self, _ctx: &TabCtx) {}
+
+    /// Hook for the move-section `TargetFromTree` confirm (see
+    /// [`AppRequest::GraphMoveConfirmTargetFromTree`]). The Graph tab
+    /// overrides this to validate the selection against the carry's
+    /// source and either compose the existing-target flow or re-open
+    /// `TargetFromTree` with the carry intact for retry.
+    fn graph_move_confirm_target_from_tree(
+        &mut self,
+        _ctx: &TabCtx,
+        _carry: crate::tui::notes_actions::section_move::MoveCarry,
+    ) {
+    }
+
+    /// Hook for the move-section Flow A target-dir confirm (see
+    /// [`AppRequest::GraphMoveConfirmMoveTarget`]). The Graph tab
+    /// overrides this to plan + apply the multi-rename and refresh,
+    /// or re-open `MoveTargetFromTree` with `selected` preserved.
+    fn graph_move_confirm_move_target(
+        &mut self,
+        _ctx: &TabCtx,
+        _selected: HashSet<ft_core::graph::NoteId>,
+    ) {
+    }
+
+    /// Hook for the Flow A fuzzy-picker variant (see
+    /// [`AppRequest::GraphMoveExecuteMultiMove`]). The Graph tab
+    /// overrides this to execute the multi-rename to an explicit
+    /// `dir_path` chosen via the picker (no tree-row lookup).
+    fn graph_move_execute_multi_move(
+        &mut self,
+        _ctx: &TabCtx,
+        _selected: HashSet<ft_core::graph::NoteId>,
+        _dir_path: PathBuf,
+    ) {
+    }
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

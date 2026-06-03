@@ -6623,25 +6623,19 @@ fn graph_m_enters_source_from_tree_phase() -> Result<()> {
 fn graph_m_again_on_directory_emits_toast() -> Result<()> {
     // Default tree starts with the vault root *directory* selected.
     // Pressing `m` then `m` should not advance — the source row needs
-    // to be a Note. A toast is queued and the source banner stays.
+    // to be a Note. An error toast surfaces in the App's toast slot
+    // (via `OpenModalWithToast` from the host hook) and the source
+    // banner stays.
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(1)?;
     app.switch_to(0)?;
     app.dispatch(key('m'))?;
     app.dispatch(key('m'))?;
-    let req = app
-        .take_pending_request()
-        .expect("`m` on directory should queue a toast");
-    matches!(
-        req,
-        AppRequest::Toast {
-            style: ToastStyle::Error,
-            ..
-        }
-    )
-    .then_some(())
-    .ok_or_else(|| anyhow::anyhow!("expected error toast, got {req:?}"))?;
+    let toast = app
+        .current_toast()
+        .expect("`m` on directory should queue an error toast");
+    assert_eq!(toast.style, ToastStyle::Error, "toast style: {toast:?}");
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("MOVE source"),

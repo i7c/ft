@@ -553,10 +553,6 @@ pub struct GraphTab {
     graph: Option<Graph>,
     views: Vec<ExpandedView>,
     active: usize,
-    /// Active move-section flow. `None` outside the flow; `Some` while
-    /// the user is walking the two-phase graph-driven UX or inside a
-    /// shared [`SectionMoveState`] step.
-    move_outer: Option<GraphMoveOuter>,
     /// Vault-relative path of a note whose Related modal should open
     /// on the next focus once the graph is built. Set by
     /// [`crate::tui::App`] when the TUI was launched via
@@ -885,13 +881,475 @@ pub enum GraphMoveOuter {
     },
 }
 
+/// Build the fuzzy file/directory picker used by the move flow's
+/// `t`-fallback. Pulled out of [`GraphTab`] so [`GraphMoveOuter`]'s
+/// `Modal` impl can spawn pickers without borrowing the tab.
+fn open_move_file_picker(ctx: &TabCtx) -> FuzzyPicker<VaultFilePickerSource> {
+    FuzzyPicker::new(VaultFilePickerSource::new(
+        Arc::clone(ctx.vault),
+        Arc::clone(ctx.recents),
+    ))
+}
+
+impl Modal for GraphMoveOuter {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        // Take the variant by value so each branch can move owned
+        // fields into its handler. `*self` is restored on
+        // `Consumed`/`NotHandled` paths; `Closed`/`OpenSibling` paths
+        // discard whatever's left in `*self` (the App swaps the slot).
+        let prev = std::mem::replace(self, GraphMoveOuter::SourceFromTree);
+        match prev {
+            GraphMoveOuter::SourceFromTree => self.handle_source_from_tree(k, ctx),
+            GraphMoveOuter::SourcePicker { picker } => self.handle_source_picker(picker, k, ctx),
+            GraphMoveOuter::Inner(sms) => self.handle_inner(sms, k, ctx),
+            GraphMoveOuter::TargetFromTree { carry } => self.handle_target_from_tree(carry, k, ctx),
+            GraphMoveOuter::TargetPicker { picker, carry } => {
+                self.handle_target_picker(picker, carry, k, ctx)
+            }
+            GraphMoveOuter::MoveTargetFromTree { selected } => {
+                self.handle_move_target_from_tree(selected, k, ctx)
+            }
+            GraphMoveOuter::MoveTargetPicker { picker, selected } => {
+                self.handle_move_target_picker(picker, selected, k, ctx)
+            }
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
+        // Reconstruct the tab's strip area (top 1 row of the body) so
+        // banners overwrite the view-tab strip exactly as the
+        // pre-migration render arm did.
+        let strip_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        match self {
+            GraphMoveOuter::SourceFromTree => {
+                render_move_banner(
+                    frame,
+                    strip_area,
+                    "MOVE source · m: use selected · t: pick from list · Esc: cancel",
+                );
+            }
+            GraphMoveOuter::SourcePicker { picker } => {
+                // Forward through a throwaway `SectionMoveState::SourcePicking`
+                // so the shared move overlay handles the picker chrome.
+                // `mem::replace` lets us hand the picker over by value
+                // without taking ownership of the variant.
+                let mut wrap = SectionMoveState::SourcePicking {
+                    picker: std::mem::replace(picker, open_move_file_picker(ctx)),
+                };
+                notes_view::render_move_overlay(frame, area, &mut wrap);
+                if let SectionMoveState::SourcePicking { picker: orig } = wrap {
+                    *picker = orig;
+                }
+            }
+            GraphMoveOuter::Inner(sms) => {
+                notes_view::render_move_overlay(frame, area, sms);
+            }
+            GraphMoveOuter::TargetFromTree { .. } => {
+                render_move_banner(
+                    frame,
+                    strip_area,
+                    "MOVE target · m: use selected · t: pick from list · Esc: back",
+                );
+            }
+            GraphMoveOuter::TargetPicker { picker, carry } => {
+                let mut wrap = SectionMoveState::TargetPicking {
+                    source_rel: carry.source_rel.clone(),
+                    source_abs: carry.source_abs.clone(),
+                    source_content: carry.source_content.clone(),
+                    headings: carry.headings.clone(),
+                    selected: carry.selected.clone(),
+                    focus: carry.focus,
+                    clipboard: carry.clipboard.clone(),
+                    picker: std::mem::replace(picker, open_move_file_picker(ctx)),
+                    error: None,
+                };
+                notes_view::render_move_overlay(frame, area, &mut wrap);
+                if let SectionMoveState::TargetPicking { picker: orig, .. } = wrap {
+                    *picker = orig;
+                }
+            }
+            GraphMoveOuter::MoveTargetFromTree { selected } => {
+                let n = selected.len();
+                let text = format!(
+                    "Move {n} selection(s): navigate to target directory, Enter/m to confirm, t for picker, Esc to cancel"
+                );
+                render_move_banner(frame, strip_area, &text);
+            }
+            GraphMoveOuter::MoveTargetPicker { picker, .. } => {
+                picker.render(frame, area);
+            }
+        }
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        match self {
+            GraphMoveOuter::SourceFromTree => HelpSection::new(
+                "Move section · source",
+                &[
+                    ("m", "use selected as source"),
+                    ("t", "pick source from list"),
+                    ("Esc", "cancel"),
+                ],
+            ),
+            GraphMoveOuter::SourcePicker { .. } => HelpSection::new(
+                "Move section · source picker",
+                &[
+                    ("Type", "filter"),
+                    ("↑ / ↓", "navigate"),
+                    ("Enter", "pick source"),
+                    ("Esc", "back to tree"),
+                ],
+            ),
+            GraphMoveOuter::Inner(_) => HelpSection::new(
+                "Move section",
+                &[
+                    ("Space", "toggle"),
+                    ("↑ / ↓", "navigate"),
+                    ("Enter", "confirm step"),
+                    ("Esc", "cancel / back"),
+                ],
+            ),
+            GraphMoveOuter::TargetFromTree { .. } => HelpSection::new(
+                "Move section · target",
+                &[
+                    ("m", "use selected as target"),
+                    ("t", "pick target from list"),
+                    ("/", "refine tree"),
+                    ("Esc", "back to headings"),
+                ],
+            ),
+            GraphMoveOuter::TargetPicker { .. } => HelpSection::new(
+                "Move section · target picker",
+                &[
+                    ("Type", "filter"),
+                    ("↑ / ↓", "navigate"),
+                    ("Enter", "pick target"),
+                    ("Esc", "back to tree"),
+                ],
+            ),
+            GraphMoveOuter::MoveTargetFromTree { .. } => HelpSection::new(
+                "Move · target directory",
+                &[
+                    ("Enter / m", "confirm directory"),
+                    ("t", "pick directory from list"),
+                    ("Esc", "cancel"),
+                ],
+            ),
+            GraphMoveOuter::MoveTargetPicker { .. } => HelpSection::new(
+                "Move · directory picker",
+                &[
+                    ("Type", "filter"),
+                    ("↑ / ↓", "navigate"),
+                    ("Enter", "confirm directory"),
+                    ("Esc", "back to tree"),
+                ],
+            ),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "move"
+    }
+}
+
+impl GraphMoveOuter {
+    fn handle_source_from_tree(&mut self, k: KeyEvent, ctx: &TabCtx) -> ModalOutcome {
+        match (k.code, k.modifiers) {
+            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::GraphMoveConfirmSourceFromTree);
+                // The host hook re-opens SourceFromTree on a toast
+                // path or advances to `Inner(...)` on success.
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::SourcePicker {
+                    picker: open_move_file_picker(ctx),
+                }),
+            )),
+            (KeyCode::Esc, _) => ModalOutcome::Closed,
+            _ => {
+                *self = GraphMoveOuter::SourceFromTree;
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+
+    fn handle_source_picker(
+        &mut self,
+        mut picker: FuzzyPicker<VaultFilePickerSource>,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(hit) => match advance_to_multiselect(ctx, hit) {
+                MoveStep::Transition(inner) => ModalOutcome::OpenSibling(Box::new(
+                    ActiveModal::MoveOuter(GraphMoveOuter::Inner(inner)),
+                )),
+                // Toast was queued by advance_to_multiselect; drop back
+                // to the tree-driven source phase so the user can
+                // pick a different note.
+                MoveStep::Finished => ModalOutcome::OpenSibling(Box::new(ActiveModal::MoveOuter(
+                    GraphMoveOuter::SourceFromTree,
+                ))),
+                MoveStep::Stay | MoveStep::NotHandled => {
+                    *self = GraphMoveOuter::SourcePicker { picker };
+                    ModalOutcome::Consumed
+                }
+            },
+            PickerOutcome::Cancelled => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree),
+            )),
+            PickerOutcome::StillOpen => {
+                *self = GraphMoveOuter::SourcePicker { picker };
+                ModalOutcome::Consumed
+            }
+            PickerOutcome::NotHandled => {
+                *self = GraphMoveOuter::SourcePicker { picker };
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+
+    fn handle_inner(
+        &mut self,
+        mut sms: SectionMoveState,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        // Drive the shared section-move state machine directly so we
+        // can inspect the returned `MoveStep` and intercept the
+        // `HeadingMultiSelect → TargetPicking` transition (we replace
+        // the shared `TargetPicking` with our tree-driven
+        // `TargetFromTree { carry }` instead).
+        let step = section_move::handle_key(&mut sms, k, ctx);
+        match step {
+            MoveStep::Stay => {
+                *self = GraphMoveOuter::Inner(sms);
+                ModalOutcome::Consumed
+            }
+            MoveStep::NotHandled => {
+                *self = GraphMoveOuter::Inner(sms);
+                ModalOutcome::NotHandled
+            }
+            MoveStep::Finished => ModalOutcome::Closed,
+            MoveStep::Transition(SectionMoveState::TargetPicking {
+                source_rel,
+                source_abs,
+                source_content,
+                headings,
+                selected,
+                focus,
+                clipboard,
+                picker: _,
+                error: _,
+            }) => {
+                let carry = MoveCarry {
+                    source_rel,
+                    source_abs,
+                    source_content,
+                    headings,
+                    selected,
+                    focus,
+                    clipboard,
+                };
+                ModalOutcome::OpenSibling(Box::new(ActiveModal::MoveOuter(
+                    GraphMoveOuter::TargetFromTree { carry },
+                )))
+            }
+            MoveStep::Transition(next) => {
+                *self = GraphMoveOuter::Inner(next);
+                ModalOutcome::Consumed
+            }
+        }
+    }
+
+    fn handle_target_from_tree(
+        &mut self,
+        carry: MoveCarry,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        match (k.code, k.modifiers) {
+            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::GraphMoveConfirmTargetFromTree {
+                        carry: Box::new(carry),
+                    });
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::TargetPicker {
+                    picker: open_move_file_picker(ctx),
+                    carry,
+                }),
+            )),
+            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                // `/` cancels the move flow and opens the host's
+                // query bar on the active view. With the modal
+                // driver there can only be one active modal at a
+                // time, so the pre-migration UX (carry preserved
+                // across the bar's lifetime) is no longer
+                // expressible — the carry is dropped here. The host
+                // hook picks the correct `view_id`.
+                let _ = carry;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphFocusQueryBar);
+                ModalOutcome::Closed
+            }
+            (KeyCode::Esc, _) => {
+                // Cancel back to the heading-multi-select with the
+                // same carry data so the user can re-pick headings.
+                ModalOutcome::OpenSibling(Box::new(ActiveModal::MoveOuter(GraphMoveOuter::Inner(
+                    SectionMoveState::HeadingMultiSelect {
+                        source_rel: carry.source_rel,
+                        source_abs: carry.source_abs,
+                        source_content: carry.source_content,
+                        headings: carry.headings,
+                        selected: carry.selected,
+                        focus: carry.focus,
+                    },
+                ))))
+            }
+            _ => {
+                // Pass tree-navigation keys through; keep self alive.
+                *self = GraphMoveOuter::TargetFromTree { carry };
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+
+    fn handle_target_picker(
+        &mut self,
+        mut picker: FuzzyPicker<VaultFilePickerSource>,
+        carry: MoveCarry,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(hit) => {
+                if hit.path == carry.source_rel {
+                    // Same-file: reopen picker with same instance.
+                    queue_toast(
+                        ctx,
+                        "same-file move is out of scope — pick a different target",
+                        ToastStyle::Error,
+                    );
+                    *self = GraphMoveOuter::TargetPicker { picker, carry };
+                    return ModalOutcome::Consumed;
+                }
+                let target_abs = ctx.vault.path.join(&hit.path);
+                let target_content = match std::fs::read_to_string(&target_abs) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        queue_toast(
+                            ctx,
+                            &format!("could not read target: {e}"),
+                            ToastStyle::Error,
+                        );
+                        return ModalOutcome::OpenSibling(Box::new(ActiveModal::MoveOuter(
+                            GraphMoveOuter::TargetFromTree { carry },
+                        )));
+                    }
+                };
+                match compose_with_existing_target(carry, hit.path, target_abs, target_content) {
+                    MoveStep::Transition(inner) => ModalOutcome::OpenSibling(Box::new(
+                        ActiveModal::MoveOuter(GraphMoveOuter::Inner(inner)),
+                    )),
+                    MoveStep::Finished => ModalOutcome::Closed,
+                    MoveStep::Stay | MoveStep::NotHandled => ModalOutcome::Closed,
+                }
+            }
+            PickerOutcome::Cancelled => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::TargetFromTree { carry }),
+            )),
+            PickerOutcome::StillOpen => {
+                *self = GraphMoveOuter::TargetPicker { picker, carry };
+                ModalOutcome::Consumed
+            }
+            PickerOutcome::NotHandled => {
+                *self = GraphMoveOuter::TargetPicker { picker, carry };
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+
+    fn handle_move_target_from_tree(
+        &mut self,
+        selected: HashSet<NoteId>,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        match (k.code, k.modifiers) {
+            (KeyCode::Enter, _) | (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::GraphMoveConfirmMoveTarget { selected });
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetPicker {
+                    picker: open_move_file_picker(ctx),
+                    selected,
+                }),
+            )),
+            (KeyCode::Esc, _) => {
+                // Cancel: multi-selection was already taken by the
+                // tab's `r` arm; just drop the modal.
+                ModalOutcome::Closed
+            }
+            _ => {
+                // Tree navigation keys pass through to the tab.
+                *self = GraphMoveOuter::MoveTargetFromTree { selected };
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+
+    fn handle_move_target_picker(
+        &mut self,
+        mut picker: FuzzyPicker<VaultFilePickerSource>,
+        selected: HashSet<NoteId>,
+        k: KeyEvent,
+        ctx: &TabCtx,
+    ) -> ModalOutcome {
+        match picker.handle_key(k) {
+            PickerOutcome::Selected(hit) => {
+                // Hand off to the host so it can plan + apply the
+                // multi-rename to the chosen directory.
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphMoveExecuteMultiMove {
+                    selected,
+                    dir_path: hit.path,
+                });
+                ModalOutcome::Closed
+            }
+            PickerOutcome::Cancelled => ModalOutcome::OpenSibling(Box::new(
+                ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree { selected }),
+            )),
+            PickerOutcome::StillOpen => {
+                *self = GraphMoveOuter::MoveTargetPicker { picker, selected };
+                ModalOutcome::Consumed
+            }
+            PickerOutcome::NotHandled => {
+                *self = GraphMoveOuter::MoveTargetPicker { picker, selected };
+                ModalOutcome::NotHandled
+            }
+        }
+    }
+}
+
 impl GraphTab {
     pub fn new() -> Self {
         Self {
             graph: None,
             views: vec![ExpandedView::default()],
             active: 0,
-            move_outer: None,
             queued_related_path: None,
         }
     }
@@ -1016,80 +1474,77 @@ impl GraphTab {
         ))
     }
 
-    /// Apply a `MoveStep` returned by the shared module while we're in
-    /// `Inner(...)`. The Graph tab intercepts the headings → target
-    /// transition (the shared step yields `TargetPicking { ..., picker, error }`)
-    /// and re-routes to `TargetFromTree`, discarding the picker and
-    /// using a tree-driven target phase instead. All other transitions
-    /// pass through unchanged.
-    fn apply_inner_step(&mut self, step: MoveStep) {
-        match step {
-            MoveStep::Stay | MoveStep::NotHandled => {}
+    /// Confirm the currently-selected node as move source.
+    ///
+    /// Called by [`Tab::graph_move_confirm_source_from_tree`] after the
+    /// [`GraphMoveOuter::SourceFromTree`] modal posts
+    /// [`AppRequest::GraphMoveConfirmSourceFromTree`] on `m`. Validates the
+    /// selection, calls [`advance_to_multiselect`], and either advances the
+    /// flow by posting `OpenModal(MoveOuter(Inner(...)))` or — on toast paths
+    /// (non-Note row, IO error, no headings) — re-opens `SourceFromTree` so
+    /// the user can navigate and retry.
+    fn confirm_source_from_tree(&mut self, ctx: &TabCtx) {
+        let Some(hit) = self.selected_note_hit() else {
+            // Toast + reopen in one shot (single-slot `pending_request`).
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree)),
+                toast_text: "select a note row to use as source".into(),
+                toast_style: ToastStyle::Error,
+            });
+            return;
+        };
+        match advance_to_multiselect(ctx, hit) {
+            MoveStep::Transition(inner) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::MoveOuter(GraphMoveOuter::Inner(inner)),
+                )));
+            }
             MoveStep::Finished => {
-                self.move_outer = None;
+                // advance_to_multiselect already queued its own toast
+                // via the side-effect queue; reopen the source modal so
+                // the user can pick a different note. (The toast it
+                // queued went into `pending_request` before we got
+                // here — but our OpenModal overwrites it. Surface a
+                // generic retry message instead so the user still gets
+                // feedback.)
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                    modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree)),
+                    toast_text: "source has no movable headings".into(),
+                    toast_style: ToastStyle::Error,
+                });
             }
-            MoveStep::Transition(SectionMoveState::TargetPicking {
-                source_rel,
-                source_abs,
-                source_content,
-                headings,
-                selected,
-                focus,
-                clipboard,
-                picker: _,
-                error: _,
-            }) => {
-                let carry = MoveCarry {
-                    source_rel,
-                    source_abs,
-                    source_content,
-                    headings,
-                    selected,
-                    focus,
-                    clipboard,
-                };
-                self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-            }
-            MoveStep::Transition(next) => {
-                self.move_outer = Some(GraphMoveOuter::Inner(next));
-            }
+            // advance_to_multiselect only ever yields Transition / Finished.
+            MoveStep::Stay | MoveStep::NotHandled => {}
         }
     }
 
-    /// Confirm the currently-selected node as move source. Reads the
-    /// file, extracts headings, transitions to `Inner(HeadingMultiSelect)`.
-    /// No-op + toast when the selected row isn't a Note.
-    fn confirm_source_from_tree(&mut self, ctx: &TabCtx) {
+    /// Confirm the currently-selected node as move target.
+    ///
+    /// Called by [`Tab::graph_move_confirm_target_from_tree`] after the
+    /// [`GraphMoveOuter::TargetFromTree`] modal posts
+    /// [`AppRequest::GraphMoveConfirmTargetFromTree`] on `m`. The modal
+    /// hands the [`MoveCarry`] through the round-trip so this method can
+    /// re-open `TargetFromTree` (carry intact) on a recoverable error
+    /// (non-Note selection, same-file pick).
+    fn confirm_target_from_tree(&mut self, ctx: &TabCtx, carry: MoveCarry) {
         let Some(hit) = self.selected_note_hit() else {
-            queue_toast(ctx, "select a note row to use as source", ToastStyle::Error);
-            return;
-        };
-        // advance_to_multiselect can yield Finished on IO error / empty
-        // headings — fold it through the same dispatcher as Inner so the
-        // toast surfaces correctly.
-        let step = advance_to_multiselect(ctx, hit);
-        self.apply_inner_step(step);
-    }
-
-    /// Confirm the currently-selected node as move target. Reads the
-    /// target file, builds `Composing`, transitions to `Inner(Composing)`.
-    /// Toasts on non-Note selection or same-file.
-    fn confirm_target_from_tree(&mut self, ctx: &TabCtx) {
-        let Some(hit) = self.selected_note_hit() else {
-            queue_toast(ctx, "select a note row to use as target", ToastStyle::Error);
-            return;
-        };
-        let Some(GraphMoveOuter::TargetFromTree { carry }) = self.move_outer.take() else {
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::TargetFromTree {
+                    carry,
+                })),
+                toast_text: "select a note row to use as target".into(),
+                toast_style: ToastStyle::Error,
+            });
             return;
         };
         if hit.path == carry.source_rel {
-            queue_toast(
-                ctx,
-                "same-file move is out of scope — pick a different target",
-                ToastStyle::Error,
-            );
-            // Restore the outer so the user can pick again.
-            self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::TargetFromTree {
+                    carry,
+                })),
+                toast_text: "same-file move is out of scope — pick a different target".into(),
+                toast_style: ToastStyle::Error,
+            });
             return;
         }
         let target_abs = ctx.vault.path.join(&hit.path);
@@ -1101,33 +1556,57 @@ impl GraphTab {
                     &format!("could not read target: {e}"),
                     ToastStyle::Error,
                 );
+                // Match the pre-migration behaviour: IO failure drops the
+                // user back to idle (the carry is consumed; not restored).
                 return;
             }
         };
-        let step = compose_with_existing_target(carry, hit.path, target_abs, target_content);
-        self.apply_inner_step(step);
+        match compose_with_existing_target(carry, hit.path, target_abs, target_content) {
+            MoveStep::Transition(inner) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::MoveOuter(GraphMoveOuter::Inner(inner)),
+                )));
+            }
+            // Other variants don't surface from this helper today.
+            MoveStep::Stay | MoveStep::NotHandled | MoveStep::Finished => {}
+        }
     }
 
     /// Confirm the currently-selected row as the move target for Flow A.
-    /// Reads the Directory path and executes the multi-note move.
-    fn confirm_move_target(&mut self, ctx: &TabCtx) {
+    ///
+    /// Called by [`Tab::graph_move_confirm_move_target`] after the
+    /// [`GraphMoveOuter::MoveTargetFromTree`] modal posts
+    /// [`AppRequest::GraphMoveConfirmMoveTarget`] on `m`/Enter. On a
+    /// recoverable failure (no row / non-Directory) re-opens
+    /// `MoveTargetFromTree` with `selected` intact so the user can navigate
+    /// to a different row.
+    fn confirm_move_target(&mut self, ctx: &TabCtx, selected: HashSet<NoteId>) {
         let Some(graph) = self.graph.as_ref() else {
             return;
         };
         let v = self.active_view();
         let Some(row) = v.tree.rows().get(v.selected) else {
-            queue_toast(ctx, "select a directory as target", ToastStyle::Error);
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree {
+                    selected,
+                })),
+                toast_text: "select a directory as target".into(),
+                toast_style: ToastStyle::Error,
+            });
             return;
         };
         let dir_path = match graph.node(row.note_id) {
             NodeKind::Directory(d) => d.path.clone(),
             _ => {
-                queue_toast(ctx, "select a directory as target", ToastStyle::Error);
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModalWithToast {
+                    modal: Box::new(ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree {
+                        selected,
+                    })),
+                    toast_text: "select a directory as target".into(),
+                    toast_style: ToastStyle::Error,
+                });
                 return;
             }
-        };
-        let Some(GraphMoveOuter::MoveTargetFromTree { selected }) = self.move_outer.take() else {
-            return;
         };
         self.execute_multi_move(ctx, &selected, &dir_path);
     }
@@ -1137,7 +1616,6 @@ impl GraphTab {
     /// selections are expanded to their contained notes via BFS.
     fn execute_multi_move(&mut self, ctx: &TabCtx, selected: &HashSet<NoteId>, target_dir: &Path) {
         let Some(graph) = self.graph.as_ref() else {
-            self.move_outer = None;
             return;
         };
         let vault_root = &ctx.vault.path;
@@ -1177,8 +1655,6 @@ impl GraphTab {
                 _ => {}
             }
         }
-
-        self.move_outer = None;
 
         if moves.is_empty() {
             let total = selected.len();
@@ -1230,232 +1706,6 @@ impl GraphTab {
         if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
             self.graph = Some(new_graph);
             self.restore_all_views();
-        }
-    }
-
-    /// Dispatch a keystroke while the move overlay is active. Returns
-    /// `EventOutcome::NotHandled` when no move flow is in progress
-    /// (the caller's regular keymap can run).
-    fn handle_move_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(outer) = self.move_outer.take() else {
-            return EventOutcome::NotHandled;
-        };
-        match outer {
-            GraphMoveOuter::SourceFromTree => match (k.code, k.modifiers) {
-                (KeyCode::Char('m'), KeyModifiers::NONE) => {
-                    self.confirm_source_from_tree(ctx);
-                    // confirm_source_from_tree only transitions the
-                    // outer on success (Note row → headings step). On
-                    // toast paths (non-Note selection, IO error, no
-                    // headings) it leaves move_outer at `None` — but
-                    // the user should stay in the source phase so
-                    // they can navigate to a Note and try again.
-                    if self.move_outer.is_none() {
-                        self.move_outer = Some(GraphMoveOuter::SourceFromTree);
-                    }
-                    EventOutcome::Consumed
-                }
-                (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                    self.move_outer = Some(GraphMoveOuter::SourcePicker {
-                        picker: self.open_source_picker(ctx),
-                    });
-                    EventOutcome::Consumed
-                }
-                (KeyCode::Esc, _) => {
-                    // Drop back to normal mode (move_outer already taken).
-                    EventOutcome::Consumed
-                }
-                _ => {
-                    // Restore and ignore.
-                    self.move_outer = Some(GraphMoveOuter::SourceFromTree);
-                    EventOutcome::NotHandled
-                }
-            },
-            GraphMoveOuter::SourcePicker { mut picker } => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => {
-                    let step = advance_to_multiselect(ctx, hit);
-                    self.apply_inner_step(step);
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::Cancelled => {
-                    self.move_outer = Some(GraphMoveOuter::SourceFromTree);
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::StillOpen => {
-                    self.move_outer = Some(GraphMoveOuter::SourcePicker { picker });
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::NotHandled => {
-                    self.move_outer = Some(GraphMoveOuter::SourcePicker { picker });
-                    EventOutcome::NotHandled
-                }
-            },
-            GraphMoveOuter::Inner(mut sms) => {
-                let step = section_move::handle_key(&mut sms, k, ctx);
-                // If the step didn't transition away, put the state back
-                // (apply_inner_step handles Transition/Finished by
-                // assigning move_outer itself).
-                match step {
-                    MoveStep::Stay => {
-                        self.move_outer = Some(GraphMoveOuter::Inner(sms));
-                        EventOutcome::Consumed
-                    }
-                    MoveStep::NotHandled => {
-                        self.move_outer = Some(GraphMoveOuter::Inner(sms));
-                        EventOutcome::NotHandled
-                    }
-                    other => {
-                        self.apply_inner_step(other);
-                        EventOutcome::Consumed
-                    }
-                }
-            }
-            GraphMoveOuter::TargetFromTree { carry } => match (k.code, k.modifiers) {
-                (KeyCode::Char('m'), KeyModifiers::NONE) => {
-                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-                    self.confirm_target_from_tree(ctx);
-                    EventOutcome::Consumed
-                }
-                (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                    self.move_outer = Some(GraphMoveOuter::TargetPicker {
-                        picker: self.open_source_picker(ctx),
-                        carry,
-                    });
-                    EventOutcome::Consumed
-                }
-                (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                    // `/` falls back to the tab's query-input mode so
-                    // the user can refine the visible tree. We keep the
-                    // move state alive — exiting input mode returns
-                    // here. With §5 the query bar is the App-level
-                    // `QueryBar` modal which renders over the move
-                    // outer (modal dispatch runs ahead of the tab).
-                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-                    *ctx.pending_request.borrow_mut() =
-                        Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
-                            view_id: self.active,
-                        })));
-                    EventOutcome::Consumed
-                }
-                (KeyCode::Esc, _) => {
-                    // Cancel back to the heading-multi-select with the
-                    // same carry data so the user can re-pick headings
-                    // or escape further.
-                    self.move_outer = Some(GraphMoveOuter::Inner(
-                        SectionMoveState::HeadingMultiSelect {
-                            source_rel: carry.source_rel,
-                            source_abs: carry.source_abs,
-                            source_content: carry.source_content,
-                            headings: carry.headings,
-                            selected: carry.selected,
-                            focus: carry.focus,
-                        },
-                    ));
-                    EventOutcome::Consumed
-                }
-                // Pass arrow/jk/Enter through to the tree-navigation
-                // keymap so the user can move selection in the tree.
-                _ => {
-                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-                    EventOutcome::NotHandled
-                }
-            },
-            GraphMoveOuter::TargetPicker { mut picker, carry } => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => {
-                    if hit.path == carry.source_rel {
-                        // Same-file: reopen picker with a fresh inst.
-                        queue_toast(
-                            ctx,
-                            "same-file move is out of scope — pick a different target",
-                            ToastStyle::Error,
-                        );
-                        self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
-                        return EventOutcome::Consumed;
-                    }
-                    let target_abs = ctx.vault.path.join(&hit.path);
-                    let target_content = match std::fs::read_to_string(&target_abs) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            queue_toast(
-                                ctx,
-                                &format!("could not read target: {e}"),
-                                ToastStyle::Error,
-                            );
-                            self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-                            return EventOutcome::Consumed;
-                        }
-                    };
-                    let step =
-                        compose_with_existing_target(carry, hit.path, target_abs, target_content);
-                    self.apply_inner_step(step);
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::Cancelled => {
-                    self.move_outer = Some(GraphMoveOuter::TargetFromTree { carry });
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::StillOpen => {
-                    self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
-                    EventOutcome::Consumed
-                }
-                PickerOutcome::NotHandled => {
-                    self.move_outer = Some(GraphMoveOuter::TargetPicker { picker, carry });
-                    EventOutcome::NotHandled
-                }
-            },
-            GraphMoveOuter::MoveTargetFromTree { selected } => {
-                match (k.code, k.modifiers) {
-                    (KeyCode::Enter, _) | (KeyCode::Char('m'), KeyModifiers::NONE) => {
-                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
-                        self.confirm_move_target(ctx);
-                        EventOutcome::Consumed
-                    }
-                    (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                        self.move_outer = Some(GraphMoveOuter::MoveTargetPicker {
-                            picker: self.open_source_picker(ctx),
-                            selected,
-                        });
-                        EventOutcome::Consumed
-                    }
-                    (KeyCode::Esc, _) => {
-                        // Cancel: clear multi-selection (already
-                        // consumed from ExpandedView), drop outer.
-                        EventOutcome::Consumed
-                    }
-                    // Tree navigation keys pass through.
-                    _ => {
-                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
-                        EventOutcome::NotHandled
-                    }
-                }
-            }
-            GraphMoveOuter::MoveTargetPicker {
-                mut picker,
-                selected,
-            } => {
-                match picker.handle_key(k) {
-                    PickerOutcome::Selected(hit) => {
-                        // Execute move to the selected directory.
-                        let dir_path = hit.path;
-                        self.execute_multi_move(ctx, &selected, &dir_path);
-                        EventOutcome::Consumed
-                    }
-                    PickerOutcome::Cancelled => {
-                        self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected });
-                        EventOutcome::Consumed
-                    }
-                    PickerOutcome::StillOpen => {
-                        self.move_outer =
-                            Some(GraphMoveOuter::MoveTargetPicker { picker, selected });
-                        EventOutcome::Consumed
-                    }
-                    PickerOutcome::NotHandled => {
-                        self.move_outer =
-                            Some(GraphMoveOuter::MoveTargetPicker { picker, selected });
-                        EventOutcome::NotHandled
-                    }
-                }
-            }
         }
     }
 
@@ -2015,29 +2265,36 @@ impl Tab for GraphTab {
         self.confirm_related(ctx, target_path, selected_titles);
     }
 
+    fn graph_move_confirm_source_from_tree(&mut self, ctx: &TabCtx) {
+        self.confirm_source_from_tree(ctx);
+    }
+
+    fn graph_move_confirm_target_from_tree(&mut self, ctx: &TabCtx, carry: MoveCarry) {
+        self.confirm_target_from_tree(ctx, carry);
+    }
+
+    fn graph_move_confirm_move_target(&mut self, ctx: &TabCtx, selected: HashSet<NoteId>) {
+        self.confirm_move_target(ctx, selected);
+    }
+
+    fn graph_move_execute_multi_move(
+        &mut self,
+        ctx: &TabCtx,
+        selected: HashSet<NoteId>,
+        dir_path: PathBuf,
+    ) {
+        self.execute_multi_move(ctx, &selected, &dir_path);
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
 
-        // Tab-resident modals captured here (input mode bridge, move
-        // outer, rename, related). The create / append / capture /
-        // capture-var / preset / search / periodic flows are owned by
-        // the App-level modal slot (extract-modal-driver §4).
-
-        // Move-section flow: shared and tree-driven phases all funnel
-        // through one dispatcher. Most of them capture the keyboard,
-        // but `TargetFromTree` deliberately returns `NotHandled` for
-        // navigation keys (j/k/g/G/etc.) so the tree-cursor keymap
-        // further down still runs.
-        if self.move_outer.is_some() {
-            let outcome = self.handle_move_key(k, ctx);
-            if matches!(outcome, EventOutcome::Consumed) {
-                return Ok(outcome);
-            }
-            // outcome == NotHandled — fall through to tree-navigation /
-            // input-mode / etc. while keeping move_outer alive.
-        }
+        // All graph-tab modals (including the move-section outer flow)
+        // route through the App-level `ActiveModal` slot — the
+        // tree-driven phases that return `NotHandled` for navigation
+        // keys fall straight through to the cursor-keymap arms below.
 
         // Multi-view bindings — checked before the outer-tab passthrough
         // so Alt+digit and Ctrl+chord variants land here instead of the
@@ -2274,7 +2531,9 @@ impl Tab for GraphTab {
                 // Enter the move-section source phase. A second `m`
                 // confirms the currently-selected node as source; `t`
                 // opens the fuzzy picker; Esc cancels.
-                self.move_outer = Some(GraphMoveOuter::SourceFromTree);
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree),
+                )));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => {
@@ -2340,7 +2599,9 @@ impl Tab for GraphTab {
                     }
                 };
                 if let Some(s) = selected {
-                    self.move_outer = Some(GraphMoveOuter::MoveTargetFromTree { selected: s });
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                        ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree { selected: s }),
+                    )));
                     return Ok(EventOutcome::Consumed);
                 }
                 // Flow B: rename focused node in place (needs immutable
@@ -2558,90 +2819,10 @@ impl Tab for GraphTab {
             }
         }
 
-        // Move-section overlay. Inner(...) defers to the shared Notes
-        // renderer (multiselect / new-target / compose popups). The two
-        // tree-driven phases render a thin status banner over the tab
-        // strip so the user knows what `m`/`t`/Esc do right now.
-        if let Some(outer) = self.move_outer.as_mut() {
-            match outer {
-                GraphMoveOuter::SourceFromTree => {
-                    render_move_banner(
-                        frame,
-                        strip_area,
-                        "MOVE source · m: use selected · t: pick from list · Esc: cancel",
-                    );
-                }
-                GraphMoveOuter::SourcePicker { picker: _ } | GraphMoveOuter::Inner(_) => {
-                    // SourcePicker uses the shared picker; Inner uses
-                    // the shared move overlay. Forward through a
-                    // throwaway SectionMoveState so the existing render
-                    // path can be reused for both.
-                    if let GraphMoveOuter::SourcePicker { picker } = outer {
-                        let mut wrap = SectionMoveState::SourcePicking {
-                            picker: std::mem::replace(
-                                picker,
-                                FuzzyPicker::new(VaultFilePickerSource::new(
-                                    Arc::clone(ctx.vault),
-                                    Arc::clone(ctx.recents),
-                                )),
-                            ),
-                        };
-                        notes_view::render_move_overlay(frame, area, &mut wrap);
-                        // Restore the original picker (we swapped it
-                        // out to satisfy the borrow checker without
-                        // taking ownership of the variant).
-                        if let SectionMoveState::SourcePicking { picker: orig } = wrap {
-                            *picker = orig;
-                        }
-                    } else if let GraphMoveOuter::Inner(sms) = outer {
-                        notes_view::render_move_overlay(frame, area, sms);
-                    }
-                }
-                GraphMoveOuter::TargetFromTree { .. } => {
-                    render_move_banner(
-                        frame,
-                        strip_area,
-                        "MOVE target · m: use selected · t: pick from list · /: refine · Esc: back",
-                    );
-                }
-                GraphMoveOuter::TargetPicker { picker, carry } => {
-                    let mut wrap = SectionMoveState::TargetPicking {
-                        source_rel: carry.source_rel.clone(),
-                        source_abs: carry.source_abs.clone(),
-                        source_content: carry.source_content.clone(),
-                        headings: carry.headings.clone(),
-                        selected: carry.selected.clone(),
-                        focus: carry.focus,
-                        clipboard: carry.clipboard.clone(),
-                        picker: std::mem::replace(
-                            picker,
-                            FuzzyPicker::new(VaultFilePickerSource::new(
-                                Arc::clone(ctx.vault),
-                                Arc::clone(ctx.recents),
-                            )),
-                        ),
-                        error: None,
-                    };
-                    notes_view::render_move_overlay(frame, area, &mut wrap);
-                    if let SectionMoveState::TargetPicking { picker: orig, .. } = wrap {
-                        *picker = orig;
-                    }
-                }
-                GraphMoveOuter::MoveTargetFromTree { selected } => {
-                    let n = selected.len();
-                    let text = format!(
-                        "Move {n} selection(s): navigate to target directory, Enter/m to confirm, t for picker, Esc to cancel"
-                    );
-                    render_move_banner(frame, strip_area, &text);
-                }
-                GraphMoveOuter::MoveTargetPicker {
-                    picker,
-                    selected: _,
-                } => {
-                    picker.render(frame, area);
-                }
-            }
-        }
+        // Move-section overlay: rendered by `Modal::render` for
+        // `ActiveModal::MoveOuter(...)` via the App-level modal driver
+        // (extract-modal-driver §2 + migrate-move-outer-modal). No
+        // tab-resident render arm here anymore.
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {

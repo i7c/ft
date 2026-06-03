@@ -514,6 +514,15 @@ impl App {
                 *self.active_modal.borrow_mut() = Some(*modal);
                 Ok(())
             }
+            AppRequest::OpenModalWithToast {
+                modal,
+                toast_text,
+                toast_style,
+            } => {
+                *self.active_modal.borrow_mut() = Some(*modal);
+                self.push_toast(toast_text, toast_style);
+                Ok(())
+            }
             AppRequest::GraphJumpToNodes(path) => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                     self.tabs[idx].graph_jump_to_nodes(path);
@@ -591,6 +600,62 @@ impl App {
             AppRequest::GraphApplyQueryBar { view_id } => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                     self.tabs[idx].graph_apply_query_bar(view_id);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmSourceFromTree => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmMoveTarget { selected } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                 }
                 Ok(())
             }
@@ -1120,6 +1185,14 @@ impl App {
                 Some(AppRequest::OpenModal(m)) => {
                     *self.active_modal.borrow_mut() = Some(*m);
                 }
+                Some(AppRequest::OpenModalWithToast {
+                    modal,
+                    toast_text,
+                    toast_style,
+                }) => {
+                    *self.active_modal.borrow_mut() = Some(*modal);
+                    self.push_toast(toast_text, toast_style);
+                }
                 Some(AppRequest::GraphJumpToNodes(path)) => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                         self.tabs[idx].graph_jump_to_nodes(path);
@@ -1191,6 +1264,58 @@ impl App {
                 Some(AppRequest::GraphApplyQueryBar { view_id }) => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                         self.tabs[idx].graph_apply_query_bar(view_id);
+                    }
+                }
+                Some(AppRequest::GraphMoveConfirmSourceFromTree) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
+                    }
+                }
+                Some(AppRequest::GraphMoveConfirmTargetFromTree { carry }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
+                    }
+                }
+                Some(AppRequest::GraphMoveConfirmMoveTarget { selected }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
+                    }
+                }
+                Some(AppRequest::GraphMoveExecuteMultiMove { selected, dir_path }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                     }
                 }
                 Some(other) => {
@@ -1302,6 +1427,58 @@ impl App {
                         self.tabs[idx].graph_apply_query_bar(view_id);
                     }
                 }
+                AppRequest::GraphMoveConfirmSourceFromTree => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
+                    }
+                }
+                AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
+                    }
+                }
+                AppRequest::GraphMoveConfirmMoveTarget { selected } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
+                    }
+                }
+                AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
+                    }
+                }
                 // Other variants need terminal state; tests that exercise
                 // them go through the real `service_request` path.
                 other => {
@@ -1340,6 +1517,15 @@ impl App {
             }
             AppRequest::OpenModal(modal) => {
                 *self.active_modal.borrow_mut() = Some(*modal);
+                Ok(())
+            }
+            AppRequest::OpenModalWithToast {
+                modal,
+                toast_text,
+                toast_style,
+            } => {
+                *self.active_modal.borrow_mut() = Some(*modal);
+                self.push_toast(toast_text, toast_style);
                 Ok(())
             }
             AppRequest::GraphJumpToNodes(path) => {
@@ -1419,6 +1605,62 @@ impl App {
             AppRequest::GraphApplyQueryBar { view_id } => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
                     self.tabs[idx].graph_apply_query_bar(view_id);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmSourceFromTree => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveConfirmMoveTarget { selected } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
+                }
+                Ok(())
+            }
+            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                 }
                 Ok(())
             }
