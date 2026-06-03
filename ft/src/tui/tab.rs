@@ -66,12 +66,10 @@ pub enum AppRequest {
     /// currently-active view's query. Raised by the preset-picker
     /// modal on Enter; the App calls [`Tab::graph_apply_preset`].
     GraphApplyPreset(String),
-    /// Routed back to the Graph tab: focus the active view's query
-    /// bar (set `input_mode = true`). Legacy bridge until Section 5
-    /// migrates `input_mode` to `ActiveModal::QueryBar`. Raised by the
-    /// preset-picker modal when the user cancels a "new view with
-    /// presets" flow (`Ctrl+N`) so the freshly-pushed blank view
-    /// drops into edit mode.
+    /// Routed back to the Graph tab: open the `QueryBar` modal on the
+    /// active view. Raised by the preset-picker modal when the user
+    /// cancels a "new view with presets" flow (`Ctrl+N`) so the
+    /// freshly-pushed blank view drops into edit mode.
     GraphFocusQueryBar,
     /// Routed back to the Graph tab: commit a rename for the given
     /// node. Raised by the rename modal on Enter. The host runs

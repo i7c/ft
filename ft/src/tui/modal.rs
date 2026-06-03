@@ -369,14 +369,14 @@ impl Modal for CaptureVarPromptState {
 // `AppRequest` on `PickerOutcome::Selected` with the typed payload
 // the host expects (e.g. `GraphJumpToNodes`, `GraphApplyPreset`).
 
-// ── Modal stubs — tab-resident state types ───────────────────────────
+// ── Modal stub for tab-resident `GraphMoveOuter` ─────────────────────
 //
-// These variants own state whose handlers currently live as inline
-// match arms in `tabs/graph.rs`. The proper migration moves those arms
-// into the impls below. Until Section 4 lands, these stubs compile and
-// return `NotHandled` so the dispatch layer falls through to the tab
-// (preserving today's behaviour even if the App accidentally routed
-// through here).
+// `GraphMoveOuter` is the one modal variant that still lives on
+// `GraphTab` as a tab-resident field rather than flowing through
+// `ActiveModal`. Migrating it cleanly is a deferred follow-up (see
+// `openspec/changes/extract-modal-driver/tasks.md` §9). This stub
+// keeps the enum closed and the trait dispatch total; `OpenModal`
+// never actually wraps `MoveOuter` today.
 
 impl Modal for GraphMoveOuter {
     fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
