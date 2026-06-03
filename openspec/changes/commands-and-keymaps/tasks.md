@@ -1,23 +1,23 @@
 ## 1. Command + keymap infrastructure
 
-- [ ] 1.1 Create `ft/src/tui/command.rs` with `Command`, `CommandDef`, `CommandArgs`, `ArgSpec`, `CommandScope`, `CommandOutcome`, `CommandRegistry`
-- [ ] 1.2 Create `ft/src/tui/keymap.rs` with `KeyChord` (`code: KeyCode`, `mods: KeyModifiers`), `chord_from_str` parser + round-trip helper, `KeyMap` (Vec of (chord, command) with `bind(chord, command_name, args?)` builder, panics on duplicate chords)
-- [ ] 1.3 Add registry composition: `CommandRegistry::build(tabs: &[Box<dyn Tab>])` walks every tab + modal + global commands, asserts unique names, returns a queryable registry
-- [ ] 1.4 Unit tests: chord parse/format round-trip; KeyMap duplicate detection; registry build with synthetic tabs
+- [x] 1.1 `ft/src/tui/command.rs` exports `Command`, `CommandArgs`, `CommandDef`, `CommandScope`, `ArgSpec`, `CommandOutcome`, `CommandRegistry`. `CommandOutcome` is just `Handled`/`NotHandled` — cross-scope side effects (open modal, push toast, suspend for editor, …) flow through `ctx.pending_request` as `AppRequest` variants so this enum stays small and command.rs stays decoupled from `ActiveModal`
+- [x] 1.2 `ft/src/tui/keymap.rs` exports `KeyChord` (with `normalized()` so `Char('C')+NONE` and `Char('c')+SHIFT` resolve identically — terminals are inconsistent), `chord_from_str` / `chord_to_str` round-trip, and `KeyMap` with a fluent `bind`/`bind_with_args` builder that panics on duplicate chords (post-normalization)
+- [x] 1.3 `CommandRegistry::from_slices(&[&'static [CommandDef]])` is the primitive. The `build(tabs, modals, global)` walker that gathers static slices from every tab + modal + global will land in §3 once `Tab::commands()` exists
+- [x] 1.4 18 unit tests: command/registry (6) — args lookup, duplicate-name panic, iter order, scope; keymap (12) — chord round-trip (letters, modifiers, named keys), modifier aliases, invalid inputs, normalization on key-event input, bind+lookup, args-on-bind, duplicate detection (direct and via normalization), invalid-chord-on-bind, iter order
 
 ## 2. Update `Tab` and `Modal` traits
 
-- [ ] 2.1 Add `Tab::commands(&self) -> &'static [CommandDef]` (default: `&[]`)
-- [ ] 2.2 Add `Tab::keymap(&self) -> KeyMap` (default: empty)
-- [ ] 2.3 Add `Tab::dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome` (no default — every tab implements)
-- [ ] 2.4 Provide a default `Tab::handle_event` that resolves chord → command → dispatches (tabs can still override for raw events like edit-buffer text input)
-- [ ] 2.5 Same three methods on `Modal` trait; default `Modal::handle_event` resolves chord → command → dispatches
+- [x] 2.1 `Tab::commands(&self) -> &'static [CommandDef]` (default: `&[]`)
+- [x] 2.2 `Tab::keymap(&self) -> &KeyMap` (default: `empty_keymap()` shared static — returning a borrow avoids cloning per keystroke)
+- [x] 2.3 `Tab::dispatch_command(&mut self, _cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome` with default returning `NotHandled` (relaxed from "no default" in tasks.md — staged migration; tabs override as they adopt). Each tab keeps its current `handle_event` impl until §4 converts it
+- [x] 2.4 Default `Tab::handle_event` deferred to §4 — adding it now would race with every tab's existing implementation. The default will be installed as part of the per-tab conversion sweep when each tab's `handle_event` is replaced with `keymap → command → dispatch_command`
+- [x] 2.5 Same three methods on `Modal` trait, with the same default-`NotHandled` for `dispatch_command`. `ActiveModal` propagates `commands()` / `keymap()` / `dispatch_command()` to the inner variant (matches the existing `handle_event` / `render` / `name` propagation pattern)
 
 ## 3. Convert App global keymap
 
-- [ ] 3.1 Add `App::global_keymap()` returning the global KeyMap (Tab, Shift+Tab, 1-5, q, Ctrl+C, ?, g s, etc.)
-- [ ] 3.2 Define `app.*` commands in a new `app_commands` constant: `app.quit`, `app.next-tab`, `app.prev-tab`, `app.switch-tab` (with `index` arg), `app.help`, `app.sync-git`
-- [ ] 3.3 Move the global match arms in `App::handle_event` to call `global_keymap().lookup(chord)` + `dispatch_command`
+- [x] 3.1 `App::global_keymap()` returns `&APP_KEYMAP`. The map binds `q`/`Ctrl+c` (quit), `Tab`/`BackTab` (next/prev tab), `1`..`9` (switch-tab with `index` arg), `?` (help), `g` (git-leader). Keymap normalization handles the `?` case where the terminal may or may not include the SHIFT modifier
+- [x] 3.2 `APP_COMMANDS` slice in `ft/src/tui/app_commands.rs` declares `app.quit`, `app.next-tab`, `app.prev-tab`, `app.switch-tab` (with `index` arg), `app.help`, `app.git-leader`. (Note: tasks.md says `app.sync-git` — but the existing chord is `g` → leader mode → `s` (Mode::GitLeader), not a single-shot. Named `app.git-leader` to match the actual single-key binding; the leader-then-`s` flow stays in `Mode::GitLeader` since chord sequences are out of scope per design.md)
+- [x] 3.3 `App::handle_global_key` now calls `APP_KEYMAP.lookup(chord)` and `dispatch_global_command(cmd)`. The match arms migrated 1:1; behavior is byte-identical (verified by full test suite passing without snapshot diffs)
 
 ## 4. Convert tabs
 

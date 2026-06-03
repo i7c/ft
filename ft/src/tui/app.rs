@@ -21,10 +21,13 @@ use crate::tui::tabs::tasks::ClockFn;
 use ft_core::config::EditorStrategy;
 
 use crate::tui::{
+    app_commands::APP_KEYMAP,
+    command::Command as TuiCommand,
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
     event::{BgEvent, Event, EventStream, SyncJobResult},
     help::{global_section, HelpSection},
     jobs::{JobHandle, JobKind},
+    keymap::KeyChord,
     modal::{ActiveModal, Modal, ModalOutcome},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{
@@ -425,36 +428,58 @@ impl App {
     }
 
     fn handle_global_key(&mut self, k: KeyEvent) -> Result<()> {
-        match (k.code, k.modifiers) {
-            (KeyCode::Char('q'), KeyModifiers::NONE) => {
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = APP_KEYMAP.lookup(chord).cloned() else {
+            return Ok(());
+        };
+        self.dispatch_global_command(&cmd)
+    }
+
+    /// Execute one App-global command. Side effects mutate `self`
+    /// directly (no `pending_request` round-trip is needed since the
+    /// global commands are mode/tab switches and quit).
+    fn dispatch_global_command(&mut self, cmd: &TuiCommand) -> Result<()> {
+        match cmd.name {
+            "app.quit" => {
                 self.should_quit = true;
             }
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
-            (KeyCode::Char('?'), _) => {
-                self.mode = Mode::Help;
-            }
-            (KeyCode::Char('g'), KeyModifiers::NONE) => {
-                self.mode = Mode::GitLeader;
-            }
-            (KeyCode::Tab, _) => {
+            "app.next-tab" => {
                 let next = (self.active + 1) % self.tabs.len();
                 self.switch_tab(next)?;
             }
-            (KeyCode::BackTab, _) => {
+            "app.prev-tab" => {
                 let prev = (self.active + self.tabs.len() - 1) % self.tabs.len();
                 self.switch_tab(prev)?;
             }
-            (KeyCode::Char(c), _) if c.is_ascii_digit() => {
-                let idx = (c as u8 - b'1') as usize;
-                if idx < self.tabs.len() {
-                    self.switch_tab(idx)?;
+            "app.switch-tab" => {
+                if let Some(idx_str) = cmd.arg("index") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        if idx < self.tabs.len() {
+                            self.switch_tab(idx)?;
+                        }
+                    }
                 }
             }
-            _ => {}
+            "app.help" => {
+                self.mode = Mode::Help;
+            }
+            "app.git-leader" => {
+                self.mode = Mode::GitLeader;
+            }
+            _ => {
+                // Unknown global command — silently ignored. The
+                // registry's collision-detection at startup ensures
+                // every chord-bound command exists.
+            }
         }
         Ok(())
+    }
+
+    /// App-global keymap accessor (used by the `?` overlay, the docs
+    /// generator, and `ft commands list`).
+    #[allow(dead_code)] // wired into help.rs / docs.rs in §6/§7
+    pub fn global_keymap(&self) -> &crate::tui::keymap::KeyMap {
+        &APP_KEYMAP
     }
 
     fn switch_tab(&mut self, idx: usize) -> Result<()> {

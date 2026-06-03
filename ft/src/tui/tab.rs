@@ -9,9 +9,22 @@ use ft_core::recents::RecentsLog;
 use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
 
+use crate::tui::command::{Command, CommandDef, CommandOutcome};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
+use crate::tui::keymap::KeyMap;
 use crate::tui::modal::ActiveModal;
+
+/// Empty static keymap, used as the default return for `Tab::keymap()` and
+/// `Modal::keymap()` before a tab/modal adopts the command/keymap layer.
+/// A single shared instance avoids reallocating a fresh `Vec` per dispatch.
+static EMPTY_KEYMAP: KeyMap = KeyMap::empty();
+
+/// Borrow the shared empty keymap. Same address every call — safe to compare
+/// or share across calls.
+pub fn empty_keymap() -> &'static KeyMap {
+    &EMPTY_KEYMAP
+}
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
@@ -457,5 +470,32 @@ pub trait Tab {
     #[cfg(test)]
     fn selected_is_note_for_test(&self) -> bool {
         false
+    }
+
+    /// Static slice of every command this tab owns, used by the
+    /// `CommandRegistry` to compose the build-time union and by
+    /// `?` / `ft commands list` / `ft do` to look up metadata.
+    /// Default is empty so tabs can adopt the pattern incrementally.
+    #[allow(dead_code)] // wired in §§4–8 (per-tab CommandDef + registry build)
+    fn commands(&self) -> &'static [CommandDef] {
+        &[]
+    }
+
+    /// Tab-scoped key bindings — looked up before the App's global
+    /// keymap. Default is the shared empty map so tabs adopt the
+    /// pattern only when they have bindings to declare.
+    #[allow(dead_code)] // wired in §§4–6 (per-tab keymaps + ? overlay)
+    fn keymap(&self) -> &KeyMap {
+        empty_keymap()
+    }
+
+    /// Dispatch a resolved command on this tab. Returns
+    /// [`CommandOutcome::NotHandled`] if the command isn't owned by
+    /// this scope (the caller falls through to the next scope). The
+    /// default returns `NotHandled` so unimplemented tabs don't claim
+    /// commands they can't execute.
+    #[allow(dead_code)] // wired in §4 (per-tab dispatch)
+    fn dispatch_command(&mut self, _cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
+        CommandOutcome::NotHandled
     }
 }

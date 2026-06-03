@@ -37,8 +37,10 @@ use ft_core::periodic::Period;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
+use crate::tui::command::{Command, CommandDef, CommandOutcome};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
+use crate::tui::keymap::KeyMap;
 use crate::tui::notes_actions::append::{handle_key as append_handle_key, AppendState, AppendStep};
 use crate::tui::notes_actions::capture::{handle_capture_var_key, CaptureVarPromptState};
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
@@ -46,7 +48,7 @@ use crate::tui::notes_actions::periodic::run_periodic_open;
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
-use crate::tui::tab::{AppRequest, TabCtx};
+use crate::tui::tab::{empty_keymap, AppRequest, TabCtx};
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
     SearchPickerModal,
@@ -80,6 +82,29 @@ pub trait Modal {
     /// Stable identifier for the status-bar indicator and tests. Each
     /// implementation returns a short kebab-case string.
     fn name(&self) -> &'static str;
+
+    /// Static slice of every command this modal owns. The default
+    /// (`&[]`) lets pre-conversion modals coexist with the registry
+    /// without claiming commands they can't execute.
+    #[allow(dead_code)] // wired in §5 (per-modal CommandDef)
+    fn commands(&self) -> &'static [CommandDef] {
+        &[]
+    }
+
+    /// Modal-scoped key bindings — looked up before the tab's keymap
+    /// and the App-global keymap. Default is the shared empty map.
+    #[allow(dead_code)] // wired in §5 (per-modal keymap)
+    fn keymap(&self) -> &KeyMap {
+        empty_keymap()
+    }
+
+    /// Dispatch a resolved command on this modal. Returns
+    /// [`CommandOutcome::NotHandled`] when the command isn't owned
+    /// here. Default returns `NotHandled`.
+    #[allow(dead_code)] // wired in §5 (per-modal dispatch)
+    fn dispatch_command(&mut self, _cmd: &Command, _ctx: &TabCtx) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
 }
 
 // ── Outcome ──────────────────────────────────────────────────────────
@@ -215,6 +240,57 @@ impl Modal for ActiveModal {
             ActiveModal::Search(_) => "search",
             ActiveModal::PeriodicLeader => "periodic-leader",
             ActiveModal::QueryBar { .. } => "query-bar",
+        }
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        match self {
+            ActiveModal::Create(s) => s.commands(),
+            ActiveModal::Append(s) => s.commands(),
+            ActiveModal::CapturePicker(s) => s.commands(),
+            ActiveModal::CaptureVar(s) => s.commands(),
+            ActiveModal::SectionMove(s) => s.commands(),
+            ActiveModal::MoveOuter(s) => s.commands(),
+            ActiveModal::Rename(s) => s.commands(),
+            ActiveModal::PresetPicker(s) => s.commands(),
+            ActiveModal::Related(s) => s.commands(),
+            ActiveModal::Search(s) => s.commands(),
+            ActiveModal::PeriodicLeader => PeriodicLeader.commands(),
+            ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.commands(),
+        }
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        match self {
+            ActiveModal::Create(s) => s.keymap(),
+            ActiveModal::Append(s) => s.keymap(),
+            ActiveModal::CapturePicker(s) => s.keymap(),
+            ActiveModal::CaptureVar(s) => s.keymap(),
+            ActiveModal::SectionMove(s) => s.keymap(),
+            ActiveModal::MoveOuter(s) => s.keymap(),
+            ActiveModal::Rename(s) => s.keymap(),
+            ActiveModal::PresetPicker(s) => s.keymap(),
+            ActiveModal::Related(s) => s.keymap(),
+            ActiveModal::Search(s) => s.keymap(),
+            ActiveModal::PeriodicLeader => empty_keymap(),
+            ActiveModal::QueryBar { .. } => empty_keymap(),
+        }
+    }
+
+    fn dispatch_command(&mut self, cmd: &Command, ctx: &TabCtx) -> CommandOutcome {
+        match self {
+            ActiveModal::Create(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::Append(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::CapturePicker(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::CaptureVar(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::SectionMove(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::MoveOuter(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::Rename(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::PresetPicker(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::Related(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::Search(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::PeriodicLeader => CommandOutcome::NotHandled,
+            ActiveModal::QueryBar { .. } => CommandOutcome::NotHandled,
         }
     }
 }

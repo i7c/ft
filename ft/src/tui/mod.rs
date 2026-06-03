@@ -1,8 +1,11 @@
 mod app;
+mod app_commands;
+mod command;
 mod editor;
 mod event;
 mod help;
 mod jobs;
+mod keymap;
 mod modal;
 mod notes_actions;
 mod tab;
