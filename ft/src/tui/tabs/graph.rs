@@ -42,9 +42,9 @@ use crate::tui::{
     help::HelpSection,
     modal::{ActiveModal, Modal, ModalOutcome},
     notes_actions::{
-        append::{self, AppendState, AppendStep},
+        append::AppendState,
         capture::{self, CapturePresetPickerSource},
-        create::{self, CreateState, CreateStep},
+        create,
         periodic::run_periodic_open,
         queue_toast,
         section_move::{
@@ -558,14 +558,6 @@ pub struct GraphTab {
     /// "editing an inactive view", and the App-level keymap wants one
     /// place to look to decide if printable characters are being captured.
     input_mode: bool,
-    /// Active create-note flow. `Some` whenever the user has pressed
-    /// `c` / `C` and we're walking the shared [`CreateState`] machine;
-    /// `None` otherwise. While `Some`, the create overlay captures the
-    /// keyboard ahead of every other binding.
-    create_state: Option<CreateState>,
-    /// Active append-with-template flow. `Some` when the user presses `A`
-    /// on a note row. Uses the shared [`AppendState`] machine.
-    append_state: Option<AppendState>,
     /// Active move-section flow. `None` outside the flow; `Some` while
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
@@ -702,8 +694,6 @@ impl GraphTab {
             views: vec![ExpandedView::default()],
             active: 0,
             input_mode: false,
-            create_state: None,
-            append_state: None,
             move_outer: None,
             rename_state: None,
             related_modal: None,
@@ -1346,42 +1336,6 @@ impl GraphTab {
     /// Feed a key to the active create flow. Returns
     /// `EventOutcome::NotHandled` if no create flow is active (the
     /// caller's normal keymap can run).
-    fn handle_create_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(cs) = self.create_state.as_mut() else {
-            return EventOutcome::NotHandled;
-        };
-        match create::handle_key(cs, k, ctx) {
-            CreateStep::Stay => EventOutcome::Consumed,
-            CreateStep::NotHandled => EventOutcome::NotHandled,
-            CreateStep::Transition(next) => {
-                *cs = next;
-                EventOutcome::Consumed
-            }
-            CreateStep::Finished => {
-                self.create_state = None;
-                EventOutcome::Consumed
-            }
-        }
-    }
-
-    fn handle_append_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
-        let Some(as_) = self.append_state.as_mut() else {
-            return EventOutcome::NotHandled;
-        };
-        match append::handle_key(as_, k, ctx) {
-            AppendStep::Stay => EventOutcome::Consumed,
-            AppendStep::NotHandled => EventOutcome::NotHandled,
-            AppendStep::Transition(next) => {
-                *as_ = *next;
-                EventOutcome::Consumed
-            }
-            AppendStep::Finished => {
-                self.append_state = None;
-                EventOutcome::Consumed
-            }
-        }
-    }
-
     fn selected_note_abs_path(&self, ctx: &TabCtx) -> Option<PathBuf> {
         let graph = self.graph.as_ref()?;
         let id = self.selected_note_id()?;
@@ -1924,17 +1878,10 @@ impl Tab for GraphTab {
             return Ok(EventOutcome::NotHandled);
         };
 
-        // The create overlay captures the keyboard ahead of every other
-        // binding, including input mode — the user is inside a modal
-        // popup, not the tree.
-        if self.create_state.is_some() {
-            return Ok(self.handle_create_key(k, ctx));
-        }
-
-        // Append overlay: template picking for append with template.
-        if self.append_state.is_some() {
-            return Ok(self.handle_append_key(k, ctx));
-        }
+        // Tab-resident modals captured here (input mode bridge, move
+        // outer, rename, related). The create / append / capture /
+        // capture-var / preset / search / periodic flows are owned by
+        // the App-level modal slot (extract-modal-driver §4).
 
         // Rename modal (Flow B): captures keyboard while open.
         if self.rename_state.is_some() {
@@ -2184,7 +2131,9 @@ impl Tab for GraphTab {
                 // straight into FilenamePrompt with the folder derived
                 // from the current selection.
                 let folder = self.create_folder_from_selection();
-                self.create_state = Some(create::begin_filename_prompt(folder, None));
+                let state = create::begin_filename_prompt(folder, None);
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('m'), KeyModifiers::NONE) => {
@@ -2210,7 +2159,9 @@ impl Tab for GraphTab {
                 // folder picker and goes straight to the filename
                 // prompt — same selection-driven shape as `c`.
                 let folder = self.create_folder_from_selection();
-                self.create_state = Some(create::begin_template_picking(ctx, Some(folder)));
+                let state = create::begin_template_picking(ctx, Some(folder));
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('A'), _) => {
@@ -2224,7 +2175,9 @@ impl Tab for GraphTab {
                     );
                     return Ok(EventOutcome::Consumed);
                 };
-                self.append_state = Some(AppendState::begin_with_target(ctx, target_path, None));
+                let state = AppendState::begin_with_target(ctx, target_path, None);
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::Append(state))));
                 Ok(EventOutcome::Consumed)
             }
             (KeyCode::Char('Q'), _) => {
@@ -2469,17 +2422,6 @@ impl Tab for GraphTab {
                 let err_span = Span::styled(err.as_str(), Style::default().fg(Color::Red));
                 frame.render_widget(Paragraph::new(Line::from(err_span)), err_rect);
             }
-        }
-
-        // Create overlay floats over everything when active. Reuses the
-        // Notes-tab renderer so both tabs render the same modal.
-        if let Some(cs) = self.create_state.as_mut() {
-            notes_view::render_create_overlay(frame, area, cs);
-        }
-
-        // Append overlay.
-        if let Some(as_) = self.append_state.as_mut() {
-            notes_view::render_append_overlay(frame, area, as_);
         }
 
         // Move-section overlay. Inner(...) defers to the shared Notes

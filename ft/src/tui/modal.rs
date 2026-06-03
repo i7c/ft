@@ -51,7 +51,10 @@ use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
     SearchPickerModal,
 };
-use crate::tui::tabs::notes::view::{render_capture_var_prompt, render_periodic_leader};
+use crate::tui::tabs::notes::view::{
+    render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
+    render_periodic_leader,
+};
 use crate::tui::widgets::{FuzzyPicker, PickerSource};
 
 // ── Trait ────────────────────────────────────────────────────────────
@@ -235,14 +238,20 @@ impl Modal for CreateState {
         }
     }
 
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {
-        // Rendering is owned by the host tab today (notes_view::render or
-        // tabs/graph.rs render). Section 4 lifts the render path out of
-        // the host so it lives behind `Modal::render`.
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_create_overlay(frame, area, self);
     }
 
     fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Create note", &[])
+        HelpSection::new(
+            "Create note",
+            &[
+                ("Type", "filter / edit"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "confirm step"),
+                ("Esc", "cancel"),
+            ],
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -266,12 +275,20 @@ impl Modal for AppendState {
         }
     }
 
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {
-        // Rendering owned by the host tab; see CreateState above.
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_append_overlay(frame, area, self);
     }
 
     fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Append template", &[])
+        HelpSection::new(
+            "Append template",
+            &[
+                ("Type", "filter / edit"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "confirm step"),
+                ("Esc", "cancel"),
+            ],
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -295,12 +312,20 @@ impl Modal for SectionMoveState {
         }
     }
 
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {
-        // Rendering owned by the host tab; see CreateState above.
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_move_overlay(frame, area, self);
     }
 
     fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Move section", &[])
+        HelpSection::new(
+            "Move section",
+            &[
+                ("Space", "toggle"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "confirm step"),
+                ("Esc", "cancel / back"),
+            ],
+        )
     }
 
     fn name(&self) -> &'static str {
