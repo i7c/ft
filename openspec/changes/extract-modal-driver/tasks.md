@@ -29,34 +29,37 @@ Notes from implementation:
 
 ### Per-modal migration progress
 
-- [x] **PeriodicLeader** — fully migrated end-to-end as proof of pattern (commit `22cb319`)
-- [ ] **CreateState** — handler already in `notes_actions/create.rs`; needs render lift + `c`/`C` arm rewire
-- [ ] **AppendState** — handler in `notes_actions/append.rs`; needs render lift + `A` arm rewire
-- [ ] **SectionMoveState** — handler in `notes_actions/section_move.rs`; needs render lift + integration with `MoveOuter`
-- [ ] **CaptureVarPromptState** — handler in `notes_actions/capture.rs`; needs render lift + `OpenSibling` from CapturePicker
-- [ ] **CapturePresetPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
-- [ ] **PresetPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
-- [ ] **GraphSearchPickerSource (FuzzyPicker)** — picker selection routing problem ⚠
-- [ ] **GraphRenameState** — tab-resident; needs handler + render lifted from `tabs/graph.rs`
-- [ ] **RelatedModal** — tab-resident; needs handler + render lifted from `tabs/graph.rs`
-- [ ] **GraphMoveOuter** — complex multi-phase; needs handler + render lifted
+- [x] **PeriodicLeader** — fully migrated (commit `22cb319`)
+- [x] **SearchPicker** (`SearchPickerModal` newtype) — `AppRequest::GraphJumpToNodes` (commit `3541a7b`)
+- [x] **PresetPicker** (`PresetPickerModal` newtype) — `AppRequest::GraphApplyPreset` + `GraphFocusQueryBar` (commit `7a5c510`)
+- [x] **CapturePicker** (`CapturePickerModal` newtype) + **CaptureVarPromptState** — first real use of `OpenSibling` (commit `0e71781`)
+- [x] **CreateState**, **AppendState** — handlers in `notes_actions/*` already; render delegated to existing `notes_view::render_*_overlay` (commit `e9040a0`)
+- [x] **GraphRenameState** — tab-resident `Modal` impl in `tabs/graph.rs`; commits via `AppRequest::GraphCommitRename`; re-opens on recoverable error (commit `02e477f`)
+- [x] **RelatedModal** — tab-resident `Modal` impl in `tabs/graph.rs`; commits via `AppRequest::GraphConfirmRelated` (commit `fe11de1`)
+- [ ] **GraphMoveOuter** — 7-variant state machine with multiple tree-driven phases and fuzzy pickers per phase. Most complex remaining. Needs its own Modal impl + likely several new AppRequest variants. ~250 LoC of handler logic + ~80 LoC render
+- [ ] **SectionMoveState** — Modal impl already provided (used by `GraphMoveOuter::Inner`), but the outer wrapper isn't migrated yet
 
 ### Aggregate task status
 
-- [ ] 4.1 Remove fields: ~~`periodic_leader`~~ done; `input_mode`, `create_state`, `append_state`, `capture_picker`, `capture_var_state`, `move_outer`, `rename_state`, `preset_picker`, `preset_picker_for_active_view`, `related_modal`, `search_picker` (12 of 13 still to migrate; `queued_related_path` stays)
-- [ ] 4.2 Remove the `is_some()` dispatch chain — 1 of ~10 arms removed
-- [ ] 4.3 Remove `render_*_overlay` calls — 1 of ~10 render arms removed
-- [ ] 4.4 Replace `selected_is_note_for_test` with `App::active_modal_name()` in cross-tab tests
+- [x] 4.1 Remove fields: `periodic_leader`, `create_state`, `append_state`, `capture_picker`, `capture_var_state`, `preset_picker`, `preset_picker_for_active_view`, `related_modal`, `rename_state`, `search_picker` (10 of 13 fields removed); `input_mode` and `move_outer` remain; `queued_related_path` stays as queue
+- [x] 4.2 Dispatch chain: 9 of 11 `is_some()` arms removed; only `move_outer.is_some()` and `input_mode` remain
+- [x] 4.3 Render arms: 9 of 11 modal render arms removed
+- [ ] 4.4 Replace `selected_is_note_for_test` with `App::active_modal_name()` in cross-tab tests *(deferred — no current tests need it)*
 
-### Design issue surfaced during PeriodicLeader migration
+### Design decisions resolved
 
-**Picker selection routing.** `FuzzyPicker<S>::handle_event` returns a typed `PickerOutcome<S::Item>`. The host tab acts on `Selected(item)` (e.g. apply preset DSL, jump to node, open capture flow). When the picker becomes a Modal, that typed outcome cannot be erased into the bare `ModalOutcome` enum without losing the payload. Three options for the picker variants (Search / Preset / Capture):
+The picker selection routing problem (flagged in PeriodicLeader's notes) was resolved via **Strategy A**: new `AppRequest` variants per outcome (`GraphJumpToNodes`, `GraphApplyPreset`, `GraphFocusQueryBar`, `GraphCommitRename`, `GraphConfirmRelated`). The App finds the Graph tab by title and calls a typed `Tab::graph_*` hook. Same pattern is used for tab-resident commit flows.
 
-1. **New `AppRequest` variants per outcome** (e.g. `AppRequest::GraphApplyPreset { dsl }`, `AppRequest::GraphJumpToPath(Vec<NoteId>)`). App routes them back to GraphTab via tab-id lookup. Clean separation but grows the AppRequest surface significantly.
-2. **Move the action into the picker source**. The source holds a callback / state ref that fires on selection. Couples the picker to the host.
-3. **Custom outcome enum per picker**. Each picker variant has its own outcome → tab dispatch. Breaks the uniform `Modal` interface.
+Per-modal Render code:
+- Flow modals (Create/Append/SectionMove/CaptureVar) → re-use existing `notes_view::render_*_overlay` functions (already `pub(crate)` in `tabs/notes/view.rs`)
+- Picker modals → lifted into `Modal::render` on the newtype, calling `notes_view::render_picker_popup` or the existing search-picker chrome
+- Tab-resident modals → render lifted from inline arm to `Modal::render` on the state struct, defined in `tabs/graph.rs`
 
-The original design.md did not solve this. It needs a decision before the picker variants can migrate.
+Tab-resident state types (`GraphRenameState`, `RelatedModal`) host their `Modal` impls in `tabs/graph.rs` (the user's chosen Option for Q2 in the design-decision questionnaire).
+
+### `drain_simple_requests` helper
+
+Added an App-private helper that drains `OpenModal` + graph-routed back-action requests from `pending_request`. Called from `dispatch`, `switch_to`, and `apply_initial_action_for_test`. Production's main event loop continues to use `service_request` after each `handle_event`; this helper covers the test paths and the `on_focus` post-switch case where the modal-open needs to materialise before the next render.
 
 ## 5. Map `input_mode` → `ActiveModal::QueryBar`
 
@@ -67,8 +70,8 @@ The original design.md did not solve this. It needs a decision before the picker
 
 ## 6. Status-bar modal indicator (preview)
 
-- [ ] 6.1 Add a single status-bar cell that renders `App::active_modal_name()` when `Some`. Render an empty cell when `None`
-- [ ] 6.2 Test: open each modal, assert the indicator cell renders the expected name
+- [x] 6.1 Status-bar right cell renders `modal: <name>` in magenta when active; `mode: <label>` otherwise. In-flight sync indicator still takes priority. (commit `808cdbe`)
+- [ ] 6.2 Dedicated open-each-modal indicator test — the modal-indicator behaviour is covered indirectly by the re-blessed snapshots of `graph_periodic_leader_status_snapshot`, `graph_tab_search_picker_open`, `graph_tab_preset_picker_open`, `graph_create_filename_prompt_snapshot`, `graph_rename_note_modal_snapshot`. A dedicated parametrised test could be added later.
 
 ## 7. Tests
 

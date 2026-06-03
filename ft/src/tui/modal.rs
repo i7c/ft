@@ -32,7 +32,7 @@
 
 #![allow(dead_code)] // wired up in Section 2; nothing calls into here yet
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyCode;
 use ft_core::periodic::Period;
 use ratatui::layout::Rect;
 use ratatui::Frame;
@@ -55,7 +55,6 @@ use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
     render_periodic_leader,
 };
-use crate::tui::widgets::{FuzzyPicker, PickerSource};
 
 // ── Trait ────────────────────────────────────────────────────────────
 
@@ -364,54 +363,11 @@ impl Modal for CaptureVarPromptState {
     }
 }
 
-// ── Modal impl — picker variants share one impl via blanket on FuzzyPicker ──
-
-impl<S: PickerSource> Modal for FuzzyPicker<S> {
-    fn handle_event(&mut self, ev: Event, _ctx: &TabCtx) -> ModalOutcome {
-        let Event::Key(k) = ev else {
-            return ModalOutcome::NotHandled;
-        };
-        // The picker's handle_event needs to return its outcome generically
-        // (because the data payload depends on `S::Item`). Section 4 will
-        // wire selection back into the host tab; here we only need to
-        // collapse the outcome to a Modal-level signal.
-        picker_consume_key(self, k);
-        // Conservative until Section 4 wires selection: we treat key
-        // events as consumed-but-still-open. Esc / Enter dispatch live
-        // in Section 4 alongside the selection plumbing.
-        ModalOutcome::Consumed
-    }
-
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {
-        // The host tab currently renders the picker (centered_rect +
-        // Clear + picker.render). Section 4 moves the chrome here.
-    }
-
-    fn keymap_help(&self) -> HelpSection {
-        HelpSection::new(
-            "Picker",
-            &[
-                ("Type", "filter"),
-                ("Up / Down", "navigate"),
-                ("Enter", "select"),
-                ("Esc", "cancel"),
-            ],
-        )
-    }
-
-    fn name(&self) -> &'static str {
-        "picker"
-    }
-}
-
-/// Forwarding helper: feed one key into the picker without claiming
-/// ownership of the selection outcome (that gets wired up in Section
-/// 4). Stub today — the picker's real `handle_event` returns
-/// `PickerOutcome<S::Item>` which can't be erased to a `Modal` return
-/// type cleanly without knowing the host context.
-fn picker_consume_key<S: PickerSource>(_picker: &mut FuzzyPicker<S>, _k: KeyEvent) {
-    // Section 4 fills this in alongside the selection-plumbing rework.
-}
+// Picker variants don't share a blanket Modal impl. Each picker
+// (SearchPickerModal, PresetPickerModal, CapturePickerModal) is a
+// newtype in `tabs/graph.rs` so it can post a tab-specific
+// `AppRequest` on `PickerOutcome::Selected` with the typed payload
+// the host expects (e.g. `GraphJumpToNodes`, `GraphApplyPreset`).
 
 // ── Modal stubs — tab-resident state types ───────────────────────────
 //
