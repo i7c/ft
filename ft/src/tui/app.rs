@@ -547,6 +547,22 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::GraphConfirmRelated {
+                target_path,
+                selected_titles,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                    };
+                    self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1012,7 +1028,9 @@ impl App {
     }
 
     pub fn switch_to(&mut self, idx: usize) -> Result<()> {
-        self.switch_tab(idx)
+        self.switch_tab(idx)?;
+        self.drain_simple_requests();
+        Ok(())
     }
 
     /// Drain the queued [`crate::tui::InitialAction`] (if any) and
@@ -1030,7 +1048,9 @@ impl App {
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
         };
-        self.tabs[self.active].on_focus(&mut ctx)
+        self.tabs[self.active].on_focus(&mut ctx)?;
+        self.drain_simple_requests();
+        Ok(())
     }
 
     pub fn active_index(&self) -> usize {
@@ -1049,11 +1069,17 @@ impl App {
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {
         self.handle_event(ev)?;
-        // Auto-service the requests that don't require terminal state:
-        // `OpenModal` (closing/opening modal slot) and graph-routed
-        // back-actions (`GraphJumpToNodes` and similar future ones).
-        // Other request variants stay in `pending_request` so tests
-        // that assert on them via `take_pending_request` keep working.
+        self.drain_simple_requests();
+        Ok(())
+    }
+
+    /// Drain `OpenModal` and graph-routed back-action requests from
+    /// `pending_request`. Used by `dispatch` and by the
+    /// `apply_initial_action_for_test` / `switch_to` test helpers so
+    /// modal-opens posted from `on_focus` and queued requests are
+    /// serviced without a full event loop. Terminal-touching variants
+    /// (`OpenInEditor`, `SyncGit`, …) stay in the slot.
+    fn drain_simple_requests(&mut self) {
         loop {
             let req = self.pending_request.borrow_mut().take();
             match req {
@@ -1098,6 +1124,21 @@ impl App {
                         );
                     }
                 }
+                Some(AppRequest::GraphConfirmRelated {
+                    target_path,
+                    selected_titles,
+                }) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                        };
+                        self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
+                    }
+                }
                 Some(other) => {
                     *self.pending_request.borrow_mut() = Some(other);
                     break;
@@ -1105,7 +1146,6 @@ impl App {
                 None => break,
             }
         }
-        Ok(())
     }
 
     pub fn is_quit(&self) -> bool {
@@ -1171,6 +1211,21 @@ impl App {
                             source_rel,
                             new_name,
                         );
+                    }
+                }
+                AppRequest::GraphConfirmRelated {
+                    target_path,
+                    selected_titles,
+                } => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                        };
+                        self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                     }
                 }
                 // Other variants need terminal state; tests that exercise
@@ -1252,6 +1307,22 @@ impl App {
                         source_rel,
                         new_name,
                     );
+                }
+                Ok(())
+            }
+            AppRequest::GraphConfirmRelated {
+                target_path,
+                selected_titles,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                    };
+                    self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                 }
                 Ok(())
             }

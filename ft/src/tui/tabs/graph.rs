@@ -562,11 +562,6 @@ pub struct GraphTab {
     /// the user is walking the two-phase graph-driven UX or inside a
     /// shared [`SectionMoveState`] step.
     move_outer: Option<GraphMoveOuter>,
-    /// Active Related-section updater modal. `Some` when open;
-    /// captures the keyboard for the duration. Triggered by `R` on a
-    /// Note row or by `ft notes update-related` via
-    /// [`crate::tui::InitialAction::OpenRelatedModal`].
-    related_modal: Option<RelatedModal>,
     /// Vault-relative path of a note whose Related modal should open
     /// on the next focus once the graph is built. Set by
     /// [`crate::tui::App`] when the TUI was launched via
@@ -796,6 +791,60 @@ impl RelatedModal {
     }
 }
 
+impl Modal for RelatedModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match (k.code, k.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => ModalOutcome::Closed,
+            (KeyCode::Enter, _) => {
+                let titles = self.selected_titles();
+                if !titles.is_empty() {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmRelated {
+                        target_path: self.target_path.clone(),
+                        selected_titles: titles,
+                    });
+                }
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char(' '), _) => {
+                self.toggle_current();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.move_cursor(-1);
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.move_cursor(1);
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _ctx: &TabCtx) {
+        render_related_modal(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Related",
+            &[
+                ("↑/↓ · j/k", "move cursor"),
+                ("Space", "toggle"),
+                ("Enter", "commit"),
+                ("Esc / q", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "related"
+    }
+}
+
 /// Graph-tab outer wrapper around the shared section-move flow.
 ///
 /// The shared module's [`SectionMoveState`] assumes both source and
@@ -849,7 +898,6 @@ impl GraphTab {
             active: 0,
             input_mode: false,
             move_outer: None,
-            related_modal: None,
             queued_related_path: None,
         }
     }
@@ -864,63 +912,27 @@ impl GraphTab {
     }
 
     /// Handle a key while the Related-section modal is open.
-    fn handle_related_modal_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
-        match (k.code, k.modifiers) {
-            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
-                self.related_modal = None;
-                EventOutcome::Consumed
-            }
-            (KeyCode::Enter, _) => {
-                self.confirm_related_modal(ctx);
-                EventOutcome::Consumed
-            }
-            (KeyCode::Char(' '), _) => {
-                if let Some(m) = self.related_modal.as_mut() {
-                    m.toggle_current();
-                }
-                EventOutcome::Consumed
-            }
-            (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
-                if let Some(m) = self.related_modal.as_mut() {
-                    m.move_cursor(-1);
-                }
-                EventOutcome::Consumed
-            }
-            (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => {
-                if let Some(m) = self.related_modal.as_mut() {
-                    m.move_cursor(1);
-                }
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
-        }
+    /// Compute scores and build the Related-updater modal for the
+    /// note at `note_path`. Returns `None` when the path doesn't
+    /// resolve to a real note. Caller is responsible for posting
+    /// `AppRequest::OpenModal(Related(...))`.
+    fn build_related_modal_for_path(&self, note_path: &Path, ctx: &TabCtx) -> Option<RelatedModal> {
+        let graph = self.graph.as_ref()?;
+        let note_id = graph.note_by_path(note_path)?;
+        self.build_related_modal_for_id(note_id, ctx)
     }
 
-    /// Compute scores and open the Related-updater modal for the
-    /// note at `note_path`. No-op if the path doesn't resolve to a
-    /// real note in the current graph.
-    fn open_related_modal_for_path(&mut self, note_path: &Path, ctx: &mut TabCtx) {
-        let Some(graph) = self.graph.as_ref() else {
-            return;
-        };
-        let Some(note_id) = graph.note_by_path(note_path) else {
-            return;
-        };
-        self.open_related_modal_for_id(note_id, ctx);
-    }
-
-    /// Build the Related modal for a known `NoteId` (current graph).
-    fn open_related_modal_for_id(&mut self, note_id: NoteId, ctx: &mut TabCtx) {
-        let Some(graph) = self.graph.as_ref() else {
-            return;
-        };
+    /// Build the Related modal for a known `NoteId`. Toasts on errors
+    /// (non-note row, scoring failure).
+    fn build_related_modal_for_id(&self, note_id: NoteId, ctx: &TabCtx) -> Option<RelatedModal> {
+        let graph = self.graph.as_ref()?;
         let NodeKind::Note(note_data) = graph.node(note_id) else {
             queue_toast(
                 ctx,
                 "select a note row (paragraphs / directories aren't supported)",
                 ToastStyle::Error,
             );
-            return;
+            return None;
         };
         let target_path = note_data.path.clone();
         let target_title = note_data.title.clone();
@@ -928,12 +940,12 @@ impl GraphTab {
             Ok(s) => s,
             Err(e) => {
                 queue_toast(ctx, &format!("scoring failed: {e}"), ToastStyle::Error);
-                return;
+                return None;
             }
         };
         let (already, candidates): (Vec<_>, Vec<_>) =
             scores.into_iter().partition(|s| s.already_in_related);
-        self.related_modal = Some(RelatedModal {
+        Some(RelatedModal {
             target_path,
             target_title,
             already,
@@ -941,36 +953,38 @@ impl GraphTab {
             checked: HashSet::new(),
             cursor: 0,
             scroll_offset: 0,
-        });
+        })
     }
 
     /// Apply the modal's selected concepts to the target note via
-    /// the `ft-core::related` plan/apply pair and close the modal.
-    fn confirm_related_modal(&mut self, ctx: &mut TabCtx) {
-        let Some(modal) = self.related_modal.take() else {
-            return;
-        };
-        let titles = modal.selected_titles();
-        if titles.is_empty() {
+    /// the `ft-core::related` plan/apply pair. Called by
+    /// `Tab::graph_confirm_related` when the Related modal commits.
+    fn confirm_related(
+        &mut self,
+        ctx: &TabCtx,
+        target_path: PathBuf,
+        selected_titles: Vec<String>,
+    ) {
+        if selected_titles.is_empty() {
             return;
         }
-        let abs = ctx.vault.path.join(&modal.target_path);
+        let abs = ctx.vault.path.join(&target_path);
         let content = match std::fs::read_to_string(&abs) {
             Ok(s) => s,
             Err(e) => {
                 queue_toast(
                     ctx,
-                    &format!("read {}: {e}", modal.target_path.display()),
+                    &format!("read {}: {e}", target_path.display()),
                     ToastStyle::Error,
                 );
                 return;
             }
         };
-        let plan = ft_core::related::plan_related_update(&content, &titles);
+        let plan = ft_core::related::plan_related_update(&content, &selected_titles);
         if let Err(e) = ft_core::related::apply_related_update(&plan, &abs) {
             queue_toast(
                 ctx,
-                &format!("write {}: {e}", modal.target_path.display()),
+                &format!("write {}: {e}", target_path.display()),
                 ToastStyle::Error,
             );
             return;
@@ -1966,7 +1980,10 @@ impl Tab for GraphTab {
         // If a queued Related modal was requested before the graph
         // existed (e.g. `ft notes update-related <note>`), open it now.
         if let Some(path) = self.queued_related_path.take() {
-            self.open_related_modal_for_path(&path, ctx);
+            if let Some(modal) = self.build_related_modal_for_path(&path, ctx) {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::Related(modal))));
+            }
         }
         Ok(())
     }
@@ -1998,6 +2015,15 @@ impl Tab for GraphTab {
         self.commit_rename(ctx, note_id, is_directory, source_rel, &new_name);
     }
 
+    fn graph_confirm_related(
+        &mut self,
+        ctx: &TabCtx,
+        target_path: PathBuf,
+        selected_titles: Vec<String>,
+    ) {
+        self.confirm_related(ctx, target_path, selected_titles);
+    }
+
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
@@ -2007,11 +2033,6 @@ impl Tab for GraphTab {
         // outer, rename, related). The create / append / capture /
         // capture-var / preset / search / periodic flows are owned by
         // the App-level modal slot (extract-modal-driver §4).
-
-        // Related-section modal: captures keyboard while open.
-        if self.related_modal.is_some() {
-            return Ok(self.handle_related_modal_key(k, ctx));
-        }
 
         // Move-section flow: shared and tree-driven phases all funnel
         // through one dispatcher. Most of them capture the keyboard,
@@ -2070,7 +2091,10 @@ impl Tab for GraphTab {
             // graph refresh keymap.
             (KeyCode::Char('R'), m) if m == KeyModifiers::SHIFT => {
                 if let Some(note_id) = self.selected_note_id() {
-                    self.open_related_modal_for_id(note_id, ctx);
+                    if let Some(modal) = self.build_related_modal_for_id(note_id, ctx) {
+                        *ctx.pending_request.borrow_mut() =
+                            Some(AppRequest::OpenModal(Box::new(ActiveModal::Related(modal))));
+                    }
                 } else {
                     queue_toast(
                         ctx,
@@ -2627,10 +2651,6 @@ impl Tab for GraphTab {
                     picker.render(frame, area);
                 }
             }
-        }
-
-        if let Some(modal) = self.related_modal.as_ref() {
-            render_related_modal(frame, area, modal);
         }
     }
 

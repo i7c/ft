@@ -84,6 +84,15 @@ pub enum AppRequest {
         source_rel: PathBuf,
         new_name: String,
     },
+    /// Routed back to the Graph tab: apply a `## Related` section
+    /// update to the target note. Raised by the Related modal on
+    /// Enter; the host reads the file, runs
+    /// `ft_core::related::plan_related_update` + `apply_related_update`,
+    /// and toasts the outcome.
+    GraphConfirmRelated {
+        target_path: PathBuf,
+        selected_titles: Vec<String>,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -132,6 +141,14 @@ impl std::fmt::Debug for AppRequest {
                 .field("is_directory", is_directory)
                 .field("source_rel", source_rel)
                 .field("new_name", new_name)
+                .finish(),
+            AppRequest::GraphConfirmRelated {
+                target_path,
+                selected_titles,
+            } => f
+                .debug_struct("GraphConfirmRelated")
+                .field("target_path", target_path)
+                .field("selected_titles", selected_titles)
                 .finish(),
         }
     }
@@ -269,6 +286,17 @@ pub trait Tab {
         _is_directory: bool,
         _source_rel: PathBuf,
         _new_name: String,
+    ) {
+    }
+
+    /// Hook for the Related modal commit (see
+    /// [`AppRequest::GraphConfirmRelated`]). The Graph tab overrides
+    /// this to apply the related-section update on disk and toast.
+    fn graph_confirm_related(
+        &mut self,
+        _ctx: &TabCtx,
+        _target_path: PathBuf,
+        _selected_titles: Vec<String>,
     ) {
     }
 

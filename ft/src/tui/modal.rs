@@ -435,19 +435,6 @@ impl Modal for GraphMoveOuter {
     }
 }
 
-impl Modal for RelatedModal {
-    fn handle_event(&mut self, _ev: Event, _ctx: &TabCtx) -> ModalOutcome {
-        ModalOutcome::NotHandled
-    }
-    fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {}
-    fn keymap_help(&self) -> HelpSection {
-        HelpSection::new("Related (graph)", &[])
-    }
-    fn name(&self) -> &'static str {
-        "related"
-    }
-}
-
 /// Unit modal: the periodic-note leader is "awaiting the next
 /// keystroke" — `d`/`w`/`m`/`q`/`y` open the matching period; any other
 /// key cancels. Mirrors the pre-migration semantics in `GraphTab`
