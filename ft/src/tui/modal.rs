@@ -41,6 +41,7 @@ use crate::tui::command::{Command, CommandDef, CommandOutcome};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::KeyMap;
+use crate::tui::modal_commands as mc;
 use crate::tui::notes_actions::append::{handle_key as append_handle_key, AppendState, AppendStep};
 use crate::tui::notes_actions::capture::{handle_capture_var_key, CaptureVarPromptState};
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
@@ -332,6 +333,14 @@ impl Modal for CreateState {
     fn name(&self) -> &'static str {
         "create"
     }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::CREATE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::CREATE_KEYMAP
+    }
 }
 
 impl Modal for AppendState {
@@ -368,6 +377,14 @@ impl Modal for AppendState {
 
     fn name(&self) -> &'static str {
         "append"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::APPEND_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::APPEND_KEYMAP
     }
 }
 
@@ -406,6 +423,14 @@ impl Modal for SectionMoveState {
     fn name(&self) -> &'static str {
         "section-move"
     }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::SECTION_MOVE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::SECTION_MOVE_KEYMAP
+    }
 }
 
 impl Modal for CaptureVarPromptState {
@@ -436,6 +461,14 @@ impl Modal for CaptureVarPromptState {
 
     fn name(&self) -> &'static str {
         "capture-var"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::CAPTURE_VAR_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::CAPTURE_VAR_KEYMAP
     }
 }
 
@@ -490,6 +523,14 @@ impl Modal for PeriodicLeader {
     }
     fn name(&self) -> &'static str {
         "periodic-leader"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::PERIODIC_LEADER_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::PERIODIC_LEADER_KEYMAP
     }
 }
 
@@ -553,5 +594,13 @@ impl Modal for QueryBar {
     }
     fn name(&self) -> &'static str {
         "query-bar"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::QUERY_BAR_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::QUERY_BAR_KEYMAP
     }
 }

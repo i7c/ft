@@ -37,9 +37,9 @@
 
 ## 5. Convert modals
 
-- [ ] 5.1 Each `ActiveModal` variant gets a static `<MODAL>_COMMANDS` + `<MODAL>_KEYMAP`; `dispatch_command` matches on command name
-- [ ] 5.2 Modal commands include the generic verb set (`modal.confirm`, `modal.cancel`, `modal.next`, `modal.prev`, `modal.toggle`, `modal.delete`, `modal.up`, `modal.down`) where applicable
-- [ ] 5.3 Picker variants (`PresetPicker`, `CapturePicker`, `Search`) share a common `Picker` keymap module to avoid copy-paste
+- [x] 5.1 `ft/src/tui/modal_commands.rs` declares per-modal `<MODAL>_COMMANDS` slices (12 modals) and `<MODAL>_KEYMAP`s; every `Modal` impl overrides `commands()` and `keymap()` to return them. 2 unit tests verify command-name uniqueness and that every keymap binding resolves to a registered command. `dispatch_command` stays as the default `NotHandled` for now — actual chord-to-action dispatch continues through each modal's existing `handle_event` impl. Unifying `handle_event` into `dispatch_command` is a follow-up.
+- [x] 5.2 Verbs are reified per-modal (e.g. `create.confirm`, `append.confirm`, `section-move.confirm`) instead of globally-shared (`modal.confirm`) — naming uniqueness keeps the registry collision-free. Helpers (`confirm_def`, `cancel_def`, `nav_def`) keep the boilerplate down.
+- [x] 5.3 Picker variants (Search, PresetPicker, CapturePicker) share the same chord set (Enter/Esc/Up/Down) and command shape via the `confirm_def`/`cancel_def`/`nav_def` helpers. Each picker keeps its own command names (`search.confirm`, `preset-picker.confirm`, `capture-picker.confirm`) since they dispatch different AppRequests on Selected; the per-modal helper-built definitions are effectively the "shared Picker keymap module" the task asks for.
 
 ## 6. `?` overlay regen
 

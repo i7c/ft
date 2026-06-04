@@ -44,6 +44,7 @@ use crate::tui::{
     help::HelpSection,
     keymap::{KeyChord, KeyMap},
     modal::{ActiveModal, Modal, ModalOutcome},
+    modal_commands as mc,
     notes_actions::{
         append::AppendState,
         capture::{self, CapturePresetPickerSource},
@@ -386,6 +387,14 @@ impl Modal for CapturePickerModal {
     fn name(&self) -> &'static str {
         "capture-picker"
     }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::CAPTURE_PICKER_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::CAPTURE_PICKER_KEYMAP
+    }
 }
 
 // ── PresetPickerModal ─────────────────────────────────────────────────
@@ -468,6 +477,14 @@ impl Modal for PresetPickerModal {
     fn name(&self) -> &'static str {
         "preset-picker"
     }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::PRESET_PICKER_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::PRESET_PICKER_KEYMAP
+    }
 }
 
 // ── SearchPickerModal ─────────────────────────────────────────────────
@@ -534,6 +551,14 @@ impl Modal for SearchPickerModal {
 
     fn name(&self) -> &'static str {
         "search"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::SEARCH_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::SEARCH_KEYMAP
     }
 }
 
@@ -1088,6 +1113,14 @@ impl Modal for GraphRenameState {
     fn name(&self) -> &'static str {
         "rename"
     }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::RENAME_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::RENAME_KEYMAP
+    }
 }
 
 /// Related-section updater modal state. Built on `R` keypress against
@@ -1198,6 +1231,14 @@ impl Modal for RelatedModal {
 
     fn name(&self) -> &'static str {
         "related"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::RELATED_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::RELATED_KEYMAP
     }
 }
 
@@ -1422,6 +1463,14 @@ impl Modal for GraphMoveOuter {
 
     fn name(&self) -> &'static str {
         "move"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::MOVE_OUTER_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::MOVE_OUTER_KEYMAP
     }
 }
 

@@ -7,6 +7,7 @@ mod help;
 mod jobs;
 mod keymap;
 mod modal;
+mod modal_commands;
 mod notes_actions;
 mod tab;
 mod tabs;
