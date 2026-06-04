@@ -76,9 +76,17 @@ pub trait Modal {
     /// the active tab has drawn so the modal lands on top.
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx);
 
-    /// Help rows for the `?` overlay while this modal is active. The
-    /// App composes this with the global section.
-    fn keymap_help(&self) -> HelpSection;
+    /// Hand-curated `?` overlay rows. **Deprecated** by §6 of
+    /// commands-and-keymaps — the `?` overlay reads
+    /// `Modal::keymap()` + the central `CommandRegistry` now.
+    /// Existing overrides are kept until the next cleanup pass.
+    #[allow(dead_code)]
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection {
+            title: self.name().to_string(),
+            entries: Vec::new(),
+        }
+    }
 
     /// Stable identifier for the status-bar indicator and tests. Each
     /// implementation returns a short kebab-case string.

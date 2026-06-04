@@ -6,23 +6,23 @@ expression: frame
 ┌ sidebar │Keybindings — Timeblocks                                  │tomorrow)┐
 │         │                                                          │         │
 │ Sun 10 M│  Global                                                  │et.      │
-│ 14:32:05│  q / Ctrl+C         quit                                 │eate from│
-│         │  ?                  toggle this help                     │         │
-│ ── total│  Tab / Shift+Tab    next / previous tab                  │         │
-│ total 00│  1 / 2 / 3 / 4      jump to tab N                        │         │
-│         │  g s                git sync                             │         │
-│ ── focus│  Esc                close overlay                        │         │
+│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │eate from│
+│         │  ?           Open the keymap help overlay                │         │
+│ ── total│  g           Enter the git-sync leader (then `s` to sync)│         │
+│ total 00│  Tab         Switch to the next tab                      │         │
+│         │  BackTab     Switch to the previous tab                  │         │
+│ ── focus│  1..9        Switch to the tab at the given 0-based index│         │
 │ ▶ 2026-0│                                                          │         │
 │ view: sp│  Navigation                                              │         │
-│         │  ↑ / ↓ · j / k      select prev / next block             │         │
-│         │  g / G              first / last block                   │         │
-│         │  h / l · ← / →      toggle pane (Split) / switch day (Sin│         │
-│         │  f                  toggle Split / Single view           │         │
-│         │  Shift+H / Shift+L  slide anchor day back / forward      │         │
-│         │  Shift+T            jump anchor to today                 │         │
-│         │  r                  refresh from disk                    │         │
-│         │                                                          │         │
-│         │  Edit times                                              │         │
-│         │  ] / [              end +5m / -5m                        │         │
+│         │  ↑ / k       Move the cursor up one block                │         │
+│         │  ↓ / j       Move the cursor down one block              │         │
+│         │  g           Jump to the first block                     │         │
+│         │  Shift+g     Jump to the last block                      │         │
+│         │  ← / h       Toggle focus to the previous pane (Split) / │         │
+│         │  → / l       Toggle focus to the next pane (Split) / next│         │
+│         │  f           Toggle between Split and Single view        │         │
+│         │  Shift+h     Slide the anchor day back by one day        │         │
+│         │  Shift+l     Slide the anchor day forward by one day     │         │
+│         │  Shift+t     Jump the anchor day to today                │         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Timeblocks      not yet refreshed        mode: help

@@ -6,23 +6,23 @@ expression: frame
  1: (empty│Keybindings — Graph                                       │          
           │                                                          │          
 press / to│  Global                                                  │          
-          │  q / Ctrl+C              quit                            │          
-          │  ?                       toggle this help                │          
-          │  Tab / Shift+Tab         next / previous tab             │          
-          │  1 / 2 / 3 / 4           jump to tab N                   │          
-          │  g s                     git sync                        │          
-          │  Esc                     close overlay                   │          
+          │  q / Ctrl+c     Quit the TUI                             │          
+          │  ?              Open the keymap help overlay             │          
+          │  g              Enter the git-sync leader (then `s` to sy│          
+          │  Tab            Switch to the next tab                   │          
+          │  BackTab        Switch to the previous tab               │          
+          │  1..9           Switch to the tab at the given 0-based in│          
           │                                                          │          
-          │  Navigation                                              │          
-          │  ↑ / ↓ · j / k           select prev / next row          │          
-          │  Enter / l               expand / collapse node          │          
-          │  h                       collapse · jump to parent       │          
-          │  g / G                   first / last row                │          
-          │  Ctrl+D / Ctrl+U         half-page down / up             │          
-          │  z                       root view on selected node      │          
-          │  f                       search & jump to node in current│          
-          │  r                       refresh graph from disk         │          
+          │  Views                                                   │          
+          │  Ctrl+n         Add a new view (pick preset or blank)    │          
+          │  Ctrl+p         Load a preset into the active view       │          
+          │  Ctrl+w         Close the active view                    │          
+          │  Ctrl+PageDown  Switch to the next view                  │          
+          │  Ctrl+PageUp    Switch to the previous view              │          
+          │  Alt+1..Alt+9   Switch to the view at the given 0-based i│          
           │                                                          │          
-          │  Query                                                   │          
+          │  Notes                                                   │          
+          │  Shift+r        Open the Related-section updater modal fo│          
+          │  Shift+j        Open the Journal tab for the selected not│          
 >         └──────────────────────────────────────────────────────────┘          
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

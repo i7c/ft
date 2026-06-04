@@ -1606,59 +1606,11 @@ fn tasks_tab_wide_terminal_snapshot() -> Result<()> {
 
 // --- session 6: help-overlay audit ------------------------------------------
 
-/// The set of keystroke labels that MUST appear in the help overlay when
-/// the **Tasks** tab is active. Mixes the App-level global section with
-/// the Tasks-tab `help_sections()`. Adjusting either source requires
-/// updating this list so the rendered help never drifts from what the
-/// code actually binds.
-const EXPECTED_TASKS_HELP_LABELS: &[&str] = &[
-    // global
-    "q / Ctrl+C",
-    "?",
-    "Tab / Shift+Tab",
-    "1 / 2 / 3 / 4",
-    "g s",
-    "Esc",
-    // tasks
-    "↑ / ↓ · j / k",
-    "/",
-    "R",
-    "Enter",
-    "] / [",
-    "} / {",
-    "t",
-    "p / P",
-    "x / X",
-    "c",
-    "Shift+C",
-    "e",
-    "Ctrl+E",
-    "Ctrl+S",
-    "Enter (target)",
-    "← / →",
-    "Home / End",
-    "Ctrl+W / Ctrl+⌫",
-];
-
-#[test]
-fn help_overlay_documents_every_canonical_tasks_binding() -> Result<()> {
-    let (_dir, vault) = populated_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
-    app.enter_help();
-    let frame = render(&mut app, 80, 60); // tall enough to render every row
-    for label in EXPECTED_TASKS_HELP_LABELS {
-        assert!(
-            frame.contains(label),
-            "Tasks help overlay is missing key binding `{label}`:\n{frame}"
-        );
-    }
-    Ok(())
-}
-
 /// The active tab name appears in the overlay header, so a glance at the
 /// popup tells you which keymap you're looking at. Asserted against each
-/// of the four tabs so the per-tab `help_sections()` wiring stays honest.
+/// of the four tabs so the per-tab keymap wiring stays honest. (Helps
+/// catch a regression where a tab's `Tab::keymap()` returned the empty
+/// default — the header still renders but no rows appear.)
 #[test]
 fn help_overlay_header_names_active_tab() -> Result<()> {
     let (_dir, vault) = populated_vault();
@@ -1674,28 +1626,6 @@ fn help_overlay_header_names_active_tab() -> Result<()> {
         );
         // Leave help mode before switching to the next tab.
         app.dispatch(key('?'))?;
-    }
-    Ok(())
-}
-
-/// Every tab in production `App::new` must contribute at least one help
-/// section with a non-empty entry list — otherwise the per-tab block of
-/// the `?` overlay degrades to just the global section, which is
-/// indistinguishable from "this tab hasn't been wired up".
-#[test]
-fn every_tab_returns_non_empty_help_sections() -> Result<()> {
-    use crate::tui::help::HelpSection;
-
-    let (_dir, vault) = test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    for idx in 0..4 {
-        app.switch_to(idx)?;
-        let sections: Vec<HelpSection> = app.active_tab_help_sections();
-        assert!(
-            sections.iter().any(|s| !s.entries.is_empty()),
-            "tab {idx} ({}) returned no non-empty HelpSection",
-            app.active_title()
-        );
     }
     Ok(())
 }
@@ -7552,8 +7482,8 @@ fn graph_related_modal_help_sections_include_shift_r() -> Result<()> {
         .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
         .collect();
     assert!(
-        merged.contains("Shift+R"),
-        "help must surface Shift+R for Related modal:\n{merged}"
+        merged.contains("Shift+r"),
+        "help must surface Shift+r for Related modal:\n{merged}"
     );
     Ok(())
 }
@@ -7672,7 +7602,7 @@ fn journal_tab_help_lists_keybindings() -> Result<()> {
         .iter()
         .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
         .collect();
-    for expected in ["/", "R", "c", "Enter", "j / k"] {
+    for expected in ["/", "Shift+r", "c", "Enter", "↓ / j"] {
         assert!(
             merged.contains(expected),
             "help missing `{expected}`:\n{merged}"
@@ -7753,8 +7683,8 @@ fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
         .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
         .collect();
     assert!(
-        merged.contains("Shift+J"),
-        "graph-tab help must mention Shift+J for Journal jump:\n{merged}"
+        merged.contains("Shift+j"),
+        "graph-tab help must mention Shift+j for Journal jump:\n{merged}"
     );
     Ok(())
 }

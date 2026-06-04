@@ -1,14 +1,15 @@
-//! Per-tab help data model + global (App-level) bindings.
+//! Help overlay data model.
 //!
-//! Phase 1 of plan 022. Each [`Tab`](crate::tui::tab::Tab) implements
-//! [`Tab::help_sections`](crate::tui::tab::Tab::help_sections) to return its
-//! own keybinding inventory; the `?` overlay (rendered by
-//! [`crate::tui::ui::render_help_overlay`]) composes the active tab's
-//! sections with [`global_section`] below.
+//! Sections rendered by the `?` overlay are derived from `KeyMap` data
+//! and the central `CommandRegistry` via [`sections_from_keymap`]. Each
+//! `(chord, command)` row in the active context's keymap produces one
+//! `HelpEntry`; the row's group comes from `CommandDef.group`. Aliases
+//! (multiple chords bound to the same command) collapse into one row
+//! with the chords joined by `" / "`.
 //!
-//! `keys` is a pre-rendered display string ("Ctrl+E", "Shift+C", "g s") so
-//! Phase 2 can swap in a parsed `KeySpec` (driving both dispatch and help
-//! from the same map) without changing the renderer or the tab API.
+//! Hand-curated sections are no longer the source of truth — the
+//! renderer is generated from the same data the dispatcher uses, which
+//! makes the `?` overlay automatically stay in sync with bindings.
 
 /// One row in the help overlay: the key combo on the left, the description
 /// on the right.
@@ -48,18 +49,121 @@ impl HelpSection {
     }
 }
 
-/// App-level bindings rendered first in every `?` overlay regardless of
-/// active tab. Mirrors what `App::handle_global_key` actually handles.
-pub fn global_section() -> HelpSection {
-    HelpSection::new(
-        "Global",
-        &[
-            ("q / Ctrl+C", "quit"),
-            ("?", "toggle this help"),
-            ("Tab / Shift+Tab", "next / previous tab"),
-            ("1 / 2 / 3 / 4", "jump to tab N"),
-            ("g s", "git sync"),
-            ("Esc", "close overlay"),
-        ],
-    )
+/// App-level bindings rendered first in every `?` overlay regardless
+/// of active tab. Built from `APP_KEYMAP` + the central registry; the
+/// pre-migration hand-curated list lived here and is now derived.
+pub fn global_section(registry: &crate::tui::command::CommandRegistry) -> HelpSection {
+    let mut sections = sections_from_keymap(&crate::tui::app_commands::APP_KEYMAP, registry);
+    // Coalesce all global sections into one titled "Global" — the
+    // pre-migration overlay grouped every global chord under that name.
+    let entries: Vec<HelpEntry> = sections.drain(..).flat_map(|s| s.entries).collect();
+    HelpSection {
+        title: "Global".to_string(),
+        entries,
+    }
+}
+
+/// Build a list of help sections from a keymap and the registry.
+///
+/// Aliases (multiple chords bound to the same command) collapse onto
+/// one row with chords joined by `" / "`. Rows are grouped by the
+/// command's `CommandDef.group`; group order follows the first-bind
+/// order in the keymap, so the keymap's declaration order controls
+/// the help overlay's section order.
+pub fn sections_from_keymap(
+    keymap: &crate::tui::keymap::KeyMap,
+    registry: &crate::tui::command::CommandRegistry,
+) -> Vec<HelpSection> {
+    use std::collections::HashMap;
+
+    // Collect chords per command, preserving first-seen order.
+    let mut by_cmd: HashMap<&'static str, Vec<crate::tui::keymap::KeyChord>> = HashMap::new();
+    let mut ordered: Vec<&'static str> = Vec::new();
+    for (chord, cmd) in keymap.iter() {
+        if !by_cmd.contains_key(cmd.name) {
+            ordered.push(cmd.name);
+        }
+        by_cmd.entry(cmd.name).or_default().push(*chord);
+    }
+
+    // Build (group, entries) in the order groups are first encountered.
+    let mut sections: Vec<(&'static str, Vec<HelpEntry>)> = Vec::new();
+    for name in ordered {
+        let chords = by_cmd.get(name).unwrap();
+        let Some(def) = registry.lookup(name) else {
+            continue;
+        };
+        let formatted = format_chord_list(chords);
+        let entry = HelpEntry::new(formatted, def.description);
+        if let Some((_, rows)) = sections.iter_mut().find(|(g, _)| *g == def.group) {
+            rows.push(entry);
+        } else {
+            sections.push((def.group, vec![entry]));
+        }
+    }
+    sections
+        .into_iter()
+        .map(|(title, entries)| HelpSection {
+            title: title.to_string(),
+            entries,
+        })
+        .collect()
+}
+
+/// Format a list of chords bound to the same command for the help
+/// overlay. Up to 3 chords are joined with `" / "`; sequential
+/// modifier+digit aliases (e.g. `Alt+1`..`Alt+9`) are collapsed into
+/// a range form (`Alt+1..Alt+9`) so the key column doesn't eat the
+/// description.
+fn format_chord_list(chords: &[crate::tui::keymap::KeyChord]) -> String {
+    use crossterm::event::KeyCode;
+    // Detect a contiguous mod+digit run (1..9) — the common case is
+    // `Alt+1..Alt+9` for view jumps. Same modifiers across all chords
+    // and an ascending run of consecutive digits.
+    if chords.len() >= 4 {
+        let mods0 = chords[0].mods;
+        let digits: Option<Vec<char>> = chords
+            .iter()
+            .map(|c| match c.code {
+                KeyCode::Char(d) if d.is_ascii_digit() && c.mods == mods0 => Some(d),
+                _ => None,
+            })
+            .collect();
+        if let Some(ds) = digits {
+            let sorted = {
+                let mut s = ds.clone();
+                s.sort();
+                s
+            };
+            let contiguous = sorted
+                .windows(2)
+                .all(|w| (w[1] as u32) == (w[0] as u32 + 1));
+            if contiguous {
+                return format!(
+                    "{}..{}",
+                    chord_display(&chords[0]),
+                    chord_display(chords.last().unwrap())
+                );
+            }
+        }
+    }
+    let mut shown: Vec<String> = chords.iter().take(3).map(chord_display).collect();
+    if chords.len() > 3 {
+        shown.push("…".to_string());
+    }
+    shown.join(" / ")
+}
+
+/// Pretty-print a chord for the help overlay. Arrows render as
+/// unicode glyphs (`↑↓←→`); everything else uses the canonical form
+/// from `chord_to_str` (`Shift+c`, `Ctrl+r`, `Space`, `Esc`, …).
+fn chord_display(chord: &crate::tui::keymap::KeyChord) -> String {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match (chord.code, chord.mods) {
+        (KeyCode::Up, KeyModifiers::NONE) => "↑".to_string(),
+        (KeyCode::Down, KeyModifiers::NONE) => "↓".to_string(),
+        (KeyCode::Left, KeyModifiers::NONE) => "←".to_string(),
+        (KeyCode::Right, KeyModifiers::NONE) => "→".to_string(),
+        _ => crate::tui::keymap::chord_to_str(chord),
+    }
 }

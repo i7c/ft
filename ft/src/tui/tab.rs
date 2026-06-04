@@ -345,10 +345,12 @@ pub trait Tab {
         Ok(())
     }
 
-    /// Sections rendered in the `?` overlay when this tab is active. The
-    /// App composes these after the shared global section
-    /// (see [`crate::tui::help::global_section`]). Default is empty so a
-    /// new tab can land without a help block until it's filled in.
+    /// Hand-curated `?` overlay sections. **Deprecated** by §6 of
+    /// commands-and-keymaps — the `?` overlay is generated from
+    /// `Tab::keymap()` + the central `CommandRegistry` now. Each
+    /// tab's existing override is no-op-from-the-renderer's-POV and
+    /// can be deleted at the next cleanup pass.
+    #[allow(dead_code)]
     fn help_sections(&self) -> Vec<HelpSection> {
         Vec::new()
     }

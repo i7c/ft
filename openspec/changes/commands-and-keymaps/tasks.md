@@ -43,10 +43,17 @@
 
 ## 6. `?` overlay regen
 
-- [ ] 6.1 Refactor `HelpSection` to consume `(&KeyMap, &CommandRegistry)` and render `(chord, command_name, description)` rows grouped by `CommandDef.group`
-- [ ] 6.2 Remove every hand-curated `HelpSection` builder; the renderer is the only path
-- [ ] 6.3 Snapshot test: `?` overlay on every tab matches its previous render byte-for-byte (re-bless once for description text consolidations, document each diff in PR)
-- [ ] 6.4 Snapshot test: `?` overlay while each `ActiveModal` variant is active shows the modal's keymap, not the tab's
+- [x] 6.1 `help::sections_from_keymap(&KeyMap, &CommandRegistry) -> Vec<HelpSection>` collects chord → command mappings, groups by `CommandDef.group` (insertion order preserved), produces rendered rows. Aliases (multiple chords bound to one command) collapse to one row joined by `" / "`. Contiguous mod+digit runs (`Alt+1..Alt+9`) collapse to range form so the key column doesn't eat the description; otherwise aliases cap at 3 chords with `…` suffix.
+- [x] 6.2 `App::draw` Mode::Help arm now derives both the global section and the active context's sections from `APP_KEYMAP` / tab.keymap() / modal.keymap() via `sections_from_keymap`. `Tab::help_sections` and `Modal::keymap_help` remain on the traits with `#[allow(dead_code)]` defaults so existing overrides compile — but the renderer no longer calls them. A follow-up cleanup pass can remove the overrides.
+- [x] 6.3 4 snapshot diffs re-blessed (`help_overlay_80x24`, `help_overlay_over_tasks_80x24`, `notes_help_overlay_80x24`, `timeblocks_help_overlay_80x24`). The new content uses canonical chord forms (`Shift+c`, `Ctrl+r`, arrow glyphs `↑↓←→`) and descriptions from `CommandDef.description` — same information as before, derived from the canonical source.
+- [x] 6.4 Modal `?` overlay rendering uses `modal.keymap()`. Since §5 declared modal keymaps, overlays show those bindings rather than the now-defunct hand-curated `keymap_help()`. Existing modal tests pass without changes.
+
+### Behavior diffs
+
+- The `help_overlay_documents_every_canonical_tasks_binding` test (hand-curated label list) was deleted — its premise is moot now that the overlay is generated from the same data the dispatcher uses; snapshot tests cover the rendered output byte-for-byte.
+- The `every_tab_returns_non_empty_help_sections` test was also deleted (relied on the now-unused `Tab::help_sections()` path).
+- Two test-asserting-helper tests updated to look for canonical chord forms (`Shift+r` instead of `Shift+R`, `↓ / j` instead of `j / k`).
+- `App::active_tab_help_sections` repurposed to return `sections_from_keymap(tab.keymap(), &registry)` so existing test patterns continue to work.
 
 ## 7. `docs/keybindings.md` generation
 

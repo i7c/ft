@@ -21,14 +21,15 @@ use crate::tui::tabs::tasks::ClockFn;
 use ft_core::config::EditorStrategy;
 
 use crate::tui::{
-    app_commands::APP_KEYMAP,
-    command::Command as TuiCommand,
+    app_commands::{APP_COMMANDS, APP_KEYMAP},
+    command::{Command as TuiCommand, CommandRegistry},
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
     event::{BgEvent, Event, EventStream, SyncJobResult},
-    help::{global_section, HelpSection},
+    help::{global_section, sections_from_keymap, HelpSection},
     jobs::{JobHandle, JobKind},
     keymap::KeyChord,
     modal::{ActiveModal, Modal, ModalOutcome},
+    modal_commands,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{
         graph::GraphTab, journal::JournalTab, notes::NotesTab, tasks::TasksTab,
@@ -88,6 +89,10 @@ pub struct App {
     /// post `AppRequest::OpenModal` and have the App service it
     /// after the event returns.
     active_modal: RefCell<Option<ActiveModal>>,
+    /// Build-time command registry — union of every tab's, modal's,
+    /// and global commands. Powers `?` overlay rendering, `ft commands
+    /// list`, the docs generator, and (eventually) `ft do`.
+    command_registry: CommandRegistry,
     /// Optional action to apply once the first frame is about to draw.
     /// Set by `App::set_initial_action` before `run`; consumed on the
     /// first iteration of the event loop.
@@ -123,6 +128,7 @@ impl App {
         today: NaiveDate,
         tabs: Vec<Box<dyn Tab>>,
     ) -> Self {
+        let command_registry = build_registry(&tabs);
         Self {
             vault,
             recents,
@@ -136,6 +142,7 @@ impl App {
             sync_conflict: RefCell::new(None),
             jobs: RefCell::new(None),
             active_modal: RefCell::new(None),
+            command_registry,
             initial_action: RefCell::new(None),
             should_quit: false,
         }
@@ -278,13 +285,16 @@ impl App {
 
         match self.mode {
             Mode::Help => {
-                let global = global_section();
+                let global = global_section(&self.command_registry);
                 // When a modal is active, the `?` overlay shows the
                 // modal's keymap_help instead of the tab's
                 // help_sections (extract-modal-driver §2.5).
                 let sections: Vec<HelpSection> = match self.active_modal.borrow().as_ref() {
-                    Some(modal) => vec![modal.keymap_help()],
-                    None => self.tabs[self.active].help_sections(),
+                    Some(modal) => sections_from_keymap(modal.keymap(), &self.command_registry),
+                    None => sections_from_keymap(
+                        self.tabs[self.active].keymap(),
+                        &self.command_registry,
+                    ),
                 };
                 ui::render_help_overlay(
                     frame,
@@ -984,6 +994,30 @@ fn resolve_today() -> NaiveDate {
         .unwrap_or_else(|| Local::now().date_naive())
 }
 
+/// Compose the build-time `CommandRegistry`: every tab's commands +
+/// every modal variant's commands + APP_COMMANDS. Called once at
+/// App construction (and on every `for_test*` constructor) so the
+/// `?` overlay, `ft commands list`, and the docs generator share
+/// one consistent surface.
+fn build_registry(tabs: &[Box<dyn Tab>]) -> CommandRegistry {
+    use crate::tui::command::CommandDef;
+    let modal_slices: &[&'static [CommandDef]] = &[
+        modal_commands::CREATE_COMMANDS,
+        modal_commands::APPEND_COMMANDS,
+        modal_commands::SECTION_MOVE_COMMANDS,
+        modal_commands::CAPTURE_VAR_COMMANDS,
+        modal_commands::PERIODIC_LEADER_COMMANDS,
+        modal_commands::QUERY_BAR_COMMANDS,
+        modal_commands::RENAME_COMMANDS,
+        modal_commands::SEARCH_COMMANDS,
+        modal_commands::PRESET_PICKER_COMMANDS,
+        modal_commands::CAPTURE_PICKER_COMMANDS,
+        modal_commands::RELATED_COMMANDS,
+        modal_commands::MOVE_OUTER_COMMANDS,
+    ];
+    CommandRegistry::build(tabs, modal_slices, APP_COMMANDS)
+}
+
 // --- background workers ------------------------------------------------------
 
 /// Body of the `g s` worker thread (plan 014). Owns all its inputs
@@ -1185,10 +1219,11 @@ impl App {
         self.tabs[self.active].title()
     }
 
-    /// Help sections the active tab contributes to the `?` overlay. Used
-    /// by the test that asserts every tab wires its own keybinding doc.
+    /// Build the active tab's `?` overlay sections from its keymap and
+    /// the central registry. Tests use this to assert that specific
+    /// chord+command rows appear without driving a full render.
     pub fn active_tab_help_sections(&self) -> Vec<crate::tui::help::HelpSection> {
-        self.tabs[self.active].help_sections()
+        sections_from_keymap(self.tabs[self.active].keymap(), &self.command_registry)
     }
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {

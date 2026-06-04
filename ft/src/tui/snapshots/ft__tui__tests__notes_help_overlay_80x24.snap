@@ -6,23 +6,23 @@ expression: frame
 ┌ notes ──│Keybindings — Notes                                       │─────────┐
 │         │                                                          │         │
 │  Notes —│  Global                                                  │         │
-│         │  q / Ctrl+C         quit                                 │         │
-│  o     o│  ?                  toggle this help                     │         │
-│  m     m│  Tab / Shift+Tab    next / previous tab                  │         │
-│  c     c│  1 / 2 / 3 / 4      jump to tab N                        │         │
-│  C     c│  g s                git sync                             │         │
-│  t     o│  Esc                close overlay                        │         │
+│         │  q / Ctrl+c  Quit the TUI                                │         │
+│  o     o│  ?           Open the keymap help overlay                │         │
+│  m     m│  g           Enter the git-sync leader (then `s` to sync)│         │
+│  c     c│  Tab         Switch to the next tab                      │         │
+│  C     c│  BackTab     Switch to the previous tab                  │         │
+│  t     o│  1..9        Switch to the tab at the given 0-based index│         │
 │  p     p│                                                          │         │
 │  ?     s│  Notes                                                   │         │
-│  Esc   c│  o                  open file / heading picker           │         │
-│         │  m                  move section(s) to another file      │         │
-│         │  c                  create note (blank)                  │         │
-│         │  Shift+C            create note from template            │         │
-│         │  a                  append template to a note            │         │
-│         │  Q                  quick capture (run a preset)         │         │
+│  Esc   c│  o           Open the fuzzy file / heading picker to open│         │
+│         │  m           Enter the move-section flow                 │         │
+│         │  c           Create a new note (blank)                   │         │
+│         │  a           Append a template to a note                 │         │
+│         │  Shift+q     Quick capture (run a preset)                │         │
+│         │  Shift+c     Create a new note from a template           │         │
 │         │                                                          │         │
 │         │  Periodic notes                                          │         │
-│         │  t                  open today's daily note              │         │
-│         │  p                  leader → d/w/m/q/y for daily…yearly  │         │
+│         │  t           Open today's daily note                     │         │
+│         │  p           Enter the periodic-note leader (then d/w/m/q│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Notes           not yet refreshed        mode: help

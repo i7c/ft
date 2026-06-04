@@ -6,23 +6,23 @@ expression: frame
 ┌ sidebar │Keybindings — Tasks                                       │─────────┐
 │         │                                                          │e, priori│
 │ Sun 10 M│  Global                                                  │─────────┘
-│ 14:32:05│  q / Ctrl+C       quit                                   │─────────┐
-│         │  ?                toggle this help                       │         │
-│ ── views│  Tab / Shift+Tab  next / previous tab                    │         │
-│ ▶ Search│  1 / 2 / 3 / 4    jump to tab N                          │         │
-│         │  g s              git sync                               │         │
-│         │  Esc              close overlay                          │         │
+│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │─────────┐
+│         │  ?           Open the keymap help overlay                │         │
+│ ── views│  g           Enter the git-sync leader (then `s` to sync)│         │
+│ ▶ Search│  Tab         Switch to the next tab                      │         │
+│         │  BackTab     Switch to the previous tab                  │         │
+│         │  1..9        Switch to the tab at the given 0-based index│         │
 │         │                                                          │026-05-11│
-│         │  Navigation                                              │         │
-│         │  ↑ / ↓ · j / k    select prev / next task                │         │
-│         │  /                edit query                             │         │
-│         │  R                reload vault                           │         │
-│         │  Enter            open task in $EDITOR                   │         │
+│         │  Sidebar                                                 │         │
+│         │  ↑           Select the previous view in the sidebar     │         │
+│         │  ↓           Select the next view in the sidebar         │         │
+│         │  Enter       Confirm the sidebar's selected view (no-op f│         │
 │         │                                                          │         │
-│         │  Mutations                                               │         │
-│         │  ] / [            due date +1d / -1d                     │         │
-│         │  } / {            scheduled +1d / -1d                    │         │
-│         │  t                set due to today                       │         │
-│         │  p / P            priority cycle fwd / back              │         │
+│         │  press ? or Esc to close                                 │         │
+│         │                                                          │         │
+│         │                                                          │         │
+│         │                                                          │         │
+│         │                                                          │         │
+│         │                                                          │         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help
