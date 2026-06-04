@@ -32,7 +32,7 @@ use view::View;
 /// and the SearchView commands (delegated to the active view's
 /// `dispatch_command`). Pre-declared here so the build-time
 /// `CommandRegistry` sees the full surface in one slice.
-pub(super) static TASKS_COMMANDS: &[CommandDef] = &[
+pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
     // Tab-level: sidebar view selection.
     CommandDef {
         name: "tasks.select-prev-view",

@@ -30,6 +30,49 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub use app::App;
 
+/// Re-export the command/keymap building blocks so the top-level CLI
+/// (`ft commands list`, `ft completions docs`) can construct a
+/// `CommandRegistry` without instantiating a full `App`.
+pub mod registry {
+    pub use crate::tui::command::{CommandDef, CommandRegistry, CommandScope};
+
+    /// Build the binary's full `CommandRegistry` from static slices.
+    /// Mirrors what `tui::App::with_tabs` does at runtime but doesn't
+    /// need live tab instances — every command in the binary is
+    /// declared as a `static [CommandDef]` so the union is purely
+    /// data-driven.
+    pub fn build() -> CommandRegistry {
+        use crate::tui::{app_commands, modal_commands};
+
+        let tab_slices: &[&'static [CommandDef]] = &[
+            crate::tui::tabs::graph::GRAPH_COMMANDS,
+            crate::tui::tabs::tasks::TASKS_COMMANDS,
+            crate::tui::tabs::notes::NOTES_COMMANDS,
+            crate::tui::tabs::timeblocks::TIMEBLOCKS_COMMANDS,
+            crate::tui::tabs::journal::JOURNAL_COMMANDS,
+        ];
+        let modal_slices: &[&'static [CommandDef]] = &[
+            modal_commands::CREATE_COMMANDS,
+            modal_commands::APPEND_COMMANDS,
+            modal_commands::SECTION_MOVE_COMMANDS,
+            modal_commands::CAPTURE_VAR_COMMANDS,
+            modal_commands::PERIODIC_LEADER_COMMANDS,
+            modal_commands::QUERY_BAR_COMMANDS,
+            modal_commands::RENAME_COMMANDS,
+            modal_commands::SEARCH_COMMANDS,
+            modal_commands::PRESET_PICKER_COMMANDS,
+            modal_commands::CAPTURE_PICKER_COMMANDS,
+            modal_commands::RELATED_COMMANDS,
+            modal_commands::MOVE_OUTER_COMMANDS,
+        ];
+
+        let mut slices: Vec<&'static [CommandDef]> = tab_slices.to_vec();
+        slices.extend_from_slice(modal_slices);
+        slices.push(app_commands::APP_COMMANDS);
+        CommandRegistry::from_slices(&slices)
+    }
+}
+
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 /// A startup action initiated from outside the TUI loop (e.g. by a

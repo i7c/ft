@@ -34,6 +34,7 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // single-instance argv parse; size doesn't matter
+#[allow(clippy::enum_variant_names)] // the `Commands` variant maps to the `ft commands ...` subcommand name
 enum Commands {
     /// Show resolved vault path, active config files, and merged configuration
     Vault(cmd::vault::VaultArgs),
@@ -55,6 +56,8 @@ enum Commands {
     Completions(cmd::completions::CompletionsArgs),
     /// Render man pages from the clap definition
     Man(cmd::man::ManArgs),
+    /// Inspect or document the TUI command registry
+    Commands(cmd::commands::CommandsArgs),
 }
 
 fn main() -> ExitCode {
@@ -97,6 +100,7 @@ fn main() -> ExitCode {
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
+        Commands::Commands(args) => cmd::commands::run(args).map(|_| ExitCode::SUCCESS),
     };
 
     match result {

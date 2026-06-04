@@ -584,7 +584,7 @@ const VIEW_LABEL_QUERY_WIDTH: usize = 20;
 /// `graph.quick-capture`, `graph.move`, `graph.rename`, `graph.related`,
 /// `graph.search`, `graph.preset-pick`) are tagged `opens_modal: true`
 /// — `ft do` rejects them since they need interactive input.
-static GRAPH_COMMANDS: &[CommandDef] = &[
+pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
     // Multi-view bindings
     CommandDef {
         name: "graph.add-view",

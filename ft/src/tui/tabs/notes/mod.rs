@@ -38,7 +38,7 @@ use crate::tui::{
 /// (OpenPicking, MoveSection, Creating, Appending, CapturePicking,
 /// CaptureVarPrompt, PeriodicLeader) capture raw keys and bypass the
 /// keymap — same pattern as JournalTab's picker overlay.
-static NOTES_COMMANDS: &[CommandDef] = &[
+pub(crate) static NOTES_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "notes.open-picker",
         description: "Open the fuzzy file / heading picker to open a note",

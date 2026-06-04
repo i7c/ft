@@ -48,7 +48,7 @@ use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSou
 /// Every action the Journal tab exposes through the command/keymap
 /// layer. Pulled out of the tab impl so the registry can include them
 /// at build time and `?` / `ft commands list` can introspect them.
-static JOURNAL_COMMANDS: &[CommandDef] = &[
+pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "journal.open-picker",
         description: "Open the fuzzy note picker to choose a journal source",

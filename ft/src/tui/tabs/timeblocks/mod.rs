@@ -63,7 +63,7 @@ mod view;
 /// layer. Idle-mode keys only — the per-mode handlers (DeleteConfirm,
 /// Quickline, EditDesc, Form, Tagging) capture their own keys raw and
 /// bypass the keymap in `handle_event`.
-static TIMEBLOCKS_COMMANDS: &[CommandDef] = &[
+pub(crate) static TIMEBLOCKS_COMMANDS: &[CommandDef] = &[
     // Navigation
     CommandDef {
         name: "timeblocks.cursor-up",
