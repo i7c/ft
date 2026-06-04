@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -38,8 +39,10 @@ use ft_core::periodic::Period;
 use ft_core::search::Hit;
 
 use crate::tui::{
+    command::{Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
+    keymap::{KeyChord, KeyMap},
     modal::{ActiveModal, Modal, ModalOutcome},
     notes_actions::{
         append::AppendState,
@@ -548,6 +551,368 @@ const BUILTIN_DEFAULT_QUERY: &str = concat!(
 
 /// Width budget for a view's tab-strip label query snippet, in characters.
 const VIEW_LABEL_QUERY_WIDTH: usize = 20;
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+/// Every command the Graph tab exposes through the command/keymap
+/// layer. Modal-launch commands (`graph.create-blank`, `graph.append`,
+/// `graph.quick-capture`, `graph.move`, `graph.rename`, `graph.related`,
+/// `graph.search`, `graph.preset-pick`) are tagged `opens_modal: true`
+/// — `ft do` rejects them since they need interactive input.
+static GRAPH_COMMANDS: &[CommandDef] = &[
+    // Multi-view bindings
+    CommandDef {
+        name: "graph.add-view",
+        description: "Add a new view (pick preset or blank)",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.preset-pick",
+        description: "Load a preset into the active view",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.close-view",
+        description: "Close the active view",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.next-view",
+        description: "Switch to the next view",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.prev-view",
+        description: "Switch to the previous view",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.switch-view",
+        description: "Switch to the view at the given 0-based index",
+        scope: CommandScope::Tab("graph"),
+        group: "Views",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.related",
+        description: "Open the Related-section updater modal for the selected note",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.journal",
+        description: "Open the Journal tab for the selected note",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Query bar
+    CommandDef {
+        name: "graph.query-bar",
+        description: "Open the query bar to edit the active view's query",
+        scope: CommandScope::Tab("graph"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.rewrite-for-root",
+        description: "Re-root the active view's query on the selected node",
+        scope: CommandScope::Tab("graph"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.search",
+        description: "Open the in-tree fuzzy search picker",
+        scope: CommandScope::Tab("graph"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    // Navigation
+    CommandDef {
+        name: "graph.cursor-down",
+        description: "Move the cursor down one row",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.cursor-up",
+        description: "Move the cursor up one row",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.expand-or-collapse",
+        description: "Expand the selected node (or collapse if already expanded)",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.collapse-or-jump-parent",
+        description: "Collapse the selected node (or jump to parent)",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.cursor-first",
+        description: "Jump to the first row",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.cursor-last",
+        description: "Jump to the last row",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.cursor-half-page-down",
+        description: "Move the cursor down half a page",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.cursor-half-page-up",
+        description: "Move the cursor up half a page",
+        scope: CommandScope::Tab("graph"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Notes — open / create / append / capture / move / rename
+    CommandDef {
+        name: "graph.open-in-editor",
+        description: "Open the selected note in $EDITOR",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.open-in-obsidian",
+        description: "Open the selected note in Obsidian",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.create-blank",
+        description: "Create a new note (blank) in the selected folder",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.create-from-template",
+        description: "Create a new note from a template",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.append",
+        description: "Append a template to the selected note",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.quick-capture",
+        description: "Quick capture (run a preset)",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.move",
+        description: "Enter the move-section flow (source from selected)",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.rename-or-multi-move",
+        description: "Rename the selected node (or move multi-selection)",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.refresh",
+        description: "Refresh the graph from disk",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Periodic notes
+    CommandDef {
+        name: "graph.periodic-leader",
+        description: "Enter the periodic-note leader (then d/w/m/q/y)",
+        scope: CommandScope::Tab("graph"),
+        group: "Periodic notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.today",
+        description: "Open today's daily note",
+        scope: CommandScope::Tab("graph"),
+        group: "Periodic notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // Multi-select
+    CommandDef {
+        name: "graph.toggle-multi-select",
+        description: "Toggle multi-selection on the focused row",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.clear-multi-select",
+        description: "Clear the multi-selection (Esc)",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+];
+
+/// Default keymap for the Graph tab. Per-modal flows are routed
+/// through the App-level `ActiveModal` slot and bypass this keymap
+/// entirely (the modal driver dispatches keys to the modal first).
+static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        // Views
+        .bind("Ctrl+n", "graph.add-view")
+        .bind("Ctrl+p", "graph.preset-pick")
+        .bind("Ctrl+w", "graph.close-view")
+        .bind("Ctrl+PageDown", "graph.next-view")
+        .bind("Ctrl+PageUp", "graph.prev-view")
+        // Cross-tab
+        .bind("R", "graph.related")
+        .bind("J", "graph.journal")
+        // Query bar / search
+        .bind("/", "graph.query-bar")
+        .bind("z", "graph.rewrite-for-root")
+        .bind("f", "graph.search")
+        // Navigation — vim + arrow aliases
+        .bind("j", "graph.cursor-down")
+        .bind("Down", "graph.cursor-down")
+        .bind("k", "graph.cursor-up")
+        .bind("Up", "graph.cursor-up")
+        .bind("Enter", "graph.expand-or-collapse")
+        .bind("l", "graph.expand-or-collapse")
+        .bind("h", "graph.collapse-or-jump-parent")
+        .bind("g", "graph.cursor-first")
+        .bind("G", "graph.cursor-last")
+        .bind("Ctrl+d", "graph.cursor-half-page-down")
+        .bind("Ctrl+u", "graph.cursor-half-page-up")
+        // Notes
+        .bind("o", "graph.open-in-editor")
+        .bind("Ctrl+o", "graph.open-in-obsidian")
+        .bind("c", "graph.create-blank")
+        .bind("C", "graph.create-from-template")
+        .bind("A", "graph.append")
+        .bind("Q", "graph.quick-capture")
+        .bind("m", "graph.move")
+        .bind("r", "graph.rename-or-multi-move")
+        .bind("Ctrl+r", "graph.refresh")
+        // Periodic
+        .bind("p", "graph.periodic-leader")
+        .bind("t", "graph.today")
+        // Multi-select
+        .bind("Space", "graph.toggle-multi-select")
+        .bind("Esc", "graph.clear-multi-select")
+        // Alt+1..9 → switch view (with `index` arg)
+        .bind_with_args("Alt+1", "graph.switch-view", &[("index", "0")])
+        .bind_with_args("Alt+2", "graph.switch-view", &[("index", "1")])
+        .bind_with_args("Alt+3", "graph.switch-view", &[("index", "2")])
+        .bind_with_args("Alt+4", "graph.switch-view", &[("index", "3")])
+        .bind_with_args("Alt+5", "graph.switch-view", &[("index", "4")])
+        .bind_with_args("Alt+6", "graph.switch-view", &[("index", "5")])
+        .bind_with_args("Alt+7", "graph.switch-view", &[("index", "6")])
+        .bind_with_args("Alt+8", "graph.switch-view", &[("index", "7")])
+        .bind_with_args("Alt+9", "graph.switch-view", &[("index", "8")])
+});
 
 pub struct GraphTab {
     graph: Option<Graph>,
@@ -2286,51 +2651,49 @@ impl Tab for GraphTab {
         self.execute_multi_move(ctx, &selected, &dir_path);
     }
 
-    fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
-        let Event::Key(k) = ev else {
-            return Ok(EventOutcome::NotHandled);
-        };
+    fn commands(&self) -> &'static [CommandDef] {
+        GRAPH_COMMANDS
+    }
 
-        // All graph-tab modals (including the move-section outer flow)
-        // route through the App-level `ActiveModal` slot — the
-        // tree-driven phases that return `NotHandled` for navigation
-        // keys fall straight through to the cursor-keymap arms below.
+    fn keymap(&self) -> &KeyMap {
+        &GRAPH_KEYMAP
+    }
 
-        // Multi-view bindings — checked before the outer-tab passthrough
-        // so Alt+digit and Ctrl+chord variants land here instead of the
-        // App's tab switcher.
-        match (k.code, k.modifiers) {
-            (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
+    fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
+        // Approximation; render's `scroll_to_selection` corrects.
+        let vis = 20usize;
+        match cmd.name {
+            // Views
+            "graph.add-view" => {
                 self.add_view_with_presets(ctx);
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.preset-pick" => {
                 self.open_preset_picker_for_active_view(ctx);
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.close-view" => {
                 self.close_view();
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            (KeyCode::PageDown, m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.next-view" => {
                 self.next_view();
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            (KeyCode::PageUp, m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.prev-view" => {
                 self.prev_view();
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            (KeyCode::Char(c), m)
-                if c.is_ascii_digit() && c != '0' && m.contains(KeyModifiers::ALT) =>
-            {
-                let idx = (c as u8 - b'1') as usize;
-                self.switch_view(idx);
-                return Ok(EventOutcome::Consumed);
+            "graph.switch-view" => {
+                if let Some(idx_str) = cmd.arg("index") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        self.switch_view(idx);
+                    }
+                }
+                CommandOutcome::Handled
             }
-            // Shift+R: open the Related-section updater modal for the
-            // currently-selected Note row. Plain `r` is taken by the
-            // graph refresh keymap.
-            (KeyCode::Char('R'), m) if m == KeyModifiers::SHIFT => {
+            // Cross-tab
+            "graph.related" => {
                 if let Some(note_id) = self.selected_note_id() {
                     if let Some(modal) = self.build_related_modal_for_id(note_id, ctx) {
                         *ctx.pending_request.borrow_mut() =
@@ -2343,11 +2706,9 @@ impl Tab for GraphTab {
                         ToastStyle::Error,
                     );
                 }
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            // Shift+J: open the Journal tab for the currently-selected
-            // Note row. Plain `j` is the cursor-down binding.
-            (KeyCode::Char('J'), m) if m == KeyModifiers::SHIFT => {
+            "graph.journal" => {
                 if let Some(note_id) = self.selected_note_id() {
                     if let Some(graph) = self.graph.as_ref() {
                         if let NodeKind::Note(n) = graph.node(note_id) {
@@ -2363,47 +2724,21 @@ impl Tab for GraphTab {
                         ToastStyle::Error,
                     );
                 }
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            _ => {}
-        }
-
-        // Tab switching keys pass through to the App's dispatcher. Plain
-        // digits (NO modifier) trigger an outer-tab switch; modified
-        // digits were handled above as Alt+N view jumps.
-        if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
-            || (matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit())
-                && k.modifiers == KeyModifiers::NONE)
-        {
-            return Ok(EventOutcome::NotHandled);
-        }
-
-        let graph_missing = self.graph.is_none();
-        if graph_missing || self.active_view().tree.is_empty() {
-            if let (KeyCode::Char('/'), KeyModifiers::NONE) = (k.code, k.modifiers) {
+            // Query / search
+            "graph.query-bar" => {
                 *ctx.pending_request.borrow_mut() =
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
                         view_id: self.active,
                     })));
-                return Ok(EventOutcome::Consumed);
+                CommandOutcome::Handled
             }
-            return Ok(EventOutcome::NotHandled);
-        }
-
-        let vis = 20; // approximation; render's scroll_to_selection corrects
-        match (k.code, k.modifiers) {
-            (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
-                        view_id: self.active,
-                    })));
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Char('z'), KeyModifiers::NONE) => {
+            "graph.rewrite-for-root" => {
                 self.rewrite_query_for_root();
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('f'), KeyModifiers::NONE) => {
+            "graph.search" => {
                 if let (Some(g), Some(q)) = (self.graph.as_ref(), self.active_view().query.as_ref())
                 {
                     let src = GraphSearchPickerSource::new(g, q);
@@ -2411,23 +2746,24 @@ impl Tab for GraphTab {
                         ActiveModal::Search(SearchPickerModal::new(src)),
                     )));
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
+            // Navigation
+            "graph.cursor-down" => {
                 let v = self.active_view_mut();
                 v.selected = v.tree.move_selection_down(v.selected);
                 v.refresh_selected_path();
                 v.scroll_to_selection(vis);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
+            "graph.cursor-up" => {
                 let v = self.active_view_mut();
                 v.selected = v.tree.move_selection_up(v.selected);
                 v.refresh_selected_path();
                 v.scroll_to_selection(vis);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Enter, _) | (KeyCode::Char('l'), _) => {
+            "graph.expand-or-collapse" => {
                 let graph = self.graph.as_ref();
                 let v = &mut self.views[self.active];
                 if let (Some(g), Some(q)) = (graph, v.query.as_ref()) {
@@ -2439,9 +2775,6 @@ impl Tab for GraphTab {
                         .map(|r| r.expanded)
                         .unwrap_or(false);
                     v.tree.expand_at(v.selected, g, q);
-                    // Record/forget the expansion-path spec. Toggle: if
-                    // the node was previously expanded the call above
-                    // collapsed it; otherwise it (attempted to) expand.
                     if was_expanded {
                         v.forget_expansion_subtree(&path);
                     } else if v.tree.rows().get(v.selected).is_some_and(|r| r.expanded) {
@@ -2449,9 +2782,9 @@ impl Tab for GraphTab {
                     }
                     v.scroll_to_selection(vis);
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('h'), _) => {
+            "graph.collapse-or-jump-parent" => {
                 let v = self.active_view_mut();
                 let expanded = v.tree.rows().get(v.selected).is_some_and(|r| r.expanded);
                 if expanded {
@@ -2475,120 +2808,102 @@ impl Tab for GraphTab {
                         }
                     }
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('g'), _) => {
+            "graph.cursor-first" => {
                 let v = self.active_view_mut();
                 v.selected = 0;
                 v.scroll_offset = 0;
                 v.refresh_selected_path();
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('G'), _) => {
+            "graph.cursor-last" => {
                 let v = self.active_view_mut();
                 v.selected = v.tree.len().saturating_sub(1);
                 v.refresh_selected_path();
                 v.scroll_to_selection(vis);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            "graph.cursor-half-page-down" => {
                 let v = self.active_view_mut();
                 let rows = vis.max(1);
                 v.selected = (v.selected + rows / 2).min(v.tree.len().saturating_sub(1));
                 v.scroll_offset = (v.scroll_offset + rows / 2).min(v.tree.len().saturating_sub(1));
                 v.refresh_selected_path();
                 v.scroll_to_selection(vis);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            "graph.cursor-half-page-up" => {
                 let v = self.active_view_mut();
                 let rows = vis.max(1);
                 v.selected = v.selected.saturating_sub(rows / 2);
                 v.scroll_offset = v.scroll_offset.saturating_sub(rows / 2);
                 v.refresh_selected_path();
                 v.scroll_to_selection(vis);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('o'), KeyModifiers::NONE) => {
+            // Notes
+            "graph.open-in-editor" => {
                 self.request_open_selected_in_editor(ctx);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.open-in-obsidian" => {
                 self.request_open_selected_in_obsidian(ctx);
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('c'), KeyModifiers::NONE) => {
-                // Create blank: seed the folder picker step by jumping
-                // straight into FilenamePrompt with the folder derived
-                // from the current selection.
+            "graph.create-blank" => {
                 let folder = self.create_folder_from_selection();
                 let state = create::begin_filename_prompt(folder, None);
                 *ctx.pending_request.borrow_mut() =
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('m'), KeyModifiers::NONE) => {
-                // Enter the move-section source phase. A second `m`
-                // confirms the currently-selected node as source; `t`
-                // opens the fuzzy picker; Esc cancels.
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
-                    ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree),
-                )));
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Char('p'), KeyModifiers::NONE) => {
-                *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::OpenModal(Box::new(ActiveModal::PeriodicLeader)));
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                run_periodic_open(ctx, Period::Daily);
-                Ok(EventOutcome::Consumed)
-            }
-            (KeyCode::Char('C'), _) | (KeyCode::Char('c'), KeyModifiers::SHIFT) => {
-                // Create from template: open the template picker with
-                // the folder pre-seeded from the current selection.
-                // After the template is chosen, the flow skips the
-                // folder picker and goes straight to the filename
-                // prompt — same selection-driven shape as `c`.
+            "graph.create-from-template" => {
                 let folder = self.create_folder_from_selection();
                 let state = create::begin_template_picking(ctx, Some(folder));
                 *ctx.pending_request.borrow_mut() =
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('A'), _) => {
-                // Append with template: use the selected note as target.
-                // Must have a note row selected; otherwise toast an error.
+            "graph.append" => {
                 let Some(target_path) = self.selected_note_abs_path(ctx) else {
                     queue_toast(
                         ctx,
                         "select a note first (A appends to the selected note)",
                         ToastStyle::Error,
                     );
-                    return Ok(EventOutcome::Consumed);
+                    return CommandOutcome::Handled;
                 };
                 let state = AppendState::begin_with_target(ctx, target_path, None);
                 *ctx.pending_request.borrow_mut() =
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::Append(state))));
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('Q'), _) => {
+            "graph.quick-capture" => {
                 let src = CapturePresetPickerSource::new(ctx.vault);
                 let target = self.selected_note_abs_path(ctx);
                 *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
                     ActiveModal::CapturePicker(CapturePickerModal::new(src, target)),
                 )));
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
+            "graph.move" => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::MoveOuter(GraphMoveOuter::SourceFromTree),
+                )));
+                CommandOutcome::Handled
+            }
+            "graph.refresh" => {
                 let scan = ctx.vault.scan();
-                self.graph = Some(Graph::build(ctx.vault, &scan)?);
-                self.restore_all_views();
-                Ok(EventOutcome::Consumed)
+                if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                    self.graph = Some(g);
+                    self.restore_all_views();
+                }
+                CommandOutcome::Handled
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) => {
-                // Check multi_selected first (needs mutable access to active view).
+            "graph.rename-or-multi-move" => {
+                // r with multi-selection enters multi-move; otherwise
+                // opens the rename modal on the focused row.
                 let selected = {
                     let v = self.active_view_mut();
                     if !v.multi_selected.is_empty() {
@@ -2602,14 +2917,12 @@ impl Tab for GraphTab {
                     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
                         ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree { selected: s }),
                     )));
-                    return Ok(EventOutcome::Consumed);
+                    return CommandOutcome::Handled;
                 }
-                // Flow B: rename focused node in place (needs immutable
-                // access to graph and view).
                 let graph = self.graph.as_ref();
                 let v = self.active_view();
                 let Some(row) = v.tree.rows().get(v.selected) else {
-                    return Ok(EventOutcome::Consumed);
+                    return CommandOutcome::Handled;
                 };
                 let modal = match graph.map(|g| g.node(row.note_id)) {
                     Some(NodeKind::Note(n)) => Some(GraphRenameState::for_note(
@@ -2640,13 +2953,24 @@ impl Tab for GraphTab {
                     *ctx.pending_request.borrow_mut() =
                         Some(AppRequest::OpenModal(Box::new(ActiveModal::Rename(state))));
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+            // Periodic
+            "graph.periodic-leader" => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::PeriodicLeader)));
+                CommandOutcome::Handled
+            }
+            "graph.today" => {
+                run_periodic_open(ctx, Period::Daily);
+                CommandOutcome::Handled
+            }
+            // Multi-select
+            "graph.toggle-multi-select" => {
                 let (selectable, note_id, is_root) = {
                     let v = self.active_view();
                     let Some(row) = v.tree.rows().get(v.selected) else {
-                        return Ok(EventOutcome::Consumed);
+                        return CommandOutcome::Handled;
                     };
                     let note_id = row.note_id;
                     let (selectable, is_root) = match self.graph.as_ref().map(|g| g.node(note_id)) {
@@ -2664,18 +2988,64 @@ impl Tab for GraphTab {
                         v.multi_selected.insert(note_id);
                     }
                 }
-                Ok(EventOutcome::Consumed)
+                CommandOutcome::Handled
             }
-            (KeyCode::Esc, KeyModifiers::NONE) => {
+            "graph.clear-multi-select" => {
                 let v = self.active_view_mut();
                 if !v.multi_selected.is_empty() {
                     v.multi_selected.clear();
-                    return Ok(EventOutcome::Consumed);
+                    CommandOutcome::Handled
+                } else {
+                    // Esc with empty multi-selection falls through to
+                    // (potentially) close other things; signal NotHandled.
+                    CommandOutcome::NotHandled
                 }
-                Ok(EventOutcome::NotHandled)
             }
-            _ => Ok(EventOutcome::NotHandled),
+            _ => CommandOutcome::NotHandled,
         }
+    }
+
+    fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let Event::Key(k) = ev else {
+            return Ok(EventOutcome::NotHandled);
+        };
+
+        // App-global Tab cycling & plain-digit tab-switch must beat the
+        // tab keymap so the user can switch tabs from anywhere. Modified
+        // digits (Alt+N) are view jumps and ARE in the keymap.
+        if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
+            || (matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit())
+                && k.modifiers == KeyModifiers::NONE)
+        {
+            return Ok(EventOutcome::NotHandled);
+        }
+
+        // Graph-missing or empty-tree gate: only the query-bar opens —
+        // dispatch_command would otherwise no-op or toast for other
+        // keys, which is fine semantically, but preserving the early-
+        // return mirrors pre-migration behavior for tests that assert
+        // NotHandled in this state.
+        let graph_missing = self.graph.is_none();
+        if graph_missing || self.active_view().tree.is_empty() {
+            if let (KeyCode::Char('/'), KeyModifiers::NONE) = (k.code, k.modifiers) {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
+                        view_id: self.active,
+                    })));
+                return Ok(EventOutcome::Consumed);
+            }
+            return Ok(EventOutcome::NotHandled);
+        }
+
+        // Tab keymap → dispatch_command.
+        let chord = KeyChord::from_key_event(k);
+        let Some(cmd) = GRAPH_KEYMAP.lookup(chord).cloned() else {
+            return Ok(EventOutcome::NotHandled);
+        };
+        Ok(match self.dispatch_command(&cmd, ctx) {
+            CommandOutcome::Handled => EventOutcome::Consumed,
+            CommandOutcome::NotHandled => EventOutcome::NotHandled,
+        })
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
