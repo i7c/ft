@@ -58,6 +58,8 @@ enum Commands {
     Man(cmd::man::ManArgs),
     /// Inspect or document the TUI command registry
     Commands(cmd::commands::CommandsArgs),
+    /// Dispatch a named command headlessly (modal-opening commands rejected)
+    Do(cmd::do_cmd::DoArgs),
 }
 
 fn main() -> ExitCode {
@@ -101,6 +103,7 @@ fn main() -> ExitCode {
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Commands(args) => cmd::commands::run(args).map(|_| ExitCode::SUCCESS),
+        Commands::Do(args) => cmd::do_cmd::run(args),
     };
 
     match result {

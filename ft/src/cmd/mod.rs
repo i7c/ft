@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod completions;
+#[path = "do.rs"]
+pub mod do_cmd;
 pub mod find;
 pub mod git;
 pub mod graph;
