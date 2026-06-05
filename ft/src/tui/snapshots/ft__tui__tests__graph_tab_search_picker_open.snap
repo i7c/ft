@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 6313
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
@@ -26,4 +25,4 @@ press / to edit query
                                                                                 
                                                                                 
 > node where kind = Directory and path = ""; expand where edge.kind = directory-
- vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]     modal: search
+ vault: vault  ·  tab: Graph            Enter:confirm  Esc:cance  modal: search

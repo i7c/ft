@@ -269,6 +269,15 @@ impl App {
             slot.clone()
         };
         let modal_name = self.active_modal_name();
+        // Up-to-three primary chord hints from the active modal's
+        // keymap (commands-and-keymaps §10.2). Empty when no modal is
+        // up, leaving the center cell free for the refresh stamp.
+        let modal_hints: Vec<(String, String)> = match self.active_modal.borrow().as_ref() {
+            Some(modal) => {
+                crate::tui::help::modal_primary_hints(modal.keymap(), &self.command_registry)
+            }
+            None => Vec::new(),
+        };
         ui::render_status_bar(
             frame,
             status_bar,
@@ -280,6 +289,7 @@ impl App {
                 mode: self.mode,
                 in_flight: self.in_flight_job(),
                 active_modal: modal_name,
+                modal_hints: &modal_hints,
             },
         );
 

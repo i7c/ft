@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::tui::{
-    command::{Command, CommandDef, CommandOutcome, CommandScope},
+    command::{ArgSpec, Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
     keymap::{KeyChord, KeyMap},
@@ -169,6 +169,23 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         scope: CommandScope::Tab("tasks"),
         group: "Mutations",
         args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    // §9.4/§9.5 — first headless-handled command. Reachable from
+    // `ft do tasks.complete-by-id --arg id=<id>` (see cmd/do.rs);
+    // not bound to a chord in the TUI (cursor-driven completion is
+    // `tasks.complete`).
+    CommandDef {
+        name: "tasks.complete-by-id",
+        description: "Complete the task with the given id (headless)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[ArgSpec {
+            name: "id",
+            description: "Task id (the `🆔 xyz123` suffix)",
+            required: true,
+        }],
         opens_modal: false,
         is_primary: false,
     },

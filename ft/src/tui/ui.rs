@@ -109,6 +109,13 @@ pub struct StatusBarState<'a> {
     /// `mode: <label>` so users always know which keymap context owns
     /// the keyboard. Added in extract-modal-driver §6.
     pub active_modal: Option<&'a str>,
+    /// Up to three `(chord, label)` pairs surfaced from the active
+    /// modal's keymap (`CommandDef.is_primary = true`). When non-empty
+    /// and no toast is showing, the center cell renders
+    /// `chord:label  chord:label  chord:label` instead of the
+    /// refresh timestamp so users see the modal's important chords
+    /// without opening `?`. Added in commands-and-keymaps §10.2.
+    pub modal_hints: &'a [(String, String)],
 }
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_>) {
@@ -120,6 +127,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         mode,
         in_flight,
         active_modal,
+        modal_hints,
     } = state;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -140,6 +148,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
 
     // Toast takes priority over the refresh timestamp so transient
     // success/error feedback isn't crowded out by the periodic redraw.
+    // When a modal is active and the modal advertised primary chords
+    // (commands-and-keymaps §10.2), the chord hints take the cell
+    // ahead of the refresh stamp so users see what the modal accepts.
     let center = if let Some(t) = toast {
         let color = match t.style {
             crate::tui::tab::ToastStyle::Success => Color::Green,
@@ -151,6 +162,25 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center)
+    } else if !modal_hints.is_empty() {
+        let mut spans: Vec<Span> = Vec::with_capacity(modal_hints.len() * 4);
+        for (i, (chord, label)) in modal_hints.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::styled(
+                chord.clone(),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(":", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                label.clone(),
+                Style::default().fg(Color::White),
+            ));
+        }
+        Line::from(spans).alignment(Alignment::Center)
     } else {
         let refresh_text = match last_refresh {
             Some(ts) => format!("refreshed {}", ts.format("%H:%M:%S")),
@@ -412,4 +442,130 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod status_bar_tests {
+    //! §10.3 — snapshot the status bar's center cell to lock in the
+    //! modal primary-chord hint rendering. Tests render
+    //! [`render_status_bar`] directly so they don't depend on a full
+    //! `App` or any tab/modal scaffolding.
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn render_bar(state: StatusBarState<'_>, w: u16) -> String {
+        let backend = TestBackend::new(w, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: 1,
+                };
+                render_status_bar(f, area, state);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for x in 0..buf.area().width {
+            out.push_str(buf[(x, 0)].symbol());
+        }
+        out
+    }
+
+    #[test]
+    fn modal_hint_cell_shows_primary_chords() {
+        let hints = vec![
+            ("Space".to_string(), "toggle".to_string()),
+            ("Enter".to_string(), "confirm".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ];
+        let state = StatusBarState {
+            vault_name: "v",
+            tab_title: "Graph",
+            last_refresh: None,
+            toast: None,
+            mode: Mode::Normal,
+            in_flight: None,
+            active_modal: Some("section-move"),
+            modal_hints: &hints,
+        };
+        // 160 cols ⇒ 48-col center cell ⇒ all three hints fit
+        // comfortably. Narrower terminals get a graceful truncation
+        // (ratatui clips the cell), but the cell-shape spec scenario
+        // requires the full list to render somewhere.
+        let rendered = render_bar(state, 160);
+        // Center cell shows all three primary hints with the
+        // `chord:label` shape from the spec scenario.
+        assert!(
+            rendered.contains("Space:toggle"),
+            "expected Space:toggle in center cell, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("Enter:confirm"),
+            "expected Enter:confirm in center cell, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("Esc:cancel"),
+            "expected Esc:cancel in center cell, got: {rendered}"
+        );
+        // Right cell still surfaces the modal name (§6 indicator).
+        assert!(
+            rendered.contains("modal: section-move"),
+            "expected modal name in right cell, got: {rendered}"
+        );
+        // Hints replaced the refresh timestamp.
+        assert!(!rendered.contains("refreshed"));
+        assert!(!rendered.contains("not yet refreshed"));
+    }
+
+    #[test]
+    fn modal_hint_cell_empty_when_no_modal() {
+        let hints: Vec<(String, String)> = Vec::new();
+        let state = StatusBarState {
+            vault_name: "v",
+            tab_title: "Graph",
+            last_refresh: None,
+            toast: None,
+            mode: Mode::Normal,
+            in_flight: None,
+            active_modal: None,
+            modal_hints: &hints,
+        };
+        let rendered = render_bar(state, 80);
+        // Falls back to the refresh-stamp default; no hint text leaks
+        // through, and the right cell shows `mode: normal` (not `modal:`).
+        assert!(rendered.contains("not yet refreshed"));
+        assert!(!rendered.contains(":toggle"));
+        assert!(!rendered.contains(":confirm"));
+        assert!(rendered.contains("mode: normal"));
+        assert!(!rendered.contains("modal: "));
+    }
+
+    #[test]
+    fn toast_outranks_modal_hints_in_center_cell() {
+        // A toast in flight crowds out everything else — confirming
+        // hints don't override transient success/error feedback.
+        let hints = vec![("Enter".to_string(), "confirm".to_string())];
+        let toast = crate::tui::app::Toast {
+            text: "saved".to_string(),
+            style: crate::tui::tab::ToastStyle::Success,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        };
+        let state = StatusBarState {
+            vault_name: "v",
+            tab_title: "Graph",
+            last_refresh: None,
+            toast: Some(&toast),
+            mode: Mode::Normal,
+            in_flight: None,
+            active_modal: Some("create"),
+            modal_hints: &hints,
+        };
+        let rendered = render_bar(state, 80);
+        assert!(rendered.contains("saved"));
+        assert!(!rendered.contains("Enter:confirm"));
+    }
 }

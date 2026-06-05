@@ -154,6 +154,42 @@ fn format_chord_list(chords: &[crate::tui::keymap::KeyChord]) -> String {
     shown.join(" / ")
 }
 
+/// Up to three `(chord, label)` pairs for the status-bar modal hint.
+///
+/// Walks the modal's keymap, keeps only bindings whose `CommandDef`
+/// has `is_primary = true`, and renders the chord with [`chord_display`]
+/// plus a short label derived from the verb portion of the command
+/// name (`section-move.toggle` → `toggle`). The cap of three keeps the
+/// hint inside the status bar's center cell at narrow terminal widths.
+///
+/// Order follows the keymap's bind order — the modal author controls
+/// which chords are surfaced by ordering primaries first in the
+/// keymap's `bind` chain.
+pub fn modal_primary_hints(
+    keymap: &crate::tui::keymap::KeyMap,
+    registry: &crate::tui::command::CommandRegistry,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::with_capacity(3);
+    for (chord, cmd) in keymap.iter() {
+        if out.len() == 3 {
+            break;
+        }
+        let Some(def) = registry.lookup(cmd.name) else {
+            continue;
+        };
+        if !def.is_primary {
+            continue;
+        }
+        let label = cmd
+            .name
+            .rsplit_once('.')
+            .map(|(_, v)| v)
+            .unwrap_or(cmd.name);
+        out.push((chord_display(chord), label.to_string()));
+    }
+    out
+}
+
 /// Pretty-print a chord for the help overlay. Arrows render as
 /// unicode glyphs (`↑↓←→`); everything else uses the canonical form
 /// from `chord_to_str` (`Shift+c`, `Ctrl+r`, `Space`, `Esc`, …).

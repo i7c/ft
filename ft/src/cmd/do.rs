@@ -6,15 +6,28 @@
 //! `opens_modal = true` are rejected with a clear "this needs the
 //! TUI" message and exit code 2.
 //!
-//! V1 limitation: most non-modal commands in the registry are
-//! TUI-state-mutating (cursor navigation, view switching, multi-
-//! selection toggles) and have no headless equivalent — `ft do` for
-//! those returns an explicit "no headless handler" error with exit
-//! code 3. Factoring shared handlers out of each tab's
-//! `dispatch_command` is a follow-up (commands-and-keymaps §9.4–9.5).
+//! Headless coverage today: `tasks.complete-by-id` (factored in
+//! commands-and-keymaps §9.4-9.5). Other registry commands without a
+//! headless equivalent — mostly TUI-state-mutating verbs like cursor
+//! navigation, view switching, multi-selection toggles — return an
+//! explicit "no headless handler" error (exit 3). Add new handlers
+//! here as their underlying ft-core operations become atomic enough
+//! to call directly.
 
-use anyhow::Result;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use anyhow::{anyhow, Context, Result};
+use chrono::{Local, NaiveDate};
 use clap::Args;
+use ft_core::{
+    selector::{self, Selector},
+    task::{
+        ops::{self, CompleteError, CompleteOptions},
+        Task,
+    },
+    vault::Vault,
+};
 
 use crate::tui::registry::{self, CommandDef};
 
@@ -43,7 +56,7 @@ pub struct DoArgs {
 /// - 3 — no headless handler exists yet for this command (a
 ///   deferred follow-up; the command is in the registry but the
 ///   dispatch path hasn't been factored out of the TUI).
-pub fn run(args: DoArgs) -> Result<std::process::ExitCode> {
+pub fn run(args: DoArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let reg = registry::build();
     let Some(def) = reg.lookup(&args.command) else {
         anyhow::bail!("unknown command '{}'; see 'ft commands list'", args.command);
@@ -57,14 +70,146 @@ pub fn run(args: DoArgs) -> Result<std::process::ExitCode> {
     let parsed = parse_args(&args.args)?;
     validate_args(def, &parsed)?;
 
-    // V1: no shared headless handlers exist yet. Surface an explicit
-    // error rather than silently no-op-ing — users get a clear next
-    // step (file an issue, or wait for §9.4-9.5).
-    anyhow::bail!(
-        "command '{}' has no headless handler yet; this is a known v1 gap \
-         (commands-and-keymaps §9.4–9.5)",
-        args.command
-    );
+    match args.command.as_str() {
+        "tasks.complete-by-id" => {
+            let id = arg_value(&parsed, "id").expect("validated above");
+            handle_tasks_complete_by_id(id, vault_flag, &args.format)
+        }
+        _ => {
+            // Registered command without a headless handler. Surface
+            // an explicit error rather than silently no-op-ing.
+            Err(anyhow!(
+                "command '{}' has no headless handler yet; this command is registered \
+                 for `?` overlay / docs / TUI dispatch but cannot be invoked headlessly",
+                args.command
+            ))
+        }
+    }
+}
+
+fn arg_value<'a>(parsed: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    parsed
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+/// Headless handler for `tasks.complete-by-id`. Discovers the vault,
+/// scans for the task with `id`, and calls
+/// [`ft_core::task::ops::complete_task`] (the same path the TUI's
+/// `tasks.complete` action takes).
+fn handle_tasks_complete_by_id(
+    id: &str,
+    vault_flag: Option<PathBuf>,
+    format: &str,
+) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    let today = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive());
+
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    let sel = Selector::Id(id.to_string());
+    let matches: Vec<&Task> = selector::resolve(&scan.tasks, &sel);
+    let task = match matches.as_slice() {
+        [] => anyhow::bail!("no task with id `{id}`"),
+        [t] => *t,
+        many => anyhow::bail!(
+            "selector `id={id}` matched {} tasks (expected exactly one)",
+            many.len()
+        ),
+    };
+
+    let absolute_path = vault.path.join(&task.source_file);
+    let outcome = ops::complete_task(
+        &absolute_path,
+        task.source_line,
+        CompleteOptions { on: today },
+    )
+    .map_err(|e| translate_complete_error(e, &vault.path))?;
+
+    let rel = absolute_path
+        .strip_prefix(&vault.path)
+        .unwrap_or(&absolute_path);
+
+    if format == "json" {
+        let mut obj = serde_json::json!({
+            "command": "tasks.complete-by-id",
+            "outcome": "ok",
+            "details": {
+                "file": rel.display().to_string(),
+                "line": outcome.completed_line,
+                "serialized": outcome.completed_serialized,
+            },
+        });
+        if let Some(next) = outcome.next_instance.as_ref() {
+            obj["details"]["next_instance"] = serde_json::json!({
+                "line": next.line,
+                "serialized": next.serialized,
+            });
+        }
+        println!("{}", serde_json::to_string(&obj)?);
+    } else {
+        println!(
+            "Completed {}:{}\n  {}",
+            rel.display(),
+            outcome.completed_line,
+            outcome.completed_serialized
+        );
+        if let Some(next) = outcome.next_instance {
+            println!(
+                "Recurring: next instance at {}:{}\n  {}",
+                rel.display(),
+                next.line,
+                next.serialized
+            );
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Translate a complete-task error into a vault-relative, user-facing
+/// message. Mirrors `cmd::tasks::translate_complete_error`; duplicated
+/// rather than re-exported to keep the two CLI surfaces decoupled.
+fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> anyhow::Error {
+    use CompleteError::*;
+    match e {
+        Read { path, source } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("could not read {}: {source}", rel.display())
+        }
+        LineMissing {
+            path,
+            line,
+            file_lines,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "line {line} not found in {} ({file_lines} lines)",
+                rel.display()
+            )
+        }
+        NotATask { path, line } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        AlreadyDone { path, line, done } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{} is already done (on {done})",
+                rel.display(),
+                line
+            )
+        }
+        other => anyhow!("{other}"),
+    }
 }
 
 /// Parse a list of `KEY=VALUE` strings into a sorted-by-key list of
@@ -161,7 +306,7 @@ mod tests {
             args: vec![],
             format: "text".into(),
         };
-        let err = run(args).unwrap_err();
+        let err = run(args, None).unwrap_err();
         assert!(err.to_string().contains("unknown command"));
     }
 
@@ -172,7 +317,7 @@ mod tests {
             args: vec![],
             format: "text".into(),
         };
-        let err = run(args).unwrap_err();
+        let err = run(args, None).unwrap_err();
         assert!(
             err.to_string().contains("interactive flow"),
             "expected interactive-flow rejection, got: {err}"
@@ -186,21 +331,79 @@ mod tests {
             args: vec![],
             format: "text".into(),
         };
-        let err = run(args).unwrap_err();
+        let err = run(args, None).unwrap_err();
         assert!(err.to_string().contains("missing required arg"));
     }
 
     #[test]
-    fn run_returns_no_handler_for_validated_non_modal_command() {
+    fn run_returns_no_handler_for_unhandled_non_modal_command() {
+        // `app.switch-tab` is registered but TUI-state-mutating;
+        // headless dispatch deliberately rejects it.
         let args = DoArgs {
             command: "app.switch-tab".into(),
             args: vec!["index=0".to_string()],
             format: "text".into(),
         };
-        let err = run(args).unwrap_err();
+        let err = run(args, None).unwrap_err();
         assert!(
             err.to_string().contains("no headless handler"),
-            "expected the §9.4-9.5 deferral message, got: {err}"
+            "expected no-handler rejection, got: {err}"
+        );
+    }
+
+    /// §9.4-9.5: end-to-end headless completion via id selector.
+    /// Mirrors the spec scenario `ft do tasks.complete-by-id --arg id=xyz123`.
+    #[test]
+    fn run_completes_task_by_id_headlessly() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        let vault_path = dir.path().join("v");
+        std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+        std::fs::write(
+            vault_path.join("tasks.md"),
+            "- [ ] Buy milk 🆔 abc123 📅 2026-05-10\n",
+        )
+        .unwrap();
+
+        // FT_TODAY pins the done-date so this test is reproducible.
+        std::env::set_var("FT_TODAY", "2026-05-12");
+
+        let args = DoArgs {
+            command: "tasks.complete-by-id".into(),
+            args: vec!["id=abc123".to_string()],
+            format: "text".into(),
+        };
+        let code = run(args, Some(vault_path.clone())).expect("run should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let content = std::fs::read_to_string(vault_path.join("tasks.md")).unwrap();
+        assert!(
+            content.contains("[x]"),
+            "expected the task to be marked done, got: {content}"
+        );
+        assert!(
+            content.contains("✅ 2026-05-12"),
+            "expected today's done-date to be recorded, got: {content}"
+        );
+
+        std::env::remove_var("FT_TODAY");
+    }
+
+    #[test]
+    fn run_reports_unknown_id_clearly() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        let vault_path = dir.path().join("v");
+        std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+        std::fs::write(vault_path.join("tasks.md"), "- [ ] Buy milk\n").unwrap();
+
+        let args = DoArgs {
+            command: "tasks.complete-by-id".into(),
+            args: vec!["id=nope".to_string()],
+            format: "text".into(),
+        };
+        let err = run(args, Some(vault_path)).unwrap_err();
+        assert!(
+            err.to_string().contains("no task with id"),
+            "expected no-match error, got: {err}"
         );
     }
 }

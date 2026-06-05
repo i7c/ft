@@ -316,6 +316,52 @@ The plan-extract-modal-driver work is the reference implementation;
 tab-resident dispatch path and is the subject of a follow-up
 migration.
 
+## Commands and keymaps (TUI)
+
+Every TUI action has a stable `<context>.<verb>` name (`Command`) with
+metadata (`CommandDef`); every key binding is a row in a `KeyMap` that
+maps a chord to a command. The `?` overlay, `docs/keybindings.md`,
+`ft commands list`, and `ft do` all read from the same registry — one
+source of truth for what exists, what it does, and how to trigger it.
+
+- **`ft/src/tui/command.rs`** — `Command`, `CommandDef`,
+  `CommandScope`, `ArgSpec`, `CommandOutcome` (`Handled`/`NotHandled`),
+  `CommandRegistry` (build-time union of every static command slice).
+- **`ft/src/tui/keymap.rs`** — `KeyChord` (normalized so terminal
+  inconsistencies don't matter), `chord_from_str`/`chord_to_str`
+  round-trip, `KeyMap` with a fluent `.bind(...)` builder that panics
+  on duplicate chords at construction time.
+- **`ft/src/tui/app_commands.rs`** — `APP_COMMANDS` + `APP_KEYMAP`
+  (global bindings: quit, tab cycling, help, git-leader).
+- **`ft/src/tui/modal_commands.rs`** — per-modal `<MODAL>_COMMANDS`
+  and `<MODAL>_KEYMAP` plus `confirm_def`/`cancel_def`/`nav_def`
+  helpers.
+- **Per-tab declarations** live next to each tab
+  (`ft/src/tui/tabs/<tab>/` — `<TAB>_COMMANDS`, `<TAB>_KEYMAP`,
+  `dispatch_command`).
+
+Input resolves modal → tab → global. Cross-scope side effects flow
+through `ctx.pending_request` as `AppRequest` variants so
+`CommandOutcome` stays small.
+
+Status bar: when a modal is active, the center cell renders up to
+three `chord:label` pairs picked from the modal's keymap by
+`CommandDef.is_primary = true`; the right cell shows
+`modal: <name>` (from `extract-modal-driver`). Toasts override the
+hint cell.
+
+Headless dispatch: `ft do <command>` looks up the command in the
+registry, validates args against `args_schema`, and calls a shared
+headless handler (in `ft/src/cmd/do.rs`). Commands with
+`opens_modal = true` are rejected with exit 2; commands with no
+headless handler yet exit 3. Atomic ops with explicit selectors
+(`tasks.complete-by-id --arg id=…`) are factored as the underlying
+`ft-core` ops become callable without TUI ambient state.
+
+Full write-up: [docs/commands.md](commands.md). Generated reference of
+every registered command (re-run `ft commands docs > docs/keybindings.md`
+after touching a `CommandDef` slice): [docs/keybindings.md](keybindings.md).
+
 ## Concurrency model
 
 The codebase is deliberately single-threaded everywhere except for two

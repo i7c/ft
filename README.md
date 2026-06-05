@@ -92,6 +92,26 @@ ft tui                          # discover vault + open
 ft tui --vault path/to/vault
 ```
 
+Every TUI action is a named `Command`; bindings live in scoped
+`KeyMap`s. The `?` overlay, [`docs/keybindings.md`](docs/keybindings.md),
+`ft commands list`, and `ft do` all read from the same registry.
+
+```sh
+# List every registered command (table / json / ndjson).
+ft commands list
+ft commands list --scope tab/graph --format ndjson
+
+# Regenerate the markdown keybindings reference (CI checks freshness).
+ft commands docs > docs/keybindings.md
+ft commands docs --check
+
+# Dispatch an atomic command headlessly (modal-opening commands rejected).
+ft do tasks.complete-by-id --arg id=xyz123
+```
+
+See [`docs/commands.md`](docs/commands.md) for the full Command/Keymap
+model, adding new commands, and the headless-dispatch contract.
+
 ## Notes
 
 `ft notes` covers everything that operates on whole notes — open,
@@ -284,6 +304,10 @@ ft --json-errors tasks list overdue --format ndjson \
 
 - [docs/architecture.md](docs/architecture.md) — workspace layout, key
   traits, where to add a new subcommand or task format
+- [docs/commands.md](docs/commands.md) — Command/Keymap model, `ft do`,
+  `ft commands list`/`docs`, status-bar hint, adding new commands
+- [docs/keybindings.md](docs/keybindings.md) — generated reference of
+  every registered command, grouped by scope
 - [docs/task-format.md](docs/task-format.md) — exactly which Tasks-plugin
   emoji fields are supported, with examples and the deferred list
 - [docs/query-dsl.md](docs/query-dsl.md) — supported subset of the

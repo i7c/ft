@@ -25,4 +25,4 @@ Move 1 selection(s): navigate to target directory, Enter/m to confirm, t for pic
                                                                                 
                                                                                 
 > node where kind = Directory and path = ""; expand where edge.kind = directory-
- vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]       modal: move
+ vault: vault  ·  tab: Graph            m:use-selected-as-source    modal: move
