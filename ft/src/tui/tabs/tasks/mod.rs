@@ -8,7 +8,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -19,6 +19,7 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     keymap::{KeyChord, KeyMap},
+    palette,
     tab::{EventOutcome, Tab, TabCtx},
 };
 
@@ -304,18 +305,18 @@ impl TasksTab {
             Line::from(""),
             Line::from(Span::styled(
                 format!(" {date}"),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::WHITE),
             )),
             Line::from(Span::styled(
                 format!(" {time}"),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::PRIMARY)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 " ── views ──",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )),
         ];
 
@@ -324,11 +325,11 @@ impl TasksTab {
                 (
                     " ▶ ",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(palette::PRIMARY)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                ("   ", Style::default().fg(Color::White))
+                ("   ", Style::default().fg(palette::WHITE))
             };
             lines.push(Line::from(vec![
                 Span::raw(marker),
@@ -339,7 +340,7 @@ impl TasksTab {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" sidebar ")
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(palette::DIM));
         let para = Paragraph::new(lines).block(block);
         frame.render_widget(para, area);
     }

@@ -24,7 +24,7 @@ use anyhow::Result;
 use crossterm::event::KeyEvent;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
@@ -40,6 +40,7 @@ use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
+use crate::tui::palette;
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle};
 use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSource};
 
@@ -513,19 +514,19 @@ fn render_empty(frame: &mut Frame, area: Rect, last_error: Option<&str>) {
         Line::from(""),
         Line::from(Span::styled(
             "press `/` to pick a note",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::DIM),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Shift+J in the Graph tab on a Note row jumps straight here.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )),
     ];
     if let Some(err) = last_error {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(palette::ERROR),
         )));
     }
     frame.render_widget(Paragraph::new(lines), inner);
@@ -552,13 +553,13 @@ fn render_loaded(
     if entries.is_empty() {
         let mut lines = vec![Line::from(Span::styled(
             "no journal entries for this note",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::DIM),
         ))];
         if let Some(err) = last_error {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette::ERROR),
             )));
         }
         frame.render_widget(Paragraph::new(lines), inner);
@@ -573,11 +574,11 @@ fn render_loaded(
         entry_starts.push(lines.len());
         let header_style = if i == selected {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         };
         lines.push(Line::from(Span::styled(
@@ -616,7 +617,7 @@ fn render_loaded(
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette::ERROR),
             ))),
             banner_area,
         );

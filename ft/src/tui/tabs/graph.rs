@@ -56,6 +56,7 @@ use crate::tui::{
             SectionMoveState,
         },
     },
+    palette,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
     widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
@@ -531,7 +532,7 @@ impl Modal for SearchPickerModal {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "Enter: jump · Esc: cancel",
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::DIM),
             ))),
             footer_area,
         );
@@ -1070,8 +1071,8 @@ impl Modal for GraphRenameState {
             Paragraph::new(Line::from(Span::styled(
                 title,
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::White)
+                    .fg(palette::BLACK)
+                    .bg(palette::WHITE)
                     .add_modifier(Modifier::BOLD),
             ))),
             title_area,
@@ -1085,7 +1086,7 @@ impl Modal for GraphRenameState {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 buf_display,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::SECONDARY),
             ))),
             buf_area,
         );
@@ -1093,7 +1094,7 @@ impl Modal for GraphRenameState {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 footer,
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::DIM),
             ))),
             footer_area,
         );
@@ -3098,35 +3099,72 @@ impl Tab for GraphTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        let [strip_area, tree_area, input_area] = Layout::vertical([
+        let [input_area, strip_area, tree_area] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(1),
         ])
         .areas(area);
 
+        let input_mode = ctx.active_modal_name == Some("query-bar");
+
+        // Extract view info before mutable borrow for tree rendering.
+        let query_snippet = self.views[self.active].query_snippet();
+        let query_text = self.views[self.active].query_text.clone();
+        let input_cursor = self.views[self.active].input_cursor;
+
+        // ── Input bar ────────────────────────────────────────────────
+        let prompt_style = if input_mode {
+            Style::default().fg(palette::PRIMARY)
+        } else {
+            Style::default().fg(palette::DIM)
+        };
+        let input_text = format!("> {}", query_text);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(input_text, prompt_style))),
+            input_area,
+        );
+
+        if input_mode {
+            // 2 = width of the "> " prompt.
+            let x = input_area
+                .x
+                .saturating_add(2)
+                .saturating_add(input_cursor as u16);
+            frame.set_cursor_position((
+                x.min(input_area.x + input_area.width.saturating_sub(1)),
+                input_area.y,
+            ));
+        }
+
         // ── View tab strip ───────────────────────────────────────────
         let mut spans: Vec<Span> = Vec::with_capacity(self.views.len() * 2);
-        for (i, v) in self.views.iter().enumerate() {
+        for (i, vw) in self.views.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw(" "));
             }
-            let label = format!(" {}: {} ", i + 1, v.query_snippet());
+            let label = format!(" {}: {} ", i + 1, vw.query_snippet());
             let style = if i == self.active {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::White)
+                    .fg(palette::BLACK)
+                    .bg(palette::PRIMARY)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(palette::DIM)
             };
             spans.push(Span::styled(label, style));
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), strip_area);
 
         // ── Tree ─────────────────────────────────────────────────────
-        let visible = tree_area.height.saturating_sub(1).max(1) as usize;
-        let input_mode = ctx.active_modal_name == Some("query-bar");
+        let tree_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", query_snippet))
+            .border_style(Style::default().fg(palette::PRIMARY));
+        let inner_area = tree_block.inner(tree_area);
+        frame.render_widget(tree_block, tree_area);
+
+        let visible = inner_area.height.saturating_sub(1).max(1) as usize;
         let active = self.active;
         let v = &mut self.views[active];
 
@@ -3156,16 +3194,16 @@ impl Tab for GraphTab {
                 let prefix = format!("{indent}{indicator} {sel_marker} ");
                 let base_style = if i == v.selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::White)
+                        .fg(palette::BLACK)
+                        .bg(palette::PRIMARY)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(palette::WHITE)
                 };
                 let graph = self.graph.as_ref();
                 let kind_color = graph
                     .map(|g| node_kind_color(g.node(row.note_id)))
-                    .unwrap_or(Color::White);
+                    .unwrap_or(palette::WHITE);
                 let kind_style = base_style.fg(kind_color);
                 let kind_span = Span::styled(row.kind_char.to_string(), kind_style);
                 let display_span = Span::styled(row.display.clone(), kind_style);
@@ -3182,58 +3220,31 @@ impl Tab for GraphTab {
             })
             .collect();
 
-        frame.render_widget(List::new(items), tree_area);
+        frame.render_widget(List::new(items), inner_area);
 
         // Empty-state hint: shown when the active view's tree has no
         // navigable content (≤ 1 row) and the user isn't actively
         // typing. Disappears as soon as the user expands anything or
         // enters input mode.
-        if v.tree.len() <= 1 && !input_mode && tree_area.height >= 2 {
+        if v.tree.len() <= 1 && !input_mode && inner_area.height >= 2 {
             let hint_rect = Rect {
-                y: tree_area.y + 1,
+                y: inner_area.y + 1,
                 height: 1,
-                ..tree_area
+                ..inner_area
             };
-            let hint = Span::styled(
-                "press / to edit query",
-                Style::default().fg(Color::DarkGray),
-            );
+            let hint = Span::styled("press / to edit query", Style::default().fg(palette::DIM));
             frame.render_widget(Paragraph::new(Line::from(hint)), hint_rect);
         }
 
-        // ── Input bar ────────────────────────────────────────────────
-        let prompt_style = if input_mode {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        let input_text = format!("> {}", v.query_text);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(input_text, prompt_style))),
-            input_area,
-        );
-
-        if input_mode {
-            // 2 = width of the "> " prompt.
-            let x = input_area
-                .x
-                .saturating_add(2)
-                .saturating_add(v.input_cursor as u16);
-            frame.set_cursor_position((
-                x.min(input_area.x + input_area.width.saturating_sub(1)),
-                input_area.y,
-            ));
-        }
-
-        // Error line overlays bottom of tree area.
+        // Error line overlays bottom of tree inner area.
         if let Some(ref err) = v.parse_error {
-            if tree_area.height > 0 {
+            if inner_area.height > 0 {
                 let err_rect = Rect {
-                    y: tree_area.y + tree_area.height.saturating_sub(1),
+                    y: inner_area.y + inner_area.height.saturating_sub(1),
                     height: 1,
-                    ..tree_area
+                    ..inner_area
                 };
-                let err_span = Span::styled(err.as_str(), Style::default().fg(Color::Red));
+                let err_span = Span::styled(err.as_str(), Style::default().fg(palette::ERROR));
                 frame.render_widget(Paragraph::new(Line::from(err_span)), err_rect);
             }
         }
@@ -3591,7 +3602,7 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             header_text,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::DIM),
         ))),
         header_area,
     );
@@ -3599,14 +3610,14 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
     let mut lines: Vec<Line> = Vec::new();
     for s in &modal.already {
         lines.push(Line::from(vec![
-            Span::styled("  ✓  ", Style::default().fg(Color::Green)),
+            Span::styled("  ✓  ", Style::default().fg(palette::SUCCESS)),
             Span::styled(
                 format!("[[{}]]", s.title),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             ),
             Span::styled(
                 format!("  ({})", s.score),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             ),
         ]));
     }
@@ -3621,7 +3632,7 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
         lines.push(Line::from(vec![
             Span::styled(format!("{cursor}{marker} "), style),
             Span::styled(format!("[[{}]]", s.title), style),
-            Span::styled(format!("  ({})", s.score), style.fg(Color::DarkGray)),
+            Span::styled(format!("  ({})", s.score), style.fg(palette::DIM)),
         ]));
     }
     frame.render_widget(
@@ -3632,7 +3643,7 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "Space: toggle · Enter: confirm · Esc/q: cancel",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::DIM),
         ))),
         footer_area,
     );
@@ -3642,8 +3653,8 @@ fn render_move_banner(frame: &mut Frame, area: Rect, text: &str) {
     let span = Span::styled(
         text,
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Yellow)
+            .fg(palette::BLACK)
+            .bg(palette::PRIMARY)
             .add_modifier(Modifier::BOLD),
     );
     frame.render_widget(Paragraph::new(Line::from(span)), area);
@@ -3823,11 +3834,11 @@ impl TreeState {
 /// in the tree view. Palette inspired by the Monokai theme.
 fn node_kind_color(kind: &NodeKind) -> Color {
     match kind {
-        NodeKind::Note(_) => Color::Rgb(166, 226, 46), // green
-        NodeKind::Directory(_) => Color::Rgb(102, 217, 239), // blue
-        NodeKind::Ghost(_) => Color::Rgb(117, 113, 94), // dim gray
-        NodeKind::Task(_) => Color::Rgb(253, 151, 31), // orange
-        NodeKind::Paragraph(_) => Color::Rgb(174, 129, 255), // purple
+        NodeKind::Note(_) => Color::Rgb(166, 210, 50), // warm green
+        NodeKind::Directory(_) => Color::Rgb(80, 190, 200), // warm cyan
+        NodeKind::Ghost(_) => palette::DIM,            // warm gray
+        NodeKind::Task(_) => palette::PRIMARY,         // orange
+        NodeKind::Paragraph(_) => Color::Rgb(210, 150, 100), // warm tan/purple
     }
 }
 

@@ -278,6 +278,8 @@ fn timeblocks_tab_populated_today_missing_tomorrow_shows_placeholder() -> Result
     // Don't seed 2026-05-11 — tomorrow's pane should show the placeholder.
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
+    // Default is now Single-day; toggle to Split to see both panes.
+    app.dispatch(key('f'))?;
     let frame = render(&mut app, 100, 24);
     assert!(
         frame.contains("no daily note yet"),
@@ -301,6 +303,8 @@ fn timeblocks_tab_both_days_populated_renders_two_lists() -> Result<()> {
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
+    // Default is now Single-day; toggle to Split to see both panes.
+    app.dispatch(key('f'))?;
     let frame = render(&mut app, 100, 24);
     assert!(frame.contains("today-a"));
     assert!(frame.contains("tomorrow-a"));
@@ -884,18 +888,23 @@ fn timeblocks_tab_f_toggles_to_single_day_view() -> Result<()> {
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
-    // Split: both visible.
+    // Default is now Single-day: only today visible.
+    let single = render(&mut app, 100, 24);
+    assert!(single.contains("today-a"));
+    assert!(!single.contains("tomorrow-a"), "got: {single}");
+    assert!(single.contains("view: single (f)"));
+    // Toggle to Split: both visible.
+    app.dispatch(key('f'))?;
     let split = render(&mut app, 100, 24);
     assert!(split.contains("today-a"));
     assert!(split.contains("tomorrow-a"));
     assert!(split.contains("view: split"));
-    // Toggle to single-day. Tomorrow's row should disappear; focus is
-    // on Today so only today's block remains.
+    // Toggle back to Single.
     app.dispatch(key('f'))?;
-    let single = render(&mut app, 100, 24);
-    assert!(single.contains("today-a"));
-    assert!(!single.contains("tomorrow-a"), "got: {single}");
-    assert!(single.contains("view: single"));
+    let single2 = render(&mut app, 100, 24);
+    assert!(single2.contains("today-a"));
+    assert!(!single2.contains("tomorrow-a"), "got: {single2}");
+    assert!(single2.contains("view: single (f)"));
     // `l` flips focus → in single mode, that flips which day is shown.
     app.dispatch(key('l'))?;
     let after_l = render(&mut app, 100, 24);
@@ -6013,11 +6022,14 @@ fn graph_tab_input_mode_shows_cursor() -> Result<()> {
         .expect("input mode should position the cursor");
     // The default query is pre-seeded; cursor sits at end of text +
     // 2 (the "> " prompt offset). The test just asserts the cursor is
-    // on the input bar (last row) and past the prompt. Exact column
+    // on the input bar (top row of body) and past the prompt. Exact column
     // depends on default-query length which is intentional UI state.
-    // The 80×24 frame's bottom row is the status bar (row 23); the
-    // graph tab's input bar sits on row 22 just above it.
-    assert_eq!(cursor.y, 22, "cursor must be on the input bar row");
+    // The 80×24 frame's tab bar is row 0; the graph tab's input bar now
+    // sits on row 1 (top of body area).
+    assert_eq!(
+        cursor.y, 1,
+        "cursor must be on the input bar row (now at top)"
+    );
     assert!(
         cursor.x >= 2,
         "cursor must be past the `> ` prompt (got x={})",

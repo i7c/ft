@@ -1,7 +1,7 @@
 use chrono::Local;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs},
     Frame,
@@ -10,6 +10,7 @@ use ratatui::{
 use crate::tui::{
     help::HelpSection,
     jobs::JobKind,
+    palette,
     tab::{Tab, TabCtx},
 };
 
@@ -81,11 +82,11 @@ pub fn render_tab_bar(frame: &mut Frame, area: Rect, titles: &[&str], selected: 
         .collect();
     let widget = Tabs::new(spans)
         .select(selected)
-        .style(Style::default().fg(Color::Gray))
+        .style(Style::default().fg(palette::DIM))
         .highlight_style(
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(palette::BLACK)
+                .bg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )
         .divider("│");
@@ -139,11 +140,11 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         .split(area);
 
     let left = Line::from(vec![
-        Span::styled(" vault: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(vault_name, Style::default().fg(Color::White)),
+        Span::styled(" vault: ", Style::default().fg(palette::DIM)),
+        Span::styled(vault_name, Style::default().fg(palette::WHITE)),
         Span::raw("  ·  "),
-        Span::styled("tab: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(tab_title, Style::default().fg(Color::White)),
+        Span::styled("tab: ", Style::default().fg(palette::DIM)),
+        Span::styled(tab_title, Style::default().fg(palette::WHITE)),
     ]);
 
     // Toast takes priority over the refresh timestamp so transient
@@ -153,9 +154,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
     // ahead of the refresh stamp so users see what the modal accepts.
     let center = if let Some(t) = toast {
         let color = match t.style {
-            crate::tui::tab::ToastStyle::Success => Color::Green,
-            crate::tui::tab::ToastStyle::Error => Color::Red,
-            crate::tui::tab::ToastStyle::Info => Color::Cyan,
+            crate::tui::tab::ToastStyle::Success => palette::SUCCESS,
+            crate::tui::tab::ToastStyle::Error => palette::ERROR,
+            crate::tui::tab::ToastStyle::Info => palette::PRIMARY,
         };
         Line::from(Span::styled(
             t.text.clone(),
@@ -166,18 +167,18 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         let mut spans: Vec<Span> = Vec::with_capacity(modal_hints.len() * 4);
         for (i, (chord, label)) in modal_hints.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled("  ", Style::default().fg(palette::DIM)));
             }
             spans.push(Span::styled(
                 chord.clone(),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(palette::TERTIARY)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(":", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(":", Style::default().fg(palette::DIM)));
             spans.push(Span::styled(
                 label.clone(),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::WHITE),
             ));
         }
         Line::from(spans).alignment(Alignment::Center)
@@ -188,7 +189,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
         };
         Line::from(Span::styled(
             refresh_text,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         ))
         .alignment(Alignment::Center)
     };
@@ -206,36 +207,36 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
             Span::styled(
                 format!("⟳ {}", kind.indicator_label()),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" · ", Style::default().fg(palette::DIM)),
             Span::styled(
                 mode.label(),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
         ])
     } else if let Some(name) = active_modal {
         Line::from(vec![
-            Span::styled("modal: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("modal: ", Style::default().fg(palette::DIM)),
             Span::styled(
                 name,
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(palette::TERTIARY)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
         ])
     } else {
         Line::from(vec![
-            Span::styled("mode: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("mode: ", Style::default().fg(palette::DIM)),
             Span::styled(
                 mode.label(),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -243,7 +244,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: StatusBarState<'_
     }
     .alignment(Alignment::Right);
 
-    let bg = Style::default().bg(Color::Rgb(28, 28, 32));
+    let bg = Style::default().bg(palette::STATUS_BG);
     frame.render_widget(Paragraph::new(left).style(bg), chunks[0]);
     frame.render_widget(Paragraph::new(center).style(bg), chunks[1]);
     frame.render_widget(Paragraph::new(right).style(bg), chunks[2]);
@@ -287,7 +288,7 @@ pub fn render_help_overlay(
     lines.push(Line::from(Span::styled(
         format!("Keybindings — {tab_title}"),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::PRIMARY)
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -299,7 +300,7 @@ pub fn render_help_overlay(
         lines.push(Line::from(Span::styled(
             format!("  {}", section.title),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )));
         for entry in &section.entries {
@@ -308,10 +309,10 @@ pub fn render_help_overlay(
                 Span::styled(
                     format!("  {}{}  ", entry.keys, " ".repeat(pad)),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::SECONDARY)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(entry.desc.clone(), Style::default().fg(Color::White)),
+                Span::styled(entry.desc.clone(), Style::default().fg(palette::WHITE)),
             ]));
         }
     }
@@ -319,14 +320,14 @@ pub fn render_help_overlay(
     lines.push(Line::from(Span::styled(
         "  press ? or Esc to close",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(palette::DIM)
             .add_modifier(Modifier::ITALIC),
     )));
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" help ")
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(palette::BLACK));
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, popup);
 }
@@ -339,8 +340,8 @@ pub fn render_git_leader(frame: &mut Frame, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" git · pick an action ")
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -350,22 +351,22 @@ pub fn render_git_leader(frame: &mut Frame, area: Rect) {
             Span::styled(
                 "  s     ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "sync (commit + pull + push)",
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::WHITE),
             ),
         ]),
         Line::from(vec![
             Span::styled(
                 "  Esc   ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("cancel", Style::default().fg(Color::White)),
+            Span::styled("cancel", Style::default().fg(palette::WHITE)),
         ]),
     ];
     frame.render_widget(
@@ -387,8 +388,8 @@ pub fn render_sync_conflict(frame: &mut Frame, area: Rect, info: &SyncConflictIn
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::ERROR))
+        .style(Style::default().bg(palette::BLACK));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -397,14 +398,14 @@ pub fn render_sync_conflict(frame: &mut Frame, area: Rect, info: &SyncConflictIn
     lines.push(Line::from(Span::styled(
         format!("  {} conflicted file(s):", info.files.len()),
         Style::default()
-            .fg(Color::White)
+            .fg(palette::WHITE)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
     for f in &info.files {
         lines.push(Line::from(Span::styled(
             format!("    {}", f.display()),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::WHITE),
         )));
     }
     lines.push(Line::from(""));
@@ -414,12 +415,12 @@ pub fn render_sync_conflict(frame: &mut Frame, area: Rect, info: &SyncConflictIn
     };
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette::DIM),
     )));
     lines.push(Line::from(Span::styled(
         "  press Esc to dismiss",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(palette::DIM)
             .add_modifier(Modifier::ITALIC),
     )));
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);

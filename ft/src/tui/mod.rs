@@ -9,6 +9,7 @@ mod keymap;
 mod modal;
 mod modal_commands;
 mod notes_actions;
+mod palette;
 mod tab;
 mod tabs;
 #[cfg(test)]

@@ -4,25 +4,25 @@ expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
 Move 1 selection(s): navigate to target directory, Enter/m to confirm, t for pic
-▼   D /                                                                         
-  ▶   D Areas/                                                                  
-  ▶   D Projects/                                                               
-      N root                                                                    
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-> node where kind = Directory and path = ""; expand where edge.kind = directory-
+ 1: node where kind = D…                                                        
+┌ node where kind = D… ────────────────────────────────────────────────────────┐
+│▼   D /                                                                       │
+│  ▶   D Areas/                                                                │
+│  ▶   D Projects/                                                             │
+│      N root                                                                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
  vault: vault  ·  tab: Graph            m:use-selected-as-source    modal: move

@@ -19,6 +19,7 @@ use crate::tui::notes_actions::section_move::{
     is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, RenameBuffer,
     SectionMoveState,
 };
+use crate::tui::palette;
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::NotesState;
 
@@ -171,8 +172,8 @@ pub(crate) fn render_periodic_leader(frame: &mut Frame, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" periodic note · pick a period ")
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -183,10 +184,10 @@ pub(crate) fn render_periodic_leader(frame: &mut Frame, area: Rect) {
             Span::styled(
                 format!("  {key:<6}"),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(*desc, Style::default().fg(Color::White)),
+            Span::styled(*desc, Style::default().fg(palette::WHITE)),
         ]));
     }
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
@@ -322,8 +323,8 @@ fn render_append_var_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -341,15 +342,15 @@ fn render_append_var_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
-        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
+        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -400,8 +401,8 @@ pub(crate) fn render_capture_var_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -419,15 +420,15 @@ pub(crate) fn render_capture_var_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
-        Span::styled(vs.buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
+        Span::styled(vs.buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -464,8 +465,8 @@ fn render_path_picker_popup(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title.to_string())
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -512,8 +513,8 @@ fn render_filename_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -531,15 +532,15 @@ fn render_filename_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("filename: ", Style::default().fg(Color::Gray)),
-        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled("filename: ", Style::default().fg(palette::DIM)),
+        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -549,7 +550,9 @@ fn render_filename_prompt(
     if let Some(msg) = error {
         footer_lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
         )));
     }
     footer_lines.push(keymap_line(CREATE_FILENAME_KEYS));
@@ -591,8 +594,8 @@ fn render_var_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -610,15 +613,15 @@ fn render_var_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
-        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
+        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -636,7 +639,7 @@ fn render_var_prompt(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             so_far_label,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         ))),
         chunks[1],
     );
@@ -668,8 +671,8 @@ fn render_collision_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::ERROR))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -688,7 +691,7 @@ fn render_collision_prompt(
         Paragraph::new(Line::from(Span::styled(
             format!("target already exists: {rel}"),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(Alignment::Center),
@@ -698,11 +701,11 @@ fn render_collision_prompt(
     let opt_span = |label: &str, choice: CC| {
         let style = if focus == choice {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(palette::BLACK)
+                .bg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::WHITE)
         };
         Span::styled(format!(" {label} "), style)
     };
@@ -888,8 +891,8 @@ fn render_new_target_filename_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -907,15 +910,15 @@ fn render_new_target_filename_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("filename: ", Style::default().fg(Color::Gray)),
-        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled("filename: ", Style::default().fg(palette::DIM)),
+        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -925,7 +928,9 @@ fn render_new_target_filename_prompt(
     if let Some(msg) = error {
         footer_lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
         )));
     }
     footer_lines.push(keymap_line(MOVE_NEW_FILENAME_KEYS));
@@ -964,8 +969,8 @@ fn render_new_target_var_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -983,15 +988,15 @@ fn render_new_target_var_prompt(
         Span::styled(
             "▏ ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{key_name} = "), Style::default().fg(Color::Gray)),
-        Span::styled(buf.text.clone(), Style::default().fg(Color::White)),
+        Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
+        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
         Span::styled(
             "█",
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::SLOW_BLINK),
         ),
     ]);
@@ -1009,7 +1014,7 @@ fn render_new_target_var_prompt(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             so_far_label,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         ))),
         chunks[1],
     );
@@ -1035,8 +1040,8 @@ fn render_new_target_collision_prompt(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::ERROR))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -1055,7 +1060,7 @@ fn render_new_target_collision_prompt(
         Paragraph::new(Line::from(Span::styled(
             format!("target already exists: {}", target_rel.display()),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(Alignment::Center),
@@ -1065,11 +1070,11 @@ fn render_new_target_collision_prompt(
     let opt_span = |label: &str, choice: CC| {
         let style = if focus == choice {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(palette::BLACK)
+                .bg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::WHITE)
         };
         Span::styled(format!(" {label} "), style)
     };
@@ -1108,8 +1113,8 @@ fn render_compose_popup(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -1143,15 +1148,15 @@ fn render_compose_popup(
             Span::styled(
                 "▏ ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("rename → ", Style::default().fg(Color::Yellow)),
-            Span::styled(rb.buf.text.clone(), Style::default().fg(Color::White)),
+            Span::styled("rename → ", Style::default().fg(palette::SECONDARY)),
+            Span::styled(rb.buf.text.clone(), Style::default().fg(palette::WHITE)),
             Span::styled(
                 "█",
                 Style::default()
-                    .fg(Color::White)
+                    .fg(palette::WHITE)
                     .add_modifier(Modifier::SLOW_BLINK),
             ),
         ]);
@@ -1196,36 +1201,40 @@ fn render_compose_row(
     let marker = if is_pending { "+ " } else { "· " };
     let row_style = if i == focus {
         Style::default()
-            .bg(Color::Rgb(40, 40, 60))
+            .bg(Color::Rgb(50, 38, 30))
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
     let marker_style = if is_pending {
-        row_style.fg(Color::Green).add_modifier(Modifier::BOLD)
+        row_style.fg(palette::SUCCESS).add_modifier(Modifier::BOLD)
     } else {
-        row_style.fg(Color::DarkGray)
+        row_style.fg(palette::DIM)
     };
     let text_style = if is_pending {
-        row_style.fg(Color::White)
+        row_style.fg(palette::WHITE)
     } else {
-        row_style.fg(Color::DarkGray)
+        row_style.fg(palette::DIM)
     };
     let mut spans = vec![
         Span::styled(cursor, row_style),
         Span::styled(marker, marker_style),
         Span::styled(indent, row_style),
-        Span::styled(level_tag, row_style.fg(Color::DarkGray)),
+        Span::styled(level_tag, row_style.fg(palette::DIM)),
         Span::styled(text, text_style),
     ];
     if let Some(new_text) = rename {
         spans.push(Span::styled(
             "  → ",
-            row_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            row_style
+                .fg(palette::SECONDARY)
+                .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
             new_text,
-            row_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            row_style
+                .fg(palette::SECONDARY)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     Line::from(spans)
@@ -1244,8 +1253,8 @@ pub(crate) fn render_picker_popup<S: crate::tui::widgets::PickerSource>(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title.to_string())
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -1261,7 +1270,9 @@ pub(crate) fn render_picker_popup<S: crate::tui::widgets::PickerSource>(
     if let Some(msg) = error {
         footer_lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
         )));
     }
     footer_lines.push(keymap_line(keys));
@@ -1285,8 +1296,8 @@ fn render_multiselect_popup(
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup);
     frame.render_widget(outer, popup);
 
@@ -1335,28 +1346,30 @@ fn render_multiselect_row(
     let level_tag = format!("H{}  ", h.level);
     let row_style = if i == focus {
         Style::default()
-            .bg(Color::Rgb(40, 40, 60))
+            .bg(Color::Rgb(50, 38, 30))
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
     let marker_style = if explicit {
-        row_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        row_style
+            .fg(palette::SECONDARY)
+            .add_modifier(Modifier::BOLD)
     } else if implicit {
-        row_style.fg(Color::DarkGray)
+        row_style.fg(palette::DIM)
     } else {
-        row_style.fg(Color::White)
+        row_style.fg(palette::WHITE)
     };
     let text_style = if implicit {
-        row_style.fg(Color::DarkGray)
+        row_style.fg(palette::DIM)
     } else {
-        row_style.fg(Color::White)
+        row_style.fg(palette::WHITE)
     };
     Line::from(vec![
         Span::styled(cursor, row_style),
         Span::styled(format!("{marker} "), marker_style),
         Span::styled(indent, row_style),
-        Span::styled(level_tag, row_style.fg(Color::DarkGray)),
+        Span::styled(level_tag, row_style.fg(palette::DIM)),
         Span::styled(h.text.clone(), text_style),
     ])
 }
@@ -1379,10 +1392,10 @@ fn keymap_line(keys: &[(&str, &str)]) -> Line<'static> {
                     Span::styled(
                         format!(" {k} "),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(palette::SECONDARY)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!("{d}  "), Style::default().fg(Color::Gray)),
+                    Span::styled(format!("{d}  "), Style::default().fg(palette::DIM)),
                 ]
             })
             .collect::<Vec<_>>(),
@@ -1393,7 +1406,7 @@ fn render_idle_body(frame: &mut Frame, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" notes ")
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(palette::DIM));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
@@ -1402,7 +1415,7 @@ fn render_idle_body(frame: &mut Frame, area: Rect) {
     lines.push(Line::from(Span::styled(
         "  Notes — Obsidian-flavoured editing",
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::PRIMARY)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -1411,10 +1424,10 @@ fn render_idle_body(frame: &mut Frame, area: Rect) {
             Span::styled(
                 format!("  {key:<6}"),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::SECONDARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(*desc, Style::default().fg(Color::White)),
+            Span::styled(*desc, Style::default().fg(palette::WHITE)),
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);

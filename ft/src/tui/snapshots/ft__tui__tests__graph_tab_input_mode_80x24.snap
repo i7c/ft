@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 6098
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
- 1: node where kind = D…                                                        
-▶   D /                                                                         
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
 > node where kind = Directory and path = ""; expand where edge.kind = directory-
+ 1: node where kind = D…                                                        
+┌ node where kind = D… ────────────────────────────────────────────────────────┐
+│▶   D /                                                                       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
  vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]   modal: query-bar

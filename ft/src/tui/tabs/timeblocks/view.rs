@@ -4,13 +4,13 @@ use chrono::Timelike;
 use ft_core::timeblock::report::{minutes_to_hours_minutes, time_per_tag, total_minutes};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
-use crate::tui::tab::TabCtx;
+use crate::tui::{palette, tab::TabCtx};
 use ratatui::widgets::Clear;
 
 use super::{FormField, Mode, Pane, TimeblocksTab, ViewMode, SIDEBAR_WIDTH};
@@ -71,7 +71,7 @@ fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         _ => return,
     };
     let line = Line::from(vec![
-        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::styled(prefix, Style::default().fg(palette::PRIMARY)),
         Span::raw(text),
     ]);
     let para = Paragraph::new(line);
@@ -97,7 +97,7 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" New timeblock ")
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(palette::PRIMARY));
     let inner = block.inner(modal);
     frame.render_widget(block, modal);
 
@@ -122,10 +122,10 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     let row = |label: &str, buf_text: &str, focused: bool| -> Paragraph<'_> {
         let style = if focused {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::WHITE)
         };
         Paragraph::new(Line::from(vec![
             Span::styled(prefix_for(label, focused), style),
@@ -143,7 +143,7 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Tab / ↑↓ to cycle  ·  Enter on desc to commit  ·  Esc to cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )),
         rows[4],
     );
@@ -170,12 +170,12 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             format!(" {date}"),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::WHITE),
         )),
         Line::from(Span::styled(
             format!(" {time}"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -184,7 +184,7 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
             // the day the user is steering toward with H/L. Label by
             // date so the relationship is unambiguous.
             format!(" ── totals · {} ──", tab.today.date),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )),
     ];
 
@@ -193,15 +193,15 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(Span::styled(
         format!(" total {th:02}:{tm:02}"),
         Style::default()
-            .fg(Color::White)
+            .fg(palette::WHITE)
             .add_modifier(Modifier::BOLD),
     )));
     for tt in time_per_tag(&tab.today.blocks) {
         let (h, m) = minutes_to_hours_minutes(tt.minutes);
         let style = if tt.tag == "break" {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::DIM)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::WHITE)
         };
         lines.push(Line::from(Span::styled(
             format!(" @{}  {h:02}:{m:02}", tt.tag),
@@ -211,7 +211,7 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         " ── focus ──",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette::DIM),
     )));
     let focused_date = match tab.focus {
         Pane::Today => tab.today.date,
@@ -220,7 +220,7 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(Span::styled(
         format!(" ▶ {focused_date}"),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::PRIMARY)
             .add_modifier(Modifier::BOLD),
     )));
     // Show the view mode so users have a visible cue that `f` is doing
@@ -230,20 +230,22 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
             ViewMode::Split => " view: split",
             ViewMode::Single => " view: single (f)",
         },
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette::DIM),
     )));
     if matches!(tab.mode, Mode::DeleteConfirm { .. }) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             " d again = delete",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
         )));
     }
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" sidebar ")
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(palette::DIM));
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, area);
 }
@@ -256,9 +258,9 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, ctx: &TabCtx, area: Rect,
     let focused = tab.focus == which;
     let title_text = format!(" {} ", pane_title(pane.date, ctx.today));
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::PRIMARY)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::DIM)
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -272,11 +274,11 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, ctx: &TabCtx, area: Rect,
             Line::from(""),
             Line::from(Span::styled(
                 "  no daily note yet.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )),
             Line::from(Span::styled(
                 "  press `c` to create from template",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )),
         ];
         let para = Paragraph::new(body).block(block);
@@ -289,7 +291,7 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, ctx: &TabCtx, area: Rect,
             Line::from(""),
             Line::from(Span::styled(
                 "  no timeblocks for this day yet.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )),
         ];
         let para = Paragraph::new(body).block(block);
@@ -304,11 +306,11 @@ fn render_pane(tab: &TimeblocksTab, frame: &mut Frame, ctx: &TabCtx, area: Rect,
 
     let highlight_style = if focused {
         Style::default()
-            .bg(Color::Cyan)
-            .fg(Color::Black)
+            .bg(palette::PRIMARY)
+            .fg(palette::BLACK)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(Color::DarkGray).fg(Color::White)
+        Style::default().bg(palette::DIM).fg(palette::WHITE)
     };
     let list = List::new(items)
         .block(block)
@@ -354,7 +356,7 @@ fn build_block_item(b: &ft_core::timeblock::Timeblock) -> ListItem<'static> {
     for _ in 1..n {
         lines.push(Line::from(Span::styled(
             cont.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )));
     }
     ListItem::new(lines)
@@ -388,7 +390,7 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Tags ")
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(palette::PRIMARY));
     let inner = block.inner(modal);
     frame.render_widget(block, modal);
 
@@ -411,7 +413,7 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         Paragraph::new(Span::styled(
             summary,
             Style::default()
-                .fg(Color::White)
+                .fg(palette::WHITE)
                 .add_modifier(Modifier::BOLD),
         )),
         rows[0],
@@ -434,17 +436,14 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         })
         .unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            tags_text,
-            Style::default().fg(Color::DarkGray),
-        )),
+        Paragraph::new(Span::styled(tags_text, Style::default().fg(palette::DIM))),
         rows[1],
     );
 
     let prefix = "> ";
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::Cyan)),
+            Span::styled(prefix, Style::default().fg(palette::PRIMARY)),
             Span::raw(buf.text.clone()),
         ])),
         rows[3],
@@ -452,7 +451,7 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(Span::styled(
             "+@tag to add, -@tag to remove (space-separated)  ·  Enter commits, Esc cancels",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )),
         rows[4],
     );

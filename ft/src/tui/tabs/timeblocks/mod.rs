@@ -460,7 +460,7 @@ impl TimeblocksTab {
             tomorrow: PaneState::empty(now + chrono::Duration::days(1)),
             focus: Pane::Today,
             mode: Mode::Idle,
-            view: ViewMode::Split,
+            view: ViewMode::Single,
             anchor: None,
             heading: "Time Blocks".into(),
             last_error: None,

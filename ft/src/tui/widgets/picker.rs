@@ -30,7 +30,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::tui::widgets::EditBuffer;
+use crate::tui::{palette, widgets::EditBuffer};
 
 // ── public surface ───────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ impl<S: PickerSource> FuzzyPicker<S> {
             Line::from(Span::styled(
                 "type to search…",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::DIM)
                     .add_modifier(Modifier::ITALIC),
             ))
         } else {
@@ -271,19 +271,19 @@ impl<S: PickerSource> FuzzyPicker<S> {
             let left: String = iter.by_ref().take(cursor).collect();
             let right: String = iter.collect();
             Line::from(vec![
-                Span::styled(left, Style::default().fg(Color::White)),
+                Span::styled(left, Style::default().fg(palette::WHITE)),
                 Span::styled(
                     "│",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::SECONDARY)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(right, Style::default().fg(Color::White)),
+                Span::styled(right, Style::default().fg(palette::WHITE)),
             ])
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(palette::SECONDARY))
             .title(" find ");
         frame.render_widget(Paragraph::new(line).block(block), area);
     }
@@ -305,7 +305,7 @@ impl<S: PickerSource> FuzzyPicker<S> {
             let hint = Paragraph::new(Line::from(Span::styled(
                 "type to search…",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::DIM)
                     .add_modifier(Modifier::ITALIC),
             )))
             .alignment(Alignment::Center);
@@ -316,7 +316,7 @@ impl<S: PickerSource> FuzzyPicker<S> {
         if self.items.is_empty() {
             let hint = Paragraph::new(Line::from(Span::styled(
                 "no matches",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )))
             .alignment(Alignment::Center);
             frame.render_widget(hint, inner);
@@ -353,7 +353,7 @@ fn render_row<T>(item: &PickerItem<T>, selected: bool, label_width: usize) -> Li
     let cursor = if selected { "▶ " } else { "  " };
     let row_style = if selected {
         Style::default()
-            .bg(Color::Rgb(40, 40, 60))
+            .bg(Color::Rgb(50, 38, 30))
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -390,11 +390,11 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
         Span::styled(
             text,
             row_style
-                .fg(Color::Yellow)
+                .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )
     } else {
-        Span::styled(text, row_style.fg(Color::White))
+        Span::styled(text, row_style.fg(palette::WHITE))
     }
 }
 

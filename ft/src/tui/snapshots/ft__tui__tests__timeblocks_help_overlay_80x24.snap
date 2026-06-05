@@ -3,17 +3,17 @@ source: ft/src/tui/tests.rs
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐          
-┌ sidebar │Keybindings — Timeblocks                                  │tomorrow)┐
+┌ sidebar │Keybindings — Timeblocks                                  │─────────┐
 │         │                                                          │         │
-│ Sun 10 M│  Global                                                  │et.      │
-│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │eate from│
+│ Sun 10 M│  Global                                                  │         │
+│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │         │
 │         │  ?           Open the keymap help overlay                │         │
 │ ── total│  g           Enter the git-sync leader (then `s` to sync)│         │
 │ total 00│  Tab         Switch to the next tab                      │         │
 │         │  BackTab     Switch to the previous tab                  │         │
 │ ── focus│  1..9        Switch to the tab at the given 0-based index│         │
 │ ▶ 2026-0│                                                          │         │
-│ view: sp│  Navigation                                              │         │
+│ view: si│  Navigation                                              │         │
 │         │  ↑ / k       Move the cursor up one block                │         │
 │         │  ↓ / j       Move the cursor down one block              │         │
 │         │  g           Jump to the first block                     │         │

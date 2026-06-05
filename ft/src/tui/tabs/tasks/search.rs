@@ -25,6 +25,7 @@ use crate::tui::{
     command::{Command, CommandOutcome},
     event::Event,
     keymap::{KeyChord, KeyMap},
+    palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{quickline::parse_quickline, view::View},
     widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
@@ -564,9 +565,9 @@ impl SearchView {
             " query "
         };
         let border_style = if editing {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(palette::PRIMARY)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::DIM)
         };
 
         // Inner content width inside borders. We scroll horizontally so the
@@ -591,7 +592,7 @@ impl SearchView {
                 Span::styled(
                     "│",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::PRIMARY)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(right),
@@ -602,7 +603,7 @@ impl SearchView {
             } else {
                 self.query_text.clone()
             };
-            Line::from(Span::styled(display, Style::default().fg(Color::White)))
+            Line::from(Span::styled(display, Style::default().fg(palette::WHITE)))
         };
 
         let block = Block::default()
@@ -632,7 +633,7 @@ impl SearchView {
             Line::from(Span::styled(
                 "type a task — e.g. \"email Sarah due:tomorrow pri:high #work\"",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::DIM)
                     .add_modifier(Modifier::ITALIC),
             ))
         } else {
@@ -640,19 +641,19 @@ impl SearchView {
             let left: String = iter.by_ref().take(cursor).collect();
             let right: String = iter.collect();
             Line::from(vec![
-                Span::styled(left, Style::default().fg(Color::White)),
+                Span::styled(left, Style::default().fg(palette::WHITE)),
                 Span::styled(
                     "│",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::PRIMARY)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(right, Style::default().fg(Color::White)),
+                Span::styled(right, Style::default().fg(palette::WHITE)),
             ])
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Green))
+            .border_style(Style::default().fg(palette::SUCCESS))
             .title(" new task ");
         frame.render_widget(Paragraph::new(line).block(block), chunks[0]);
 
@@ -668,15 +669,17 @@ impl SearchView {
                 Line::from(""),
                 Line::from(Span::styled(
                     "query parse error",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette::ERROR)
+                        .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(msg, Style::default().fg(Color::Red))),
+                Line::from(Span::styled(msg, Style::default().fg(palette::ERROR))),
                 Line::from(""),
                 Line::from(Span::styled(
                     "press / to edit the query",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(palette::DIM)
                         .add_modifier(Modifier::ITALIC),
                 )),
             ])
@@ -689,7 +692,7 @@ impl SearchView {
         if !self.loaded {
             let body = Paragraph::new(Line::from(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title(" tasks "));
@@ -700,7 +703,7 @@ impl SearchView {
         if self.matches.is_empty() {
             let body = Paragraph::new(Line::from(Span::styled(
                 "no matching tasks",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             )))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title(" tasks "));
@@ -1606,8 +1609,8 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
     // sees the most recent failure instead of the live parse preview.
     if let Some(err) = &ql.error {
         return Line::from(vec![
-            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
-            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+            Span::styled("  ⚠ ", Style::default().fg(palette::ERROR)),
+            Span::styled(err.clone(), Style::default().fg(palette::ERROR)),
         ]);
     }
 
@@ -1615,7 +1618,7 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
         return Line::from(Span::styled(
             "  Enter to save · Esc to cancel",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(palette::DIM)
                 .add_modifier(Modifier::ITALIC),
         ));
     }
@@ -1623,8 +1626,8 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
     let parse = parse_quickline(&ql.input.text, ctx.today);
     if let Some(first) = parse.errors.first() {
         return Line::from(vec![
-            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
-            Span::styled(first.clone(), Style::default().fg(Color::Red)),
+            Span::styled("  ⚠ ", Style::default().fg(palette::ERROR)),
+            Span::styled(first.clone(), Style::default().fg(palette::ERROR)),
         ]);
     }
 
@@ -1664,11 +1667,11 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
     };
 
     Line::from(vec![
-        Span::styled("  → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(serialized, Style::default().fg(Color::White)),
+        Span::styled("  → ", Style::default().fg(palette::DIM)),
+        Span::styled(serialized, Style::default().fg(palette::WHITE)),
         Span::styled(
             format!("   → {target_label}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         ),
     ])
 }
@@ -1740,7 +1743,7 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(palette::BLACK));
     let inner = outer.inner(popup_area);
     frame.render_widget(outer, popup_area);
 
@@ -1757,10 +1760,10 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
         let buf = popup.buffer_for(*field);
         let label_style = if focused {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::DIM)
         };
 
         let value_spans: Vec<Span<'static>> = if focused {
@@ -1775,18 +1778,18 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
             let left: String = iter.by_ref().take(split).collect();
             let right: String = iter.collect();
             vec![
-                Span::styled(left, Style::default().fg(Color::White)),
+                Span::styled(left, Style::default().fg(palette::WHITE)),
                 Span::styled(
                     "│",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::PRIMARY)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(right, Style::default().fg(Color::White)),
+                Span::styled(right, Style::default().fg(palette::WHITE)),
             ]
         } else {
             let display: String = buf.text.chars().take(value_width).collect();
-            vec![Span::styled(display, Style::default().fg(Color::White))]
+            vec![Span::styled(display, Style::default().fg(palette::WHITE))]
         };
 
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(value_spans.len() + 2);
@@ -1801,13 +1804,13 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
     lines.push(Line::from("")); // separator before footer
     let footer = if let Some(msg) = &popup.error {
         Line::from(vec![
-            Span::styled("  ⚠ ", Style::default().fg(Color::Red)),
-            Span::styled(msg.clone(), Style::default().fg(Color::Red)),
+            Span::styled("  ⚠ ", Style::default().fg(palette::ERROR)),
+            Span::styled(msg.clone(), Style::default().fg(palette::ERROR)),
         ])
     } else {
         Line::from(Span::styled(
             "  Tab/Shift+Tab next · Ctrl+S save · Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         ))
     };
     lines.push(footer);
@@ -1824,7 +1827,7 @@ fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
         let outer = Block::default()
             .borders(Borders::ALL)
             .title(" pick target ")
-            .style(Style::default().bg(Color::Black));
+            .style(Style::default().bg(palette::BLACK));
         let inner = outer.inner(picker_area);
         frame.render_widget(outer, picker_area);
         picker.render(frame, inner);
@@ -1873,7 +1876,7 @@ fn divider_line(label: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {label}"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(palette::DIM)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -1886,8 +1889,14 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     let due_str = task.due.map(|d| d.format("%Y-%m-%d").to_string());
     let due_color = task
         .due
-        .map(|d| if d < today { Color::Red } else { Color::White })
-        .unwrap_or(Color::DarkGray);
+        .map(|d| {
+            if d < today {
+                palette::ERROR
+            } else {
+                palette::WHITE
+            }
+        })
+        .unwrap_or(palette::DIM);
 
     let scheduled_str = task.scheduled.map(|d| d.format("%Y-%m-%d").to_string());
 
@@ -1919,7 +1928,7 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     let terminal_status = matches!(task.status, Status::Done | Status::Cancelled);
     let row_style = if selected {
         Style::default()
-            .bg(Color::Rgb(40, 40, 60))
+            .bg(Color::Rgb(50, 38, 30))
             .add_modifier(Modifier::BOLD)
     } else if terminal_status {
         Style::default().add_modifier(Modifier::DIM)
@@ -1932,14 +1941,14 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
     spans.push(Span::styled(desc_padded, row_style));
     if let Some(due) = due_str {
-        spans.push(Span::styled(" 📅 ", row_style.fg(Color::DarkGray)));
+        spans.push(Span::styled(" 📅 ", row_style.fg(palette::DIM)));
         spans.push(Span::styled(due, row_style.fg(due_color)));
     } else {
         spans.push(Span::styled("              ", row_style));
     }
     if let Some(sch) = scheduled_str {
-        spans.push(Span::styled(" ⏳ ", row_style.fg(Color::DarkGray)));
-        spans.push(Span::styled(sch, row_style.fg(Color::Cyan)));
+        spans.push(Span::styled(" ⏳ ", row_style.fg(palette::DIM)));
+        spans.push(Span::styled(sch, row_style.fg(palette::PRIMARY)));
     }
     Line::from(spans)
 }
@@ -1949,10 +1958,10 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
 /// open anyway; non-open statuses are immediately visible.
 fn status_marker(status: Status) -> (&'static str, Color) {
     match status {
-        Status::Open => (" ", Color::DarkGray),
-        Status::Done => ("✓", Color::Green),
-        Status::Cancelled => ("✗", Color::Red),
-        Status::InProgress => ("▷", Color::Yellow),
+        Status::Open => (" ", palette::DIM),
+        Status::Done => ("✓", palette::SUCCESS),
+        Status::Cancelled => ("✗", palette::ERROR),
+        Status::InProgress => ("▷", palette::SECONDARY),
     }
 }
 
@@ -1969,9 +1978,9 @@ fn priority_label(p: Option<Priority>) -> &'static str {
 
 fn priority_color(p: Option<Priority>) -> Color {
     match p {
-        Some(Priority::Highest | Priority::High) => Color::Red,
-        Some(Priority::Medium) => Color::Yellow,
-        Some(Priority::Low | Priority::Lowest) => Color::Blue,
-        None => Color::DarkGray,
+        Some(Priority::Highest | Priority::High) => palette::ERROR,
+        Some(Priority::Medium) => palette::SECONDARY,
+        Some(Priority::Low | Priority::Lowest) => palette::PRIMARY,
+        None => palette::DIM,
     }
 }
