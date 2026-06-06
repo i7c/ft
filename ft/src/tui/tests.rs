@@ -7996,3 +7996,119 @@ fn capture_var_prompt_snapshot() -> Result<()> {
     assert_tui_snapshot!("capture_var_prompt_80x24", frame);
     Ok(())
 }
+
+// --- configurable keymaps integration tests -----------------------------------
+
+fn vault_with_keymap_config(toml_content: &str) -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("keymap-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(vault_path.join(".ft").join("config.toml"), toml_content).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn keymap_override_applies_to_graph_tab() -> Result<()> {
+    // Override 'R' in tab/graph to graph.refresh.
+    let toml = r#"
+[keymap."tab/graph"]
+"R" = "graph.refresh"
+"#;
+    let (_dir, vault) = vault_with_keymap_config(toml);
+    let app = App::for_test(vault);
+
+    // Graph tab is index 0.
+    use crate::tui::keymap::KeyChord;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let chord = KeyChord::new(KeyCode::Char('R'), KeyModifiers::NONE);
+    let cmd = app.tab_keymap_for_test(0).lookup(chord);
+    assert!(cmd.is_some(), "R should be bound after override");
+    assert_eq!(cmd.unwrap().name, "graph.refresh");
+    Ok(())
+}
+
+#[test]
+fn keymap_unbind_removes_default_chord() -> Result<()> {
+    // Unbind 'q' from the global scope.
+    let toml = r#"
+[[keymap.unbind]]
+scope = "global"
+chord = "q"
+"#;
+    let (_dir, vault) = vault_with_keymap_config(toml);
+    let app = App::for_test(vault);
+
+    use crate::tui::keymap::KeyChord;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let chord = KeyChord::new(KeyCode::Char('q'), KeyModifiers::NONE);
+    // global_keymap() is pub on App.
+    let cmd = app.global_keymap().lookup(chord);
+    assert!(cmd.is_none(), "q should be unbound after unbind entry");
+    Ok(())
+}
+
+#[test]
+fn keymap_strict_false_bad_entry_does_not_prevent_startup() {
+    // A bad command name with strict=false should not panic or fail startup.
+    let toml = r#"
+[keymap]
+strict = false
+
+[keymap.global]
+"q" = "app.this-command-does-not-exist"
+"#;
+    let (_dir, vault) = vault_with_keymap_config(toml);
+    // Should not panic — bad overlay silently falls back to empty overlay.
+    let _app = App::for_test(vault);
+}
+
+#[test]
+fn keymap_validate_strict_bad_entry_returns_errors() {
+    use ft_core::config::{Config, KeymapConfig};
+    use std::collections::HashMap;
+
+    let mut scopes: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut global = HashMap::new();
+    global.insert("q".to_string(), "app.nonexistent".to_string());
+    scopes.insert("global".to_string(), global);
+
+    let config = Config {
+        keymap: Some(KeymapConfig {
+            strict: true,
+            unbind: vec![],
+            scopes,
+        }),
+        ..Config::default()
+    };
+
+    let errors = crate::tui::registry::validate_keymap(&config);
+    assert!(
+        !errors.is_empty(),
+        "strict mode with bad command should report errors"
+    );
+    assert!(
+        errors[0].contains("nonexistent"),
+        "error should mention the bad command name"
+    );
+}
+
+#[test]
+fn help_overlay_with_keymap_override_shows_new_chord() {
+    // Rebind quit: unbind 'q' from global, bind 'x' to app.quit.
+    // The help overlay should show 'x / Ctrl+c' instead of 'q / Ctrl+c'.
+    let toml = r#"
+[keymap.global]
+"x" = "app.quit"
+
+[[keymap.unbind]]
+scope = "global"
+chord = "q"
+"#;
+    let (_dir, vault) = vault_with_keymap_config(toml);
+    let mut app = App::for_test(vault);
+    app.enter_help();
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("help_overlay_with_keymap_override_80x24", frame);
+}

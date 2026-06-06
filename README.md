@@ -76,9 +76,11 @@ depth.
 - [docs/commands.md](docs/commands.md) — Command/Keymap model, `ft do`,
   `ft commands list`/`docs`, status-bar hint, adding new commands
 - [docs/keybindings.md](docs/keybindings.md) — generated reference of
-  every registered command, grouped by scope
+  every registered command, grouped by scope; TUI bindings are
+  user-configurable via `[keymap]` in `config.toml` (see
+  [docs/config.md](docs/config.md#keymap))
 - [docs/config.md](docs/config.md) — full config schema (vault
-  discovery, `[periodic_notes]`, `[editor]`, `[git]`, presets)
+  discovery, `[periodic_notes]`, `[editor]`, `[git]`, `[keymap]`, presets)
 - [docs/task-format.md](docs/task-format.md) — exactly which
   Tasks-plugin emoji fields are supported, with examples and the
   deferred list

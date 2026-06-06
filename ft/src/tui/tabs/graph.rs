@@ -885,7 +885,7 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
 /// Default keymap for the Graph tab. Per-modal flows are routed
 /// through the App-level `ActiveModal` slot and bypass this keymap
 /// entirely (the modal driver dispatches keys to the modal first).
-static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Views
         .bind("Ctrl+n", "graph.add-view")
@@ -949,6 +949,8 @@ pub struct GraphTab {
     /// [`crate::tui::App`] when the TUI was launched via
     /// `ft notes update-related`.
     queued_related_path: Option<PathBuf>,
+    /// Effective keymap: static defaults overlaid with user config.
+    keymap: crate::tui::keymap::KeyMap,
 }
 
 /// Inline rename-in-place state — the modal owns its edit buffer and
@@ -1766,7 +1768,14 @@ impl GraphTab {
             views: vec![ExpandedView::default()],
             active: 0,
             queued_related_path: None,
+            keymap: GRAPH_KEYMAP.clone(),
         }
+    }
+
+    /// Return a new `GraphTab` with the given keymap overlay applied.
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = GRAPH_KEYMAP.with_overlay(overlay);
+        self
     }
 
     /// Return the `NoteId` of the currently-selected Note row, or
@@ -2706,7 +2715,7 @@ impl Tab for GraphTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &GRAPH_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
@@ -3077,7 +3086,7 @@ impl Tab for GraphTab {
         // different preset, Ctrl+W to close the view).
         let graph_missing = self.graph.is_none();
         let chord = KeyChord::from_key_event(k);
-        let cmd = GRAPH_KEYMAP.lookup(chord).cloned();
+        let cmd = self.keymap.lookup(chord).cloned();
         if graph_missing || self.active_view().tree.is_empty() {
             let allowed = cmd.as_ref().is_some_and(|c| empty_tree_allows(c.name));
             if !allowed {

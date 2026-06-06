@@ -72,6 +72,169 @@ pub mod registry {
         slices.push(app_commands::APP_COMMANDS);
         CommandRegistry::from_slices(&slices)
     }
+
+    /// Validate `config.keymap` against every known scope's default keymap.
+    ///
+    /// Returns a list of human-readable error strings. Empty = valid.
+    /// Used by `ft commands check-keymap`.
+    pub fn validate_keymap(config: &ft_core::config::Config) -> Vec<String> {
+        use crate::tui::{
+            app_commands::APP_KEYMAP,
+            keymap::{parse_scope, KeymapOverlay},
+            modal_commands,
+            tabs::{
+                graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
+                tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+            },
+        };
+
+        let registry = build();
+        let kc = config.keymap.as_ref();
+        let raw_unbinds: Vec<(String, String)> = kc
+            .map(|k| {
+                k.unbind
+                    .iter()
+                    .map(|e| (e.scope.clone(), e.chord.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let scope_bases: &[(&str, &crate::tui::keymap::KeyMap)] = &[
+            ("global", &APP_KEYMAP),
+            ("tab/graph", &GRAPH_KEYMAP),
+            ("tab/tasks", &TASKS_KEYMAP),
+            ("tab/notes", &NOTES_KEYMAP),
+            ("tab/timeblocks", &TIMEBLOCKS_KEYMAP),
+            ("tab/journal", &JOURNAL_KEYMAP),
+            ("modal/create", &modal_commands::CREATE_KEYMAP),
+            ("modal/append", &modal_commands::APPEND_KEYMAP),
+            ("modal/section-move", &modal_commands::SECTION_MOVE_KEYMAP),
+            ("modal/capture-var", &modal_commands::CAPTURE_VAR_KEYMAP),
+            (
+                "modal/periodic-leader",
+                &modal_commands::PERIODIC_LEADER_KEYMAP,
+            ),
+            ("modal/query-bar", &modal_commands::QUERY_BAR_KEYMAP),
+            ("modal/rename", &modal_commands::RENAME_KEYMAP),
+            ("modal/search", &modal_commands::SEARCH_KEYMAP),
+            ("modal/preset-picker", &modal_commands::PRESET_PICKER_KEYMAP),
+            (
+                "modal/capture-picker",
+                &modal_commands::CAPTURE_PICKER_KEYMAP,
+            ),
+            ("modal/related", &modal_commands::RELATED_KEYMAP),
+            ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+        ];
+
+        let mut errors: Vec<String> = Vec::new();
+        let empty_scope = std::collections::HashMap::new();
+
+        // Flag unknown scope strings in the scopes table.
+        if let Some(kc) = kc {
+            for scope_str in kc.scopes.keys() {
+                if parse_scope(scope_str).is_none() {
+                    errors.push(format!("unknown scope {scope_str:?} in [keymap] config"));
+                }
+            }
+        }
+
+        // Validate all known scopes.
+        for (scope_str, base) in scope_bases {
+            let scope_table = kc
+                .and_then(|k| k.scopes.get(*scope_str))
+                .unwrap_or(&empty_scope);
+            if let Err(errs) =
+                KeymapOverlay::from_raw(scope_table, &raw_unbinds, &registry, scope_str, base)
+            {
+                for e in errs {
+                    errors.push(e.to_string());
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Return effective chord-to-command bindings per scope after applying
+    /// `config.keymap` overlays. Each entry is `(scope_str, chord_str, command_name)`.
+    /// Used by `ft commands list --effective`.
+    pub fn effective_bindings(config: &ft_core::config::Config) -> Vec<(String, String, String)> {
+        use crate::tui::{
+            app_commands::APP_KEYMAP,
+            keymap::{chord_to_str, KeymapOverlay},
+            modal_commands,
+            tabs::{
+                graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
+                tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+            },
+        };
+
+        let registry = build();
+        let kc = config.keymap.as_ref();
+        let raw_unbinds: Vec<(String, String)> = kc
+            .map(|k| {
+                k.unbind
+                    .iter()
+                    .map(|e| (e.scope.clone(), e.chord.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let scope_bases: &[(&str, &crate::tui::keymap::KeyMap)] = &[
+            ("global", &APP_KEYMAP),
+            ("tab/graph", &GRAPH_KEYMAP),
+            ("tab/tasks", &TASKS_KEYMAP),
+            ("tab/notes", &NOTES_KEYMAP),
+            ("tab/timeblocks", &TIMEBLOCKS_KEYMAP),
+            ("tab/journal", &JOURNAL_KEYMAP),
+            ("modal/create", &modal_commands::CREATE_KEYMAP),
+            ("modal/append", &modal_commands::APPEND_KEYMAP),
+            ("modal/section-move", &modal_commands::SECTION_MOVE_KEYMAP),
+            ("modal/capture-var", &modal_commands::CAPTURE_VAR_KEYMAP),
+            (
+                "modal/periodic-leader",
+                &modal_commands::PERIODIC_LEADER_KEYMAP,
+            ),
+            ("modal/query-bar", &modal_commands::QUERY_BAR_KEYMAP),
+            ("modal/rename", &modal_commands::RENAME_KEYMAP),
+            ("modal/search", &modal_commands::SEARCH_KEYMAP),
+            ("modal/preset-picker", &modal_commands::PRESET_PICKER_KEYMAP),
+            (
+                "modal/capture-picker",
+                &modal_commands::CAPTURE_PICKER_KEYMAP,
+            ),
+            ("modal/related", &modal_commands::RELATED_KEYMAP),
+            ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+        ];
+
+        let mut out: Vec<(String, String, String)> = Vec::new();
+        let empty_scope = std::collections::HashMap::new();
+
+        for (scope_str, base) in scope_bases {
+            let scope_table = kc
+                .and_then(|k| k.scopes.get(*scope_str))
+                .unwrap_or(&empty_scope);
+            let effective = match KeymapOverlay::from_raw(
+                scope_table,
+                &raw_unbinds,
+                &registry,
+                scope_str,
+                base,
+            ) {
+                Ok(ov) => base.with_overlay(&ov),
+                Err(_) => (*base).clone(),
+            };
+            for (chord, cmd) in effective.iter() {
+                out.push((
+                    scope_str.to_string(),
+                    chord_to_str(chord),
+                    cmd.name.to_string(),
+                ));
+            }
+        }
+
+        out
+    }
 }
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;

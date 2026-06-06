@@ -26,6 +26,7 @@ dialoguer = { workspace = true }
 similar = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+thiserror = { workspace = true }
 nucleo-matcher = { workspace = true }
 regex = { workspace = true }
 

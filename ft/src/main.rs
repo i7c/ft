@@ -102,7 +102,7 @@ fn main() -> ExitCode {
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
-        Commands::Commands(args) => cmd::commands::run(args).map(|_| ExitCode::SUCCESS),
+        Commands::Commands(args) => cmd::commands::run(args, vault),
         Commands::Do(args) => cmd::do_cmd::run(args, vault),
     };
 

@@ -89,10 +89,18 @@ pub struct App {
     /// post `AppRequest::OpenModal` and have the App service it
     /// after the event returns.
     active_modal: RefCell<Option<ActiveModal>>,
+    /// Effective keymap for the currently-active modal (static defaults
+    /// overlaid with user config). Computed when a modal opens; cleared
+    /// when it closes. Used by the `?` overlay so it shows user overrides.
+    active_modal_keymap: RefCell<Option<crate::tui::keymap::KeyMap>>,
     /// Build-time command registry — union of every tab's, modal's,
     /// and global commands. Powers `?` overlay rendering, `ft commands
     /// list`, the docs generator, and (eventually) `ft do`.
     command_registry: CommandRegistry,
+    /// Effective App-global keymap (APP_KEYMAP + user [keymap.global]).
+    effective_global_keymap: crate::tui::keymap::KeyMap,
+    /// Per-modal overlays built once at startup from user config.
+    per_modal_overlays: std::collections::HashMap<&'static str, crate::tui::keymap::KeymapOverlay>,
     /// Optional action to apply once the first frame is about to draw.
     /// Set by `App::set_initial_action` before `run`; consumed on the
     /// first iteration of the event loop.
@@ -112,14 +120,16 @@ impl App {
     /// state directory.
     pub fn new_with_recents(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
         let today = resolve_today();
-        let tabs: Vec<Box<dyn Tab>> = vec![
-            Box::new(GraphTab::new()),
-            Box::new(TasksTab::new()),
-            Box::new(NotesTab::new()),
-            Box::new(TimeblocksTab::new()),
-            Box::new(JournalTab::new()),
-        ];
-        Self::with_tabs(vault, recents, today, tabs)
+        let (tabs, effective_global_keymap, per_modal_overlays) =
+            build_tabs_with_overlays(&vault.config.config);
+        Self::with_tabs(
+            vault,
+            recents,
+            today,
+            tabs,
+            effective_global_keymap,
+            per_modal_overlays,
+        )
     }
 
     fn with_tabs(
@@ -127,6 +137,11 @@ impl App {
         recents: Arc<RecentsLog>,
         today: NaiveDate,
         tabs: Vec<Box<dyn Tab>>,
+        effective_global_keymap: crate::tui::keymap::KeyMap,
+        per_modal_overlays: std::collections::HashMap<
+            &'static str,
+            crate::tui::keymap::KeymapOverlay,
+        >,
     ) -> Self {
         let command_registry = build_registry(&tabs);
         Self {
@@ -142,7 +157,10 @@ impl App {
             sync_conflict: RefCell::new(None),
             jobs: RefCell::new(None),
             active_modal: RefCell::new(None),
+            active_modal_keymap: RefCell::new(None),
             command_registry,
+            effective_global_keymap,
+            per_modal_overlays,
             initial_action: RefCell::new(None),
             should_quit: false,
         }
@@ -153,6 +171,26 @@ impl App {
     /// which modal is up without reaching for private fields.
     pub fn active_modal_name(&self) -> Option<&'static str> {
         self.active_modal.borrow().as_ref().map(|m| m.name())
+    }
+
+    /// Open a modal, computing and caching its effective keymap (static
+    /// defaults + user overlay) for the `?` overlay.
+    fn open_modal(&self, modal: ActiveModal) {
+        let effective_km = {
+            let base = modal.keymap().clone();
+            if let Some(overlay) = self.per_modal_overlays.get(modal.name()) {
+                base.with_overlay(overlay)
+            } else {
+                base
+            }
+        };
+        *self.active_modal_keymap.borrow_mut() = Some(effective_km);
+        *self.active_modal.borrow_mut() = Some(modal);
+    }
+
+    fn close_modal(&self) {
+        *self.active_modal.borrow_mut() = None;
+        *self.active_modal_keymap.borrow_mut() = None;
     }
 
     /// Queue a startup action to apply on first event-loop iteration.
@@ -272,11 +310,16 @@ impl App {
         // Up-to-three primary chord hints from the active modal's
         // keymap (commands-and-keymaps §10.2). Empty when no modal is
         // up, leaving the center cell free for the refresh stamp.
-        let modal_hints: Vec<(String, String)> = match self.active_modal.borrow().as_ref() {
-            Some(modal) => {
-                crate::tui::help::modal_primary_hints(modal.keymap(), &self.command_registry)
+        let modal_hints: Vec<(String, String)> = {
+            let modal_ref = self.active_modal.borrow();
+            let keymap_ref = self.active_modal_keymap.borrow();
+            match modal_ref.as_ref() {
+                Some(modal) => {
+                    let km = keymap_ref.as_ref().unwrap_or_else(|| modal.keymap());
+                    crate::tui::help::modal_primary_hints(km, &self.command_registry)
+                }
+                None => Vec::new(),
             }
-            None => Vec::new(),
         };
         ui::render_status_bar(
             frame,
@@ -295,16 +338,23 @@ impl App {
 
         match self.mode {
             Mode::Help => {
-                let global = global_section(&self.command_registry);
+                let global = global_section(&self.effective_global_keymap, &self.command_registry);
                 // When a modal is active, the `?` overlay shows the
                 // modal's keymap_help instead of the tab's
                 // help_sections (extract-modal-driver §2.5).
-                let sections: Vec<HelpSection> = match self.active_modal.borrow().as_ref() {
-                    Some(modal) => sections_from_keymap(modal.keymap(), &self.command_registry),
-                    None => sections_from_keymap(
-                        self.tabs[self.active].keymap(),
-                        &self.command_registry,
-                    ),
+                let sections: Vec<HelpSection> = {
+                    let modal_ref = self.active_modal.borrow();
+                    let keymap_ref = self.active_modal_keymap.borrow();
+                    match modal_ref.as_ref() {
+                        Some(modal) => {
+                            let km = keymap_ref.as_ref().unwrap_or_else(|| modal.keymap());
+                            sections_from_keymap(km, &self.command_registry)
+                        }
+                        None => sections_from_keymap(
+                            self.tabs[self.active].keymap(),
+                            &self.command_registry,
+                        ),
+                    }
                 };
                 ui::render_help_overlay(
                     frame,
@@ -402,11 +452,11 @@ impl App {
             match outcome {
                 ModalOutcome::Consumed => return Ok(()),
                 ModalOutcome::Closed => {
-                    *self.active_modal.borrow_mut() = None;
+                    self.close_modal();
                     return Ok(());
                 }
                 ModalOutcome::OpenSibling(next) => {
-                    *self.active_modal.borrow_mut() = Some(*next);
+                    self.open_modal(*next);
                     return Ok(());
                 }
                 ModalOutcome::NotHandled => {
@@ -449,7 +499,7 @@ impl App {
 
     fn handle_global_key(&mut self, k: KeyEvent) -> Result<()> {
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = APP_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.effective_global_keymap.lookup(chord).cloned() else {
             return Ok(());
         };
         self.dispatch_global_command(&cmd)
@@ -496,10 +546,11 @@ impl App {
     }
 
     /// App-global keymap accessor (used by the `?` overlay, the docs
-    /// generator, and `ft commands list`).
-    #[allow(dead_code)] // wired into help.rs / docs.rs in §6/§7
+    /// generator, and `ft commands list`). Returns the effective keymap
+    /// (static defaults overlaid with user config).
+    #[allow(dead_code)]
     pub fn global_keymap(&self) -> &crate::tui::keymap::KeyMap {
-        &APP_KEYMAP
+        &self.effective_global_keymap
     }
 
     fn switch_tab(&mut self, idx: usize) -> Result<()> {
@@ -556,7 +607,7 @@ impl App {
                 Ok(())
             }
             AppRequest::OpenModal(modal) => {
-                *self.active_modal.borrow_mut() = Some(*modal);
+                self.open_modal(*modal);
                 Ok(())
             }
             AppRequest::OpenModalWithToast {
@@ -564,7 +615,7 @@ impl App {
                 toast_text,
                 toast_style,
             } => {
-                *self.active_modal.borrow_mut() = Some(*modal);
+                self.open_modal(*modal);
                 self.push_toast(toast_text, toast_style);
                 Ok(())
             }
@@ -1004,6 +1055,135 @@ fn resolve_today() -> NaiveDate {
         .unwrap_or_else(|| Local::now().date_naive())
 }
 
+/// Build tabs with per-scope keymap overlays derived from `config`.
+///
+/// Returns `(tabs, effective_global_keymap, per_modal_overlays)`.
+/// On overlay validation error: emits warnings to stderr in strict mode,
+/// silently falls back to an empty overlay otherwise.
+fn build_tabs_with_overlays(
+    config: &ft_core::config::Config,
+) -> (
+    Vec<Box<dyn Tab>>,
+    crate::tui::keymap::KeyMap,
+    std::collections::HashMap<&'static str, crate::tui::keymap::KeymapOverlay>,
+) {
+    use crate::tui::{
+        keymap::KeymapOverlay,
+        tabs::{
+            graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP, tasks::TASKS_KEYMAP,
+            timeblocks::TIMEBLOCKS_KEYMAP,
+        },
+    };
+
+    let registry = crate::tui::registry::build();
+
+    let kc = config.keymap.as_ref();
+    let strict = kc.map(|k| k.strict).unwrap_or(false);
+    let raw_unbinds: Vec<(String, String)> = kc
+        .map(|k| {
+            k.unbind
+                .iter()
+                .map(|e| (e.scope.clone(), e.chord.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let build_overlay = |scope_str: &str, base: &crate::tui::keymap::KeyMap| -> KeymapOverlay {
+        let empty_scope = std::collections::HashMap::new();
+        let scope_table = kc
+            .and_then(|k| k.scopes.get(scope_str))
+            .unwrap_or(&empty_scope);
+        match KeymapOverlay::from_raw(scope_table, &raw_unbinds, &registry, scope_str, base) {
+            Ok(ov) => ov,
+            Err(errs) => {
+                if strict {
+                    for e in &errs {
+                        eprintln!("ft: keymap config error: {e}");
+                    }
+                }
+                KeymapOverlay::empty()
+            }
+        }
+    };
+
+    let global_overlay = build_overlay("global", &APP_KEYMAP);
+    let graph_overlay = build_overlay("tab/graph", &GRAPH_KEYMAP);
+    let tasks_overlay = build_overlay("tab/tasks", &TASKS_KEYMAP);
+    let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
+    let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
+    let journal_overlay = build_overlay("tab/journal", &JOURNAL_KEYMAP);
+
+    let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
+        (
+            "create",
+            build_overlay("modal/create", &modal_commands::CREATE_KEYMAP),
+        ),
+        (
+            "append",
+            build_overlay("modal/append", &modal_commands::APPEND_KEYMAP),
+        ),
+        (
+            "section-move",
+            build_overlay("modal/section-move", &modal_commands::SECTION_MOVE_KEYMAP),
+        ),
+        (
+            "capture-var",
+            build_overlay("modal/capture-var", &modal_commands::CAPTURE_VAR_KEYMAP),
+        ),
+        (
+            "periodic-leader",
+            build_overlay(
+                "modal/periodic-leader",
+                &modal_commands::PERIODIC_LEADER_KEYMAP,
+            ),
+        ),
+        (
+            "query-bar",
+            build_overlay("modal/query-bar", &modal_commands::QUERY_BAR_KEYMAP),
+        ),
+        (
+            "rename",
+            build_overlay("modal/rename", &modal_commands::RENAME_KEYMAP),
+        ),
+        (
+            "search",
+            build_overlay("modal/search", &modal_commands::SEARCH_KEYMAP),
+        ),
+        (
+            "preset-picker",
+            build_overlay("modal/preset-picker", &modal_commands::PRESET_PICKER_KEYMAP),
+        ),
+        (
+            "capture-picker",
+            build_overlay(
+                "modal/capture-picker",
+                &modal_commands::CAPTURE_PICKER_KEYMAP,
+            ),
+        ),
+        (
+            "related",
+            build_overlay("modal/related", &modal_commands::RELATED_KEYMAP),
+        ),
+        (
+            "move",
+            build_overlay("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    let tabs: Vec<Box<dyn Tab>> = vec![
+        Box::new(GraphTab::new().with_keymap_overlay(&graph_overlay)),
+        Box::new(TasksTab::new().with_keymap_overlay(&tasks_overlay)),
+        Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
+        Box::new(TimeblocksTab::new().with_keymap_overlay(&timeblocks_overlay)),
+        Box::new(JournalTab::new().with_keymap_overlay(&journal_overlay)),
+    ];
+
+    let effective_global_keymap = APP_KEYMAP.with_overlay(&global_overlay);
+    (tabs, effective_global_keymap, per_modal_overlays)
+}
+
 /// Compose the build-time `CommandRegistry`: every tab's commands +
 /// every modal variant's commands + APP_COMMANDS. Called once at
 /// App construction (and on every `for_test*` constructor) so the
@@ -1144,7 +1324,14 @@ impl App {
             Box::new(JournalTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
-        Self::with_tabs(Arc::new(vault), recents, today, tabs)
+        Self::with_tabs(
+            Arc::new(vault),
+            recents,
+            today,
+            tabs,
+            crate::tui::app_commands::APP_KEYMAP.clone(),
+            std::collections::HashMap::new(),
+        )
     }
 
     /// Variant of [`for_test`] that lets the caller inspect / pre-seed the
@@ -1173,7 +1360,14 @@ impl App {
             Box::new(TimeblocksTab::with_clock(clock)),
             Box::new(JournalTab::new()),
         ];
-        Self::with_tabs(Arc::new(vault), recents, today, tabs)
+        Self::with_tabs(
+            Arc::new(vault),
+            recents,
+            today,
+            tabs,
+            crate::tui::app_commands::APP_KEYMAP.clone(),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn test_recents_for(vault: &Vault) -> Arc<RecentsLog> {
@@ -1253,14 +1447,14 @@ impl App {
             let req = self.pending_request.borrow_mut().take();
             match req {
                 Some(AppRequest::OpenModal(m)) => {
-                    *self.active_modal.borrow_mut() = Some(*m);
+                    self.open_modal(*m);
                 }
                 Some(AppRequest::OpenModalWithToast {
                     modal,
                     toast_text,
                     toast_style,
                 }) => {
-                    *self.active_modal.borrow_mut() = Some(*modal);
+                    self.open_modal(*modal);
                     self.push_toast(toast_text, toast_style);
                 }
                 Some(AppRequest::GraphJumpToNodes(path)) => {
@@ -1422,7 +1616,7 @@ impl App {
                     });
                 }
                 AppRequest::OpenModal(modal) => {
-                    *self.active_modal.borrow_mut() = Some(*modal);
+                    self.open_modal(*modal);
                 }
                 AppRequest::GraphJumpToNodes(path) => {
                     if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
@@ -1586,7 +1780,7 @@ impl App {
                 Ok(())
             }
             AppRequest::OpenModal(modal) => {
-                *self.active_modal.borrow_mut() = Some(*modal);
+                self.open_modal(*modal);
                 Ok(())
             }
             AppRequest::OpenModalWithToast {
@@ -1594,7 +1788,7 @@ impl App {
                 toast_text,
                 toast_style,
             } => {
-                *self.active_modal.borrow_mut() = Some(*modal);
+                self.open_modal(*modal);
                 self.push_toast(toast_text, toast_style);
                 Ok(())
             }
@@ -1794,5 +1988,11 @@ impl App {
         message: Option<String>,
     ) -> Result<()> {
         self.dispatch_sync_git(events, message)
+    }
+
+    /// Return the effective keymap for the tab at `idx`. Used by
+    /// configurable-keymap integration tests to assert overlays applied.
+    pub fn tab_keymap_for_test(&self, idx: usize) -> &crate::tui::keymap::KeyMap {
+        self.tabs[idx].keymap()
     }
 }

@@ -92,6 +92,34 @@ ft commands docs --check                 # exit 0 iff the committed file matches
 CI runs `--check` to catch drift between the registry and the
 committed file.
 
+### `ft commands check-keymap`
+
+Validates `[keymap]` entries in `config.toml` against every known scope's
+default keymap. Reports unknown commands, invalid chord strings, and chords
+targeted for unbinding that don't exist in the base map.
+
+```sh
+ft commands check-keymap                 # exit 0 if clean; exit 2 on any error
+ft commands check-keymap --format json   # machine-readable error list
+```
+
+Useful as a lint step after editing `config.toml`. The same validation runs
+at TUI startup under `strict = true`; `check-keymap` lets you catch errors
+before launching the TUI. See [docs/config.md](config.md#keymap) for the
+full `[keymap]` schema.
+
+### `ft commands list --effective`
+
+Like `ft commands list` but composes per-scope effective keymaps — the
+default bindings merged with any user `[keymap]` overlays from `config.toml`
+— and emits chord-to-command rows:
+
+```sh
+ft commands list --effective             # all scopes, terminal table
+ft commands list --effective --scope global  # filter to one scope
+ft commands list --effective --format ndjson # machine-readable
+```
+
 ### `ft do <command>`
 
 Dispatches a registered command headlessly.
@@ -153,6 +181,12 @@ do this by default) and by ordering primary commands first in the
 modal's keymap chain.
 
 ## Adding commands and keymaps
+
+Existing commands are user-rebindable at runtime — no recompilation needed.
+Add a `[keymap.<scope>]` table to your `config.toml` to assign new chords,
+and `[[keymap.unbind]]` entries to remove defaults. See
+[docs/config.md](config.md#keymap) for the full schema, examples, and the
+`ft commands check-keymap` lint tool.
 
 ### A new command on an existing tab
 

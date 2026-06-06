@@ -148,7 +148,7 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
 /// `Down`/`j`) bind the same command to multiple chords. The
 /// picker-open state captures keys before this keymap is consulted
 /// (see `handle_event`).
-static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Source
         .bind("/", "journal.open-picker")
@@ -191,6 +191,7 @@ pub struct JournalTab {
     /// user knows why the feed didn't change. Cleared on next
     /// successful load or `c`.
     last_error: Option<String>,
+    keymap: crate::tui::keymap::KeyMap,
 }
 
 impl Default for JournalTab {
@@ -210,7 +211,13 @@ impl JournalTab {
             queued_for: None,
             cache: None,
             last_error: None,
+            keymap: JOURNAL_KEYMAP.clone(),
         }
+    }
+
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = JOURNAL_KEYMAP.with_overlay(overlay);
+        self
     }
 
     /// Run `build_journal` for `path` (vault-relative) and replace
@@ -381,7 +388,7 @@ impl Tab for JournalTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &JOURNAL_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
@@ -449,7 +456,7 @@ impl Tab for JournalTab {
         }
 
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = JOURNAL_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
             return Ok(EventOutcome::NotHandled);
         };
         Ok(match self.dispatch_command(&cmd, ctx) {

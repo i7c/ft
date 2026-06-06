@@ -1,4 +1,4 @@
-#![allow(dead_code)] // wired in §§4–7 (per-tab keymaps, ? overlay, docs gen)
+#![allow(dead_code)]
 
 //! Key chord parsing + the `KeyMap` data table.
 //!
@@ -13,9 +13,11 @@
 //! is the right complexity. Duplicate chords inside one map panic at
 //! build time so collisions surface immediately.
 
+use std::collections::HashMap;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::tui::command::{Command, CommandArgs};
+use crate::tui::command::{Command, CommandArgs, CommandRegistry, CommandScope};
 
 /// A key chord — code + modifier set, normalized so that an ASCII
 /// uppercase `Char` is represented as the lowercase variant with the
@@ -259,6 +261,200 @@ impl KeyMap {
     }
 }
 
+// ── Overlay types ─────────────────────────────────────────────────────────
+
+/// Parse error for a chord string — produced by [`KeymapOverlay::from_raw`].
+#[derive(Debug, thiserror::Error)]
+#[error("invalid chord string")]
+pub struct ChordParseError;
+
+/// One user-defined binding: a parsed chord bound to a validated command.
+#[derive(Debug, Clone)]
+pub struct KeymapBinding {
+    pub chord: KeyChord,
+    pub command: Command,
+}
+
+/// A validated overlay: unbinds to drop from the base map, then
+/// overrides to replace-or-append. Built by [`KeymapOverlay::from_raw`];
+/// applied by [`KeyMap::with_overlay`].
+#[derive(Debug, Clone, Default)]
+pub struct KeymapOverlay {
+    pub overrides: Vec<KeymapBinding>,
+    pub unbinds: Vec<KeyChord>,
+}
+
+impl KeymapOverlay {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
+
+/// Errors produced by [`KeymapOverlay::from_raw`].
+#[derive(Debug, thiserror::Error)]
+pub enum KeymapOverlayError {
+    #[error("invalid chord {raw:?} in scope {scope}: {source}")]
+    InvalidChord {
+        raw: String,
+        #[source]
+        source: ChordParseError,
+        scope: String,
+    },
+    #[error("unknown command {name:?} in scope {scope}")]
+    UnknownCommand { name: String, scope: String },
+    #[error("chord {chord} listed in unbind for scope {scope} is not in the default keymap")]
+    UnbindMissing { chord: String, scope: String },
+    #[error("chord {chord} appears twice in scope {scope} overrides ({first:?} vs {second:?})")]
+    OverlayCollision {
+        chord: String,
+        first: String,
+        second: String,
+        scope: String,
+    },
+}
+
+/// Map a canonical scope string to a [`CommandScope`] for the known scopes.
+pub fn parse_scope(s: &str) -> Option<CommandScope> {
+    match s {
+        "global" => Some(CommandScope::Global),
+        "tab/graph" => Some(CommandScope::Tab("graph")),
+        "tab/tasks" => Some(CommandScope::Tab("tasks")),
+        "tab/notes" => Some(CommandScope::Tab("notes")),
+        "tab/timeblocks" => Some(CommandScope::Tab("timeblocks")),
+        "tab/journal" => Some(CommandScope::Tab("journal")),
+        "modal/create" => Some(CommandScope::Modal("create")),
+        "modal/append" => Some(CommandScope::Modal("append")),
+        "modal/section-move" => Some(CommandScope::Modal("section-move")),
+        "modal/capture-var" => Some(CommandScope::Modal("capture-var")),
+        "modal/periodic-leader" => Some(CommandScope::Modal("periodic-leader")),
+        "modal/query-bar" => Some(CommandScope::Modal("query-bar")),
+        "modal/rename" => Some(CommandScope::Modal("rename")),
+        "modal/search" => Some(CommandScope::Modal("search")),
+        "modal/preset-picker" => Some(CommandScope::Modal("preset-picker")),
+        "modal/capture-picker" => Some(CommandScope::Modal("capture-picker")),
+        "modal/related" => Some(CommandScope::Modal("related")),
+        "modal/move" => Some(CommandScope::Modal("move")),
+        _ => None,
+    }
+}
+
+impl KeymapOverlay {
+    /// Validate a raw scope table and unbind list against `base` and `registry`.
+    ///
+    /// Returns an `Ok(overlay)` if every entry parses cleanly, or
+    /// `Err(errors)` with *all* problems (not just the first).
+    ///
+    /// `scope_str` is the canonical scope string (e.g. `"tab/graph"`) used in
+    /// error messages.
+    pub fn from_raw(
+        raw_scope_table: &HashMap<String, String>,
+        raw_unbinds: &[(String, String)],
+        registry: &CommandRegistry,
+        scope_str: &str,
+        base: &KeyMap,
+    ) -> Result<Self, Vec<KeymapOverlayError>> {
+        let mut errors: Vec<KeymapOverlayError> = Vec::new();
+        let mut overrides: Vec<KeymapBinding> = Vec::new();
+
+        // Parse and validate override entries.
+        for (raw_chord, cmd_name) in raw_scope_table {
+            let chord = match chord_from_str(raw_chord) {
+                Some(c) => c,
+                None => {
+                    errors.push(KeymapOverlayError::InvalidChord {
+                        raw: raw_chord.clone(),
+                        source: ChordParseError,
+                        scope: scope_str.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if registry.lookup(cmd_name).is_none() {
+                errors.push(KeymapOverlayError::UnknownCommand {
+                    name: cmd_name.clone(),
+                    scope: scope_str.to_string(),
+                });
+                continue;
+            }
+            // Collision: two override entries normalise to the same chord.
+            if let Some(existing) = overrides.iter().find(|b| b.chord == chord) {
+                errors.push(KeymapOverlayError::OverlayCollision {
+                    chord: chord_to_str(&chord),
+                    first: existing.command.name.to_string(),
+                    second: cmd_name.clone(),
+                    scope: scope_str.to_string(),
+                });
+                continue;
+            }
+            overrides.push(KeymapBinding {
+                chord,
+                command: Command::new(
+                    registry.lookup(cmd_name).unwrap().name, // static lifetime
+                ),
+            });
+        }
+
+        // Validate unbind entries for this scope.
+        let mut unbinds: Vec<KeyChord> = Vec::new();
+        for (unbind_scope, raw_chord) in raw_unbinds {
+            if unbind_scope != scope_str {
+                continue;
+            }
+            let chord = match chord_from_str(raw_chord) {
+                Some(c) => c,
+                None => {
+                    errors.push(KeymapOverlayError::InvalidChord {
+                        raw: raw_chord.clone(),
+                        source: ChordParseError,
+                        scope: scope_str.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if base.lookup(chord).is_none() {
+                errors.push(KeymapOverlayError::UnbindMissing {
+                    chord: chord_to_str(&chord),
+                    scope: scope_str.to_string(),
+                });
+                continue;
+            }
+            unbinds.push(chord);
+        }
+
+        if errors.is_empty() {
+            Ok(Self { overrides, unbinds })
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl KeyMap {
+    /// Return a new `KeyMap` with `overlay` applied on top of `self`.
+    ///
+    /// Apply order:
+    /// 1. Drop all unbinds from the base.
+    /// 2. For each override: if the chord exists post-unbind, replace the
+    ///    command; otherwise append as a new binding.
+    ///
+    /// Infallible — all errors are caught at validation time in
+    /// [`KeymapOverlay::from_raw`].
+    pub fn with_overlay(&self, overlay: &KeymapOverlay) -> KeyMap {
+        let mut out = self.clone();
+        for chord in &overlay.unbinds {
+            out.bindings.retain(|(c, _)| c != chord);
+        }
+        for b in &overlay.overrides {
+            if let Some(slot) = out.bindings.iter_mut().find(|(c, _)| *c == b.chord) {
+                slot.1 = b.command.clone();
+            } else {
+                out.bindings.push((b.chord, b.command.clone()));
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +620,211 @@ mod tests {
             names,
             vec!["graph.create-note", "graph.open", "graph.refresh"]
         );
+    }
+
+    // ── Overlay tests ─────────────────────────────────────────────────────
+
+    use crate::tui::command::{CommandDef, CommandRegistry, CommandScope};
+    use std::collections::HashMap;
+
+    static TEST_COMMANDS: &[CommandDef] = &[
+        CommandDef {
+            name: "graph.create-note",
+            description: "Create",
+            scope: CommandScope::Tab("graph"),
+            group: "Mutations",
+            args_schema: &[],
+            opens_modal: false,
+            is_primary: false,
+        },
+        CommandDef {
+            name: "graph.refresh",
+            description: "Refresh",
+            scope: CommandScope::Tab("graph"),
+            group: "Navigation",
+            args_schema: &[],
+            opens_modal: false,
+            is_primary: false,
+        },
+        CommandDef {
+            name: "graph.open",
+            description: "Open",
+            scope: CommandScope::Tab("graph"),
+            group: "Navigation",
+            args_schema: &[],
+            opens_modal: false,
+            is_primary: false,
+        },
+    ];
+
+    fn test_registry() -> CommandRegistry {
+        CommandRegistry::from_slices(&[TEST_COMMANDS])
+    }
+
+    fn base_map() -> KeyMap {
+        KeyMap::new()
+            .bind("c", "graph.create-note")
+            .bind("r", "graph.refresh")
+            .bind("Ctrl+r", "graph.refresh")
+    }
+
+    #[test]
+    fn overlay_empty_round_trip() {
+        let base = base_map();
+        let overlay = KeymapOverlay::empty();
+        let result = base.with_overlay(&overlay);
+        assert_eq!(result.len(), base.len());
+        assert_eq!(
+            result.lookup(chord_from_str("c").unwrap()).map(|c| c.name),
+            Some("graph.create-note")
+        );
+    }
+
+    #[test]
+    fn overlay_new_chord_append() {
+        let base = base_map();
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("o".to_string(), "graph.open".to_string());
+        let overlay = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap();
+        let result = base.with_overlay(&overlay);
+        assert_eq!(
+            result.lookup(chord_from_str("o").unwrap()).map(|c| c.name),
+            Some("graph.open")
+        );
+        // Existing entries intact.
+        assert_eq!(
+            result.lookup(chord_from_str("c").unwrap()).map(|c| c.name),
+            Some("graph.create-note")
+        );
+    }
+
+    #[test]
+    fn overlay_replace_existing_chord() {
+        let base = base_map();
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("c".to_string(), "graph.refresh".to_string());
+        let overlay = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap();
+        let result = base.with_overlay(&overlay);
+        // c now triggers refresh.
+        assert_eq!(
+            result.lookup(chord_from_str("c").unwrap()).map(|c| c.name),
+            Some("graph.refresh")
+        );
+    }
+
+    #[test]
+    fn overlay_unbind_without_replacement() {
+        let base = base_map();
+        let reg = test_registry();
+        let unbinds = vec![("tab/graph".to_string(), "r".to_string())];
+        let overlay =
+            KeymapOverlay::from_raw(&HashMap::new(), &unbinds, &reg, "tab/graph", &base).unwrap();
+        let result = base.with_overlay(&overlay);
+        assert!(result.lookup(chord_from_str("r").unwrap()).is_none());
+        // Ctrl+r still present.
+        assert!(result.lookup(chord_from_str("Ctrl+r").unwrap()).is_some());
+    }
+
+    #[test]
+    fn overlay_unbind_then_rebind() {
+        let base = base_map();
+        let reg = test_registry();
+        let unbinds = vec![("tab/graph".to_string(), "r".to_string())];
+        let mut table = HashMap::new();
+        table.insert("r".to_string(), "graph.open".to_string());
+        let overlay = KeymapOverlay::from_raw(&table, &unbinds, &reg, "tab/graph", &base).unwrap();
+        let result = base.with_overlay(&overlay);
+        assert_eq!(
+            result.lookup(chord_from_str("r").unwrap()).map(|c| c.name),
+            Some("graph.open")
+        );
+    }
+
+    #[test]
+    fn overlay_unknown_command_error() {
+        let base = base_map();
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("c".to_string(), "graph.no-such-command".to_string());
+        let errs = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(
+            matches!(&errs[0], KeymapOverlayError::UnknownCommand { name, .. } if name == "graph.no-such-command")
+        );
+    }
+
+    #[test]
+    fn overlay_invalid_chord_error() {
+        let base = base_map();
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("Frobnicate+x".to_string(), "graph.refresh".to_string());
+        let errs = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(
+            matches!(&errs[0], KeymapOverlayError::InvalidChord { raw, .. } if raw == "Frobnicate+x")
+        );
+    }
+
+    #[test]
+    fn overlay_unbind_missing_chord_error() {
+        let base = base_map();
+        let reg = test_registry();
+        let unbinds = vec![("tab/graph".to_string(), "z".to_string())];
+        let errs = KeymapOverlay::from_raw(&HashMap::new(), &unbinds, &reg, "tab/graph", &base)
+            .unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(&errs[0], KeymapOverlayError::UnbindMissing { .. }));
+    }
+
+    #[test]
+    fn overlay_collision_two_overrides_same_chord() {
+        // Build a base without 'o' so both entries are "new chord" appends.
+        let _base = KeyMap::new().bind("c", "graph.create-note");
+        let reg = CommandRegistry::from_slices(&[TEST_COMMANDS]);
+        let mut table = HashMap::new();
+        table.insert("o".to_string(), "graph.open".to_string());
+        table.insert("o".to_string(), "graph.refresh".to_string()); // same key in HashMap → deduped
+                                                                    // Actually HashMap deduplication means we can only test via normalization collision:
+                                                                    // Shift+c and C normalize to the same chord.
+        let mut table2 = HashMap::new();
+        table2.insert("Shift+r".to_string(), "graph.open".to_string());
+        // "Shift+r" normalizes to different from "r", so let's use caps to get collision:
+        // "C" and "Shift+c" both normalize to Shift+c.
+        let base2 = KeyMap::new().bind("o", "graph.open");
+        let mut col_table = HashMap::new();
+        col_table.insert("Shift+c".to_string(), "graph.open".to_string());
+        col_table.insert("C".to_string(), "graph.refresh".to_string()); // C == Shift+c
+        let errs = KeymapOverlay::from_raw(&col_table, &[], &reg, "tab/graph", &base2).unwrap_err();
+        let has_collision = errs
+            .iter()
+            .any(|e| matches!(e, KeymapOverlayError::OverlayCollision { .. }));
+        assert!(has_collision);
+    }
+
+    #[test]
+    fn overlay_all_errors_not_just_first() {
+        let base = base_map();
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("Frobnicate+x".to_string(), "graph.refresh".to_string());
+        table.insert("c".to_string(), "graph.no-such-command".to_string());
+        let errs = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap_err();
+        assert_eq!(errs.len(), 2);
+    }
+
+    #[test]
+    fn overlay_normalization_collision() {
+        let base = KeyMap::new().bind("o", "graph.open");
+        let reg = test_registry();
+        let mut table = HashMap::new();
+        table.insert("Shift+c".to_string(), "graph.open".to_string());
+        table.insert("C".to_string(), "graph.refresh".to_string());
+        let errs = KeymapOverlay::from_raw(&table, &[], &reg, "tab/graph", &base).unwrap_err();
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, KeymapOverlayError::OverlayCollision { .. })));
     }
 }

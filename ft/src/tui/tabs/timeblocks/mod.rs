@@ -280,7 +280,7 @@ pub(crate) static TIMEBLOCKS_COMMANDS: &[CommandDef] = &[
 /// handlers (DeleteConfirm, Quickline, EditDesc, Form, Tagging) are
 /// reached via the bypass at the top of `handle_event` and do NOT
 /// resolve through this map.
-static TIMEBLOCKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static TIMEBLOCKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Navigation — vim aliases
         .bind("Up", "timeblocks.cursor-up")
@@ -445,6 +445,7 @@ pub struct TimeblocksTab {
     /// test API.
     #[allow(dead_code)]
     pub(crate) last_error: Option<String>,
+    keymap: crate::tui::keymap::KeyMap,
 }
 
 impl TimeblocksTab {
@@ -464,7 +465,13 @@ impl TimeblocksTab {
             anchor: None,
             heading: "Time Blocks".into(),
             last_error: None,
+            keymap: TIMEBLOCKS_KEYMAP.clone(),
         }
+    }
+
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = TIMEBLOCKS_KEYMAP.with_overlay(overlay);
+        self
     }
 
     /// Re-read both days from disk. Called from `on_focus` and `r`.
@@ -1407,7 +1414,7 @@ impl Tab for TimeblocksTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &TIMEBLOCKS_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
@@ -1544,7 +1551,7 @@ impl Tab for TimeblocksTab {
 
         // Idle keymap.
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = TIMEBLOCKS_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
             return Ok(EventOutcome::NotHandled);
         };
         Ok(match self.dispatch_command(&cmd, ctx) {

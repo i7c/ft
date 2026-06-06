@@ -50,10 +50,13 @@ impl HelpSection {
 }
 
 /// App-level bindings rendered first in every `?` overlay regardless
-/// of active tab. Built from `APP_KEYMAP` + the central registry; the
-/// pre-migration hand-curated list lived here and is now derived.
-pub fn global_section(registry: &crate::tui::command::CommandRegistry) -> HelpSection {
-    let mut sections = sections_from_keymap(&crate::tui::app_commands::APP_KEYMAP, registry);
+/// of active tab. Built from the effective global keymap + the central
+/// registry; accepts the effective map so user overlays are reflected.
+pub fn global_section(
+    keymap: &crate::tui::keymap::KeyMap,
+    registry: &crate::tui::command::CommandRegistry,
+) -> HelpSection {
+    let mut sections = sections_from_keymap(keymap, registry);
     // Coalesce all global sections into one titled "Global" — the
     // pre-migration overlay grouped every global chord under that name.
     let entries: Vec<HelpEntry> = sections.drain(..).flat_map(|s| s.entries).collect();

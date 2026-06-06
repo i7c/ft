@@ -115,7 +115,7 @@ pub(crate) static NOTES_COMMANDS: &[CommandDef] = &[
 
 /// Default keymap for the Notes tab's Idle state. Sub-states are
 /// handled by `handle_*_key` methods, bypassing the keymap.
-static NOTES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static NOTES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         .bind("o", "notes.open-picker")
         .bind("m", "notes.move-section")
@@ -163,13 +163,20 @@ pub enum NotesState {
 
 pub struct NotesTab {
     state: NotesState,
+    keymap: crate::tui::keymap::KeyMap,
 }
 
 impl NotesTab {
     pub fn new() -> Self {
         Self {
             state: NotesState::Idle,
+            keymap: NOTES_KEYMAP.clone(),
         }
+    }
+
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = NOTES_KEYMAP.with_overlay(overlay);
+        self
     }
 
     fn new_vault_picker(ctx: &TabCtx) -> FuzzyPicker<VaultFilePickerSource> {
@@ -184,7 +191,7 @@ impl NotesTab {
         // sub-state handlers (open-picker, create, append, capture,
         // periodic leader) capture raw keys and bypass this path.
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = NOTES_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
             return EventOutcome::NotHandled;
         };
         self.dispatch_idle_command(&cmd, ctx)
@@ -395,7 +402,7 @@ impl Tab for NotesTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &NOTES_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {

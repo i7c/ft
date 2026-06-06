@@ -604,6 +604,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]

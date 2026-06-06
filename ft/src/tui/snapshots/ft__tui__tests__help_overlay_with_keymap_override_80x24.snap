@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Graph ┌ help ────────────────────────────────────────────────────┐          
+>         │Keybindings — Graph                                       │          
+ 1: (empty│                                                          │          
+┌ (empty) │  Global                                                  │─────────┐
+│         │  Ctrl+c / x     Quit the TUI                             │         │
+│press / t│  ?              Open the keymap help overlay             │         │
+│         │  g              Enter the git-sync leader (then `s` to sy│         │
+│         │  Tab            Switch to the next tab                   │         │
+│         │  BackTab        Switch to the previous tab               │         │
+│         │  1..9           Switch to the tab at the given 0-based in│         │
+│         │                                                          │         │
+│         │  Views                                                   │         │
+│         │  Ctrl+n         Add a new view (pick preset or blank)    │         │
+│         │  Ctrl+p         Load a preset into the active view       │         │
+│         │  Ctrl+w         Close the active view                    │         │
+│         │  Ctrl+PageDown  Switch to the next view                  │         │
+│         │  Ctrl+PageUp    Switch to the previous view              │         │
+│         │  Alt+1..Alt+9   Switch to the view at the given 0-based i│         │
+│         │                                                          │         │
+│         │  Notes                                                   │         │
+│         │  Shift+r        Open the Related-section updater modal fo│         │
+│         │  Shift+j        Open the Journal tab for the selected not│         │
+└─────────└──────────────────────────────────────────────────────────┘─────────┘
+ vault: keymap-vault  ·  tab: Graph         not yet refreshed        mode: help

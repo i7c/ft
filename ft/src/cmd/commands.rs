@@ -4,7 +4,7 @@
 //! prints it in one of three formats: a terminal table (default),
 //! NDJSON (one JSON object per line), or grouped JSON.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::tui::registry::{self, CommandDef, CommandScope};
@@ -21,6 +21,15 @@ pub enum CommandsCommand {
     List(ListArgs),
     /// Generate (or check) the `docs/keybindings.md` markdown reference
     Docs(DocsArgs),
+    /// Validate the `[keymap]` section of `config.toml` against the registry
+    CheckKeymap(CheckKeymapArgs),
+}
+
+#[derive(Args)]
+pub struct CheckKeymapArgs {
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    format: OutputFormat,
 }
 
 #[derive(Args)]
@@ -52,6 +61,11 @@ pub struct ListArgs {
     /// kinds are shown.
     #[arg(long)]
     opens_modal: Option<bool>,
+
+    /// Show effective chord-to-command bindings (defaults merged with
+    /// user `[keymap]` config) instead of the raw registry view.
+    #[arg(long)]
+    effective: bool,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -61,11 +75,62 @@ pub enum OutputFormat {
     Json,
 }
 
-pub fn run(args: CommandsArgs) -> Result<()> {
+pub fn run(
+    args: CommandsArgs,
+    vault_flag: Option<std::path::PathBuf>,
+) -> Result<std::process::ExitCode> {
     match args.command {
-        CommandsCommand::List(args) => list(args),
-        CommandsCommand::Docs(args) => docs(args),
+        CommandsCommand::List(args) => {
+            list(args, vault_flag).map(|_| std::process::ExitCode::SUCCESS)
+        }
+        CommandsCommand::Docs(args) => docs(args).map(|_| std::process::ExitCode::SUCCESS),
+        CommandsCommand::CheckKeymap(args) => run_check_keymap(args, vault_flag),
     }
+}
+
+fn run_check_keymap(
+    args: CheckKeymapArgs,
+    vault_flag: Option<std::path::PathBuf>,
+) -> Result<std::process::ExitCode> {
+    use ft_core::vault::Vault;
+
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let errors = crate::tui::registry::validate_keymap(&vault.config.config);
+
+    if errors.is_empty() {
+        match args.format {
+            OutputFormat::Table => println!("keymap config ok -- no errors"),
+            OutputFormat::Ndjson | OutputFormat::Json => {
+                println!("{}", serde_json::json!({ "ok": true, "errors": [] }));
+            }
+        }
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
+    match args.format {
+        OutputFormat::Table => {
+            for e in &errors {
+                eprintln!("error: {e}");
+            }
+        }
+        OutputFormat::Ndjson => {
+            for e in &errors {
+                println!("{}", serde_json::json!({ "ok": false, "error": e }));
+            }
+        }
+        OutputFormat::Json => {
+            let errs: Vec<serde_json::Value> = errors
+                .iter()
+                .map(|e| serde_json::json!({ "error": e }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "ok": false, "errors": errs }))?
+            );
+        }
+    }
+    // Exit 2 on validation errors (matching the lint-tool convention).
+    Ok(std::process::ExitCode::from(2))
 }
 
 fn docs(args: DocsArgs) -> Result<()> {
@@ -165,7 +230,10 @@ fn generate_keybindings_md() -> String {
     out
 }
 
-fn list(args: ListArgs) -> Result<()> {
+fn list(args: ListArgs, vault_flag: Option<std::path::PathBuf>) -> Result<()> {
+    if args.effective {
+        return list_effective(args, vault_flag);
+    }
     let reg = registry::build();
     let mut filtered: Vec<&CommandDef> = reg
         .iter()
@@ -181,6 +249,67 @@ fn list(args: ListArgs) -> Result<()> {
         OutputFormat::Json => print_json(&filtered)?,
     }
     Ok(())
+}
+
+fn list_effective(args: ListArgs, vault_flag: Option<std::path::PathBuf>) -> Result<()> {
+    use ft_core::vault::Vault;
+
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let mut bindings = crate::tui::registry::effective_bindings(&vault.config.config);
+
+    // Apply scope filter.
+    if let Some(ref scope_filter) = args.scope {
+        bindings.retain(|(scope, _, _)| scope_filter_matches(scope, scope_filter));
+    }
+
+    // Stable order: scope, then chord.
+    bindings.sort_by(|(sa, ca, _), (sb, cb, _)| sa.cmp(sb).then(ca.cmp(cb)));
+
+    match args.format {
+        OutputFormat::Table => {
+            use comfy_table::{presets, Cell, Color, ContentArrangement, Table};
+            let mut table = Table::new();
+            table
+                .load_preset(presets::UTF8_FULL)
+                .set_content_arrangement(ContentArrangement::Dynamic)
+                .set_header(vec![
+                    Cell::new("Scope").fg(Color::Cyan),
+                    Cell::new("Chord").fg(Color::Cyan),
+                    Cell::new("Command").fg(Color::Cyan),
+                ]);
+            for (scope, chord, cmd) in &bindings {
+                table.add_row(vec![Cell::new(scope), Cell::new(chord), Cell::new(cmd)]);
+            }
+            println!("{table}");
+        }
+        OutputFormat::Ndjson => {
+            for (scope, chord, cmd) in &bindings {
+                println!(
+                    "{}",
+                    serde_json::json!({ "scope": scope, "chord": chord, "command": cmd })
+                );
+            }
+        }
+        OutputFormat::Json => {
+            let arr: Vec<serde_json::Value> = bindings
+                .iter()
+                .map(|(scope, chord, cmd)| {
+                    serde_json::json!({ "scope": scope, "chord": chord, "command": cmd })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&arr)?);
+        }
+    }
+    Ok(())
+}
+
+fn scope_filter_matches(scope: &str, filter: &str) -> bool {
+    match filter {
+        "global" => scope == "global",
+        "tab" => scope.starts_with("tab/"),
+        "modal" => scope.starts_with("modal/"),
+        other => scope == other,
+    }
 }
 
 fn scope_matches(scope: &CommandScope, filter: Option<&str>) -> bool {
@@ -307,5 +436,71 @@ mod tests {
         assert_eq!(v["name"], "app.quit");
         assert_eq!(v["scope"], "global");
         assert_eq!(v["opens_modal"], false);
+    }
+
+    #[test]
+    fn check_keymap_clean_returns_no_errors() {
+        // An empty config has no keymap section, so validate_keymap should return empty.
+        let config = ft_core::config::Config::default();
+        let errors = crate::tui::registry::validate_keymap(&config);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn check_keymap_bad_command_returns_errors() {
+        use ft_core::config::{Config, KeymapConfig};
+        use std::collections::HashMap;
+
+        let mut scopes: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut global_scope = HashMap::new();
+        global_scope.insert("q".to_string(), "app.nonexistent-command".to_string());
+        scopes.insert("global".to_string(), global_scope);
+
+        let config = Config {
+            keymap: Some(KeymapConfig {
+                strict: false,
+                unbind: vec![],
+                scopes,
+            }),
+            ..Config::default()
+        };
+        let errors = crate::tui::registry::validate_keymap(&config);
+        assert!(!errors.is_empty(), "expected errors for unknown command");
+        assert!(errors[0].contains("nonexistent-command"));
+    }
+
+    #[test]
+    fn effective_bindings_shows_override_plain_list_does_not() {
+        use ft_core::config::{Config, KeymapConfig};
+        use std::collections::HashMap;
+
+        // Override 'q' (app.quit) to app.next-tab in the global scope.
+        let mut scopes: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut global_scope = HashMap::new();
+        global_scope.insert("q".to_string(), "app.next-tab".to_string());
+        scopes.insert("global".to_string(), global_scope);
+
+        let config = Config {
+            keymap: Some(KeymapConfig {
+                strict: false,
+                unbind: vec![],
+                scopes,
+            }),
+            ..Config::default()
+        };
+
+        // effective_bindings should show the override for 'q' → app.next-tab
+        let bindings = crate::tui::registry::effective_bindings(&config);
+        let q_global = bindings
+            .iter()
+            .find(|(scope, chord, _)| scope == "global" && chord == "q");
+        assert!(q_global.is_some(), "expected 'q' binding in global scope");
+        assert_eq!(q_global.unwrap().2, "app.next-tab");
+
+        // Plain registry does NOT show chords — it shows command defs without
+        // user-applied overrides.
+        let reg = registry::build();
+        let quit_def = reg.lookup("app.quit").unwrap();
+        assert_eq!(quit_def.name, "app.quit");
     }
 }

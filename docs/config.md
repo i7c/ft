@@ -277,6 +277,94 @@ pull_strategy = "merge"   # default; also: rebase
 `ft git sync --dry-run` reads `status` + `upstream` and prints the
 plan without writing anything.
 
+## `[keymap]`
+
+Override TUI key bindings without recompiling. The vault `[keymap]`
+replaces the user `[keymap]` whole — there is no per-entry merge
+between layers. If both files set `[keymap]`, the vault file wins entirely.
+
+### Schema
+
+```toml
+[keymap]
+strict = false       # default: false; true → TUI startup fails on any error
+
+# Per-scope overrides: chord string → command name.
+# Valid scopes: global, tab/graph, tab/tasks, tab/notes, tab/timeblocks,
+#               tab/journal, modal/create, modal/append, modal/section-move,
+#               modal/capture-var, modal/periodic-leader, modal/query-bar,
+#               modal/rename, modal/search, modal/preset-picker,
+#               modal/capture-picker, modal/related, modal/move
+[keymap.global]
+"h" = "app.help"        # add a new alias for the help overlay
+"x" = "app.quit"        # bind a different chord to an existing command
+
+[keymap."tab/graph"]
+"F5" = "graph.refresh"  # override an existing chord
+
+# Remove default chords (one entry per chord to remove):
+[[keymap.unbind]]
+scope = "global"
+chord = "q"             # remove q → app.quit (Ctrl+c still quits)
+```
+
+### Chord syntax
+
+Chords are the same strings accepted by `chord_from_str`:
+
+| Example           | Meaning                             |
+|-------------------|-------------------------------------|
+| `"q"`             | Lowercase `q`, no modifiers         |
+| `"Q"` / `"Shift+q"` | Shift + q (equivalent)           |
+| `"Ctrl+s"`        | Ctrl + s                            |
+| `"Alt+1"`         | Alt + 1                             |
+| `"F5"`            | Function key 5                      |
+| `"Esc"`           | Escape                              |
+| `"Enter"`         | Enter / Return                      |
+| `"Backspace"`     | Backspace                           |
+| `"Tab"`           | Tab                                 |
+| `"BackTab"`       | Shift+Tab (reverse tab)             |
+| `"Ctrl+PageDown"` | Ctrl + Page Down                    |
+
+`ft commands list` prints every registered command name and its scope.
+`ft commands check-keymap` validates your config and reports errors
+without launching the TUI.
+
+### `strict` flag
+
+When `strict = false` (the default), a bad `[keymap]` entry (unknown
+command, invalid chord, missing unbind target) is silently ignored and
+the binding falls back to the default. When `strict = true`, the TUI
+refuses to start and prints every error to stderr. Use `strict = true`
+in CI or personal configs where you want typos surfaced immediately.
+
+### Examples
+
+**Rebind quit to `x`, keep `Ctrl+c`:**
+
+```toml
+[keymap.global]
+"x" = "app.quit"
+
+[[keymap.unbind]]
+scope = "global"
+chord = "q"
+```
+
+**Add a second chord for the help overlay:**
+
+```toml
+[keymap.global]
+"h" = "app.help"
+```
+
+**Override a tab-specific chord:**
+
+```toml
+[keymap."tab/tasks"]
+"F5" = "tasks.refresh"
+```
+
 ## `[presets]`
 
 Map of preset names to query strings. Use a preset from the CLI with

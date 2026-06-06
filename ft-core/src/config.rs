@@ -54,6 +54,10 @@ pub struct Config {
     /// Quick-capture presets, keyed by preset name. See [`CapturePreset`].
     #[serde(default)]
     pub capture_presets: HashMap<String, CapturePreset>,
+    /// User-defined key binding overrides. When `None`, defaults apply.
+    /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
+    #[serde(default)]
+    pub keymap: Option<KeymapConfig>,
 }
 
 impl Config {
@@ -62,6 +66,36 @@ impl Config {
     pub fn timeblocks_heading(&self) -> &str {
         self.timeblocks.heading.as_deref().unwrap_or("Time Blocks")
     }
+}
+
+/// One entry in `keymap.unbind` — removes a default chord from a scope.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct KeymapUnbindEntry {
+    pub scope: String,
+    pub chord: String,
+}
+
+/// User-defined key binding overrides. Appears as `[keymap]` in `config.toml`.
+///
+/// `[keymap.<scope>]` sub-tables map chord strings to command names.
+/// `keymap.unbind` drops default chords without replacing them.
+/// `keymap.strict` turns validation warnings into hard errors at startup.
+///
+/// Vault-level `[keymap]` replaces user-level `[keymap]` whole (no per-entry
+/// merging across config files).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct KeymapConfig {
+    /// When `true`, invalid entries abort `ft tui` startup (exit 1).
+    /// When `false` (default), they are logged as warnings and skipped.
+    #[serde(default)]
+    pub strict: bool,
+    /// Chords to remove from the default bindings, without replacement.
+    #[serde(default)]
+    pub unbind: Vec<KeymapUnbindEntry>,
+    /// Per-scope override maps: `"global"`, `"tab/<name>"`, `"modal/<name>"`.
+    /// Keys are chord strings; values are command names.
+    #[serde(flatten)]
+    pub scopes: HashMap<String, HashMap<String, String>>,
 }
 
 /// `ft timeblocks` configuration. The daily-note path is resolved via the
@@ -281,8 +315,10 @@ pub struct LayeredConfig {
 /// Load configuration by merging user-level and vault-level TOML files.
 ///
 /// Vault config wins over user config. Missing files are silently skipped.
+/// Exception: the `[keymap]` table is replaced whole by the vault config when
+/// it is present — no per-entry merging across the two files.
 pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
-    let config = Figment::new()
+    let mut config = Figment::new()
         .merge(Serialized::defaults(Config::default()))
         .merge(Toml::file(user_config))
         .merge(Toml::file(vault_config))
@@ -295,6 +331,11 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
             },
             source: Box::new(e),
         })?;
+
+    // Figment deep-merges maps, which would combine chord keys from both
+    // config files. For keymap the spec requires vault-replaces-user whole:
+    // determine which source (if any) defines [keymap] and use it exclusively.
+    config.keymap = effective_keymap(user_config, vault_config);
 
     Ok(LayeredConfig {
         config,
@@ -311,6 +352,23 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
             },
         ],
     })
+}
+
+/// Parse a single TOML file and return its `keymap` section if present.
+fn keymap_from_file(path: &Path) -> Option<KeymapConfig> {
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    let value: toml::Value = content.parse().ok()?;
+    let km_value = value.get("keymap")?;
+    toml::Value::try_into(km_value.clone()).ok()
+}
+
+/// Vault replaces user whole: use vault's keymap if it defines one,
+/// otherwise fall back to user's.
+fn effective_keymap(user_config: &Path, vault_config: &Path) -> Option<KeymapConfig> {
+    keymap_from_file(vault_config).or_else(|| keymap_from_file(user_config))
 }
 
 #[cfg(test)]
@@ -941,5 +999,112 @@ action = "append"
             r.is_err(),
             "missing required template field should be rejected"
         );
+    }
+
+    // ── [keymap] block ─────────────────────────────────────────────────────
+
+    #[test]
+    fn keymap_absent_when_no_section() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.keymap.is_none());
+    }
+
+    #[test]
+    fn keymap_strict_defaults_to_false() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str("[keymap]\n").unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        let km = lc.config.keymap.as_ref().unwrap();
+        assert!(!km.strict);
+        assert!(km.unbind.is_empty());
+        assert!(km.scopes.is_empty());
+    }
+
+    #[test]
+    fn keymap_full_table_parsed() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[keymap]
+strict = true
+
+[[keymap.unbind]]
+scope = "global"
+chord = "g"
+
+[keymap.global]
+"Ctrl+s" = "app.sync-git"
+
+[keymap."tab/graph"]
+"R" = "graph.refresh"
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        let km = lc.config.keymap.as_ref().unwrap();
+        assert!(km.strict);
+        assert_eq!(km.unbind.len(), 1);
+        assert_eq!(km.unbind[0].scope, "global");
+        assert_eq!(km.unbind[0].chord, "g");
+        let global = km.scopes.get("global").unwrap();
+        assert_eq!(
+            global.get("Ctrl+s").map(|s| s.as_str()),
+            Some("app.sync-git")
+        );
+        let graph = km.scopes.get("tab/graph").unwrap();
+        assert_eq!(graph.get("R").map(|s| s.as_str()), Some("graph.refresh"));
+    }
+
+    #[test]
+    fn keymap_vault_replaces_user_whole() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[keymap.global]
+"Ctrl+s" = "app.sync-git"
+"#,
+        )
+        .unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[keymap.global]
+"Ctrl+f" = "graph.search"
+"#,
+            )
+            .unwrap();
+        let lc = load(user.path(), vault.path()).unwrap();
+        let km = lc.config.keymap.as_ref().unwrap();
+        let global = km.scopes.get("global").unwrap();
+        // Vault's entry is present.
+        assert!(global.contains_key("Ctrl+f"));
+        // User's entry is absent — vault replaced the whole section.
+        assert!(!global.contains_key("Ctrl+s"));
+    }
+
+    #[test]
+    fn keymap_user_used_when_vault_has_none() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[keymap.global]
+"Ctrl+s" = "app.sync-git"
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        let km = lc.config.keymap.as_ref().unwrap();
+        let global = km.scopes.get("global").unwrap();
+        assert!(global.contains_key("Ctrl+s"));
     }
 }

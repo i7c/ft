@@ -241,7 +241,7 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
 /// active view returns `NotHandled` for an event (mirrors the
 /// pre-migration fall-through). The view-level keymap lives in
 /// `search::SEARCH_KEYMAP`.
-static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         .bind("Up", "tasks.select-prev-view")
         .bind("Down", "tasks.select-next-view")
@@ -262,6 +262,7 @@ pub struct TasksTab {
     views: Vec<Box<dyn View>>,
     active_view: usize,
     clock: ClockFn,
+    keymap: crate::tui::keymap::KeyMap,
 }
 
 impl TasksTab {
@@ -275,7 +276,13 @@ impl TasksTab {
             views,
             active_view: 0,
             clock,
+            keymap: TASKS_KEYMAP.clone(),
         }
+    }
+
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = TASKS_KEYMAP.with_overlay(overlay);
+        self
     }
 
     fn select_prev_view(&mut self) {
@@ -369,7 +376,7 @@ impl Tab for TasksTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &TASKS_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
@@ -414,7 +421,7 @@ impl Tab for TasksTab {
             return Ok(EventOutcome::NotHandled);
         };
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = TASKS_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
             return Ok(EventOutcome::NotHandled);
         };
         Ok(match self.dispatch_command(&cmd, ctx) {
