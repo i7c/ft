@@ -3070,26 +3070,23 @@ impl Tab for GraphTab {
             return Ok(EventOutcome::NotHandled);
         }
 
-        // Graph-missing or empty-tree gate: only the query-bar opens —
-        // dispatch_command would otherwise no-op or toast for other
-        // keys, which is fine semantically, but preserving the early-
-        // return mirrors pre-migration behavior for tests that assert
-        // NotHandled in this state.
+        // Graph-missing or empty-tree gate: most keys would no-op or
+        // toast because they need a selected row. Keep the gate, but
+        // still let view-management and the query-bar through so the
+        // user can recover from an empty result (e.g. Ctrl+P to pick a
+        // different preset, Ctrl+W to close the view).
         let graph_missing = self.graph.is_none();
+        let chord = KeyChord::from_key_event(k);
+        let cmd = GRAPH_KEYMAP.lookup(chord).cloned();
         if graph_missing || self.active_view().tree.is_empty() {
-            if let (KeyCode::Char('/'), KeyModifiers::NONE) = (k.code, k.modifiers) {
-                *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::OpenModal(Box::new(ActiveModal::QueryBar {
-                        view_id: self.active,
-                    })));
-                return Ok(EventOutcome::Consumed);
+            let allowed = cmd.as_ref().is_some_and(|c| empty_tree_allows(c.name));
+            if !allowed {
+                return Ok(EventOutcome::NotHandled);
             }
-            return Ok(EventOutcome::NotHandled);
         }
 
         // Tab keymap → dispatch_command.
-        let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = GRAPH_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = cmd else {
             return Ok(EventOutcome::NotHandled);
         };
         Ok(match self.dispatch_command(&cmd, ctx) {
@@ -3204,7 +3201,14 @@ impl Tab for GraphTab {
                 let kind_color = graph
                     .map(|g| node_kind_color(g.node(row.note_id)))
                     .unwrap_or(palette::WHITE);
-                let kind_style = base_style.fg(kind_color);
+                // Selected row keeps the uniform BLACK-on-PRIMARY highlight;
+                // overlaying the per-kind color (e.g. orange for Task) would
+                // collide with the orange selection background.
+                let kind_style = if i == v.selected {
+                    base_style
+                } else {
+                    base_style.fg(kind_color)
+                };
                 let kind_span = Span::styled(row.kind_char.to_string(), kind_style);
                 let display_span = Span::styled(row.display.clone(), kind_style);
                 let space = Span::styled(" ", base_style);
@@ -3828,6 +3832,24 @@ impl TreeState {
             expandable,
         }
     }
+}
+
+/// Commands that remain usable when the active view's tree is empty
+/// (or before the graph has been built). Everything else needs a
+/// selected row or query result and is gated off until the user
+/// recovers the view via one of these.
+fn empty_tree_allows(name: &str) -> bool {
+    matches!(
+        name,
+        "graph.add-view"
+            | "graph.preset-pick"
+            | "graph.close-view"
+            | "graph.next-view"
+            | "graph.prev-view"
+            | "graph.switch-view"
+            | "graph.query-bar"
+            | "graph.refresh"
+    )
 }
 
 /// Foreground color for a node kind, used to visually differentiate types
