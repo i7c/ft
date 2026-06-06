@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::graph::preset;
-use ft_core::graph::query::{parse, CyclePolicy, WalkOptions};
+use ft_core::graph::query::{parse_with, CyclePolicy, Profile, WalkOptions};
 use ft_core::graph::Graph;
 use ft_core::vault::Vault;
 
@@ -77,6 +77,27 @@ pub struct QueryArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Tree)]
     pub format: Format,
+
+    /// Parser profile. `default` is the verbose graph syntax;
+    /// `tasks` lets you write bare predicates like `priority = high` that
+    /// desugar to `node where kind = Task and self.priority = high`.
+    #[arg(long, value_enum, default_value_t = ProfileArg::Default)]
+    pub profile: ProfileArg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ProfileArg {
+    Default,
+    Tasks,
+}
+
+impl From<ProfileArg> for Profile {
+    fn from(v: ProfileArg) -> Self {
+        match v {
+            ProfileArg::Default => Profile::Default,
+            ProfileArg::Tasks => Profile::Tasks,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -105,7 +126,12 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     let src = read_query_source(&args, &vault)?;
 
-    let query = match parse(&src) {
+    let today = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| chrono::Local::now().date_naive());
+
+    let query = match parse_with(&src, args.profile.into(), today) {
         Ok(q) => q,
         Err(e) => {
             eprintln!("{e}");

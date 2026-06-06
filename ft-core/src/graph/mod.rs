@@ -137,7 +137,7 @@ pub struct ParagraphData {
 }
 
 /// Task node data — denormalized from [`crate::task::Task`] for graph queries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskData {
     /// Task description text.
     pub description: String,
@@ -149,6 +149,12 @@ pub struct TaskData {
     pub due: Option<String>,
     /// Scheduled date as YYYY-MM-DD string, if set.
     pub scheduled: Option<String>,
+    /// Created date as YYYY-MM-DD string, if set.
+    pub created: Option<String>,
+    /// Start date as YYYY-MM-DD string, if set.
+    pub start: Option<String>,
+    /// Completed (`done`) date as YYYY-MM-DD string, if set.
+    pub completed: Option<String>,
     /// Tags extracted from the task description.
     pub tags: Vec<String>,
     /// Source file (vault-relative path) where the task appears.
@@ -667,6 +673,9 @@ impl Graph {
             priority: task.priority.map(|p| p.as_str().to_string()),
             due: task.due.map(|d| d.to_string()),
             scheduled: task.scheduled.map(|s| s.to_string()),
+            created: task.created.map(|d| d.to_string()),
+            start: task.start.map(|d| d.to_string()),
+            completed: task.done.map(|d| d.to_string()),
             tags: task.tags.clone(),
             source_file: task.source_file.clone(),
             source_line: task.source_line,

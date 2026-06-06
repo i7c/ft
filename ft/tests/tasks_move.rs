@@ -120,7 +120,13 @@ fn move_bulk_query_with_yes() {
 
     run(
         dir.path(),
-        &["--query", "tag is legacy", "--to", "triage.md", "--yes"],
+        &[
+            "--query",
+            "tags includes \"legacy\"",
+            "--to",
+            "triage.md",
+            "--yes",
+        ],
     )
     .success();
 
@@ -145,9 +151,12 @@ fn move_bulk_without_yes_in_non_tty_errors() {
         .write_str("- [ ] task1 #legacy\n- [ ] task2 #legacy\n")
         .unwrap();
 
-    run(dir.path(), &["--query", "tag is legacy", "--to", "out.md"])
-        .failure()
-        .stderr(predicate::str::contains("--yes"));
+    run(
+        dir.path(),
+        &["--query", "tags includes \"legacy\"", "--to", "out.md"],
+    )
+    .failure()
+    .stderr(predicate::str::contains("--yes"));
 }
 
 #[test]

@@ -10,7 +10,7 @@ expression: frame
 │                      ││                                                      │
 │ ── views ──          ││                   query parse error                  │
 │ ▶ Search             ││                                                      │
-│                      ││             unknown identifier `totally`             │
+│                      ││       unknown attribute `totally` at position 0      │
 │                      ││                                                      │
 │                      ││               press / to edit the query              │
 │                      ││                                                      │

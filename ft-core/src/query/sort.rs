@@ -1,5 +1,18 @@
 use crate::task::{Priority, Task};
 
+/// Parse a sort-key name (used by CLI `--sort` flag parsing).
+pub fn parse_sort_key(s: &str) -> Result<SortKey, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "due" => Ok(SortKey::Due),
+        "scheduled" => Ok(SortKey::Scheduled),
+        "priority" => Ok(SortKey::Priority),
+        "path" => Ok(SortKey::Path),
+        "description" => Ok(SortKey::Description),
+        "status" => Ok(SortKey::Status),
+        other => Err(format!("unknown sort key `{other}`")),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
     Asc,

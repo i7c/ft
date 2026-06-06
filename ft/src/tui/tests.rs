@@ -1161,7 +1161,7 @@ fn search_query_edit_apply_updates_list() -> Result<()> {
             KeyModifiers::NONE,
         )))?;
     }
-    for c in "priority is high".chars() {
+    for c in "priority = High".chars() {
         app.dispatch(key(c))?;
     }
     app.dispatch(Event::Key(KeyEvent::new(

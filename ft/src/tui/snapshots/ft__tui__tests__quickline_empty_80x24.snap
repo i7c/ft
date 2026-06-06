@@ -4,7 +4,7 @@ expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
 ┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
-│                      ││not done and due before 2026-05-18 sort by due, priori│
+│                      ││status in {Open, InProgress} and due < 2026-05-18     │
 │ Sun 10 May           │└──────────────────────────────────────────────────────┘
 │ 14:32:05             │┌ new task ────────────────────────────────────────────┐
 │                      ││type a task — e.g. "email Sarah due:tomorrow pri:high │

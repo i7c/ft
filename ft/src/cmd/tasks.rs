@@ -7,7 +7,16 @@ use chrono::{Local, NaiveDate};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
     dates,
-    query::{dsl, expr::Expr, filter::Filter, preset, sort::sort_by_keys, SortKey, SortOrder},
+    graph::{
+        query::{parse_with as parse_query, GraphQuery, Profile},
+        Graph, NodeKind,
+    },
+    query::{
+        filter::Filter,
+        preset,
+        sort::{parse_sort_key, sort_by_keys},
+        SortKey, SortOrder,
+    },
     selector,
     task::{
         ops::{
@@ -88,8 +97,10 @@ pub struct ListArgs {
     pub preset_or_query: Option<String>,
 
     /// Explicit query DSL (composed with flags and any positional query as
-    /// additional `and` clauses). See docs/query-dsl.md for the supported
-    /// subset.
+    /// additional `and` clauses). See docs/graph-query-dsl.md for the
+    /// grammar; tasks queries run under `Profile::Tasks` so bare
+    /// predicates like `priority = high` desugar to
+    /// `node where kind = Task and self.priority = high`.
     #[arg(long, value_name = "DSL")]
     pub query: Option<String>,
 
@@ -135,9 +146,13 @@ pub struct ListArgs {
 
     /// Sort keys, comma-separated or repeated (e.g. `--sort priority,due` or
     /// `--sort priority --sort due`). Suffix `:reverse` to invert a key
-    /// (e.g. `--sort due:reverse`). Overrides any DSL `sort by` clause.
+    /// (e.g. `--sort due:reverse`).
     #[arg(long)]
     pub sort: Vec<String>,
+
+    /// Cap the number of rows returned.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
 
     /// Group rows in the table output. Has no effect on JSON / NDJSON / markdown.
     #[arg(long, value_enum)]
@@ -194,45 +209,63 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         .as_deref()
         .map(|name| resolve_preset(name, &vault).unwrap_or_else(|| name.to_string()));
 
-    let mut combined_expr: Option<Expr> = None;
-    let mut dsl_sort: Vec<(SortKey, SortOrder)> = Vec::new();
-    let mut dsl_limit: Option<usize> = None;
-
+    // Compose all query sources into a single AND of GraphQueries. Empty
+    // sources are skipped. Each source is parsed under Profile::Tasks so
+    // bare predicates (`priority = high`) desugar to the canonical
+    // `node where kind = Task and self.priority = high` form.
+    let mut graph_queries: Vec<GraphQuery> = Vec::new();
     for src in [positional_dsl.as_deref(), args.query.as_deref()]
         .into_iter()
         .flatten()
     {
-        let q = dsl::parse(src, today).map_err(|e| anyhow!("invalid query `{src}`: {e}"))?;
-        if let Some(e) = q.expr {
-            combined_expr = Some(match combined_expr.take() {
-                None => e,
-                Some(prev) => Expr::And(vec![prev, e]),
+        let q = parse_query(src, Profile::Tasks, today)
+            .map_err(|e| anyhow!("invalid query `{src}`: {e}"))?;
+        graph_queries.push(q);
+    }
+
+    // Build the graph once. The query evaluator runs against the graph and
+    // returns task NoteIds; we map those back to `&Task` for sort/render.
+    let graph = Graph::build(&vault, &scan).map_err(|e| anyhow!("graph build failed: {e}"))?;
+    let matched_task_keys: std::collections::HashSet<(PathBuf, usize)> = if graph_queries.is_empty()
+    {
+        // No query — every task in scan is admissible (filter is the
+        // only remaining gate).
+        scan.tasks
+            .iter()
+            .map(|t| (t.source_file.clone(), t.source_line))
+            .collect()
+    } else {
+        // AND-compose: a task must match every graph query. Each query
+        // produces a set of NoteIds; we intersect them.
+        let mut acc: Option<std::collections::HashSet<(PathBuf, usize)>> = None;
+        for q in &graph_queries {
+            let ids = q.select(&graph);
+            let keys: std::collections::HashSet<(PathBuf, usize)> = ids
+                .into_iter()
+                .filter_map(|id| match graph.node(id) {
+                    NodeKind::Task(td) => Some((td.source_file.clone(), td.source_line)),
+                    _ => None,
+                })
+                .collect();
+            acc = Some(match acc {
+                None => keys,
+                Some(prev) => prev.intersection(&keys).cloned().collect(),
             });
         }
-        if !q.sort_keys.is_empty() {
-            dsl_sort = q.sort_keys;
-        }
-        if let Some(l) = q.limit {
-            dsl_limit = Some(l);
-        }
-    }
+        acc.unwrap_or_default()
+    };
 
     let mut matches: Vec<&Task> = scan
         .tasks
         .iter()
         .filter(|t| filter.matches(t))
-        .filter(|t| combined_expr.as_ref().is_none_or(|e| e.matches(t)))
+        .filter(|t| matched_task_keys.contains(&(t.source_file.clone(), t.source_line)))
         .collect();
 
     let cli_sort = parse_cli_sort_keys(&args.sort)?;
-    let sort_keys: Vec<(SortKey, SortOrder)> = if !cli_sort.is_empty() {
-        cli_sort
-    } else {
-        dsl_sort
-    };
-    sort_by_keys(&mut matches, &sort_keys);
+    sort_by_keys(&mut matches, &cli_sort);
 
-    if let Some(limit) = dsl_limit {
+    if let Some(limit) = args.limit {
         matches.truncate(limit);
     }
 
@@ -315,7 +348,7 @@ fn parse_cli_sort_keys(values: &[String]) -> Result<Vec<(SortKey, SortOrder)>> {
                 }
                 None => (part, SortOrder::Asc),
             };
-            let key = dsl::parse_sort_key(name).map_err(|e| anyhow!("bad sort key: {e}"))?;
+            let key = parse_sort_key(name).map_err(|e| anyhow!("bad sort key: {e}"))?;
             out.push((key, order));
         }
     }
@@ -788,10 +821,20 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let target = parse_move_target(&args.to, &vault.path);
 
     let chosen: Vec<&Task> = if let Some(q) = args.query.as_deref() {
-        let parsed = dsl::parse(q, today).map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
+        let parsed = parse_query(q, Profile::Tasks, today)
+            .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
+        let graph = Graph::build(&vault, &scan).map_err(|e| anyhow!("graph build failed: {e}"))?;
+        let ids = parsed.select(&graph);
+        let keys: std::collections::HashSet<(PathBuf, usize)> = ids
+            .into_iter()
+            .filter_map(|id| match graph.node(id) {
+                NodeKind::Task(td) => Some((td.source_file.clone(), td.source_line)),
+                _ => None,
+            })
+            .collect();
         scan.tasks
             .iter()
-            .filter(|t| parsed.expr.as_ref().is_none_or(|e| e.matches(t)))
+            .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
             .collect()
     } else {
         let s = args.selector.as_deref().unwrap();

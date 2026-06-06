@@ -82,11 +82,12 @@ depth.
 - [docs/task-format.md](docs/task-format.md) — exactly which
   Tasks-plugin emoji fields are supported, with examples and the
   deferred list
-- [docs/query-dsl.md](docs/query-dsl.md) — supported subset of the
-  Tasks-plugin query language with grammar, examples, and an error
-  catalog
-- [docs/graph-query-dsl.md](docs/graph-query-dsl.md) — grammar and
-  worked examples for `ft graph query` and the TUI Graph tab
+- [docs/graph-query-dsl.md](docs/graph-query-dsl.md) — the unified
+  query DSL. Powers `ft graph query` and the TUI Graph tab, and also
+  drives `ft tasks list` / the TUI Tasks tab under `Profile::Tasks`
+- [docs/migrating-task-queries.md](docs/migrating-task-queries.md) —
+  predicate translation table for users coming from the previous
+  task DSL
 - [docs/timeblocks.md](docs/timeblocks.md) — day-planner block format,
   tag grammar, full CLI reference, and TUI keymap
 - [docs/append-and-capture.md](docs/append-and-capture.md) —

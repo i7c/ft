@@ -9,8 +9,8 @@ emoji format. This file is the quick map; deeper detail lives in
 Two crates, one workspace:
 
 - `ft-core/` — the brain. Vault discovery, config, task model + emoji
-  format, scan, query DSL, mutation ops, link graph, timeblocks, dates,
-  atomic writes, periodic-note resolution.
+  format, scan, unified query DSL (`graph::query`), mutation ops, link
+  graph, timeblocks, dates, atomic writes, periodic-note resolution.
 - `ft/` — thin binary. Clap parsing, output rendering, TTY concerns,
   editor handoff, and the TUI (`ft/src/tui/`).
 
@@ -40,12 +40,17 @@ to `ft-core` first so the CLI benefits too.
   No async runtime, no `Mutex<AppState>`. Workers own their inputs, post a
   `BgEvent::*` back, and exit. In-flight state lives on `App` as a typed
   `RefCell<Option<...>>` slot. The git-sync worker is the reference impl.
-- **Dual-DSL preset pattern.** Both task and graph queries use the same
-  convention: a `builtin(name) -> Option<&str>` + `builtin_names()` table
-  in `ft-core`, user presets in config shadowing built-ins, and CLI
-  `--preset <name>` resolution (user config → built-in → exit 2 on
-  unknown). Task presets live in `Config::presets`; graph presets in
-  `GraphCfg::presets` — separate maps to avoid cross-DSL ambiguity.
+- **Unified query DSL with profiles.** One parser (`graph::query::parse_with`)
+  drives both task and graph queries. `Profile::Tasks` prepends an
+  implicit `node where kind = Task and …` block so users can keep
+  typing `priority = High and due < today`. `Profile::Default` is the
+  verbose graph syntax. Same preset pattern as before: a
+  `builtin(name) -> Option<&str>` + `builtin_names()` table per DSL
+  consumer, user presets shadow built-ins, CLI `--preset <name>`
+  resolution (user config → built-in → exit 2 on unknown). Task
+  presets live in `Config::presets`; graph presets in
+  `GraphCfg::presets` — separate maps because the two consumers
+  default to different profiles.
 - **Signature changes on core APIs.** A new param to a widely-called
   function (e.g. `Graph::build`) ripples through every test file. Before
   making such a change, grep for callers and consider a compatibility

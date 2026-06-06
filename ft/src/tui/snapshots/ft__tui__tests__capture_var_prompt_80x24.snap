@@ -10,7 +10,7 @@ expression: frame
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
-│  C     create ┌ capture · create · var · 2026-06-05-meeting.m┐               │
+│  C     create ┌ capture · create · var · 2026-06-06-meeting.m┐               │
 │  t     open to│                                              │               │
 │  p     periodi│▏ topic = █                                   │               │
 │  ?     show th│                                              │               │

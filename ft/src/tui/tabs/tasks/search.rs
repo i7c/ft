@@ -2,10 +2,11 @@ use anyhow::Result;
 use chrono::{Duration, Local, NaiveDate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::{
-    query::{
-        dsl::{self, Query},
-        sort::{sort_by_keys, SortKey, SortOrder},
+    graph::{
+        query::{parse_with as parse_query, GraphQuery, Profile},
+        Graph, NodeKind,
     },
+    query::sort::{sort_by_keys, SortKey, SortOrder},
     task::{
         ops::{self, CompleteOptions, CreateInput},
         Priority, Status, Task,
@@ -69,6 +70,10 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
 pub struct SearchView {
     /// Loaded tasks. Empty until the first focus triggers a scan.
     tasks: Vec<Task>,
+    /// Graph derived from the last loaded scan. Used to evaluate the
+    /// Tasks-profile graph DSL query against this vault's task nodes.
+    /// `None` until the first scan; rebuilt on every reload.
+    graph: Option<Graph>,
     /// Whether `tasks` reflects a real scan (vs. the initial empty state).
     loaded: bool,
     /// Indices into `tasks` (sorted) that match the active query and pass
@@ -398,7 +403,7 @@ fn parse_optional_date(s: &str, today: NaiveDate) -> Result<Option<NaiveDate>, S
 /// Result of compiling the active `query_text` against the current `today`.
 #[derive(Debug, Clone)]
 enum ParseState {
-    Ok(Option<Query>),
+    Ok(Option<GraphQuery>),
     Err(String),
 }
 
@@ -408,6 +413,7 @@ impl SearchView {
     pub fn new() -> Self {
         Self {
             tasks: Vec::new(),
+            graph: None,
             loaded: false,
             matches: Vec::new(),
             overdue_count: 0,
@@ -421,13 +427,14 @@ impl SearchView {
         }
     }
 
-    /// Default DSL: tasks that are still actionable, due before `today + 8`,
-    /// sorted due ascending then priority descending. The literal date keeps
-    /// the bar copy-pastable and round-trippable through the parser.
+    /// Default DSL: tasks that are still actionable, due before `today + 8`.
+    /// The literal date keeps the bar copy-pastable and round-trippable
+    /// through the parser. Sorting is applied by the view independently;
+    /// the unified DSL does not carry sort clauses.
     fn default_query(today: NaiveDate) -> String {
         let upper = today + Duration::days(8);
         format!(
-            "not done and due before {} sort by due, priority",
+            "status in {{Open, InProgress}} and due < {}",
             upper.format("%Y-%m-%d")
         )
     }
@@ -441,6 +448,9 @@ impl SearchView {
 
     fn reload(&mut self, ctx: &mut TabCtx) -> Result<()> {
         let scan = ctx.vault.scan();
+        // Build the graph from the same scan so node IDs in the query
+        // result map back to the cached `tasks` Vec by (path, line).
+        self.graph = Graph::build(ctx.vault, &scan).ok();
         self.tasks = scan.tasks;
         self.loaded = true;
         if self.query_text.is_empty() {
@@ -458,7 +468,7 @@ impl SearchView {
             self.parse_state = ParseState::Ok(None);
             return;
         }
-        match dsl::parse(trimmed, today) {
+        match parse_query(trimmed, Profile::Tasks, today) {
             Ok(q) => self.parse_state = ParseState::Ok(Some(q)),
             Err(e) => self.parse_state = ParseState::Err(e.to_string()),
         }
@@ -475,26 +485,41 @@ impl SearchView {
             ParseState::Err(_) => return,
         };
 
-        // Filter
-        let active_expr = query.as_ref().and_then(|q| q.expr.as_ref());
+        // Membership: tasks the parsed query allows. With no graph (first
+        // frame before reload) or no query, every task is admissible.
+        let allowed: Option<std::collections::HashSet<(std::path::PathBuf, usize)>> =
+            match (query.as_ref(), self.graph.as_ref()) {
+                (Some(q), Some(g)) => {
+                    let ids = q.select(g);
+                    Some(
+                        ids.into_iter()
+                            .filter_map(|id| match g.node(id) {
+                                NodeKind::Task(td) => {
+                                    Some((td.source_file.clone(), td.source_line))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                    )
+                }
+                _ => None,
+            };
+
+        // Build the filtered, sorted slice. Sort always uses the view's
+        // default (due asc, priority desc) since the DSL no longer carries
+        // sort clauses.
         let mut keep: Vec<&Task> = self
             .tasks
             .iter()
-            .filter(|t| active_expr.is_none_or(|expr| expr.matches(t)))
+            .filter(|t| {
+                allowed
+                    .as_ref()
+                    .is_none_or(|s| s.contains(&(t.source_file.clone(), t.source_line)))
+            })
             .collect();
 
-        // Sort
-        let sort_keys: Vec<(SortKey, SortOrder)> = query
-            .as_ref()
-            .map(|q| q.sort_keys.clone())
-            .unwrap_or_default();
+        let sort_keys: Vec<(SortKey, SortOrder)> = Vec::new();
         sort_by_keys(&mut keep, &sort_keys);
-
-        // Apply DSL limit if present.
-        let limit = query.as_ref().and_then(|q| q.limit);
-        if let Some(n) = limit {
-            keep.truncate(n);
-        }
 
         // Reverse-map back to indices into self.tasks. Tasks are uniquely
         // identified by (path, line); we look each one up.
