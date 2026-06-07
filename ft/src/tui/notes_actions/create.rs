@@ -56,6 +56,11 @@ pub enum CreateState {
         /// from the user's selection (Graph tab `C`). `None` preserves
         /// the historical Notes-tab flow (template → folder → filename).
         folder_seed: Option<PathBuf>,
+        /// When `Some(filename)`, the flow skips BOTH folder picking AND
+        /// filename prompt — after template selection the note is created
+        /// at `folder_seed/filename` immediately. Used by the Graph tab
+        /// for ghost nodes where the target path is fully known.
+        ghost_filename: Option<String>,
     },
     FolderPicking {
         template: Option<TemplatePick>,
@@ -166,11 +171,22 @@ pub fn begin_folder_picking(ctx: &TabCtx, template: Option<TemplatePick>) -> Cre
 /// the template is chosen and goes straight to the filename prompt
 /// with that folder. Notes-tab callers pass `None`; tabs that derive
 /// the folder from selection (Graph tab) pass `Some`.
-pub fn begin_template_picking(ctx: &TabCtx, folder_seed: Option<PathBuf>) -> CreateState {
+///
+/// `ghost_filename`: when `Some` AND `folder_seed` is also `Some`,
+/// the flow skips BOTH folder picker AND filename prompt — after
+/// template selection the note is created at
+/// `folder_seed/ghost_filename` immediately. Used by the Graph tab
+/// for ghost nodes.
+pub fn begin_template_picking(
+    ctx: &TabCtx,
+    folder_seed: Option<PathBuf>,
+    ghost_filename: Option<String>,
+) -> CreateState {
     let templates = enumerate_templates(ctx.vault);
     CreateState::TemplatePicking {
         picker: FuzzyPicker::new(PathListPickerSource::new(templates)),
         folder_seed,
+        ghost_filename,
     }
 }
 
@@ -276,7 +292,8 @@ pub fn handle_key(state: &mut CreateState, k: KeyEvent, ctx: &TabCtx) -> CreateS
         CreateState::TemplatePicking {
             picker,
             folder_seed,
-        } => handle_template_picker_key(k, picker, folder_seed, ctx),
+            ghost_filename,
+        } => handle_template_picker_key(k, picker, folder_seed, ghost_filename, ctx),
         CreateState::FolderPicking { template, picker } => {
             handle_folder_picker_key(k, template, picker, ctx)
         }
@@ -318,6 +335,7 @@ fn handle_template_picker_key(
     k: KeyEvent,
     picker: &mut FuzzyPicker<PathListPickerSource>,
     folder_seed: &mut Option<PathBuf>,
+    ghost_filename: &mut Option<String>,
     ctx: &TabCtx,
 ) -> CreateStep {
     match picker.handle_key(k) {
@@ -340,6 +358,24 @@ fn handle_template_picker_key(
                 source,
                 vars_needed,
             };
+            // Ghost target: folder_seed + ghost_filename are both set →
+            // commit immediately at the exact path, skipping folder
+            // picker and filename prompt.
+            if ghost_filename.is_some() {
+                if let (Some(folder), Some(filename)) = (folder_seed.take(), ghost_filename.take())
+                {
+                    let abs_path = ctx.vault.path.join(&folder).join(&filename);
+                    commit_create(
+                        ctx,
+                        Some(&template),
+                        &folder,
+                        &filename,
+                        &BTreeMap::new(),
+                        &abs_path,
+                    );
+                    return CreateStep::Finished;
+                }
+            }
             // Tabs that pre-seeded the folder (Graph tab `C`) skip the
             // folder picker entirely and go straight to filename; the
             // historical Notes-tab flow (folder_seed=None) keeps the
@@ -379,7 +415,7 @@ fn handle_folder_picker_key(
         PickerOutcome::Cancelled => {
             // Esc: back to template picker if we came from `C`, else finish.
             if template.take().is_some() {
-                CreateStep::Transition(begin_template_picking(ctx, None))
+                CreateStep::Transition(begin_template_picking(ctx, None, None))
             } else {
                 CreateStep::Finished
             }

@@ -229,7 +229,7 @@ impl NotesTab {
                 EventOutcome::Consumed
             }
             "notes.create-from-template" => {
-                self.state = NotesState::Creating(begin_template_picking(ctx, None));
+                self.state = NotesState::Creating(begin_template_picking(ctx, None, None));
                 EventOutcome::Consumed
             }
             "notes.today" => {

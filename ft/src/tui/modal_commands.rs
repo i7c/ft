@@ -461,6 +461,69 @@ pub static MOVE_OUTER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Esc", "move.cancel")
 });
 
+// ── Create-subdir ───────────────────────────────────────────────────
+
+const CREATE_SUBDIR_SCOPE: CommandScope = CommandScope::Modal("create-subdir");
+
+pub static CREATE_SUBDIR_COMMANDS: &[CommandDef] = &[
+    confirm_def("create-subdir.confirm", CREATE_SUBDIR_SCOPE),
+    cancel_def("create-subdir.cancel", CREATE_SUBDIR_SCOPE),
+];
+
+pub static CREATE_SUBDIR_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "create-subdir.confirm")
+        .bind("Esc", "create-subdir.cancel")
+});
+
+// ── Confirm-delete ──────────────────────────────────────────────────
+
+const CONFIRM_DELETE_SCOPE: CommandScope = CommandScope::Modal("confirm-delete");
+
+pub static CONFIRM_DELETE_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "confirm-delete.yes",
+        description: "Confirm deletion",
+        scope: CONFIRM_DELETE_SCOPE,
+        group: "Flow",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "confirm-delete.no",
+        description: "Cancel deletion",
+        scope: CONFIRM_DELETE_SCOPE,
+        group: "Flow",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    nav_def(
+        "confirm-delete.cursor-left",
+        "Focus the previous choice",
+        CONFIRM_DELETE_SCOPE,
+    ),
+    nav_def(
+        "confirm-delete.cursor-right",
+        "Focus the next choice",
+        CONFIRM_DELETE_SCOPE,
+    ),
+];
+
+pub static CONFIRM_DELETE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("y", "confirm-delete.yes")
+        .bind("n", "confirm-delete.no")
+        .bind("Esc", "confirm-delete.no")
+        .bind("q", "confirm-delete.no")
+        .bind("Enter", "confirm-delete.yes")
+        .bind("Left", "confirm-delete.cursor-left")
+        .bind("h", "confirm-delete.cursor-left")
+        .bind("Right", "confirm-delete.cursor-right")
+        .bind("l", "confirm-delete.cursor-right")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +545,8 @@ mod tests {
             CAPTURE_PICKER_COMMANDS,
             RELATED_COMMANDS,
             MOVE_OUTER_COMMANDS,
+            CONFIRM_DELETE_COMMANDS,
+            CREATE_SUBDIR_COMMANDS,
         ];
         let mut seen: HashSet<&'static str> = HashSet::new();
         let mut total = 0;

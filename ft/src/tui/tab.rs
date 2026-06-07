@@ -167,6 +167,22 @@ pub enum AppRequest {
     /// Raised by the `PeriodicLeader` modal on period-letter keypress.
     /// The App calls [`Tab::graph_navigate_periodic`].
     GraphNavigatePeriodic(ft_core::periodic::Period),
+    /// Routed back to the Graph tab: execute a confirmed delete of
+    /// the given target path. Raised by the `ConfirmDelete` modal
+    /// on Yes. The host calls `plan_delete` + `apply_delete`,
+    /// refreshes the graph, and toasts the outcome.
+    GraphConfirmDelete {
+        target: PathBuf,
+        is_directory: bool,
+    },
+    /// Routed back to the Graph tab: create a subdirectory under
+    /// the given parent path with the given name. Raised by the
+    /// `CreateSubdir` modal on Enter. The host creates the
+    /// directory, refreshes the graph, and toasts.
+    GraphCreateSubdir {
+        parent: PathBuf,
+        name: String,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -262,6 +278,19 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::GraphNavigatePeriodic(period) => f
                 .debug_tuple("GraphNavigatePeriodic")
                 .field(period)
+                .finish(),
+            AppRequest::GraphConfirmDelete {
+                target,
+                is_directory,
+            } => f
+                .debug_struct("GraphConfirmDelete")
+                .field("target", target)
+                .field("is_directory", is_directory)
+                .finish(),
+            AppRequest::GraphCreateSubdir { parent, name } => f
+                .debug_struct("GraphCreateSubdir")
+                .field("parent", parent)
+                .field("name", name)
                 .finish(),
         }
     }
@@ -480,6 +509,17 @@ pub trait Tab {
     /// shortest BFS path from the active query's roots, and jump
     /// the tree cursor to it. Other tabs ignore.
     fn graph_navigate_periodic(&mut self, _ctx: &TabCtx, _period: ft_core::periodic::Period) {}
+
+    /// Hook for the confirmation-delete flow (see
+    /// [`AppRequest::GraphConfirmDelete`]). The Graph tab overrides
+    /// this to plan + apply deletion, refresh the graph, and toast
+    /// the outcome.
+    fn graph_confirm_delete(&mut self, _ctx: &TabCtx, _target: PathBuf, _is_directory: bool) {}
+
+    /// Hook for the create-subdirectory flow (see
+    /// [`AppRequest::GraphCreateSubdir`]). The Graph tab overrides
+    /// this to create the directory, refresh the graph, and toast.
+    fn graph_create_subdir(&mut self, _ctx: &TabCtx, _parent: PathBuf, _name: String) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

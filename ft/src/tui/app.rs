@@ -769,6 +769,37 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::GraphConfirmDelete {
+                target,
+                is_directory,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
+                }
+                Ok(())
+            }
+            AppRequest::GraphCreateSubdir { parent, name } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_create_subdir(&ctx, parent, name);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1979,6 +2010,37 @@ impl App {
                         active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_navigate_periodic(&ctx, period);
+                }
+                Ok(())
+            }
+            AppRequest::GraphConfirmDelete {
+                target,
+                is_directory,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
+                }
+                Ok(())
+            }
+            AppRequest::GraphCreateSubdir { parent, name } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_create_subdir(&ctx, parent, name);
                 }
                 Ok(())
             }

@@ -26,6 +26,7 @@
 //! traversal — `incoming(ghost)` works exactly like `incoming(note)`,
 //! which is what enables "rename a not-yet-created note" in session 3.
 
+pub mod delete;
 pub mod parser;
 pub mod preset;
 pub mod query;

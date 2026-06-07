@@ -35,7 +35,11 @@
 use crossterm::event::KeyCode;
 use ft_core::periodic::Period;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use std::path::PathBuf;
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome};
 use crate::tui::event::Event;
@@ -57,6 +61,7 @@ use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
     render_periodic_leader,
 };
+use crate::tui::widgets::EditBuffer;
 
 // ── Trait ────────────────────────────────────────────────────────────
 
@@ -136,6 +141,51 @@ pub enum ModalOutcome {
 
 // ── Active modal enum ────────────────────────────────────────────────
 
+// ── Confirm-delete ─────────────────────────────────────────────────
+
+/// Which choice is focused in the delete confirmation dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmChoice {
+    Yes,
+    No,
+}
+
+impl ConfirmChoice {
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Yes => Self::No,
+            Self::No => Self::Yes,
+        }
+    }
+    pub fn next(self) -> Self {
+        self.prev()
+    }
+}
+
+/// State for the create-subdirectory prompt modal.
+#[derive(Debug)]
+pub struct CreateSubdirState {
+    /// Vault-relative parent directory.
+    pub parent: PathBuf,
+    /// Subdirectory name being typed.
+    pub buf: EditBuffer,
+    /// Validation error to display.
+    pub error: Option<String>,
+}
+
+/// State for the yes/no delete confirmation modal.
+#[derive(Debug)]
+pub struct ConfirmDeleteState {
+    /// Confirmation message shown to the user.
+    pub message: String,
+    /// Vault-absolute path of the item to delete.
+    pub target: PathBuf,
+    /// Whether the target is a directory (affects rendering and deletion method).
+    pub is_directory: bool,
+    /// Currently focused choice.
+    pub focus: ConfirmChoice,
+}
+
 /// The set of modal variants the App may hold at a given time. Each
 /// variant wraps the state type that owns the modal's data; the variant
 /// itself is the discriminator for dispatch.
@@ -176,6 +226,10 @@ pub enum ActiveModal {
     /// The active view's query-input bar owns the keyboard. The
     /// payload identifies which view (multi-view tab strip).
     QueryBar { view_id: usize },
+    /// Yes/no confirmation dialog for delete operations.
+    ConfirmDelete(ConfirmDeleteState),
+    /// Single-line prompt for creating a subdirectory.
+    CreateSubdir(CreateSubdirState),
 }
 
 impl Modal for ActiveModal {
@@ -195,6 +249,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => {
                 QueryBar { view_id: *view_id }.handle_event(ev, ctx)
             }
+            ActiveModal::ConfirmDelete(s) => s.handle_event(ev, ctx),
+            ActiveModal::CreateSubdir(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -214,6 +270,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => {
                 QueryBar { view_id: *view_id }.render(frame, area, ctx)
             }
+            ActiveModal::ConfirmDelete(s) => s.render(frame, area, ctx),
+            ActiveModal::CreateSubdir(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -231,6 +289,8 @@ impl Modal for ActiveModal {
             ActiveModal::Search(s) => s.keymap_help(),
             ActiveModal::PeriodicLeader => PeriodicLeader.keymap_help(),
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.keymap_help(),
+            ActiveModal::ConfirmDelete(s) => s.keymap_help(),
+            ActiveModal::CreateSubdir(s) => s.keymap_help(),
         }
     }
 
@@ -248,6 +308,8 @@ impl Modal for ActiveModal {
             ActiveModal::Search(_) => "search",
             ActiveModal::PeriodicLeader => "periodic-leader",
             ActiveModal::QueryBar { .. } => "query-bar",
+            ActiveModal::ConfirmDelete(_) => "confirm-delete",
+            ActiveModal::CreateSubdir(_) => "create-subdir",
         }
     }
 
@@ -265,6 +327,8 @@ impl Modal for ActiveModal {
             ActiveModal::Search(s) => s.commands(),
             ActiveModal::PeriodicLeader => PeriodicLeader.commands(),
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.commands(),
+            ActiveModal::ConfirmDelete(s) => s.commands(),
+            ActiveModal::CreateSubdir(s) => s.commands(),
         }
     }
 
@@ -282,6 +346,8 @@ impl Modal for ActiveModal {
             ActiveModal::Search(s) => s.keymap(),
             ActiveModal::PeriodicLeader => empty_keymap(),
             ActiveModal::QueryBar { .. } => empty_keymap(),
+            ActiveModal::ConfirmDelete(s) => s.keymap(),
+            ActiveModal::CreateSubdir(s) => s.keymap(),
         }
     }
 
@@ -299,6 +365,8 @@ impl Modal for ActiveModal {
             ActiveModal::Search(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::PeriodicLeader => CommandOutcome::NotHandled,
             ActiveModal::QueryBar { .. } => CommandOutcome::NotHandled,
+            ActiveModal::ConfirmDelete(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::CreateSubdir(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }
@@ -484,6 +552,351 @@ impl Modal for CaptureVarPromptState {
 // newtype in `tabs/graph.rs` so it can post a tab-specific
 // `AppRequest` on `PickerOutcome::Selected` with the typed payload
 // the host expects (e.g. `GraphJumpToNodes`, `GraphApplyPreset`).
+
+// ── Create-subdir modal ─────────────────────────────────────────────
+
+impl Modal for CreateSubdirState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        let ctrl = k
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL);
+        match (k.code, ctrl) {
+            (KeyCode::Esc, _) => ModalOutcome::Closed,
+            (KeyCode::Enter, _) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphCreateSubdir {
+                    parent: self.parent.clone(),
+                    name: self.buf.text.clone(),
+                });
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char('w'), true) => {
+                self.buf.delete_word_backward();
+                self.error = None;
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Char(c), false) => {
+                self.buf.insert(c);
+                self.error = None;
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Backspace, _) => {
+                self.buf.backspace();
+                self.error = None;
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Delete, _) => {
+                self.buf.delete();
+                self.error = None;
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Left, _) => {
+                self.buf.left();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Right, _) => {
+                self.buf.right();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Home, _) => {
+                self.buf.home();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::End, _) => {
+                self.buf.end();
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_create_subdir(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Create subdirectory",
+            &[
+                ("Type", "subdirectory name"),
+                ("Enter", "create"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "create-subdir"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::CREATE_SUBDIR_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::CREATE_SUBDIR_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, cmd: &Command, _ctx: &TabCtx) -> CommandOutcome {
+        match cmd.name {
+            "create-subdir.confirm" => CommandOutcome::NotHandled, // handled via handle_event
+            "create-subdir.cancel" => CommandOutcome::NotHandled,  // handled via handle_event
+            _ => CommandOutcome::NotHandled,
+        }
+    }
+}
+
+fn render_create_subdir(frame: &mut Frame, area: Rect, state: &CreateSubdirState) {
+    let popup_height = 6u16.min(area.height.saturating_sub(2));
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let parent_display = if state.parent.as_os_str().is_empty() {
+        "vault root".to_string()
+    } else {
+        state.parent.to_string_lossy().into_owned()
+    };
+    let title = format!("Create subdirectory in {parent_display}/");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default());
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Input field
+    let input_style = Style::default().fg(Color::White);
+    let cursor_pos = (state.buf.cursor as u16).min(inner.width.saturating_sub(3));
+    let visible_start = if cursor_pos >= inner.width.saturating_sub(2) {
+        cursor_pos - inner.width.saturating_sub(3)
+    } else {
+        0
+    };
+    let visible: String = state
+        .buf
+        .text
+        .chars()
+        .skip(visible_start as usize)
+        .take(inner.width.saturating_sub(2) as usize)
+        .collect();
+    let input_line = if state.buf.text.is_empty() {
+        Line::from(Span::styled(
+            " ".repeat(inner.width.saturating_sub(2) as usize),
+            input_style,
+        ))
+    } else {
+        Line::from(Span::styled(visible, input_style))
+    };
+    let input_area = Rect {
+        x: inner.x + 1,
+        y: inner.y + 1,
+        width: inner.width.saturating_sub(2),
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Cursor
+    let cursor_x = inner.x + 1 + cursor_pos.saturating_sub(visible_start as u16);
+    let cursor_style = if state.buf.cursor < state.buf.text.len() {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(Color::White)
+    };
+    if let Some(ch) = state.buf.text.chars().nth(state.buf.cursor) {
+        let cursor_span = Span::styled(ch.to_string(), cursor_style);
+        frame.render_widget(
+            Paragraph::new(Line::from(cursor_span)),
+            Rect {
+                x: cursor_x,
+                y: inner.y + 1,
+                width: 1,
+                height: 1,
+            },
+        );
+    } else {
+        // End of text — show block cursor.
+        let cursor_span = Span::styled(" ", cursor_style);
+        frame.render_widget(
+            Paragraph::new(Line::from(cursor_span)),
+            Rect {
+                x: cursor_x,
+                y: inner.y + 1,
+                width: 1,
+                height: 1,
+            },
+        );
+    }
+
+    // Error text
+    if let Some(err) = &state.error {
+        let err_style = Style::default().fg(Color::Red);
+        let err_line = Line::from(Span::styled(err.as_str(), err_style));
+        let err_area = Rect {
+            x: inner.x + 1,
+            y: inner.y + 3,
+            width: inner.width.saturating_sub(2),
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(err_line), err_area);
+    }
+}
+
+// ── Confirm-delete modal ────────────────────────────────────────────
+
+impl Modal for ConfirmDeleteState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match (k.code, k.modifiers) {
+            (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) => {
+                self.focus = ConfirmChoice::Yes;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmDelete {
+                    target: self.target.clone(),
+                    is_directory: self.is_directory,
+                });
+                ModalOutcome::Closed
+            }
+            (KeyCode::Char('n'), _)
+            | (KeyCode::Char('N'), _)
+            | (KeyCode::Esc, _)
+            | (KeyCode::Char('q'), _) => ModalOutcome::Closed,
+            (KeyCode::Enter, _) => {
+                if self.focus == ConfirmChoice::Yes {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmDelete {
+                        target: self.target.clone(),
+                        is_directory: self.is_directory,
+                    });
+                }
+                ModalOutcome::Closed
+            }
+            (KeyCode::Left, _) | (KeyCode::Char('h'), _) => {
+                self.focus = self.focus.prev();
+                ModalOutcome::Consumed
+            }
+            (KeyCode::Right, _) | (KeyCode::Char('l'), _) => {
+                self.focus = self.focus.next();
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_confirm_delete(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Confirm delete",
+            &[
+                ("y", "yes — delete"),
+                ("n / Esc / q", "no — cancel"),
+                ("Enter", "confirm focused choice"),
+                ("←/→ · h/l", "switch focus"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "confirm-delete"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::CONFIRM_DELETE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::CONFIRM_DELETE_KEYMAP
+    }
+}
+
+fn render_confirm_delete(frame: &mut Frame, area: Rect, state: &ConfirmDeleteState) {
+    // Fixed-height popup: message line + empty line + button row + borders.
+    let popup_height = 6u16.min(area.height.saturating_sub(2));
+    let popup_width = 54u16.min(area.width.saturating_sub(4));
+
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Confirm delete")
+        .style(Style::default());
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Message — truncate to fit in the popup.
+    let max_msg_width = inner.width.saturating_sub(2) as usize;
+    let truncated: String = state.message.chars().take(max_msg_width).collect();
+    let msg = Line::from(Span::styled(truncated, Style::default().fg(Color::White)));
+    let msg_para = Paragraph::new(msg);
+    frame.render_widget(
+        msg_para,
+        Rect {
+            x: inner.x + 1,
+            y: inner.y + 1,
+            width: inner.width.saturating_sub(2),
+            height: 1,
+        },
+    );
+
+    // Buttons — centered below the message.
+    let btn_y = inner.y + 3;
+    let yes_style = if state.focus == ConfirmChoice::Yes {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Red)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Red)
+    };
+    let no_style = if state.focus == ConfirmChoice::No {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Gray)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let btns = Line::from(vec![
+        Span::styled(" [Yes] ", yes_style),
+        Span::raw("  "),
+        Span::styled(" [No] ", no_style),
+    ]);
+
+    let btn_width = 16u16;
+    let btn_x = inner.x + (inner.width.saturating_sub(btn_width)) / 2;
+    let btn_area = Rect {
+        x: btn_x,
+        y: btn_y,
+        width: btn_width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(btns), btn_area);
+}
 
 /// Unit modal: the periodic-note leader is "awaiting the next
 /// keystroke" — `d`/`w`/`m`/`q`/`y` open the matching period; any other

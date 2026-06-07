@@ -199,6 +199,7 @@ pub(crate) fn render_create_overlay(frame: &mut Frame, area: Rect, cs: &mut Crea
         CS::TemplatePicking {
             picker,
             folder_seed: _,
+            ghost_filename: _,
         } => render_path_picker_popup(
             frame,
             area,

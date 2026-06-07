@@ -20,6 +20,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use ft_core::graph::delete::{apply_delete, plan_delete};
 use ft_core::graph::preset;
 use ft_core::graph::query::{parse_with, CyclePolicy, Profile, WalkOptions};
 use ft_core::graph::Graph;
@@ -37,6 +38,8 @@ pub struct GraphArgs {
 pub enum GraphCommand {
     /// Parse a DSL query, walk the graph, and print the result.
     Query(QueryArgs),
+    /// Delete a note file or directory tree from the vault.
+    Delete(DeleteArgs),
 }
 
 #[derive(Args, Debug)]
@@ -118,6 +121,7 @@ impl From<CycleArg> for CyclePolicy {
 pub fn run(args: GraphArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         GraphCommand::Query(q) => run_query(q, vault_flag),
+        GraphCommand::Delete(d) => run_delete(d, vault_flag),
     }
 }
 
@@ -186,6 +190,43 @@ fn read_query_source(args: &QueryArgs, vault: &Vault) -> Result<String> {
             "QUERY, --query, --from-file, and --preset are mutually exclusive — pass exactly one"
         )),
     }
+}
+
+/// `ft graph delete` arguments.
+#[derive(Args, Debug)]
+pub struct DeleteArgs {
+    /// Vault-relative path of the note or directory to delete.
+    #[arg(value_name = "PATH")]
+    pub path: PathBuf,
+}
+
+fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    let abs = vault.path.join(&args.path);
+    if !abs.exists() {
+        Err(anyhow!("path does not exist: {}", args.path.display()))?;
+    }
+
+    let plan = plan_delete(&args.path, &vault.path)
+        .with_context(|| format!("cannot delete {}", args.path.display()))?;
+
+    apply_delete(&vault.path, &plan)
+        .with_context(|| format!("failed to delete {}", args.path.display()))?;
+
+    let path_display = args.path.display();
+    if args
+        .path
+        .parent()
+        .is_some_and(|p| !p.as_os_str().is_empty())
+        && args.path.extension().is_some()
+    {
+        println!("deleted note {path_display}");
+    } else {
+        println!("deleted {path_display}");
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {

@@ -26,6 +26,7 @@ use ratatui::{
     Frame,
 };
 
+use ft_core::graph::delete::{apply_delete, plan_delete};
 use ft_core::graph::preset;
 use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::rename::{
@@ -43,7 +44,9 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     keymap::{KeyChord, KeyMap},
-    modal::{ActiveModal, Modal, ModalOutcome},
+    modal::{
+        ActiveModal, ConfirmChoice, ConfirmDeleteState, CreateSubdirState, Modal, ModalOutcome,
+    },
     modal_commands as mc,
     notes_actions::{
         append::AppendState,
@@ -840,6 +843,24 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "graph.delete",
+        description: "Delete the selected note or directory",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.create-subdir",
+        description: "Create a subdirectory under the selected directory",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
     // Periodic notes
     CommandDef {
         name: "graph.periodic-leader",
@@ -920,6 +941,8 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("m", "graph.move")
         .bind("r", "graph.rename-or-multi-move")
         .bind("Ctrl+r", "graph.refresh")
+        .bind("d", "graph.delete")
+        .bind("n", "graph.create-subdir")
         // Periodic
         .bind("p", "graph.periodic-leader")
         .bind("t", "graph.today")
@@ -2823,6 +2846,97 @@ impl Tab for GraphTab {
         self.navigate_periodic(ctx, period);
     }
 
+    fn graph_confirm_delete(&mut self, ctx: &TabCtx, target: PathBuf, is_directory: bool) {
+        let vault_root = &ctx.vault.path;
+        let rel = target
+            .strip_prefix(vault_root)
+            .unwrap_or(&target)
+            .to_path_buf();
+
+        let plan = match plan_delete(&rel, vault_root) {
+            Ok(p) => p,
+            Err(e) => {
+                queue_toast(ctx, &format!("cannot delete: {e}"), ToastStyle::Error);
+                return;
+            }
+        };
+
+        match apply_delete(vault_root, &plan) {
+            Ok(()) => {
+                let scan = ctx.vault.scan();
+                if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                    self.graph = Some(g);
+                    self.restore_all_views();
+                }
+                if is_directory {
+                    queue_toast(
+                        ctx,
+                        &format!("deleted {}/", rel.display()),
+                        ToastStyle::Success,
+                    );
+                } else {
+                    queue_toast(
+                        ctx,
+                        &format!("deleted {}", rel.display()),
+                        ToastStyle::Success,
+                    );
+                }
+            }
+            Err(e) => {
+                queue_toast(ctx, &format!("delete failed: {e}"), ToastStyle::Error);
+            }
+        }
+    }
+
+    fn graph_create_subdir(&mut self, ctx: &TabCtx, parent: PathBuf, name: String) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            queue_toast(ctx, "name cannot be empty", ToastStyle::Error);
+            return;
+        }
+        if trimmed.contains('/') || trimmed.contains('\\') {
+            queue_toast(
+                ctx,
+                "name cannot contain path separators",
+                ToastStyle::Error,
+            );
+            return;
+        }
+        let abs_dir = ctx.vault.path.join(&parent).join(trimmed);
+        if abs_dir.exists() {
+            let display = if parent.as_os_str().is_empty() {
+                format!("{}/", trimmed)
+            } else {
+                format!("{}/{}/", parent.display(), trimmed)
+            };
+            queue_toast(
+                ctx,
+                &format!("directory already exists: {}", display),
+                ToastStyle::Error,
+            );
+            return;
+        }
+        match std::fs::create_dir_all(&abs_dir) {
+            Ok(()) => {
+                let display = if parent.as_os_str().is_empty() {
+                    format!("{}/", trimmed)
+                } else {
+                    format!("{}/{}/", parent.display(), trimmed)
+                };
+                // Refresh graph to pick up the new directory.
+                let scan = ctx.vault.scan();
+                if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                    self.graph = Some(g);
+                    self.restore_all_views();
+                }
+                queue_toast(ctx, &format!("created {}", display), ToastStyle::Success);
+            }
+            Err(e) => {
+                queue_toast(ctx, &format!("create failed: {e}"), ToastStyle::Error);
+            }
+        }
+    }
+
     fn commands(&self) -> &'static [CommandDef] {
         GRAPH_COMMANDS
     }
@@ -3024,6 +3138,51 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.create-blank" => {
+                // Ghost shortcut: create the note instantly at the ghost's path.
+                if let (Some(graph), Some(row)) = (
+                    self.graph.as_ref(),
+                    self.active_view()
+                        .tree
+                        .rows()
+                        .get(self.active_view().selected),
+                ) {
+                    if let NodeKind::Ghost(g) = graph.node(row.note_id) {
+                        let abs_path = ctx.vault.path.join(Path::new(&g.raw).with_extension("md"));
+                        let title = Path::new(&g.raw)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if let Some(parent) = abs_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let content = format!("# {title}\n");
+                        if ft_core::fs::write_atomic(&abs_path, &content).is_ok() {
+                            // Refresh graph to pick up the new note.
+                            let scan = ctx.vault.scan();
+                            if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                                self.graph = Some(g);
+                                self.restore_all_views();
+                            }
+                            let rel = abs_path
+                                .strip_prefix(&ctx.vault.path)
+                                .unwrap_or(&abs_path)
+                                .to_path_buf();
+                            ctx.recents.record_open(&rel);
+                            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+                                path: abs_path,
+                                line: 1,
+                            });
+                            queue_toast(
+                                ctx,
+                                &format!("created {}", rel.display()),
+                                ToastStyle::Success,
+                            );
+                        } else {
+                            queue_toast(ctx, "failed to create note", ToastStyle::Error);
+                        }
+                        return CommandOutcome::Handled;
+                    }
+                }
                 let folder = self.create_folder_from_selection();
                 let state = create::begin_filename_prompt(folder, None);
                 *ctx.pending_request.borrow_mut() =
@@ -3031,8 +3190,39 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.create-from-template" => {
+                // Ghost shortcut: open template picker, commit to ghost path.
+                if let (Some(graph), Some(row)) = (
+                    self.graph.as_ref(),
+                    self.active_view()
+                        .tree
+                        .rows()
+                        .get(self.active_view().selected),
+                ) {
+                    if let NodeKind::Ghost(g) = graph.node(row.note_id) {
+                        let parent = Path::new(&g.raw)
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default();
+                        let filename = Path::new(&g.raw)
+                            .file_name()
+                            .map(|n| {
+                                let s = n.to_string_lossy().into_owned();
+                                if s.ends_with(".md") {
+                                    s
+                                } else {
+                                    format!("{s}.md")
+                                }
+                            })
+                            .unwrap_or_default();
+                        let state =
+                            create::begin_template_picking(ctx, Some(parent), Some(filename));
+                        *ctx.pending_request.borrow_mut() =
+                            Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
+                        return CommandOutcome::Handled;
+                    }
+                }
                 let folder = self.create_folder_from_selection();
-                let state = create::begin_template_picking(ctx, Some(folder));
+                let state = create::begin_template_picking(ctx, Some(folder), None);
                 *ctx.pending_request.borrow_mut() =
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
                 CommandOutcome::Handled
@@ -3124,6 +3314,87 @@ impl Tab for GraphTab {
                 if let Some(state) = modal {
                     *ctx.pending_request.borrow_mut() =
                         Some(AppRequest::OpenModal(Box::new(ActiveModal::Rename(state))));
+                }
+                CommandOutcome::Handled
+            }
+            "graph.delete" => {
+                let graph = self.graph.as_ref();
+                let v = self.active_view();
+                let Some(row) = v.tree.rows().get(v.selected) else {
+                    return CommandOutcome::Handled;
+                };
+                match graph.map(|g| g.node(row.note_id)) {
+                    Some(NodeKind::Note(n)) => {
+                        let rel = n.path.to_string_lossy().into_owned();
+                        let abs = ctx.vault.path.join(&n.path);
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                            ActiveModal::ConfirmDelete(ConfirmDeleteState {
+                                message: format!("Delete note `{rel}`?"),
+                                target: abs,
+                                is_directory: false,
+                                focus: ConfirmChoice::No,
+                            }),
+                        )));
+                    }
+                    Some(NodeKind::Directory(d)) if d.path.as_os_str().is_empty() => {
+                        queue_toast(ctx, "cannot delete vault root", ToastStyle::Error);
+                    }
+                    Some(NodeKind::Directory(d)) => {
+                        let rel = d.path.to_string_lossy().into_owned();
+                        let display = if rel.is_empty() {
+                            "vault root".to_string()
+                        } else {
+                            rel.clone()
+                        };
+                        let abs = ctx.vault.path.join(&d.path);
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                            ActiveModal::ConfirmDelete(ConfirmDeleteState {
+                                message: format!(
+                                    "Delete directory `{display}/` and all its contents?"
+                                ),
+                                target: abs,
+                                is_directory: true,
+                                focus: ConfirmChoice::No,
+                            }),
+                        )));
+                    }
+                    Some(NodeKind::Ghost(_)) => {
+                        queue_toast(
+                            ctx,
+                            "cannot delete a ghost — it does not exist on disk",
+                            ToastStyle::Error,
+                        );
+                    }
+                    Some(NodeKind::Task(_)) => {
+                        queue_toast(
+                            ctx,
+                            "cannot delete a task node — delete the task in its source file",
+                            ToastStyle::Error,
+                        );
+                    }
+                    _ => {}
+                }
+                CommandOutcome::Handled
+            }
+            "graph.create-subdir" => {
+                let graph = self.graph.as_ref();
+                let v = self.active_view();
+                let Some(row) = v.tree.rows().get(v.selected) else {
+                    return CommandOutcome::Handled;
+                };
+                match graph.map(|g| g.node(row.note_id)) {
+                    Some(NodeKind::Directory(d)) => {
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                            ActiveModal::CreateSubdir(CreateSubdirState {
+                                parent: d.path.clone(),
+                                buf: EditBuffer::default(),
+                                error: None,
+                            }),
+                        )));
+                    }
+                    _ => {
+                        queue_toast(ctx, "select a directory first", ToastStyle::Error);
+                    }
                 }
                 CommandOutcome::Handled
             }

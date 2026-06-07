@@ -63,6 +63,36 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a single file at `path`.
+///
+/// Succeeds silently if the file does not exist (it's already gone).
+/// Returns `Error::Io` only for permission errors or other I/O failures.
+pub fn delete_file(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
+/// Recursively delete a directory at `path` and all its contents.
+///
+/// Returns `Error::Io` on failure (permission errors, path is not a
+/// directory, etc.). Succeeds silently if the directory does not exist.
+pub fn delete_directory(path: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
