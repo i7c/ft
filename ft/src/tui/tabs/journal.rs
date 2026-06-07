@@ -575,8 +575,13 @@ fn render_loaded(
         return;
     }
 
-    // Each entry contributes: 1 header line + N body lines + 1 blank
-    // separator. We materialize as Lines and clip via scroll_offset.
+    // Each entry contributes: 1 header line + N wrapped body lines + 1
+    // blank separator. We wrap body lines manually (rather than letting
+    // ratatui's `Paragraph::wrap` do it) so `entry_starts` stays in
+    // sync with the post-wrap visual line count — that's what
+    // `scroll((y, 0))` indexes into. Without manual wrap the cursor
+    // would drift relative to scroll on entries with long paragraphs.
+    let wrap_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
@@ -595,7 +600,9 @@ fn render_loaded(
             header_style,
         )));
         for body_line in e.section_text.lines() {
-            lines.push(Line::from(Span::raw(body_line.to_string())));
+            for wrapped in wrap_line(body_line, wrap_width) {
+                lines.push(Line::from(Span::raw(wrapped)));
+            }
         }
         lines.push(Line::from(""));
     }
@@ -633,6 +640,84 @@ fn render_loaded(
     }
 }
 
+/// Word-wrap one logical line to `width` columns, preserving leading
+/// whitespace on the first wrapped fragment (so an indented bullet
+/// still looks indented). Words longer than `width` are hard-broken on
+/// character boundaries; widths are measured in characters (close
+/// enough for the paragraph text the journal renders — single-cell
+/// ASCII and BMP-letter Unicode). A `width` of 0 returns the original
+/// line unchanged to avoid an infinite loop.
+fn wrap_line(line: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![line.to_string()];
+    }
+    if line.is_empty() {
+        return vec![String::new()];
+    }
+    // Preserve any leading indent on the first wrapped fragment.
+    let indent_chars: usize = line.chars().take_while(|c| c.is_whitespace()).count();
+    let indent: String = line.chars().take(indent_chars).collect();
+    let body: String = line.chars().skip(indent_chars).collect();
+    if body.is_empty() {
+        // Trailing whitespace-only line: keep the chars (chunked so we
+        // never exceed width) so spacing in poetry-style content is
+        // preserved.
+        return chunk_by_chars(line, width);
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut current = indent.clone();
+    let mut current_len = indent_chars;
+    for word in body.split_whitespace() {
+        let word_len = word.chars().count();
+        if word_len > width {
+            // Flush whatever's in the current buffer first, then
+            // hard-break the long word across full-width chunks.
+            if !current.is_empty() {
+                out.push(std::mem::take(&mut current));
+                current_len = 0;
+            }
+            for chunk in chunk_by_chars(word, width) {
+                out.push(chunk);
+            }
+            continue;
+        }
+        let needs_space = current_len > 0 && current_len > indent_chars;
+        let space_len = if needs_space { 1 } else { 0 };
+        if current_len + space_len + word_len > width {
+            out.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_len = word_len;
+        } else {
+            if needs_space {
+                current.push(' ');
+                current_len += 1;
+            }
+            current.push_str(word);
+            current_len += word_len;
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Split `s` into chunks of exactly `width` chars (last may be shorter).
+fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![s.to_string()];
+    }
+    let chars: Vec<char> = s.chars().collect();
+    chars
+        .chunks(width)
+        .map(|c| c.iter().collect::<String>())
+        .collect()
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -650,4 +735,62 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_line;
+
+    #[test]
+    fn wrap_line_short_fits_on_one_line() {
+        assert_eq!(wrap_line("hello world", 40), vec!["hello world"]);
+    }
+
+    #[test]
+    fn wrap_line_breaks_on_word_boundary() {
+        let out = wrap_line("the quick brown fox jumps over the lazy dog", 20);
+        assert_eq!(
+            out,
+            vec!["the quick brown fox", "jumps over the lazy", "dog"]
+        );
+        for line in &out {
+            assert!(line.chars().count() <= 20, "overflow: {line:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_line_preserves_leading_indent_on_first_fragment() {
+        // Continuation lines start at column 0, matching how the
+        // journal already renders bullet bodies. The indent is kept on
+        // the first fragment so the bullet visually leads the wrap.
+        let out = wrap_line("  - this is a bullet point that wraps", 20);
+        assert_eq!(out[0], "  - this is a bullet");
+        assert_eq!(out[1], "point that wraps");
+    }
+
+    #[test]
+    fn wrap_line_hard_breaks_word_longer_than_width() {
+        let out = wrap_line("supercalifragilisticexpialidocious tail", 10);
+        // First three chunks are 10-char slices of the long word;
+        // remainder + tail wrap accordingly.
+        assert_eq!(out[0], "supercalif");
+        assert_eq!(out[1], "ragilistic");
+        assert_eq!(out[2], "expialidoc");
+        assert_eq!(out[3], "ious");
+        assert_eq!(out[4], "tail");
+    }
+
+    #[test]
+    fn wrap_line_empty_input_yields_single_empty_line() {
+        assert_eq!(wrap_line("", 20), vec![""]);
+    }
+
+    #[test]
+    fn wrap_line_width_zero_is_a_no_op() {
+        // Defensive: degenerate width should not loop forever.
+        assert_eq!(
+            wrap_line("anything goes here", 0),
+            vec!["anything goes here"]
+        );
+    }
 }
