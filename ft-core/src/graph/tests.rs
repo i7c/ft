@@ -698,6 +698,167 @@ fn empty_vault_has_root_directory() {
     assert_eq!(ids.len(), 1);
 }
 
+/// Build a vault in a fresh temp dir from a closure that creates files
+/// and directories under `path`. Common scaffolding for the empty-dir
+/// tests below. `.obsidian/` is created automatically so `Vault::discover`
+/// resolves to the temp dir.
+fn temp_vault(setup: impl FnOnce(&Path)) -> (Vault, assert_fs::TempDir) {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    setup(tmp.path());
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    (v, tmp)
+}
+
+fn contains_children(graph: &Graph, parent: NoteId) -> Vec<PathBuf> {
+    graph
+        .outgoing(parent)
+        .filter(|(_, e)| matches!(e, EdgeKind::Contains))
+        .map(|(dst, _)| match graph.node(dst) {
+            NodeKind::Note(n) => n.path.clone(),
+            NodeKind::Directory(d) => d.path.clone(),
+            _ => PathBuf::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn empty_directory_appears_as_node() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::create_dir_all(root.join("Empty")).unwrap();
+        std::fs::write(root.join("root.md"), "# root").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+
+    let empty_id = g
+        .node_by_path(Path::new("Empty"))
+        .expect("empty dir must appear as a node");
+    assert!(matches!(g.node(empty_id), NodeKind::Directory(_)));
+
+    let root = dir_by_path(&g, "");
+    let kids = contains_children(&g, root);
+    assert!(
+        kids.contains(&PathBuf::from("Empty")),
+        "root must Contains the empty dir; got {kids:?}"
+    );
+}
+
+#[test]
+fn attachment_only_directory_appears_as_node() {
+    let (v, _tmp) = temp_vault(|root| {
+        let media = root.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        // a non-markdown file — the dir has no notes but exists
+        std::fs::write(media.join("diagram.png"), b"\x89PNG").unwrap();
+        std::fs::write(root.join("root.md"), "# root").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+
+    let media_id = g
+        .node_by_path(Path::new("media"))
+        .expect("attachment-only dir must appear as a node");
+    assert!(matches!(g.node(media_id), NodeKind::Directory(_)));
+
+    let root = dir_by_path(&g, "");
+    assert!(contains_children(&g, root).contains(&PathBuf::from("media")));
+}
+
+#[test]
+fn default_ignored_dirs_stay_excluded_even_as_empty_dirs() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::create_dir_all(root.join("attachments")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("root.md"), "# root").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+
+    assert!(
+        g.node_by_path(Path::new("attachments")).is_none(),
+        "default-ignored attachments/ dir must not appear"
+    );
+    assert!(
+        g.node_by_path(Path::new(".git")).is_none(),
+        ".git/ must not appear"
+    );
+    assert!(
+        g.node_by_path(Path::new(".obsidian")).is_none(),
+        ".obsidian/ must not appear"
+    );
+}
+
+#[test]
+fn nested_empty_directories_chain_to_root() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::create_dir_all(root.join("a/b/c")).unwrap();
+        std::fs::write(root.join("root.md"), "# root").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+
+    let a = g.node_by_path(Path::new("a")).expect("a must exist");
+    let b = g.node_by_path(Path::new("a/b")).expect("a/b must exist");
+    let c = g
+        .node_by_path(Path::new("a/b/c"))
+        .expect("a/b/c must exist");
+    let root = dir_by_path(&g, "");
+
+    assert!(contains_children(&g, root).contains(&PathBuf::from("a")));
+    assert!(contains_children(&g, a).contains(&PathBuf::from("a/b")));
+    assert!(contains_children(&g, b).contains(&PathBuf::from("a/b/c")));
+    // c is a leaf with no contained children
+    assert!(contains_children(&g, c).is_empty());
+}
+
+#[test]
+fn refresh_note_wires_missing_parent_dir_chain() {
+    let (v, tmp) = temp_vault(|root| {
+        std::fs::write(root.join("root.md"), "# root").unwrap();
+    });
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+
+    // No `fresh/` dir yet at build time.
+    assert!(g.node_by_path(Path::new("fresh")).is_none());
+
+    // Create a note under a brand-new dir chain, then refresh.
+    std::fs::create_dir_all(tmp.path().join("fresh/sub")).unwrap();
+    let new_note = tmp.path().join("fresh/sub/note.md");
+    std::fs::write(&new_note, "# new").unwrap();
+    g.refresh_note(tmp.path(), &new_note).unwrap();
+
+    let root = dir_by_path(&g, "");
+    let fresh = g
+        .node_by_path(Path::new("fresh"))
+        .expect("fresh dir must be created by refresh_note");
+    let sub = g
+        .node_by_path(Path::new("fresh/sub"))
+        .expect("fresh/sub dir must be created by refresh_note");
+    g.note_by_path(Path::new("fresh/sub/note.md"))
+        .expect("note must be inserted");
+
+    assert!(contains_children(&g, root).contains(&PathBuf::from("fresh")));
+    assert!(contains_children(&g, fresh).contains(&PathBuf::from("fresh/sub")));
+    assert!(contains_children(&g, sub).contains(&PathBuf::from("fresh/sub/note.md")));
+
+    // Idempotent: a second refresh of the same note must not duplicate edges.
+    g.refresh_note(tmp.path(), &new_note).unwrap();
+    let fresh_kids = contains_children(&g, fresh);
+    let sub_kids = contains_children(&g, sub);
+    assert_eq!(
+        fresh_kids
+            .iter()
+            .filter(|p| p.as_path() == Path::new("fresh/sub"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        sub_kids
+            .iter()
+            .filter(|p| p.as_path() == Path::new("fresh/sub/note.md"))
+            .count(),
+        1
+    );
+}
+
 fn dirs_fixture_scan_with_tasks() -> Scan {
     Scan {
         tasks: vec![

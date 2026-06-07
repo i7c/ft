@@ -137,6 +137,56 @@ impl Vault {
         files
     }
 
+    /// Walk the vault and return every directory as a vault-relative
+    /// path, excluding the root itself. Same exclusion rules as
+    /// [`Self::markdown_files`] so the graph's set of `Directory` nodes
+    /// stays consistent with its set of `Note` nodes — a directory the
+    /// scan excludes will not appear here either.
+    ///
+    /// Unlike [`Self::markdown_files`], paths are vault-relative because
+    /// the only consumer (graph build) immediately strips the root.
+    pub(crate) fn directories(&self) -> Vec<PathBuf> {
+        let mut overrides = OverrideBuilder::new(&self.path);
+        for default in DEFAULT_IGNORED {
+            // Exclude both the directory itself and its contents — the
+            // walker's `is_dir()` check would otherwise let the dir entry
+            // through even when its contents are filtered out.
+            let _ = overrides.add(&format!("!{default}"));
+            let _ = overrides.add(&format!("!{default}/**"));
+        }
+        for extra in &self.config.config.ignored_paths {
+            let stripped = extra.strip_suffix('/').unwrap_or(extra);
+            let _ = overrides.add(&format!("!{stripped}"));
+            let _ = overrides.add(&format!("!{stripped}/**"));
+        }
+        let overrides = overrides.build().expect("override patterns are valid");
+
+        let walker = WalkBuilder::new(&self.path)
+            .hidden(true)
+            .ignore(true)
+            .git_ignore(true)
+            .git_exclude(true)
+            .parents(false)
+            .overrides(overrides)
+            .build();
+
+        let mut dirs = Vec::new();
+        for entry in walker.flatten() {
+            if !entry.file_type().is_some_and(|t| t.is_dir()) {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(rel) = path.strip_prefix(&self.path) else {
+                continue;
+            };
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            dirs.push(rel.to_path_buf());
+        }
+        dirs
+    }
+
     /// Vault-relative path that holds ft note templates. Defaults to
     /// `templates-ft/` when `[notes] templates_dir` is unset in the
     /// vault config. The folder is **not** required to exist — callers

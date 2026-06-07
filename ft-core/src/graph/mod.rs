@@ -329,9 +329,12 @@ impl Graph {
             graph.insert_note_node(rel.clone());
         }
 
-        // Insert directory nodes (root + every unique parent directory
-        // path across all note files).
-        graph.insert_directory_nodes(&parsed);
+        // Insert directory nodes (root + every directory the vault
+        // walk yields + every parent directory of a note as a defensive
+        // union, so freshly created dirs not yet on disk at walk time
+        // still get nodes).
+        let dirs = vault.directories();
+        graph.insert_directory_nodes(&parsed, &dirs);
 
         // Insert contains edges from each directory to its immediate
         // children (subdirectories and notes).
@@ -409,6 +412,7 @@ impl Graph {
             None => self.insert_note_node(rel.clone()),
         };
 
+        self.ensure_dir_chain_for(src, &rel);
         self.remove_paragraph_nodes(src);
         self.remove_outgoing_edges(src);
         self.insert_edges_for(src, &rel, &links);
@@ -583,8 +587,17 @@ impl Graph {
             Vec<parser::RawLink>,
             Vec<crate::markdown::Paragraph>,
         )],
+        vault_dirs: &[PathBuf],
     ) {
         let mut dir_paths: BTreeSet<PathBuf> = BTreeSet::new();
+        // From the filesystem walk: every dir, including empty ones and
+        // dirs whose only content is non-markdown (attachments not
+        // covered by the default-ignore rule).
+        for dir in vault_dirs {
+            dir_paths.insert(normalize_path(dir));
+        }
+        // From note ancestors: covers dirs that the walk missed because
+        // they came into existence after the walk started.
         for (rel, _, _, _) in parsed {
             let normalized = normalize_path(rel);
             let mut current = normalized.parent();
@@ -620,6 +633,51 @@ impl Graph {
         let id = NoteId(idx);
         self.path_index.insert(normalized, id);
         id
+    }
+
+    /// Ensure every ancestor directory of `note_rel` exists as a node
+    /// and that the chain of `Contains` edges from root → … → parent →
+    /// note is wired up. Idempotent; cheap when the chain is already
+    /// present. Called from `refresh_note` so a new file in a brand-new
+    /// directory still gets its dir nodes and contains edges, since the
+    /// build-time walks don't re-run.
+    fn ensure_dir_chain_for(&mut self, note_id: NoteId, note_rel: &Path) {
+        let normalized = normalize_path(note_rel);
+        let parent = normalized
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+
+        let mut chain: Vec<PathBuf> = vec![PathBuf::new()];
+        let mut acc = PathBuf::new();
+        for comp in parent.components() {
+            if let std::path::Component::Normal(s) = comp {
+                acc.push(s);
+                chain.push(acc.clone());
+            }
+        }
+
+        let mut parent_id = self.insert_directory_node(PathBuf::new(), String::new());
+        for dir_path in chain.iter().skip(1) {
+            let name = dir_path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let dir_id = self.insert_directory_node(dir_path.clone(), name);
+            self.ensure_contains_edge(parent_id, dir_id);
+            parent_id = dir_id;
+        }
+        self.ensure_contains_edge(parent_id, note_id);
+    }
+
+    fn ensure_contains_edge(&mut self, parent: NoteId, child: NoteId) {
+        let exists = self
+            .g
+            .edges_directed(parent.0, Direction::Outgoing)
+            .any(|e| e.target() == child.0 && matches!(e.weight(), EdgeKind::Contains));
+        if !exists {
+            self.g.add_edge(parent.0, child.0, EdgeKind::Contains);
+        }
     }
 
     fn insert_contains_edges(&mut self) {
