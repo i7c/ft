@@ -1308,7 +1308,9 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
 #[derive(Args, Debug)]
 pub struct JournalArgs {
     /// Note to build the journal for. Vault-relative path (e.g.
-    /// `Areas/finance.md`), bare title, or fuzzy query.
+    /// `Areas/finance.md`), bare title, fuzzy query, or — for an
+    /// unresolved-link target with no backing file — the explicit
+    /// `[[Phantom]]` form (or just `Phantom` as a last-resort fallback).
     #[arg(value_name = "NOTE", required = true)]
     pub note: Vec<String>,
 
@@ -1327,7 +1329,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
     let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
     let query = args.note.join(" ");
-    let note_id = resolve_note_query(&graph, &vault, &query)?;
+    let note_id = resolve_journal_target(&graph, &vault, &query)?;
     // Verify the vault is inside a git repo, but then run blame from
     // `vault.path` itself: paragraph `source_file` paths are
     // vault-relative, and `git -C <vault>` finds the enclosing repo
@@ -1497,6 +1499,33 @@ fn resolve_note_query(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteI
     Err(anyhow!(
         "no note found for `{trimmed}` (tried path, title, and fuzzy match)"
     ))
+}
+
+/// Like [`resolve_note_query`] but adds two ghost selectors so
+/// `ft notes journal` works on unresolved-link targets too: the
+/// explicit `[[Phantom]]` form (always wins), and a bare-string
+/// fallback after the normal Note resolution misses. The bare
+/// fallback is journal-only — other commands (e.g. `notes rename`)
+/// have their own explicit selectors and should not silently target
+/// ghosts.
+fn resolve_journal_target(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
+    let trimmed = query.trim();
+    if let Some(stripped) = trimmed
+        .strip_prefix("[[")
+        .and_then(|s| s.strip_suffix("]]"))
+    {
+        let raw = stripped.trim();
+        if raw.is_empty() {
+            return Err(anyhow!("[[ ]] selector is empty"));
+        }
+        return graph
+            .ghost_by_raw(raw)
+            .ok_or_else(|| anyhow!("no ghost node found for `{raw}` (is anyone linking to it?)"));
+    }
+    match resolve_note_query(graph, vault, trimmed) {
+        Ok(id) => Ok(id),
+        Err(e) => graph.ghost_by_raw(trimmed).ok_or(e),
+    }
 }
 
 // ── ft notes rename ──────────────────────────────────────────────────────────

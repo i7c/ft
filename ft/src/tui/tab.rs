@@ -26,6 +26,28 @@ pub fn empty_keymap() -> &'static KeyMap {
     &EMPTY_KEYMAP
 }
 
+/// What the Journal tab should build a feed for. A `Note` carries a
+/// vault-relative path to a real backing file; a `Ghost` carries the
+/// raw unresolved-link target string (e.g. `"Phantom"`), since a ghost
+/// has no path and is keyed only by that string within a `Graph`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalTarget {
+    Note(PathBuf),
+    Ghost(String),
+}
+
+impl JournalTarget {
+    /// Single-line user-facing label: the vault-relative path for a
+    /// note, the raw target string (suffixed with `(ghost)`) for a
+    /// ghost. Used in the Journal tab's header and error messages.
+    pub fn label(&self) -> String {
+        match self {
+            JournalTarget::Note(p) => p.display().to_string(),
+            JournalTarget::Ghost(raw) => format!("{raw} (ghost)"),
+        }
+    }
+}
+
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
 /// a status-bar toast) without each tab reaching for terminal state.
@@ -60,10 +82,12 @@ pub enum AppRequest {
         message: Option<String>,
     },
     /// Switch the active tab to the Journal tab and queue the given
-    /// vault-relative note path on it so the journal auto-loads. Raised
-    /// by the graph tab's `Shift+J` keybinding.
-    JournalForNote {
-        path: PathBuf,
+    /// target on it so the journal auto-loads. Raised by the graph
+    /// tab's `Shift+J` keybinding; accepts both real notes and ghost
+    /// (unresolved-link) targets, since the journal feed is defined
+    /// for either.
+    JournalFor {
+        target: JournalTarget,
     },
     /// Install a new active modal. The App writes the variant into its
     /// `active_modal` slot and, on the next event, dispatches keys to
@@ -205,9 +229,9 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::SyncGit { message } => {
                 f.debug_struct("SyncGit").field("message", message).finish()
             }
-            AppRequest::JournalForNote { path } => f
-                .debug_struct("JournalForNote")
-                .field("path", path)
+            AppRequest::JournalFor { target } => f
+                .debug_struct("JournalFor")
+                .field("target", target)
                 .finish(),
             AppRequest::OpenModal(modal) => {
                 f.debug_tuple("OpenModal").field(&modal.name()).finish()
@@ -401,11 +425,11 @@ pub trait Tab {
     fn queue_related_modal(&mut self, _note_path: &std::path::Path) {}
 
     /// Hook for the cross-tab Journal jump (see
-    /// [`AppRequest::JournalForNote`]). The Journal tab overrides
-    /// this to store a vault-relative path; the path is consumed and
-    /// turned into a load on the tab's next `on_focus`. Default is a
-    /// no-op: other tabs ignore the request.
-    fn queue_journal_for(&mut self, _note_path: &std::path::Path) {}
+    /// [`AppRequest::JournalFor`]). The Journal tab overrides this to
+    /// store the target; it's consumed and turned into a load on the
+    /// tab's next `on_focus`. Default is a no-op: other tabs ignore
+    /// the request.
+    fn queue_journal_for(&mut self, _target: &JournalTarget) {}
 
     /// Hook for the in-tree search picker (see
     /// [`AppRequest::GraphJumpToNodes`]). The Graph tab overrides

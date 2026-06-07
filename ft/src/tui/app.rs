@@ -599,9 +599,9 @@ impl App {
                 self.dispatch_sync_git(events, message)?;
                 Ok(())
             }
-            AppRequest::JournalForNote { path } => {
+            AppRequest::JournalFor { target } => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for(&path);
+                    self.tabs[idx].queue_journal_for(&target);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
@@ -1824,7 +1824,7 @@ impl App {
         Ok(())
     }
 
-    /// Service a pending `AppRequest::JournalForNote` (or other simple
+    /// Service a pending `AppRequest::JournalFor` (or other simple
     /// requests that don't touch the terminal). Lets tests exercise the
     /// graph→Journal cross-tab jump without driving the real event
     /// loop. Returns Ok with no effect when nothing is pending.
@@ -1835,9 +1835,9 @@ impl App {
             None => return Ok(()),
         };
         match req {
-            AppRequest::JournalForNote { path } => {
+            AppRequest::JournalFor { target } => {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for(&path);
+                    self.tabs[idx].queue_journal_for(&target);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
@@ -2053,14 +2053,16 @@ impl App {
         }
     }
 
-    /// Forward a vault-relative path to the Journal tab's queue.
-    /// Equivalent to the App servicing `AppRequest::JournalForNote`
-    /// without going through the request channel — useful when a test
-    /// wants to set up a state without simulating the keystrokes.
+    /// Forward a vault-relative note path to the Journal tab's queue.
+    /// Equivalent to the App servicing `AppRequest::JournalFor` with a
+    /// `JournalTarget::Note` without going through the request channel —
+    /// useful when a test wants to set up state without simulating the
+    /// keystrokes.
     #[cfg(test)]
     pub fn queue_journal_for_tab_test(&mut self, path: &str) {
+        let target = crate::tui::tab::JournalTarget::Note(std::path::PathBuf::from(path));
         if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-            self.tabs[idx].queue_journal_for(std::path::Path::new(path));
+            self.tabs[idx].queue_journal_for(&target);
         }
     }
 

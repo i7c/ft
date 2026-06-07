@@ -61,12 +61,22 @@ pub struct JournalReport {
 
 /// Build the reverse-chronological journal feed for `note_id`.
 ///
+/// Accepts both `Note` and `Ghost` targets — a ghost is a not-yet-
+/// created note whose incoming `ParagraphLink` edges are still
+/// meaningful "references to a concept". For ghosts, alias resolution
+/// (which reads the target's `## Related` section) and the "exclude N's
+/// own paragraphs" step are no-ops, since there is no backing file.
+///
+/// `Directory`/`Task`/`Paragraph` targets return an empty feed — the
+/// journal isn't defined for them.
+///
 /// Steps:
 /// 1. Resolve aliases by scanning `note_id`'s `## Related` heading
-///    range for outgoing `Link` edges.
+///    range for outgoing `Link` edges (notes only).
 /// 2. Collect every `Paragraph` node with a `ParagraphLink` edge into
 ///    `note_id` or any alias.
-/// 3. Exclude paragraphs whose `source_file` is `note_id`'s own path.
+/// 3. For notes only: exclude paragraphs whose `source_file` is
+///    `note_id`'s own path.
 /// 4. For each remaining paragraph, look up its date via `cache`,
 ///    populating with a `git blame` call on cache miss.
 /// 5. Sort by date descending, then by source title ascending.
@@ -77,13 +87,17 @@ pub fn build_journal(
     repo: &Path,
     cache: &mut BlameCache,
 ) -> Result<JournalReport> {
-    let note_path = match graph.node(note_id) {
-        NodeKind::Note(n) => n.path.clone(),
-        // Ghost/Directory/Task/Paragraph: journal doesn't apply.
+    let note_path: Option<PathBuf> = match graph.node(note_id) {
+        NodeKind::Note(n) => Some(n.path.clone()),
+        NodeKind::Ghost(_) => None,
+        // Directories, tasks, and paragraphs have no journal semantics.
         _ => return Ok(JournalReport::default()),
     };
 
-    let alias_ids = resolve_related_aliases(graph, note_id, vault, &note_path)?;
+    let alias_ids = match &note_path {
+        Some(p) => resolve_related_aliases(graph, note_id, vault, p)?,
+        None => Vec::new(),
+    };
     let mut target_set: HashSet<NoteId> = HashSet::new();
     target_set.insert(note_id);
     target_set.extend(alias_ids.iter().copied());
@@ -114,8 +128,8 @@ pub fn build_journal(
         let NodeKind::Paragraph(p) = graph.node(p_id) else {
             continue;
         };
-        if p.source_file == note_path {
-            continue; // exclude N's own paragraphs
+        if note_path.as_ref().is_some_and(|np| p.source_file == *np) {
+            continue; // exclude N's own paragraphs (notes only; ghosts own nothing)
         }
         let path_str = p.source_file.to_string_lossy().into_owned();
         if cache.get(&path_str, &head).is_none() {
@@ -362,6 +376,65 @@ mod tests {
         );
         assert_eq!(report.entries[0].source_title, "Daily-A");
         assert_eq!(report.entries[1].source_title, "Daily-B");
+    }
+
+    /// Journal works on a Ghost target — an unresolved-link concept
+    /// with no backing file. The incoming `ParagraphLink` edges from
+    /// notes that wrote `[[Phantom]]` still carry the references we
+    /// want to surface.
+    #[test]
+    fn journal_includes_ghost_target_mentions() {
+        use assert_fs::prelude::*;
+        use std::process::Command;
+
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // Two notes that both reference [[Phantom]]; no Phantom.md
+        // exists, so the wiki link target stays a Ghost in the graph.
+        tmp.child("Notes-A.md")
+            .write_str("Thinking about [[Phantom]] today.\n")
+            .unwrap();
+        tmp.child("Notes-B.md")
+            .write_str("More on [[Phantom]] later.\n")
+            .unwrap();
+
+        let repo = tmp.path().to_path_buf();
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(&repo)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        run_git(&["init", "-b", "main"]);
+        run_git(&["config", "user.name", "T"]);
+        run_git(&["config", "user.email", "t@e.com"]);
+        run_git(&["config", "commit.gpgsign", "false"]);
+        run_git(&["add", "."]);
+        run_git(&["commit", "-m", "c1"]);
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+
+        let phantom = graph
+            .ghost_by_raw("Phantom")
+            .expect("Phantom should be materialized as a Ghost");
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, phantom, &vault, &repo, &mut cache).unwrap();
+        assert!(report.skipped_blame.is_empty(), "blame should succeed");
+        let mut titles: Vec<&str> = report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
+        titles.sort();
+        assert_eq!(
+            titles,
+            vec!["Notes-A", "Notes-B"],
+            "both ghost-mentioning notes must appear"
+        );
     }
 
     /// Regression test for the subdirectory-vault bug: when the vault

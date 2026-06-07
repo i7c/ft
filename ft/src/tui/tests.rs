@@ -7782,6 +7782,42 @@ fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()>
 }
 
 #[test]
+fn graph_shift_j_on_ghost_row_queues_journal_for_ghost() -> Result<()> {
+    let (dir, vault) = rename_vault(&[("a.md", "see [[Phantom]]\n")]);
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    switch_to_graph(&mut app)?;
+    // Expand root → row 0: D /, row 1: N a.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Select a.md, expand it → reveals row 2: G Phantom.
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Select the ghost row.
+    app.dispatch(key('j'))?;
+
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('J'),
+        KeyModifiers::SHIFT,
+    )))?;
+    match app.take_pending_request() {
+        Some(AppRequest::JournalFor {
+            target: crate::tui::tab::JournalTarget::Ghost(raw),
+        }) => assert_eq!(raw, "Phantom"),
+        other => panic!(
+            "expected JournalFor {{ Ghost(\"Phantom\") }}, got {other:?}\nframe:\n{}",
+            render(&mut app, 100, 24)
+        ),
+    }
+    let _ = dir;
+    Ok(())
+}
+
+#[test]
 fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
     let (_dir, vault) = related_modal_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);

@@ -653,7 +653,7 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "graph.journal",
-        description: "Open the Journal tab for the selected note",
+        description: "Open the Journal tab for the selected note or ghost",
         scope: CommandScope::Tab("graph"),
         group: "Notes",
         args_schema: &[],
@@ -2995,18 +2995,28 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.journal" => {
-                if let Some(note_id) = self.selected_note_id() {
-                    if let Some(graph) = self.graph.as_ref() {
-                        if let NodeKind::Note(n) = graph.node(note_id) {
-                            let path = n.path.clone();
-                            *ctx.pending_request.borrow_mut() =
-                                Some(AppRequest::JournalForNote { path });
+                let target = self.graph.as_ref().and_then(|graph| {
+                    let row = self
+                        .active_view()
+                        .tree
+                        .rows()
+                        .get(self.active_view().selected)?;
+                    match graph.node(row.note_id) {
+                        NodeKind::Note(n) => {
+                            Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
                         }
+                        NodeKind::Ghost(g) => {
+                            Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
+                        }
+                        _ => None,
                     }
+                });
+                if let Some(target) = target {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalFor { target });
                 } else {
                     queue_toast(
                         ctx,
-                        "select a Note row to open its journal",
+                        "select a Note or Ghost row to open its journal",
                         ToastStyle::Error,
                     );
                 }

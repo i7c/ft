@@ -7,16 +7,15 @@
 //! `R` reloads, `c` clears back to the empty-state prompt.
 //!
 //! Cross-tab entry: the graph tab's `Shift+J` keybinding raises
-//! [`crate::tui::tab::AppRequest::JournalForNote`]; the App services
-//! that by calling [`JournalTab::queue_journal_for`] and switching the
-//! active tab. The queued path is consumed on the next `on_focus` and
-//! turned into a load.
+//! [`crate::tui::tab::AppRequest::JournalFor`]; the App services that
+//! by calling [`JournalTab::queue_journal_for`] and switching the
+//! active tab. The queued target (a note path or a ghost name) is
+//! consumed on the next `on_focus` and turned into a load.
 //!
 //! `BlameCache` is held in the tab so subsequent loads in the same
 //! session warm up; the on-disk file at `.ft/cache/blame.msgpack` is
 //! refreshed best-effort after every successful `build_journal` call.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -41,7 +40,7 @@ use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
-use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle};
+use crate::tui::tab::{AppRequest, EventOutcome, JournalTarget, Tab, TabCtx, ToastStyle};
 use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSource};
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -168,9 +167,10 @@ pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
 });
 
 pub struct JournalTab {
-    /// Vault-relative path of the note currently loaded. `None` puts
-    /// the tab in its empty-state prompt.
-    target_path: Option<PathBuf>,
+    /// What's currently loaded. `None` puts the tab in its empty-state
+    /// prompt. `Note(path)` for a real note, `Ghost(raw)` for an
+    /// unresolved-link concept.
+    target: Option<JournalTarget>,
     /// The currently-displayed feed.
     entries: Vec<JournalEntry>,
     /// 0-indexed cursor into `entries`. Saturating-clamped on load.
@@ -181,9 +181,9 @@ pub struct JournalTab {
     /// Active fuzzy picker. `Some` while the picker overlay owns the
     /// keyboard; cleared on selection or `Esc`.
     picker: Option<FuzzyPicker<VaultFilePickerSource>>,
-    /// Queued path from a cross-tab jump. Consumed by `on_focus` to
+    /// Queued target from a cross-tab jump. Consumed by `on_focus` to
     /// kick off a load.
-    queued_for: Option<PathBuf>,
+    queued_for: Option<JournalTarget>,
     /// Lazy-loaded blame cache; preserved across loads within the
     /// tab's session.
     cache: Option<BlameCache>,
@@ -203,7 +203,7 @@ impl Default for JournalTab {
 impl JournalTab {
     pub fn new() -> Self {
         Self {
-            target_path: None,
+            target: None,
             entries: Vec::new(),
             selected: 0,
             scroll_offset: 0,
@@ -220,15 +220,17 @@ impl JournalTab {
         self
     }
 
-    /// Run `build_journal` for `path` (vault-relative) and replace
-    /// `entries`. The blame cache is loaded from disk on first use and
-    /// saved best-effort after a successful build.
-    fn load_for(&mut self, path: PathBuf, ctx: &mut TabCtx) {
+    /// Run `build_journal` for `target` and replace `entries`. The
+    /// blame cache is loaded from disk on first use and saved
+    /// best-effort after a successful build. Accepts both notes and
+    /// ghosts — the engine treats either symmetrically once a
+    /// `NoteId` is in hand.
+    fn load_for(&mut self, target: JournalTarget, ctx: &mut TabCtx) {
         if discover_repo(&ctx.vault.path).is_none() {
             self.last_error = Some(
                 "vault is not inside a git repository — journal needs git history".to_string(),
             );
-            self.target_path = Some(path);
+            self.target = Some(target);
             self.entries.clear();
             self.selected = 0;
             self.scroll_offset = 0;
@@ -242,15 +244,19 @@ impl JournalTab {
             Ok(g) => g,
             Err(e) => {
                 self.last_error = Some(format!("graph build failed: {e}"));
-                self.target_path = Some(path);
+                self.target = Some(target);
                 self.entries.clear();
                 return;
             }
         };
 
-        let Some(note_id) = graph.note_by_path(&path) else {
-            self.last_error = Some(format!("note not found in graph: {}", path.display()));
-            self.target_path = Some(path);
+        let resolved = match &target {
+            JournalTarget::Note(path) => graph.note_by_path(path),
+            JournalTarget::Ghost(raw) => graph.ghost_by_raw(raw),
+        };
+        let Some(note_id) = resolved else {
+            self.last_error = Some(format!("target not found in graph: {}", target.label()));
+            self.target = Some(target);
             self.entries.clear();
             return;
         };
@@ -267,7 +273,7 @@ impl JournalTab {
         match build_journal(&graph, note_id, ctx.vault, &vault_path, cache) {
             Ok(report) => {
                 self.last_error = None;
-                self.target_path = Some(path);
+                self.target = Some(target);
                 self.entries = report.entries;
                 self.selected = 0;
                 self.scroll_offset = 0;
@@ -300,7 +306,7 @@ impl JournalTab {
             }
             Err(e) => {
                 self.last_error = Some(format!("build_journal failed: {e}"));
-                self.target_path = Some(path);
+                self.target = Some(target);
                 self.entries.clear();
             }
         }
@@ -318,7 +324,7 @@ impl JournalTab {
         match picker.handle_key(k) {
             PickerOutcome::Selected(hit) => {
                 let Hit { path, .. } = hit;
-                self.load_for(path, ctx);
+                self.load_for(JournalTarget::Note(path), ctx);
                 EventOutcome::Consumed
             }
             PickerOutcome::Cancelled => EventOutcome::Consumed,
@@ -373,14 +379,14 @@ impl Tab for JournalTab {
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        if let Some(path) = self.queued_for.take() {
-            self.load_for(path, ctx);
+        if let Some(target) = self.queued_for.take() {
+            self.load_for(target, ctx);
         }
         Ok(())
     }
 
-    fn queue_journal_for(&mut self, note_path: &Path) {
-        self.queued_for = Some(note_path.to_path_buf());
+    fn queue_journal_for(&mut self, target: &JournalTarget) {
+        self.queued_for = Some(target.clone());
     }
 
     fn commands(&self) -> &'static [CommandDef] {
@@ -398,13 +404,13 @@ impl Tab for JournalTab {
                 CommandOutcome::Handled
             }
             "journal.reload" => {
-                if let Some(path) = self.target_path.clone() {
-                    self.load_for(path, ctx);
+                if let Some(target) = self.target.clone() {
+                    self.load_for(target, ctx);
                 }
                 CommandOutcome::Handled
             }
             "journal.clear" => {
-                self.target_path = None;
+                self.target = None;
                 self.entries.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
@@ -466,12 +472,12 @@ impl Tab for JournalTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
-        match &self.target_path {
+        match &self.target {
             None => render_empty(frame, area, self.last_error.as_deref()),
-            Some(path) => render_loaded(
+            Some(target) => render_loaded(
                 frame,
                 area,
-                path,
+                target,
                 &self.entries,
                 self.selected,
                 &mut self.scroll_offset,
@@ -542,17 +548,13 @@ fn render_empty(frame: &mut Frame, area: Rect, last_error: Option<&str>) {
 fn render_loaded(
     frame: &mut Frame,
     area: Rect,
-    target_path: &Path,
+    target: &JournalTarget,
     entries: &[JournalEntry],
     selected: usize,
     scroll_offset: &mut usize,
     last_error: Option<&str>,
 ) {
-    let title = format!(
-        " Journal — {} ({} entries) ",
-        target_path.display(),
-        entries.len()
-    );
+    let title = format!(" Journal — {} ({} entries) ", target.label(), entries.len());
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
