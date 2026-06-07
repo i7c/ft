@@ -4,7 +4,7 @@ expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
 >                                                                               
- 1: node where kind = D…   2: (empty)                                           
+ 1: node where path = "…   2: (empty)                                           
 ┌ (empty) ─────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │                                                                              │

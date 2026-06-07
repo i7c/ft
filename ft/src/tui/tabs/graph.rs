@@ -572,8 +572,8 @@ impl Modal for SearchPickerModal {
 /// expands one hop. Kept here (and not in `ft-core`) because it's a
 /// TUI-presentation default, not an engine concern.
 const BUILTIN_DEFAULT_QUERY: &str = concat!(
-    "node where kind = Directory and path = \"\"; ",
-    "expand where edge.kind = directory-contains;",
+    "node where path = \"\"; ",
+    "expand where edge.kind in {directory-contains, link, embed};",
 );
 
 /// Width budget for a view's tab-strip label query snippet, in characters.
@@ -2568,7 +2568,7 @@ impl GraphTab {
         let _ = v;
 
         let new_query =
-            format!("node where kind = {kind_str} and path = \"{escaped_path}\"{expand_part}");
+            format!("node where kind in {{{kind_str}}} and path = \"{escaped_path}\"{expand_part}");
 
         let v = &mut self.views[self.active];
         v.query_text = new_query;
@@ -5005,9 +5005,10 @@ mod view_tests {
         }
 
         // The active view's query is replaced with the preset DSL.
+        // `fs` is the first preset alphabetically, so the picker lands on it.
         assert_eq!(
             tab.views[0].query_text,
-            r#"node where kind = Directory and path = ""; expand where edge.kind in {directory-contains, links-into, link, embed};"#,
+            r#"node where path = ""; expand where edge.kind in {directory-contains};"#,
             "active view query should be replaced by the selected preset DSL"
         );
     }
@@ -5056,13 +5057,13 @@ mod view_tests {
     fn z_on_note_rewrites_query() {
         let mut tab = tab_with_node_selected(
             &[("Areas/finance.md", "[[Projects/alpha]]"), ("Projects/alpha.md", "")],
-            "node where kind = Note and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};",
+            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};",
             "Areas/finance.md",
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_text,
-            "node where kind = Note and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};"
+            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};"
         );
     }
 
@@ -5070,13 +5071,13 @@ mod view_tests {
     fn z_on_directory_rewrites_query() {
         let mut tab = tab_with_node_selected(
             &[("Areas/finance.md", "")],
-            "node where kind = Directory and path = \"Areas\"; expand where edge.kind = directory-contains;",
+            "node where kind in {Directory} and path = \"Areas\"; expand where edge.kind in {directory-contains};",
             "Areas",
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_text,
-            "node where kind = Directory and path = \"Areas\"; expand where edge.kind = directory-contains;"
+            "node where kind in {Directory} and path = \"Areas\"; expand where edge.kind in {directory-contains};"
         );
     }
 
@@ -5084,13 +5085,13 @@ mod view_tests {
     fn z_on_root_directory_rewrites_query() {
         let mut tab = tab_with_node_selected(
             &[("foo.md", "")],
-            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;",
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains};",
             "",
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_text,
-            "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains};"
         );
     }
 
@@ -5166,13 +5167,13 @@ mod view_tests {
     fn z_preserves_expand_block() {
         let mut tab = tab_with_node_selected(
             &[("Areas/finance.md", "")],
-            "node where kind = Directory and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};",
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};",
             "", // root directory is always in the tree for this query
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_text,
-            "node where kind = Directory and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};"
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};"
         );
     }
 
@@ -5180,13 +5181,13 @@ mod view_tests {
     fn z_no_expand_block_produces_trailing_semicolon() {
         let mut tab = tab_with_node_selected(
             &[("foo.md", "")],
-            "node where kind = Note and path = \"foo.md\";",
+            "node where kind in {Note} and path = \"foo.md\";",
             "foo.md",
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_text,
-            "node where kind = Note and path = \"foo.md\";"
+            "node where kind in {Note} and path = \"foo.md\";"
         );
     }
 }

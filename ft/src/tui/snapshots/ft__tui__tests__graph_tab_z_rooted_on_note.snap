@@ -3,9 +3,9 @@ source: ft/src/tui/tests.rs
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
-> node where kind = Directory and path = "Areas"; expand where edge.kind = direc
- 1: node where kind = D…                                                        
-┌ node where kind = D… ────────────────────────────────────────────────────────┐
+> node where kind in {Directory} and path = "Areas"; expand where edge.kind in {
+ 1: node where kind in …                                                        
+┌ node where kind in … ────────────────────────────────────────────────────────┐
 │▶   D Areas/                                                                  │
 │press / to edit query                                                         │
 │                                                                              │

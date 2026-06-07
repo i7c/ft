@@ -3,9 +3,9 @@ source: ft/src/tui/tests.rs
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
-> node where kind = Directory and path = ""; expand where edge.kind = directory-
- 1: node where kind = D…                                                        
-┌ node where kind = D… ────────────────────────────────────────────────────────┐
+> node where path = ""; expand where edge.kind in {directory-contains, link, emb
+ 1: node where path = "…                                                        
+┌ node where path = "… ────────────────────────────────────────────────────────┐
 │▼   D /                                                                       │
 │  ▶   D Areas/                                                                │
 │  ▶   D Projects/                                                             │

@@ -4,8 +4,8 @@ expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
 Move 1 selection(s): navigate to target directory, Enter/m to confirm, t for pic
- 1: node where kind = D…                                                        
-┌ node where kind = D… ────────────────────────────────────────────────────────┐
+ 1: node where path = "…                                                        
+┌ node where path = "… ────────────────────────────────────────────────────────┐
 │▼   D /                                                                       │
 │  ▶   D Areas/                                                                │
 │  ▶   D Projects/                                                             │
