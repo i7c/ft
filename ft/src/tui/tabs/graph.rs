@@ -48,9 +48,7 @@ use crate::tui::{
     notes_actions::{
         append::AppendState,
         capture::{self, CapturePresetPickerSource},
-        create,
-        periodic::run_periodic_open,
-        queue_toast,
+        create, queue_toast,
         section_move::{
             self, advance_to_multiselect, compose_with_existing_target, MoveCarry, MoveStep,
             SectionMoveState,
@@ -845,7 +843,7 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
     // Periodic notes
     CommandDef {
         name: "graph.periodic-leader",
-        description: "Enter the periodic-note leader (then d/w/m/q/y)",
+        description: "Navigate to periodic note in graph (then d/w/m/q/y)",
         scope: CommandScope::Tab("graph"),
         group: "Periodic notes",
         args_schema: &[],
@@ -854,7 +852,7 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "graph.today",
-        description: "Open today's daily note",
+        description: "Navigate to today's daily note in graph",
         scope: CommandScope::Tab("graph"),
         group: "Periodic notes",
         args_schema: &[],
@@ -2392,6 +2390,117 @@ impl GraphTab {
         v.scroll_to_selection(20);
     }
 
+    /// BFS from the active query's roots to `target`, returning the
+    /// shortest path (root-to-target inclusive) on first hit. Returns
+    /// `None` if `target` is not reachable. Reuses the visited-set
+    /// pattern from [`collect_search_candidates`] but stops early.
+    fn find_node_path(&self, target: NoteId) -> Option<Vec<NoteId>> {
+        use std::collections::VecDeque;
+
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let query = v.query.as_ref()?;
+
+        let roots = query.select(graph);
+        let mut visited: HashSet<NoteId> = HashSet::with_capacity(roots.len());
+        let mut queue: VecDeque<(NoteId, Vec<NoteId>)> = VecDeque::new();
+
+        for r in &roots {
+            if visited.insert(*r) {
+                if *r == target {
+                    return Some(vec![*r]);
+                }
+                queue.push_back((*r, vec![*r]));
+            }
+        }
+
+        while let Some((id, path)) = queue.pop_front() {
+            if let Some(children) = query.expand(graph, id) {
+                for child in children {
+                    if visited.insert(child) {
+                        let mut child_path = path.clone();
+                        child_path.push(child);
+                        if child == target {
+                            return Some(child_path);
+                        }
+                        queue.push_back((child, child_path));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Navigate to the periodic note for `period` within the active
+    /// view's tree. Resolves the expected path (no file creation),
+    /// looks up the NoteId, runs BFS from the query roots, and either
+    /// jumps the cursor via [`jump_to_path`] or queues a toast when
+    /// the note is unreachable.
+    fn navigate_periodic(&mut self, ctx: &TabCtx, period: Period) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let pn = &ctx.vault.config.config.periodic_notes;
+        let cfg = match period {
+            Period::Daily => pn.daily.as_ref(),
+            Period::Weekly => pn.weekly.as_ref(),
+            Period::Monthly => pn.monthly.as_ref(),
+            Period::Quarterly => pn.quarterly.as_ref(),
+            Period::Yearly => pn.yearly.as_ref(),
+        };
+        let Some(cfg) = cfg else {
+            queue_toast(
+                ctx,
+                &format!("{} not configured", period.as_str()),
+                ToastStyle::Error,
+            );
+            return;
+        };
+
+        let abs_path =
+            match ft_core::periodic::resolve_periodic_path(&ctx.vault.path, cfg, ctx.today) {
+                Ok(p) => p,
+                Err(e) => {
+                    queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+                    return;
+                }
+            };
+
+        let rel = match abs_path.strip_prefix(&ctx.vault.path) {
+            Ok(p) => p.to_path_buf(),
+            Err(_) => {
+                queue_toast(ctx, "periodic note is outside the vault", ToastStyle::Error);
+                return;
+            }
+        };
+
+        let Some(note_id) = graph.note_by_path(&rel) else {
+            queue_toast(
+                ctx,
+                &format!(
+                    "{} note is not in the current graph results",
+                    period.as_str()
+                ),
+                ToastStyle::Info,
+            );
+            return;
+        };
+
+        match self.find_node_path(note_id) {
+            Some(path) => self.jump_to_path(path),
+            None => {
+                queue_toast(
+                    ctx,
+                    &format!(
+                        "{} note is not in the current graph results",
+                        period.as_str()
+                    ),
+                    ToastStyle::Info,
+                );
+            }
+        }
+    }
+
     /// Rewrite the active view's query to root on the currently-selected
     /// node. Only works for Note and Directory nodes (which have paths).
     /// Ghost and Task nodes are no-ops.
@@ -2710,6 +2819,10 @@ impl Tab for GraphTab {
         self.execute_multi_move(ctx, &selected, &dir_path);
     }
 
+    fn graph_navigate_periodic(&mut self, ctx: &TabCtx, period: Period) {
+        self.navigate_periodic(ctx, period);
+    }
+
     fn commands(&self) -> &'static [CommandDef] {
         GRAPH_COMMANDS
     }
@@ -3021,7 +3134,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.today" => {
-                run_periodic_open(ctx, Period::Daily);
+                self.navigate_periodic(ctx, Period::Daily);
                 CommandOutcome::Handled
             }
             // Multi-select
@@ -4994,5 +5107,144 @@ mod search_tests {
         assert!(v.expanded_paths.contains(&vec![root_id, areas_id, ops_id]));
         // Target itself is NOT in expanded_paths.
         assert!(!v.expanded_paths.contains(&path));
+    }
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use std::path::PathBuf;
+
+    use assert_fs::prelude::*;
+    use ft_core::graph::Graph;
+    use ft_core::vault::{Scan, Vault};
+
+    use super::*;
+
+    fn dirs_graph() -> Graph {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
+        let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
+        Graph::build(&v, &Scan::default()).unwrap()
+    }
+
+    fn tab_with_query(graph: Graph, query_text: &str) -> GraphTab {
+        let mut v = ExpandedView {
+            query_text: query_text.to_string(),
+            input_cursor: query_text.len(),
+            ..Default::default()
+        };
+        v.apply_query(Some(&graph));
+        GraphTab {
+            graph: Some(graph),
+            views: vec![v],
+            active: 0,
+            queued_related_path: None,
+            keymap: GRAPH_KEYMAP.clone(),
+        }
+    }
+
+    // ── find_node_path ─────────────────────────────────────────────
+
+    #[test]
+    fn find_node_path_reachable_target() {
+        let g = dirs_graph();
+        let tab = tab_with_query(g, "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;");
+
+        let target = tab
+            .graph
+            .as_ref()
+            .unwrap()
+            .node_by_path(std::path::Path::new("Areas"))
+            .unwrap();
+        let path = tab.find_node_path(target);
+        assert!(path.is_some(), "Areas should be reachable");
+        let path = path.unwrap();
+        // Path should be: root → Areas
+        assert_eq!(path.len(), 2, "path has 2 nodes: root, Areas");
+    }
+
+    #[test]
+    fn find_node_path_unreachable_target() {
+        // Use a query that only selects a specific directory —
+        // other directories not connected via the expand policy
+        // are unreachable.
+        let g = dirs_graph();
+        let tab = tab_with_query(g, "node where kind = Directory and path = \"Areas\";");
+        // "Projects" is a different directory, not reachable via
+        // directory-contains from just the "Areas" root with no expand.
+        let target = tab
+            .graph
+            .as_ref()
+            .unwrap()
+            .node_by_path(std::path::Path::new("Projects"))
+            .unwrap();
+        let path = tab.find_node_path(target);
+        assert!(
+            path.is_none(),
+            "Projects should be unreachable from Areas-only root"
+        );
+    }
+
+    #[test]
+    fn find_node_path_root_is_target() {
+        let g = dirs_graph();
+        let tab = tab_with_query(g, "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;");
+        let root = tab
+            .graph
+            .as_ref()
+            .unwrap()
+            .node_by_path(std::path::Path::new(""))
+            .unwrap();
+        let path = tab.find_node_path(root);
+        assert!(path.is_some(), "root should be found");
+        let path = path.unwrap();
+        assert_eq!(path.len(), 1, "root path should be length 1");
+        assert_eq!(path[0], root);
+    }
+
+    #[test]
+    fn find_node_path_shortest_path_wins() {
+        // With a link-graph expand policy, a note reachable via
+        // multiple paths should return the shortest (BFS).
+        let (_dir, vault) = link_vault_for_shortest_path();
+        let g = Graph::build(&vault, &Scan::default()).unwrap();
+        let tab = tab_with_query(
+            g,
+            "node where kind = Note and path = \"A.md\"; expand where edge.kind in {links-into, link, embed};",
+        );
+
+        // A links to C, and A links to D which links to C.
+        // The BFS should find the shorter path A→C.
+        let c_id = tab
+            .graph
+            .as_ref()
+            .unwrap()
+            .node_by_path(std::path::Path::new("C.md"))
+            .unwrap();
+        let path = tab
+            .find_node_path(c_id)
+            .expect("C should be reachable from A");
+        // Path should be A→C (length 2) not A→D→C (length 3).
+        assert_eq!(path.len(), 2, "shortest path should be A→C (length 2)");
+        // Verify path starts at A and ends at C.
+        let a_id = tab
+            .graph
+            .as_ref()
+            .unwrap()
+            .node_by_path(std::path::Path::new("A.md"))
+            .unwrap();
+        assert_eq!(path.first(), Some(&a_id));
+        assert_eq!(path.last(), Some(&c_id));
+    }
+
+    fn link_vault_for_shortest_path() -> (assert_fs::TempDir, Vault) {
+        let dir = assert_fs::TempDir::new().unwrap();
+        dir.child(".obsidian").create_dir_all().unwrap();
+        // A links to C, A links to D, D links to C.
+        // Shortest A→C is direct (A→C), not A→D→C.
+        dir.child("A.md").write_str("[[C]]\n[[D]]\n").unwrap();
+        dir.child("C.md").write_str("").unwrap();
+        dir.child("D.md").write_str("[[C]]\n").unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        (dir, vault)
     }
 }

@@ -6408,31 +6408,31 @@ fn graph_create_filename_prompt_snapshot() -> Result<()> {
 // ── Graph tab · periodic notes (021 · session 3) ──────────────────────
 
 #[test]
-fn graph_t_opens_today_when_daily_configured() -> Result<()> {
-    // `t` is the one-shot daily synonym. Same semantics as the Notes-tab
-    // binding — the shared run_periodic_open is what makes both behave
-    // identically.
-    let (dir, vault) = periodic_vault_all_periods();
+fn graph_t_queues_toast_when_daily_unreachable() -> Result<()> {
+    // With the default graph query (directory-contains only), the
+    // daily note file won't be in the graph results — `t` queues
+    // an informational toast instead of opening an editor.
+    let (_dir, vault) = periodic_vault_all_periods();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    // Switch to graph (default tab is graph at index 0, but on_focus
-    // hasn't fired without the bounce).
     app.switch_to(1)?;
     app.switch_to(0)?;
     app.dispatch(key('t'))?;
     let req = app
         .take_pending_request()
-        .expect("`t` should queue OpenInEditor for today's daily");
+        .expect("`t` should queue a Toast when daily is unreachable");
     match req {
-        AppRequest::OpenInEditor { path, line } => {
-            assert_eq!(line, 1);
-            let expected = dir
-                .path()
-                .join("test-vault/journal/2026/2026-05-10.md")
-                .canonicalize()
-                .unwrap();
-            assert_eq!(path.canonicalize().unwrap(), expected);
+        AppRequest::Toast { text, style } => {
+            assert!(
+                text.contains("daily"),
+                "toast should mention daily: {text:?}",
+            );
+            assert!(
+                text.contains("not in the current graph results"),
+                "toast should explain the note isn't reachable: {text:?}",
+            );
+            assert_eq!(style, crate::tui::tab::ToastStyle::Info);
         }
-        other => panic!("expected OpenInEditor, got {other:?}"),
+        other => panic!("expected Toast(Info), got {other:?}"),
     }
     Ok(())
 }
@@ -6457,27 +6457,26 @@ fn graph_p_enters_periodic_leader() -> Result<()> {
 }
 
 #[test]
-fn graph_p_then_d_opens_daily() -> Result<()> {
-    let (dir, vault) = periodic_vault_all_periods();
+fn graph_p_then_d_navigates_or_toasts() -> Result<()> {
+    // With the default graph query, the daily note isn't reachable →
+    // a `GraphNavigatePeriodic` request is posted, which the App
+    // services as a toast (note not in current graph results).
+    let (_dir, vault) = periodic_vault_all_periods();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(1)?;
     app.switch_to(0)?;
     app.dispatch(key('p'))?;
     app.dispatch(key('d'))?;
-    let req = app
-        .take_pending_request()
-        .expect("`p` then `d` should queue OpenInEditor for daily");
-    match req {
-        AppRequest::OpenInEditor { path, .. } => {
-            let expected = dir
-                .path()
-                .join("test-vault/journal/2026/2026-05-10.md")
-                .canonicalize()
-                .unwrap();
-            assert_eq!(path.canonicalize().unwrap(), expected);
-        }
-        other => panic!("expected OpenInEditor, got {other:?}"),
-    }
+    // The modal posts GraphNavigatePeriodic; service it to trigger the tab's handler.
+    app.service_request_for_test()?;
+    // The handler queues a Toast in pending_request; service that too.
+    app.service_pending_for_test()?;
+    // Result: toast indicating the daily note is not in graph results.
+    let req = app.take_pending_request();
+    assert!(
+        req.is_none(),
+        "toast should have been serviced, got {req:?}"
+    );
     // Leader must clear after firing.
     let frame = render(&mut app, 80, 24);
     assert!(
@@ -6537,6 +6536,104 @@ fn graph_periodic_leader_status_snapshot() -> Result<()> {
     app.dispatch(key('p'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("graph_periodic_leader_80x24", frame);
+    Ok(())
+}
+
+// ── Graph tab · periodic navigation ──────────────────────────────────
+
+/// Vault with daily note actually on disk, so the graph tracks it.
+fn periodic_vault_with_daily_file() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::create_dir_all(vault_path.join("journal/2026")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"journal/%Y\"\nformat = \"%Y-%m-%d\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("journal/2026/2026-05-10.md"),
+        "# 2026-05-10\n\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn graph_t_navigates_to_daily_when_reachable() -> Result<()> {
+    let (_dir, vault) = periodic_vault_with_daily_file();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Switch to graph.
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    // Replace the default query with one that selects all notes
+    // (the daily note is a Note, so it will be in the tree).
+    app.dispatch(key('/'))?;
+    // Clear the pre-seeded query and type a new one.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "node where kind = Note;".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Now press `t` — navigate to the daily note within the current tree.
+    app.dispatch(key('t'))?;
+    let frame = render(&mut app, 80, 24);
+    // The daily note should now be visible and selected (≈ highlighted).
+    assert!(
+        frame.contains("2026-05-10"),
+        "daily note should be visible in the tree after navigation:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_p_then_d_navigates_to_daily_when_reachable() -> Result<()> {
+    let (_dir, vault) = periodic_vault_with_daily_file();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    // Set a query that includes the daily note.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "node where kind = Note;".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // p → opens leader, d → navigate to daily note.
+    app.dispatch(key('p'))?;
+    app.dispatch(key('d'))?;
+    // Service the GraphNavigatePeriodic request.
+    app.service_request_for_test()?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2026-05-10"),
+        "daily note should be visible after p+d navigation:\n{frame}"
+    );
     Ok(())
 }
 

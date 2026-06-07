@@ -45,7 +45,6 @@ use crate::tui::modal_commands as mc;
 use crate::tui::notes_actions::append::{handle_key as append_handle_key, AppendState, AppendStep};
 use crate::tui::notes_actions::capture::{handle_capture_var_key, CaptureVarPromptState};
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
-use crate::tui::notes_actions::periodic::run_periodic_open;
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
@@ -506,7 +505,7 @@ impl Modal for PeriodicLeader {
             _ => None,
         };
         if let Some(p) = period {
-            run_periodic_open(ctx, p);
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphNavigatePeriodic(p));
         }
         // Any key (period letter, Esc, or anything else) closes the
         // leader modal — matches the pre-migration "any key clears"

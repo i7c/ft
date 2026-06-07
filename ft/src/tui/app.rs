@@ -755,6 +755,20 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::GraphNavigatePeriodic(period) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_navigate_periodic(&ctx, period);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1582,6 +1596,19 @@ impl App {
                         self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                     }
                 }
+                Some(AppRequest::GraphNavigatePeriodic(period)) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_navigate_periodic(&ctx, period);
+                    }
+                }
                 Some(other) => {
                     *self.pending_request.borrow_mut() = Some(other);
                     break;
@@ -1741,6 +1768,19 @@ impl App {
                             active_modal_name: self.active_modal_name(),
                         };
                         self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
+                    }
+                }
+                AppRequest::GraphNavigatePeriodic(period) => {
+                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                        let ctx = TabCtx {
+                            vault: &self.vault,
+                            recents: &self.recents,
+                            today: self.today,
+                            last_refresh: &self.last_refresh,
+                            pending_request: &self.pending_request,
+                            active_modal_name: self.active_modal_name(),
+                        };
+                        self.tabs[idx].graph_navigate_periodic(&ctx, period);
                     }
                 }
                 // Other variants need terminal state; tests that exercise
@@ -1925,6 +1965,20 @@ impl App {
                         active_modal_name: self.active_modal_name(),
                     };
                     self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
+                }
+                Ok(())
+            }
+            AppRequest::GraphNavigatePeriodic(period) => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
+                    let ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                    };
+                    self.tabs[idx].graph_navigate_periodic(&ctx, period);
                 }
                 Ok(())
             }

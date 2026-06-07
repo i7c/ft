@@ -162,6 +162,11 @@ pub enum AppRequest {
         selected: HashSet<ft_core::graph::NoteId>,
         dir_path: PathBuf,
     },
+    /// Routed back to the Graph tab: navigate within the active
+    /// view's tree to the periodic note for the given period.
+    /// Raised by the `PeriodicLeader` modal on period-letter keypress.
+    /// The App calls [`Tab::graph_navigate_periodic`].
+    GraphNavigatePeriodic(ft_core::periodic::Period),
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -253,6 +258,10 @@ impl std::fmt::Debug for AppRequest {
                 .debug_struct("GraphMoveExecuteMultiMove")
                 .field("selected_count", &selected.len())
                 .field("dir_path", dir_path)
+                .finish(),
+            AppRequest::GraphNavigatePeriodic(period) => f
+                .debug_tuple("GraphNavigatePeriodic")
+                .field(period)
                 .finish(),
         }
     }
@@ -464,6 +473,13 @@ pub trait Tab {
         _dir_path: PathBuf,
     ) {
     }
+
+    /// Hook for the periodic-note navigation flow (see
+    /// [`AppRequest::GraphNavigatePeriodic`]). The Graph tab
+    /// overrides this to resolve the periodic note path, find the
+    /// shortest BFS path from the active query's roots, and jump
+    /// the tree cursor to it. Other tabs ignore.
+    fn graph_navigate_periodic(&mut self, _ctx: &TabCtx, _period: ft_core::periodic::Period) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this
