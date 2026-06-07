@@ -33,9 +33,16 @@ pub struct DeletePlan {
 /// Returns an error if `path` escapes the vault root (e.g. contains
 /// `..` components that resolve above the root).
 pub fn plan_delete(path: &Path, vault_root: &Path) -> Result<DeletePlan> {
+    // Canonicalize vault_root so the symlink-resolved form matches what
+    // `abs.canonicalize()` returns below. On macOS, $TMPDIR lives under
+    // `/var`, which is a symlink to `/private/var`, so the un-resolved and
+    // resolved forms would otherwise differ and the starts_with check
+    // would spuriously reject every path.
+    let vault_root = vault_root
+        .canonicalize()
+        .unwrap_or_else(|_| vault_root.to_path_buf());
     let abs = vault_root.join(path);
 
-    // Canonicalize and ensure we're still under vault_root.
     // We do NOT require the path to exist yet — the applier will handle
     // NotFound gracefully. But we DO require the resolved path to be
     // under the vault root.
@@ -44,7 +51,7 @@ pub fn plan_delete(path: &Path, vault_root: &Path) -> Result<DeletePlan> {
         normalize_abs(&abs)
     });
 
-    if !canonical.starts_with(vault_root) {
+    if !canonical.starts_with(&vault_root) {
         return Err(Error::Notes(format!(
             "path escapes vault root: {}",
             path.display()
@@ -74,6 +81,12 @@ fn normalize_abs(path: &Path) -> PathBuf {
 /// Apply a delete plan: remove the target file/directory from disk,
 /// then clean up empty parent directories bottom-up.
 pub fn apply_delete(vault_root: &Path, plan: &DeletePlan) -> Result<()> {
+    // Match the canonicalization performed in plan_delete so strip_prefix
+    // succeeds when the original vault_root was symlinked (e.g. macOS
+    // TMPDIR under /var → /private/var).
+    let vault_root = vault_root
+        .canonicalize()
+        .unwrap_or_else(|_| vault_root.to_path_buf());
     // Collect parent dirs for cleanup before we delete the target.
     let mut parent_dirs: Vec<PathBuf> = Vec::new();
     for abs_path in &plan.paths {
@@ -85,7 +98,7 @@ pub fn apply_delete(vault_root: &Path, plan: &DeletePlan) -> Result<()> {
             .unwrap_or(false);
 
         // Track ancestors for cleanup.
-        let rel = abs_path.strip_prefix(vault_root).unwrap_or(abs_path);
+        let rel = abs_path.strip_prefix(&vault_root).unwrap_or(abs_path);
         let mut ancestor = rel.parent().map(|p| p.to_path_buf());
         while let Some(a) = ancestor {
             if a.as_os_str().is_empty() {
@@ -132,7 +145,10 @@ mod tests {
 
         let plan = plan_delete(Path::new("notes/foo.md"), vault.path()).unwrap();
         assert_eq!(plan.paths.len(), 1);
-        assert!(plan.paths[0].starts_with(vault.path()));
+        // plan_delete canonicalizes vault_root, so compare against the
+        // canonical form rather than the raw TempDir path (on macOS these
+        // differ via the /var → /private/var symlink).
+        assert!(plan.paths[0].starts_with(vault.path().canonicalize().unwrap()));
     }
 
     #[test]
