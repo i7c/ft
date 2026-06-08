@@ -1339,8 +1339,9 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     })?;
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::journal::build_journal(&graph, note_id, &vault, &vault.path, &mut cache)
-        .context("building journal")?;
+    let report =
+        ft_core::journal::build_journal(&graph, &[note_id], &vault, &vault.path, &mut cache)
+            .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
 

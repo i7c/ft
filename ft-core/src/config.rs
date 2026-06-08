@@ -58,6 +58,10 @@ pub struct Config {
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
     pub keymap: Option<KeymapConfig>,
+    /// Synthesis-ritual settings (link review, multi-source journal,
+    /// synth notes). See [`Synth`].
+    #[serde(default)]
+    pub synth: Synth,
 }
 
 impl Config {
@@ -207,6 +211,40 @@ pub struct PeriodicPeriod {
     /// Template name resolved under `[notes].templates_dir` (or an
     /// absolute path). When unset, the new note's body is `# <title>\n\n`.
     pub template: Option<String>,
+}
+
+/// Synthesis-ritual configuration. Governs the `ft review` /
+/// multi-source journal / `ft synth` flow.
+///
+/// `folder` is the convenience default location for new synth notes
+/// created via `ft synth <name>` without a path-bearing target. It is
+/// NOT enforcement: any `.md` anywhere in the vault marked with
+/// `ft-synth: true` in frontmatter is treated as a synth note.
+///
+/// `exclude_prefixes` filters the link-review (`ft review`): added
+/// `[[wikilinks]]` whose source file's vault-relative path starts with
+/// any listed prefix are dropped from the count. Defaults to empty;
+/// users typically add their periodic-notes folder here.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Synth {
+    #[serde(default = "default_synth_folder")]
+    pub folder: String,
+    #[serde(default)]
+    pub exclude_prefixes: Vec<String>,
+}
+
+impl Default for Synth {
+    fn default() -> Self {
+        Self {
+            folder: default_synth_folder(),
+            exclude_prefixes: Vec::new(),
+        }
+    }
+}
+
+fn default_synth_folder() -> String {
+    "Synthesis/".into()
 }
 
 /// Editor handoff configuration — how the TUI launches `$EDITOR` when
@@ -1106,5 +1144,52 @@ chord = "g"
         let km = lc.config.keymap.as_ref().unwrap();
         let global = km.scopes.get("global").unwrap();
         assert!(global.contains_key("Ctrl+s"));
+    }
+
+    #[test]
+    fn synth_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert_eq!(lc.config.synth.folder, "Synthesis/");
+        assert!(lc.config.synth.exclude_prefixes.is_empty());
+    }
+
+    #[test]
+    fn synth_user_overrides() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[synth]
+folder = "Notes/Synth/"
+exclude_prefixes = ["Periodic/", "Inbox/"]
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        assert_eq!(lc.config.synth.folder, "Notes/Synth/");
+        assert_eq!(
+            lc.config.synth.exclude_prefixes,
+            vec!["Periodic/".to_string(), "Inbox/".to_string()]
+        );
+    }
+
+    #[test]
+    fn synth_unknown_key_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[synth]
+unknown_key = "oops"
+"#,
+        )
+        .unwrap();
+        let result = load(user.path(), &tmp.path().join("no-vault.toml"));
+        assert!(result.is_err(), "unknown synth key should be rejected");
     }
 }

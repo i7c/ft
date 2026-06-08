@@ -270,7 +270,7 @@ impl JournalTab {
         // vault-relative, and `git -C <vault>` finds the enclosing repo
         // even when the vault is a subdirectory of it.
         let vault_path = ctx.vault.path.clone();
-        match build_journal(&graph, note_id, ctx.vault, &vault_path, cache) {
+        match build_journal(&graph, &[note_id], ctx.vault, &vault_path, cache) {
             Ok(report) => {
                 self.last_error = None;
                 self.target = Some(target);

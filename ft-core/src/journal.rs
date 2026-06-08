@@ -37,11 +37,20 @@ pub struct JournalEntry {
     /// `source_path`. Lets consumers (e.g. the TUI Journal tab) open
     /// `$EDITOR` at the exact paragraph rather than the top of the file.
     pub line_start: u32,
+    /// 1-indexed line number of the paragraph's last line.
+    pub line_end: u32,
     /// The paragraph text itself.
     pub section_text: String,
     /// Date of the most recent commit touching any line in the
     /// paragraph (UTC).
     pub date: NaiveDate,
+    /// The subset of the caller's `targets` slice that this paragraph
+    /// has a `ParagraphLink` edge to. In single-target mode this is
+    /// always `vec![targets[0]]`; renderers can ignore the field. In
+    /// multi-target mode it identifies which selected links a paragraph
+    /// matched — used by the TUI to render a `matched: X, Y` badge when
+    /// `matched.len() > 1`.
+    pub matched: Vec<NoteId>,
 }
 
 /// Result of [`build_journal`]: the feed plus per-file diagnostics so
@@ -59,47 +68,66 @@ pub struct JournalReport {
     pub skipped_blame: Vec<PathBuf>,
 }
 
-/// Build the reverse-chronological journal feed for `note_id`.
+/// Build the reverse-chronological journal feed for the given `targets`.
 ///
-/// Accepts both `Note` and `Ghost` targets — a ghost is a not-yet-
-/// created note whose incoming `ParagraphLink` edges are still
-/// meaningful "references to a concept". For ghosts, alias resolution
-/// (which reads the target's `## Related` section) and the "exclude N's
-/// own paragraphs" step are no-ops, since there is no backing file.
-///
-/// `Directory`/`Task`/`Paragraph` targets return an empty feed — the
-/// journal isn't defined for them.
-///
-/// Steps:
-/// 1. Resolve aliases by scanning `note_id`'s `## Related` heading
-///    range for outgoing `Link` edges (notes only).
+/// **Single-target mode** (`targets.len() == 1`): preserves the original
+/// per-note journal semantics:
+/// 1. Resolve aliases by scanning the target's `## Related` heading
+///    range for outgoing `Link` edges (notes only; skipped for ghosts).
 /// 2. Collect every `Paragraph` node with a `ParagraphLink` edge into
-///    `note_id` or any alias.
-/// 3. For notes only: exclude paragraphs whose `source_file` is
-///    `note_id`'s own path.
-/// 4. For each remaining paragraph, look up its date via `cache`,
-///    populating with a `git blame` call on cache miss.
-/// 5. Sort by date descending, then by source title ascending.
+///    the target or any alias.
+/// 3. For notes only: exclude paragraphs whose `source_file` is the
+///    target's own path.
+///
+/// Every returned entry's `matched` field is `vec![targets[0]]`.
+///
+/// **Multi-target mode** (`targets.len() > 1`): the user has explicitly
+/// selected a set of links; alias resolution and self-exclusion are
+/// SKIPPED. A paragraph is included if it has a `ParagraphLink` edge to
+/// any of the targets. Each entry's `matched` field carries the subset
+/// of `targets` that the paragraph linked to (preserving the order in
+/// which they appear in `targets`).
+///
+/// Both modes: dates come from `git blame` via `cache` (lazy-populated),
+/// sort is date descending with source title ascending as tiebreak.
+///
+/// Targets that resolve to `Directory`/`Task`/`Paragraph` nodes are
+/// silently ignored — those node kinds have no journal semantics.
+///
+/// Passing an empty slice returns an empty report.
 pub fn build_journal(
     graph: &Graph,
-    note_id: NoteId,
+    targets: &[NoteId],
     vault: &Vault,
     repo: &Path,
     cache: &mut BlameCache,
 ) -> Result<JournalReport> {
-    let note_path: Option<PathBuf> = match graph.node(note_id) {
-        NodeKind::Note(n) => Some(n.path.clone()),
-        NodeKind::Ghost(_) => None,
-        // Directories, tasks, and paragraphs have no journal semantics.
-        _ => return Ok(JournalReport::default()),
+    if targets.is_empty() {
+        return Ok(JournalReport::default());
+    }
+
+    let single_mode = targets.len() == 1;
+
+    // In single-target mode, resolve aliases and capture the target's
+    // path for self-exclusion. In multi-target mode, both are skipped.
+    let (self_path, alias_ids): (Option<PathBuf>, Vec<NoteId>) = if single_mode {
+        let primary = targets[0];
+        let note_path: Option<PathBuf> = match graph.node(primary) {
+            NodeKind::Note(n) => Some(n.path.clone()),
+            NodeKind::Ghost(_) => None,
+            _ => return Ok(JournalReport::default()),
+        };
+        let aliases = match &note_path {
+            Some(p) => resolve_related_aliases(graph, primary, vault, p)?,
+            None => Vec::new(),
+        };
+        (note_path, aliases)
+    } else {
+        (None, Vec::new())
     };
 
-    let alias_ids = match &note_path {
-        Some(p) => resolve_related_aliases(graph, note_id, vault, p)?,
-        None => Vec::new(),
-    };
-    let mut target_set: HashSet<NoteId> = HashSet::new();
-    target_set.insert(note_id);
+    // Build the set of NoteIds whose incoming ParagraphLink edges count.
+    let mut target_set: HashSet<NoteId> = targets.iter().copied().collect();
     target_set.extend(alias_ids.iter().copied());
 
     // Collect candidate paragraph nodes (dedup via HashSet).
@@ -128,8 +156,8 @@ pub fn build_journal(
         let NodeKind::Paragraph(p) = graph.node(p_id) else {
             continue;
         };
-        if note_path.as_ref().is_some_and(|np| p.source_file == *np) {
-            continue; // exclude N's own paragraphs (notes only; ghosts own nothing)
+        if self_path.as_ref().is_some_and(|np| p.source_file == *np) {
+            continue; // single-target self-exclusion
         }
         let path_str = p.source_file.to_string_lossy().into_owned();
         if cache.get(&path_str, &head).is_none() {
@@ -158,12 +186,32 @@ pub fn build_journal(
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+
+        // Compute the matched subset. Single-target: always vec![targets[0]].
+        // Multi-target: the subset of `targets` (preserving caller order) that
+        // this paragraph has a ParagraphLink edge to.
+        let matched: Vec<NoteId> = if single_mode {
+            vec![targets[0]]
+        } else {
+            let direct: HashSet<NoteId> = graph
+                .outgoing(p_id)
+                .filter_map(|(dst, edge)| matches!(edge, EdgeKind::ParagraphLink).then_some(dst))
+                .collect();
+            targets
+                .iter()
+                .copied()
+                .filter(|t| direct.contains(t))
+                .collect()
+        };
+
         entries.push(JournalEntry {
             source_title,
             source_path: p.source_file.clone(),
             line_start: p.line_start,
+            line_end: p.line_end,
             section_text: p.text.clone(),
             date,
+            matched,
         });
     }
 
@@ -340,7 +388,7 @@ mod tests {
         let (vault, graph, repo) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &repo, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // Daily-A mentions [[Target]]; Daily-B mentions [[Bar]] which
@@ -356,6 +404,12 @@ mod tests {
         // Bar alias through the Related list, but we exclude paragraphs
         // whose source_file is the queried note).
         assert!(!titles.contains(&"Target"));
+
+        // Single-target mode: every entry's `matched` is exactly the
+        // one passed target (renderers can ignore the field).
+        for entry in &report.entries {
+            assert_eq!(entry.matched, vec![target]);
+        }
     }
 
     #[test]
@@ -368,7 +422,7 @@ mod tests {
         let (vault, graph, repo) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, target, &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &repo, &mut cache).unwrap();
         assert_eq!(report.entries.len(), 2);
         assert_eq!(
             report.entries[0].date, report.entries[1].date,
@@ -422,7 +476,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be materialized as a Ghost");
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, phantom, &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[phantom], &vault, &repo, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty(), "blame should succeed");
         let mut titles: Vec<&str> = report
             .entries
@@ -483,7 +537,7 @@ mod tests {
         // Pass vault.path (not the repo root) as the `repo` argument —
         // git -C still finds the enclosing repo and vault-relative
         // paths resolve correctly.
-        let report = build_journal(&graph, target, &vault, &vault.path, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &vault.path, &mut cache).unwrap();
         assert!(
             report.skipped_blame.is_empty(),
             "expected no blame skips, got {:?}",

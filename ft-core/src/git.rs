@@ -329,6 +329,147 @@ fn parse_porcelain_header(line: &str) -> Option<(String, &str)> {
     Some((sha.to_string(), rest))
 }
 
+// ── Diff helpers (used by link_review) ──────────────────────────────────
+
+/// Resolve a ref (branch, tag, partial SHA) to its full 40-char commit SHA.
+pub fn rev_parse(repo: &Path, refspec: &str) -> Result<String> {
+    let out = git(repo)
+        .args(["rev-parse", refspec])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(&format!("rev-parse {refspec}"), &out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Find the most recent commit at-or-before `iso_date` on HEAD. Returns
+/// the full 40-char SHA, or `Err` when no commit exists at-or-before
+/// that date.
+pub fn commit_before(repo: &Path, iso_date: &str) -> Result<String> {
+    let out = git(repo)
+        .args([
+            "log",
+            "-1",
+            &format!("--before={iso_date}"),
+            "--format=%H",
+            "HEAD",
+        ])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(&format!("log -1 --before={iso_date}"), &out.stderr));
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        return Err(Error::Git(format!(
+            "no commit at or before {iso_date} on HEAD"
+        )));
+    }
+    Ok(sha)
+}
+
+/// List vault-relative paths changed between two refs (`git diff
+/// --name-only <from>..<to>`).
+pub fn diff_changed_paths(repo: &Path, from: &str, to: &str) -> Result<Vec<PathBuf>> {
+    let range = format!("{from}..{to}");
+    let out = git(repo)
+        .args(["diff", "--name-only", &range])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(&format!("diff --name-only {range}"), &out.stderr));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
+/// Parse `git diff <from>..<to> -- <path>` and return the set of
+/// line numbers in `<to>`'s post-state that are ADDED (lines that
+/// exist in `<to>` but not `<from>`, per the diff). Line numbers are
+/// 1-indexed.
+///
+/// Returns an empty set when the file was not added/modified in this
+/// range (e.g., only deletions).
+pub fn diff_added_lines(repo: &Path, from: &str, to: &str, path: &Path) -> Result<Vec<u32>> {
+    let range = format!("{from}..{to}");
+    let out = git(repo)
+        .args(["diff", "--unified=0", &range, "--"])
+        .arg(path)
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(
+            &format!("diff --unified=0 {range} -- {}", path.display()),
+            &out.stderr,
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_added_lines_from_diff(&text))
+}
+
+/// Parse the "+ line numbers" out of unified-diff text. The hunk header
+/// `@@ -<a>,<b> +<c>,<d> @@` declares post-state range; each subsequent
+/// `+<content>` line (not `+++`) advances the post-state cursor.
+fn parse_added_lines_from_diff(diff: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut cur: u32 = 0;
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            // Parse the `+<start>[,<count>]` part.
+            if let Some(plus_idx) = rest.find('+') {
+                let after = &rest[plus_idx + 1..];
+                let end = after
+                    .find(|c: char| !c.is_ascii_digit() && c != ',')
+                    .unwrap_or(after.len());
+                let nums = &after[..end];
+                let start: u32 = nums
+                    .split(',')
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                cur = start;
+            }
+            continue;
+        }
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if let Some(_added) = line.strip_prefix('+') {
+            if cur > 0 {
+                out.push(cur);
+                cur += 1;
+            }
+            continue;
+        }
+        if line.starts_with(' ') {
+            // context line — advances cursor (would not appear with
+            // --unified=0 in practice, but be safe).
+            cur += 1;
+        }
+        // `-` lines do not advance post-state cursor.
+    }
+    out
+}
+
+/// Return file content at a given commit. `path` is repo-relative.
+/// Equivalent to `git show <sha>:<path>`.
+pub fn show_file_at(repo: &Path, sha: &str, path: &Path) -> Result<String> {
+    let spec = format!("{sha}:{}", path.display());
+    let out = git(repo)
+        .args(["show", &spec])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(&format!("show {spec}"), &out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 // ── Sync ─────────────────────────────────────────────────────────────────
 
 /// Orchestrate the full sync sequence. See the module docs for the
