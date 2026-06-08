@@ -30,13 +30,13 @@
 
 ## 4. CLI surfaces
 
-- [ ] 4.1 Add `ft review` subcommand: new `ft/src/cmd/review.rs`, variant on `Commands` in `ft/src/main.rs`, dispatch. Args: `--since <duration>` OR `--range <X>..<Y>` (mutually exclusive via clap groups), `--json`. Calls `link_review::compute_link_review`.
-- [ ] 4.2 Add review output renderer in `ft/src/output/review.rs`: default table `(count) [[target]]` with `?` for ghosts, sorted as Engine 2 produces; `--json` emits the documented schema.
-- [ ] 4.3 Add `ft notes journal --link <link>` (repeatable, mutually exclusive with positional `<note>`), `--since`, `--range`, `--in-window` to existing `ft/src/cmd/notes.rs`. Dispatch through `build_journal` with a slice of resolved targets. Multi-target: skip Related-aliases. In-window: apply post-pass filter using Engine 2's added-lines map for the same window.
-- [ ] 4.4 Update `ft/src/output/journal.rs` (or equivalent) to render the `matched: X, Y` indicator when `matched.len() > 1`, and to include `matched` in JSON.
-- [ ] 4.5 Add `ft synth` subcommand with two sub-subcommands: `ft synth <target.md> ...` (scaffold; default action when first positional is a path) and `ft synth verify [<note.md> | --all] [--json]`. New `ft/src/cmd/synth.rs`. Args for scaffold: `--link` (repeatable), `--from <path>:<line>` (repeatable), `--since`/`--range`, `--all`/`--in-window`, `--no-edit`.
-- [ ] 4.6 Add synth verify output renderer: default text `<status> | <header info>`; `--json` emits the documented schema. Exit code 0 if all `Ok`, else 1.
-- [ ] 4.7 Integration tests in `ft/tests/`: `review_cli.rs`, `journal_multi_link_cli.rs`, `synth_scaffold_cli.rs`, `synth_verify_cli.rs`. Use `assert_cmd` + `assert_fs` against new fixture vault `tests/fixtures/synth/`.
+- [x] 4.1 Add `ft review` subcommand: new `ft/src/cmd/review.rs`, variant on `Commands` in `ft/src/main.rs`, dispatch. Args: `--since <duration>` OR `--range <X>..<Y>` (mutually exclusive via clap groups), `--json`. Calls `link_review::compute_link_review`.
+- [x] 4.2 Add review output renderer in `ft/src/output/review.rs`: default table `(count) [[target]]` with `?` for ghosts, sorted as Engine 2 produces; `--json` emits the documented schema. (Inlined in `ft/src/cmd/review.rs` — single small command, no need for a separate output module.)
+- [x] 4.3 Add `ft notes journal --link <link>` (repeatable, mutually exclusive with positional `<note>`), `--since`, `--range`, `--in-window` to existing `ft/src/cmd/notes.rs`. Dispatch through `build_journal` with a slice of resolved targets. Multi-target: skip Related-aliases. In-window: apply post-pass filter using Engine 2's added-lines map for the same window.
+- [x] 4.4 Update `ft/src/output/journal.rs` (or equivalent) to render the `matched: X, Y` indicator when `matched.len() > 1`, and to include `matched` in JSON.
+- [x] 4.5 Add `ft synth` subcommand with two sub-subcommands: `ft synth <target.md> ...` (scaffold; default action when first positional is a path) and `ft synth verify [<note.md> | --all] [--json]`. New `ft/src/cmd/synth.rs`. Args for scaffold: `--link` (repeatable), `--from <path>:<line>` (repeatable), `--since`/`--range`, `--all`/`--in-window`, `--no-edit`. (Scaffold is an explicit `scaffold` subcommand rather than default — clap doesn't support default-subcommand cleanly and the explicit form matches `ft notes` style.)
+- [x] 4.6 Add synth verify output renderer: default text `<status> | <header info>`; `--json` emits the documented schema. Exit code 0 if all `Ok`, else 1.
+- [x] 4.7 Integration tests in `ft/tests/`: `review_cli.rs`, `journal_multi_link_cli.rs`, `synth_cli.rs` (combines scaffold + verify since they share fixtures). Use `assert_cmd` + `assert_fs`. 17 tests total, all passing.
 
 ## 5. TUI: Review tab
 

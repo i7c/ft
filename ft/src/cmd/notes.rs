@@ -1311,12 +1311,36 @@ pub struct JournalArgs {
     /// `Areas/finance.md`), bare title, fuzzy query, or — for an
     /// unresolved-link target with no backing file — the explicit
     /// `[[Phantom]]` form (or just `Phantom` as a last-resort fallback).
-    #[arg(value_name = "NOTE", required = true)]
+    /// Mutually exclusive with `--link`.
+    #[arg(value_name = "NOTE", conflicts_with = "link")]
     pub note: Vec<String>,
+
+    /// A `[[wikilink]]` to include as a journal target. Repeatable —
+    /// passing multiple `--link` flags produces a multi-source journal
+    /// merging mentions of all targets. Mutually exclusive with the
+    /// positional NOTE argument.
+    #[arg(long, value_name = "LINK", conflicts_with = "note")]
+    pub link: Vec<String>,
+
+    /// Duration window for the in-window filter: `7d`, `24h`, `2w`,
+    /// `1m`. Mutually exclusive with `--range`. Has no effect unless
+    /// combined with `--in-window`.
+    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
+    pub since: Option<String>,
+
+    /// Commit range `X..Y` for the in-window filter. Mutually exclusive
+    /// with `--since`. Has no effect unless combined with `--in-window`.
+    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
+    pub range: Option<String>,
+
+    /// Filter to entries whose paragraph lines overlap any line added
+    /// in the window. Requires `--since` or `--range`.
+    #[arg(long)]
+    pub in_window: bool,
 
     /// Output as a JSON array instead of the default human-readable
     /// table form. Each entry includes `date`, `source_title`,
-    /// `source_path`, and `section` fields.
+    /// `source_path`, `section`, and `matched` fields.
     #[arg(long)]
     pub json: bool,
 
@@ -1326,10 +1350,17 @@ pub struct JournalArgs {
 }
 
 fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    if args.note.is_empty() && args.link.is_empty() {
+        return Err(anyhow!(
+            "provide a NOTE argument or one or more --link flags"
+        ));
+    }
+    if args.in_window && args.since.is_none() && args.range.is_none() {
+        return Err(anyhow!("--in-window requires --since or --range"));
+    }
+
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
     let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
-    let query = args.note.join(" ");
-    let note_id = resolve_journal_target(&graph, &vault, &query)?;
     // Verify the vault is inside a git repo, but then run blame from
     // `vault.path` itself: paragraph `source_file` paths are
     // vault-relative, and `git -C <vault>` finds the enclosing repo
@@ -1337,11 +1368,25 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("the vault is not inside a git repository — `ft notes journal` needs git history for section dates")
     })?;
+
+    let targets: Vec<NoteId> = if !args.link.is_empty() {
+        let mut ids = Vec::new();
+        for raw in &args.link {
+            let id = resolve_link_arg(&graph, raw).ok_or_else(|| {
+                anyhow!("--link `{raw}` did not resolve to any note or ghost in the vault")
+            })?;
+            ids.push(id);
+        }
+        ids
+    } else {
+        let query = args.note.join(" ");
+        vec![resolve_journal_target(&graph, &vault, &query)?]
+    };
+
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report =
-        ft_core::journal::build_journal(&graph, &[note_id], &vault, &vault.path, &mut cache)
-            .context("building journal")?;
+    let report = ft_core::journal::build_journal(&graph, &targets, &vault, &vault.path, &mut cache)
+        .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
 
@@ -1358,17 +1403,99 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         }
     }
 
+    let mut entries = report.entries;
+    if args.in_window {
+        // Compute the link-review's added_lines map for the same window
+        // and keep only entries whose paragraph touches an added line.
+        let window = resolve_journal_window(&args.since, &args.range)?
+            .expect("validated above: in_window implies since/range");
+        let cfg = vault.config.config.synth.clone();
+        let review =
+            ft_core::link_review::compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
+                .context("computing in-window filter")?;
+        entries.retain(|e| {
+            review
+                .added_lines
+                .get(&e.source_path)
+                .is_some_and(|lines| (e.line_start..=e.line_end).any(|ln| lines.contains(&ln)))
+        });
+    }
+
+    // Map matched NoteIds → display titles for output.
+    let resolve_titles = |ids: &[NoteId]| -> Vec<String> {
+        ids.iter()
+            .map(|id| match graph.node(*id) {
+                NodeKind::Note(n) => n.title.clone(),
+                NodeKind::Ghost(g) => g.raw.clone(),
+                _ => String::new(),
+            })
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
+
     if args.json {
-        render_journal_json(&report.entries)?;
+        render_journal_json(&entries, &resolve_titles)?;
     } else {
         let use_color =
             !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
-        render_journal_table(&report.entries, use_color);
+        render_journal_table(&entries, use_color, &resolve_titles);
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn render_journal_table(entries: &[ft_core::journal::JournalEntry], use_color: bool) {
+/// Resolve a `--link` argument (`"[[Foo]]"` or `"Foo"`) to a graph
+/// `NoteId`. Falls through to ghost lookup when no note matches.
+fn resolve_link_arg(graph: &Graph, raw: &str) -> Option<NoteId> {
+    let trimmed = raw
+        .trim()
+        .trim_start_matches("[[")
+        .trim_end_matches("]]")
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    for (id, node) in graph.nodes() {
+        if let NodeKind::Note(n) = node {
+            if n.title.eq_ignore_ascii_case(trimmed) {
+                return Some(id);
+            }
+        }
+    }
+    graph.ghost_by_raw(trimmed)
+}
+
+fn resolve_journal_window(
+    since: &Option<String>,
+    range: &Option<String>,
+) -> Result<Option<ft_core::link_review::WindowRange>> {
+    use ft_core::link_review::WindowRange;
+    if let Some(s) = since {
+        let dur = WindowRange::parse_since(s)
+            .ok_or_else(|| anyhow!("invalid --since value `{s}` (try e.g. 7d, 24h, 2w, 1m)"))?;
+        return Ok(Some(WindowRange::Since(dur)));
+    }
+    if let Some(r) = range {
+        let (from, to) = r
+            .split_once("..")
+            .ok_or_else(|| anyhow!("invalid --range value `{r}` (expected `X..Y`)"))?;
+        if from.is_empty() || to.is_empty() {
+            return Err(anyhow!(
+                "invalid --range value `{r}` (both X and Y required)"
+            ));
+        }
+        return Ok(Some(WindowRange::Range {
+            from: from.to_string(),
+            to: to.to_string(),
+        }));
+    }
+    Ok(None)
+}
+
+fn render_journal_table(
+    entries: &[ft_core::journal::JournalEntry],
+    use_color: bool,
+    resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+) {
     if entries.is_empty() {
         println!("no journal entries");
         return;
@@ -1386,19 +1513,32 @@ fn render_journal_table(entries: &[ft_core::journal::JournalEntry], use_color: b
         } else {
             println!("{header}");
         }
+        if e.matched.len() > 1 {
+            let titles = resolve_titles(&e.matched);
+            let badge = format!("matched: {}", titles.join(", "));
+            if use_color {
+                println!("{}", badge.dimmed());
+            } else {
+                println!("{badge}");
+            }
+        }
         let sep_len = header.chars().count().clamp(20, 72);
         println!("{}", "─".repeat(sep_len));
         println!("{}", e.section_text);
     }
 }
 
-fn render_journal_json(entries: &[ft_core::journal::JournalEntry]) -> Result<()> {
+fn render_journal_json(
+    entries: &[ft_core::journal::JournalEntry],
+    resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+) -> Result<()> {
     #[derive(serde::Serialize)]
     struct Row<'a> {
         date: String,
         source_title: &'a str,
         source_path: String,
         section: &'a str,
+        matched: Vec<String>,
     }
     let rows: Vec<Row> = entries
         .iter()
@@ -1407,6 +1547,7 @@ fn render_journal_json(entries: &[ft_core::journal::JournalEntry]) -> Result<()>
             source_title: &e.source_title,
             source_path: e.source_path.to_string_lossy().into_owned(),
             section: &e.section_text,
+            matched: resolve_titles(&e.matched),
         })
         .collect();
     let s = serde_json::to_string_pretty(&rows).context("serialize journal json")?;
