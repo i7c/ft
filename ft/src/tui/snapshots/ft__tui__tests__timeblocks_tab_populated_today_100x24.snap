@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 266
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                                    
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review                       
 ┌ sidebar ─────────────┐┌ Sun 2026-05-10 (today) ──────────────────────────────────────────────────┐
 │                      ││▶   1  09:00 - 10:00  standup @work                                       │
 │ Sun 10 May           ││    2  10:00 - 10:30  review @work/code                                   │

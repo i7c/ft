@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 6788
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
 > node where kind in {Directory} and path = "Areas"; expand where edge.kind in {
  1: node where kind in …                                                        
 ┌ node where kind in … ────────────────────────────────────────────────────────┐

@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 2911
 expression: frame
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐          
+  1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
 ┌ notes ──│Keybindings — Notes                                       │─────────┐
 │         │                                                          │         │
 │  Notes —│  Global                                                  │         │

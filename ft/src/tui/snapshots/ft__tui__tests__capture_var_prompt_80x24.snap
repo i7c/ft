@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 8129
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal                
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
 ┌ notes ───────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  Notes — Obsidian-flavoured editing                                          │
@@ -10,7 +11,7 @@ expression: frame
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
-│  C     create ┌ capture · create · var · 2026-06-07-meeting.m┐               │
+│  C     create ┌ capture · create · var · 2026-06-08-meeting.m┐               │
 │  t     open to│                                              │               │
 │  p     periodi│▏ topic = █                                   │               │
 │  ?     show th│                                              │               │

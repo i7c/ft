@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 2922
 expression: frame
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐          
+  1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
 ┌ sidebar │Keybindings — Timeblocks                                  │─────────┐
 │         │                                                          │         │
 │ Sun 10 M│  Global                                                  │         │

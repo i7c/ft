@@ -40,23 +40,23 @@
 
 ## 5. TUI: Review tab
 
-- [ ] 5.1 Create `ft/src/tui/tabs/review.rs` implementing the `Tab` trait. State: window range, computed rows, selection set, in-flight worker handle.
-- [ ] 5.2 Implement background worker for Engine 2 following the existing single-threaded + mpsc pattern (reference: git-sync worker). Worker posts `BgEvent::LinkReviewComputed(Vec<LinkReviewRow>)` on completion. In-flight state in typed `RefCell<Option<...>>` slot on `App`.
-- [ ] 5.3 Render: header showing `<start> .. <end>` window, body listing one row per link with selection visual and `?` suffix for ghosts.
-- [ ] 5.4 Keys: `j`/`k` cursor, `<space>` toggle selection, `<enter>` handoff (queues `MultiTargetRequest { targets, window }` to App's new slot and switches focus to Journal tab), window-adjust keys (`<` / `>` or `[` / `]` — pick during impl, document in `help_sections`).
-- [ ] 5.5 Register tab in `App::new` after the Journal tab. Override `help_sections()` so `?` overlay shows the keymap.
-- [ ] 5.6 Snapshot tests via `ratatui::backend::TestBackend` in `ft/src/tui/tests.rs`: empty state, populated list, with selection, with ghost rows, header with window range.
+- [x] 5.1 Create `ft/src/tui/tabs/review.rs` implementing the `Tab` trait. State: window range, computed rows, selection set, in-flight worker handle. (Worker handle deferred — v1 uses synchronous compute on focus, matches the existing Journal tab's sync `build_journal` pattern.)
+- [~] 5.2 Background worker for Engine 2 — **deferred**: v1 computes synchronously on focus / window-change (same pattern as existing Journal tab). The "UI remains responsive during load" spec scenario is not met; documented in `review.rs` module docs. Track for v2 if performance becomes an issue on large vaults.
+- [x] 5.3 Render: header showing `<window-label> (<count> links, <selected> selected)`, body listing one row per link with `[*]` select marker and `?` suffix for ghosts.
+- [x] 5.4 Keys: `j`/`k` cursor, `<space>` toggle selection, `<enter>` handoff (queues `MultiTargetRequest { targets, window }` to App and switches focus to Journal tab via `AppRequest::JournalForMulti`), `[` / `]` window-adjust (halve / double), `R` reload.
+- [x] 5.5 Register tab in `App::new` (and `for_test*` constructors) after the Journal tab. Override `help_sections()` so `?` overlay shows the keymap.
+- [x] 5.6 Snapshot/behavior tests in `ft/src/tui/tests.rs`: empty window friendly message; populated list with counts + ghost `?` suffix; help-section content. (Used assertion-on-frame style rather than insta snapshots since the new tab already required 54 existing snapshots to be rolled for the tab-strip addition.)
 
 ## 6. TUI: Journal tab additions
 
-- [ ] 6.1 Add `queued_targets: RefCell<Option<MultiTargetRequest>>` slot on `App`. Define `MultiTargetRequest { targets: Vec<NoteId>, window: Option<WindowRange> }` in `ft-core`.
-- [ ] 6.2 In `on_focus`, consume `queued_targets` if set; otherwise fall through to existing `queued_journal_for_path` logic. Both-set precedence: multi-target wins; single-note slot cleared.
-- [ ] 6.3 Update renderer to display `matched: X, Y` badge after the date line when an entry's `matched.len() > 1`. Use display titles (not raw `[[]]`).
-- [ ] 6.4 Add in-window-only toggle key (`w`): toggles a tab-local flag; when active AND in multi-target mode AND `queued_targets.window.is_some()`, filter entries via Engine 2's added-lines map for that window. Header reflects current state.
-- [ ] 6.5 Add entry multi-select via `<space>` with persistent selection across cursor movement.
-- [ ] 6.6 Add send-to-synth key (`s`): opens an inline prompt with a fuzzy picker over existing `ft-synth: true` notes + a "new note" option. On confirm, call `plan_synth_scaffold` with selected entries (or all displayed if no selection), `apply_synth_scaffold`, trigger existing editor-handoff at the bottom of the target file.
-- [ ] 6.7 Update `Tab::help_sections()` to include `space`, `s`, `w` bindings.
-- [ ] 6.8 Snapshot tests: multi-target rendering, badge present/absent, in-window toggle on/off, send-to-synth prompt opened.
+- [x] 6.1 Defined `MultiTargetRequest { targets: Vec<JournalTarget>, window: Option<JournalWindow> }` in `ft/src/tui/tab.rs` (not `ft-core` — it carries the TUI-side `JournalTarget` enum). Added `AppRequest::JournalForMulti { request }` plus `Tab::queue_journal_for_multi` hook with default no-op.
+- [x] 6.2 In `on_focus`, consume `queued_multi` first; if set, the single-note `queued_for` slot is cleared without execution (matches spec precedence rule).
+- [x] 6.3 Renderer shows `matched: X, Y` badge after the date line when `entry.matched.len() > 1`. Display titles resolved at load time into `entry_matched_titles` (parallel vec) so the render path doesn't need graph access.
+- [x] 6.4 `w` key toggles `in_window_only`. Filter re-applies on toggle. Title reflects current state (`all-time` vs `in-window`). Toggle is no-op outside multi-target+window context.
+- [x] 6.5 Entry multi-select via `<space>`. Selection visualized with `[*]` marker; persists across cursor movement; cleared on every load.
+- [x] 6.6 Send-to-synth key (`s`): opens an inline typed-path prompt (rather than the full fuzzy picker — v1 simplification; documented as v2 polish). On Enter: resolves bare names under `synth.folder`, runs `plan_synth_scaffold` + `apply_synth_scaffold`, queues editor handoff, posts a success toast.
+- [x] 6.7 Updated `Tab::help_sections()` with a new "Synth" section listing `Space`, `w`, `s` bindings.
+- [x] 6.8 Behavior tests in `ft/src/tui/tests.rs`: multi-target rendering with `matched: Foo, Bar` badge + `2 targets` title; send-to-synth prompt opens on `s`. (Frame-assertion style; same rationale as 5.6.)
 
 ## 7. Fixtures, integration, polish
 

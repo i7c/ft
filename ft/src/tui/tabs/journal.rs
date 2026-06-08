@@ -31,16 +31,21 @@ use ratatui::{
 
 use ft_core::blame_cache::BlameCache;
 use ft_core::git::discover_repo;
-use ft_core::graph::Graph;
+use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::journal::{build_journal, JournalEntry};
+use ft_core::link_review::compute_link_review;
 use ft_core::search::Hit;
+use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
-use crate::tui::tab::{AppRequest, EventOutcome, JournalTarget, Tab, TabCtx, ToastStyle};
+use crate::tui::tab::{
+    AppRequest, EventOutcome, JournalTarget, JournalWindow, MultiTargetRequest, Tab, TabCtx,
+    ToastStyle,
+};
 use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSource};
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -141,6 +146,33 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "journal.toggle-entry-selection",
+        description: "Toggle multi-select on the entry under the cursor",
+        scope: CommandScope::Tab("journal"),
+        group: "Selection",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.toggle-in-window",
+        description: "Filter to entries touched by the window (multi-target with window only)",
+        scope: CommandScope::Tab("journal"),
+        group: "Filter",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.send-to-synth",
+        description: "Send selected (or all) entries as a synth-note scaffold",
+        scope: CommandScope::Tab("journal"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
 ];
 
 /// Default keymap for the Journal tab. Aliases (e.g. `Up`/`k`,
@@ -164,6 +196,10 @@ pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Ctrl+u", "journal.cursor-half-page-up")
         // Open
         .bind("Enter", "journal.open-selected")
+        // Multi-target + synth
+        .bind("Space", "journal.toggle-entry-selection")
+        .bind("w", "journal.toggle-in-window")
+        .bind("s", "journal.send-to-synth")
 });
 
 pub struct JournalTab {
@@ -171,8 +207,28 @@ pub struct JournalTab {
     /// prompt. `Note(path)` for a real note, `Ghost(raw)` for an
     /// unresolved-link concept.
     target: Option<JournalTarget>,
+    /// In multi-target mode, the full list of selected targets and the
+    /// optional window that produced them. `target` is set to the first
+    /// entry so existing single-target rendering paths keep working;
+    /// multi-target rendering branches on `multi_targets.len() > 1`.
+    multi_targets: Vec<JournalTarget>,
+    /// Captured window from a Review-tab handoff. Enables the
+    /// `--in-window` toggle (`w`).
+    window: Option<JournalWindow>,
+    /// When `true` and `window.is_some()`, the rendered feed is filtered
+    /// down to entries whose paragraph lines overlap an added-line in
+    /// the window.
+    in_window_only: bool,
     /// The currently-displayed feed.
     entries: Vec<JournalEntry>,
+    /// Per-entry display titles for the matched badge, parallel to
+    /// `entries`. Resolved at load-time because `entry.matched` carries
+    /// `NoteId`s that belong to the load-time graph, not the one the
+    /// renderer has access to.
+    entry_matched_titles: Vec<Vec<String>>,
+    /// Per-entry selection (for `s` → send-to-synth). Indices into
+    /// `entries`. Cleared on every fresh load.
+    entry_selected: std::collections::HashSet<usize>,
     /// 0-indexed cursor into `entries`. Saturating-clamped on load.
     selected: usize,
     /// 0-indexed scroll offset (in entries, not lines). Adjusted at
@@ -184,6 +240,9 @@ pub struct JournalTab {
     /// Queued target from a cross-tab jump. Consumed by `on_focus` to
     /// kick off a load.
     queued_for: Option<JournalTarget>,
+    /// Queued multi-target request from the Review tab. Consumed by
+    /// `on_focus`; takes precedence over `queued_for` when both are set.
+    queued_multi: Option<MultiTargetRequest>,
     /// Lazy-loaded blame cache; preserved across loads within the
     /// tab's session.
     cache: Option<BlameCache>,
@@ -191,6 +250,10 @@ pub struct JournalTab {
     /// user knows why the feed didn't change. Cleared on next
     /// successful load or `c`.
     last_error: Option<String>,
+    /// Synth-prompt state. When `Some`, the tab shows an inline prompt
+    /// for entering a synth-note target path; keys go to the prompt
+    /// until `Enter` or `Esc`.
+    synth_prompt: Option<String>,
     keymap: crate::tui::keymap::KeyMap,
 }
 
@@ -204,13 +267,20 @@ impl JournalTab {
     pub fn new() -> Self {
         Self {
             target: None,
+            multi_targets: Vec::new(),
+            window: None,
+            in_window_only: false,
             entries: Vec::new(),
+            entry_matched_titles: Vec::new(),
+            entry_selected: std::collections::HashSet::new(),
             selected: 0,
             scroll_offset: 0,
             picker: None,
             queued_for: None,
+            queued_multi: None,
             cache: None,
             last_error: None,
+            synth_prompt: None,
             keymap: JOURNAL_KEYMAP.clone(),
         }
     }
@@ -274,7 +344,13 @@ impl JournalTab {
             Ok(report) => {
                 self.last_error = None;
                 self.target = Some(target);
+                // Single-target mode → drop multi-target state.
+                self.multi_targets.clear();
+                self.window = None;
+                self.in_window_only = false;
                 self.entries = report.entries;
+                self.entry_matched_titles = vec![vec![]; self.entries.len()];
+                self.entry_selected.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
                 if !report.skipped_blame.is_empty() {
@@ -310,6 +386,277 @@ impl JournalTab {
                 self.entries.clear();
             }
         }
+    }
+
+    /// Multi-target counterpart of [`Self::load_for`]. Runs
+    /// `build_journal` over `request.targets` and stashes the window
+    /// so the `w` key can later toggle in-window filtering.
+    fn load_for_multi(&mut self, request: MultiTargetRequest, ctx: &mut TabCtx) {
+        if discover_repo(&ctx.vault.path).is_none() {
+            self.last_error = Some(
+                "vault is not inside a git repository — journal needs git history".to_string(),
+            );
+            self.entries.clear();
+            return;
+        }
+
+        let scan = ctx.vault.scan();
+        let graph = match Graph::build(ctx.vault, &scan) {
+            Ok(g) => g,
+            Err(e) => {
+                self.last_error = Some(format!("graph build failed: {e}"));
+                self.entries.clear();
+                return;
+            }
+        };
+
+        // Resolve every target to a NoteId in this fresh graph.
+        let mut ids: Vec<NoteId> = Vec::with_capacity(request.targets.len());
+        let mut unresolved: Vec<String> = Vec::new();
+        for t in &request.targets {
+            let id = match t {
+                JournalTarget::Note(p) => graph.note_by_path(p),
+                JournalTarget::Ghost(raw) => graph.ghost_by_raw(raw),
+            };
+            match id {
+                Some(i) => ids.push(i),
+                None => unresolved.push(t.label()),
+            }
+        }
+        if ids.is_empty() {
+            self.last_error = Some(format!(
+                "no Journal-multi targets resolved in current graph: {}",
+                unresolved.join(", ")
+            ));
+            self.entries.clear();
+            return;
+        }
+
+        if self.cache.is_none() {
+            self.cache = Some(BlameCache::load(&ctx.vault.path).unwrap_or_default());
+        }
+        let cache = self.cache.as_mut().expect("just initialized");
+        let vault_path = ctx.vault.path.clone();
+        let report = match build_journal(&graph, &ids, ctx.vault, &vault_path, cache) {
+            Ok(r) => r,
+            Err(e) => {
+                self.last_error = Some(format!("build_journal failed: {e}"));
+                self.entries.clear();
+                return;
+            }
+        };
+        let _ = cache.save(&ctx.vault.path);
+
+        // Resolve every entry's `matched` NoteIds to display titles
+        // while the load-time graph is still in scope.
+        let entry_matched_titles: Vec<Vec<String>> = report
+            .entries
+            .iter()
+            .map(|e| {
+                e.matched
+                    .iter()
+                    .map(|id| match graph.node(*id) {
+                        NodeKind::Note(n) => n.title.clone(),
+                        NodeKind::Ghost(g) => g.raw.clone(),
+                        _ => String::new(),
+                    })
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .collect();
+
+        self.last_error = None;
+        self.target = request.targets.first().cloned();
+        self.multi_targets = request.targets;
+        self.window = request.window;
+        self.in_window_only = false;
+        self.entries = report.entries;
+        self.entry_matched_titles = entry_matched_titles;
+        self.entry_selected.clear();
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Recompute and apply the in-window filter against the current
+    /// `entries`. Reloads from scratch (cheap) so toggling the filter
+    /// on/off restores the full list without storing a shadow copy.
+    fn refresh_after_filter_toggle(&mut self, ctx: &mut TabCtx) {
+        // We need the unfiltered list as the basis; the cleanest path is
+        // to re-run `load_for_multi` with the same request.
+        let request = MultiTargetRequest {
+            targets: self.multi_targets.clone(),
+            window: self.window.clone(),
+        };
+        let want_in_window = self.in_window_only;
+        self.load_for_multi(request, ctx);
+        if want_in_window {
+            self.apply_in_window_filter(ctx);
+        }
+    }
+
+    /// Drop entries whose paragraph lines don't overlap any added line
+    /// from `self.window`. No-op when `window` is `None`.
+    fn apply_in_window_filter(&mut self, ctx: &mut TabCtx) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let scan = ctx.vault.scan();
+        let graph = match Graph::build(ctx.vault, &scan) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let cfg = ctx.vault.config.config.synth.clone();
+        let core_window = window.to_core();
+        let review =
+            match compute_link_review(&graph, ctx.vault, &ctx.vault.path, &core_window, &cfg) {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+        // Filter `entries` and the parallel `entry_matched_titles`
+        // together so they stay aligned.
+        let added = &review.added_lines;
+        let keep: Vec<bool> = self
+            .entries
+            .iter()
+            .map(|e| {
+                added
+                    .get(&e.source_path)
+                    .is_some_and(|lines| (e.line_start..=e.line_end).any(|ln| lines.contains(&ln)))
+            })
+            .collect();
+        let mut idx = 0;
+        self.entries.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        let mut idx = 0;
+        self.entry_matched_titles.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        self.entry_selected.clear();
+        if self.selected >= self.entries.len() {
+            self.selected = self.entries.len().saturating_sub(1);
+        }
+    }
+
+    fn toggle_in_window(&mut self, ctx: &mut TabCtx) {
+        if self.window.is_none() || self.multi_targets.len() <= 1 {
+            return; // toggle only applies in multi-target mode with a window
+        }
+        self.in_window_only = !self.in_window_only;
+        self.refresh_after_filter_toggle(ctx);
+    }
+
+    fn toggle_entry_selection(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        if !self.entry_selected.remove(&self.selected) {
+            self.entry_selected.insert(self.selected);
+        }
+    }
+
+    fn open_synth_prompt(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.synth_prompt = Some(String::new());
+    }
+
+    fn confirm_synth_prompt(&mut self, ctx: &mut TabCtx) {
+        let Some(raw_target) = self.synth_prompt.take() else {
+            return;
+        };
+        let target_rel = raw_target.trim();
+        if target_rel.is_empty() {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                "send-to-synth: target path is empty",
+                ToastStyle::Error,
+            );
+            return;
+        }
+        let target_rel = if std::path::Path::new(target_rel)
+            .extension()
+            .and_then(|s| s.to_str())
+            == Some("md")
+        {
+            target_rel.to_string()
+        } else {
+            format!("{target_rel}.md")
+        };
+        // If user typed just a name, resolve under synth.folder.
+        let target_path = std::path::PathBuf::from(&target_rel);
+        let final_path = if target_path.parent().map(|p| !p.as_os_str().is_empty()) == Some(true) {
+            target_path
+        } else {
+            let folder = &ctx.vault.config.config.synth.folder;
+            std::path::PathBuf::from(folder).join(&target_rel)
+        };
+
+        // Build the entry slice: selected entries, or all if none selected.
+        let entries: Vec<JournalEntry> = if self.entry_selected.is_empty() {
+            self.entries.clone()
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.entry_selected.contains(i))
+                .map(|(_, e)| e.clone())
+                .collect()
+        };
+        if entries.is_empty() {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                "send-to-synth: no entries to send",
+                ToastStyle::Error,
+            );
+            return;
+        }
+
+        let plan = match plan_synth_scaffold(ctx.vault, &ctx.vault.path, &final_path, &entries) {
+            Ok(p) => p,
+            Err(e) => {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    &format!("synth plan failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        let written = match apply_synth_scaffold(ctx.vault, &plan) {
+            Ok(p) => p,
+            Err(e) => {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    &format!("synth write failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        crate::tui::notes_actions::queue_toast(
+            ctx,
+            &format!(
+                "{} {} synth section(s) to {}",
+                if plan.create { "created" } else { "appended" },
+                plan.sections.len(),
+                final_path.display()
+            ),
+            ToastStyle::Success,
+        );
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+            path: written,
+            line: 1,
+        });
+    }
+
+    fn cancel_synth_prompt(&mut self) {
+        self.synth_prompt = None;
     }
 
     fn open_picker(&mut self, ctx: &TabCtx) {
@@ -379,7 +726,13 @@ impl Tab for JournalTab {
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        if let Some(target) = self.queued_for.take() {
+        // Multi-target queue takes precedence; clear the single-note
+        // queue without executing it (spec: "Both slots set prefers
+        // multi-target").
+        if let Some(request) = self.queued_multi.take() {
+            self.queued_for = None;
+            self.load_for_multi(request, ctx);
+        } else if let Some(target) = self.queued_for.take() {
             self.load_for(target, ctx);
         }
         Ok(())
@@ -387,6 +740,10 @@ impl Tab for JournalTab {
 
     fn queue_journal_for(&mut self, target: &JournalTarget) {
         self.queued_for = Some(target.clone());
+    }
+
+    fn queue_journal_for_multi(&mut self, request: &MultiTargetRequest) {
+        self.queued_multi = Some(request.clone());
     }
 
     fn commands(&self) -> &'static [CommandDef] {
@@ -445,6 +802,18 @@ impl Tab for JournalTab {
                 self.request_open_selected(ctx);
                 CommandOutcome::Handled
             }
+            "journal.toggle-entry-selection" => {
+                self.toggle_entry_selection();
+                CommandOutcome::Handled
+            }
+            "journal.toggle-in-window" => {
+                self.toggle_in_window(ctx);
+                CommandOutcome::Handled
+            }
+            "journal.send-to-synth" => {
+                self.open_synth_prompt();
+                CommandOutcome::Handled
+            }
             _ => CommandOutcome::NotHandled,
         }
     }
@@ -453,6 +822,35 @@ impl Tab for JournalTab {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
+
+        // Synth prompt has highest priority — characters and editing
+        // keys go to the prompt buffer.
+        if self.synth_prompt.is_some() {
+            use crossterm::event::KeyCode;
+            match k.code {
+                KeyCode::Esc => {
+                    self.cancel_synth_prompt();
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Enter => {
+                    self.confirm_synth_prompt(ctx);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Backspace => {
+                    if let Some(buf) = self.synth_prompt.as_mut() {
+                        buf.pop();
+                    }
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char(c) => {
+                    if let Some(buf) = self.synth_prompt.as_mut() {
+                        buf.push(c);
+                    }
+                    return Ok(EventOutcome::Consumed);
+                }
+                _ => return Ok(EventOutcome::Consumed),
+            }
+        }
 
         // Picker overlay captures the keyboard while open — the picker
         // is tab-resident here (not in `ActiveModal`), so we route raw
@@ -478,10 +876,15 @@ impl Tab for JournalTab {
                 frame,
                 area,
                 target,
+                &self.multi_targets,
                 &self.entries,
+                &self.entry_matched_titles,
                 self.selected,
+                &self.entry_selected,
                 &mut self.scroll_offset,
                 self.last_error.as_deref(),
+                self.in_window_only,
+                self.window.is_some(),
             ),
         }
 
@@ -489,6 +892,10 @@ impl Tab for JournalTab {
             let popup_area = centered_rect(70, 70, area);
             frame.render_widget(Clear, popup_area);
             picker.render(frame, popup_area);
+        }
+
+        if let Some(buf) = self.synth_prompt.as_deref() {
+            render_synth_prompt(frame, area, buf);
         }
     }
 
@@ -513,6 +920,14 @@ impl Tab for JournalTab {
             HelpSection::new(
                 "Open",
                 &[("Enter", "open selected entry's note in $EDITOR")],
+            ),
+            HelpSection::new(
+                "Synth",
+                &[
+                    ("Space", "toggle multi-select on the current entry"),
+                    ("w", "toggle in-window-only filter (multi-target + window)"),
+                    ("s", "send selected (or all) entries to a synth note"),
+                ],
             ),
         ]
     }
@@ -545,16 +960,40 @@ fn render_empty(frame: &mut Frame, area: Rect, last_error: Option<&str>) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_loaded(
     frame: &mut Frame,
     area: Rect,
     target: &JournalTarget,
+    multi_targets: &[JournalTarget],
     entries: &[JournalEntry],
+    entry_matched_titles: &[Vec<String>],
     selected: usize,
+    entry_selected: &std::collections::HashSet<usize>,
     scroll_offset: &mut usize,
     last_error: Option<&str>,
+    in_window_only: bool,
+    has_window: bool,
 ) {
-    let title = format!(" Journal — {} ({} entries) ", target.label(), entries.len());
+    let title = if multi_targets.len() > 1 {
+        let window_suffix = if has_window {
+            if in_window_only {
+                " · in-window"
+            } else {
+                " · all-time"
+            }
+        } else {
+            ""
+        };
+        format!(
+            " Journal — {} targets ({} entries){} ",
+            multi_targets.len(),
+            entries.len(),
+            window_suffix
+        )
+    } else {
+        format!(" Journal — {} ({} entries) ", target.label(), entries.len())
+    };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -575,12 +1014,12 @@ fn render_loaded(
         return;
     }
 
-    // Each entry contributes: 1 header line + N wrapped body lines + 1
-    // blank separator. We wrap body lines manually (rather than letting
-    // ratatui's `Paragraph::wrap` do it) so `entry_starts` stays in
-    // sync with the post-wrap visual line count — that's what
-    // `scroll((y, 0))` indexes into. Without manual wrap the cursor
-    // would drift relative to scroll on entries with long paragraphs.
+    // Each entry contributes: 1 header line + (optional) `matched:` badge
+    // + N wrapped body lines + 1 blank separator. We wrap body lines
+    // manually (rather than letting ratatui's `Paragraph::wrap` do it) so
+    // `entry_starts` stays in sync with the post-wrap visual line count —
+    // that's what `scroll((y, 0))` indexes into. Without manual wrap the
+    // cursor would drift relative to scroll on entries with long paragraphs.
     let wrap_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
@@ -595,10 +1034,26 @@ fn render_loaded(
                 .fg(palette::PRIMARY)
                 .add_modifier(Modifier::BOLD)
         };
+        let select_marker = if entry_selected.contains(&i) {
+            "[*] "
+        } else {
+            "    "
+        };
         lines.push(Line::from(Span::styled(
-            format!("{}  {}", e.date, e.source_title),
+            format!("{select_marker}{}  {}", e.date, e.source_title),
             header_style,
         )));
+        if e.matched.len() > 1 {
+            let empty: Vec<String> = Vec::new();
+            let titles = entry_matched_titles.get(i).unwrap_or(&empty);
+            if !titles.is_empty() {
+                let badge = format!("    matched: {}", titles.join(", "));
+                lines.push(Line::from(Span::styled(
+                    badge,
+                    Style::default().fg(palette::DIM),
+                )));
+            }
+        }
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
                 lines.push(Line::from(Span::raw(wrapped)));
@@ -716,6 +1171,28 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
         .chunks(width)
         .map(|c| c.iter().collect::<String>())
         .collect()
+}
+
+/// Render the inline send-to-synth prompt. A two-line popup near the
+/// bottom of the journal area: a hint line and the input buffer.
+fn render_synth_prompt(frame: &mut Frame, area: Rect, buf: &str) {
+    let height = 3.min(area.height);
+    let y = area.y + area.height.saturating_sub(height);
+    let prompt_area = Rect {
+        x: area.x,
+        y,
+        width: area.width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Send to synth note (path or name) — Enter to confirm, Esc to cancel ")
+        .style(Style::default().fg(palette::PRIMARY));
+    let inner = block.inner(prompt_area);
+    frame.render_widget(Clear, prompt_area);
+    frame.render_widget(block, prompt_area);
+    let line = Line::from(format!("> {buf}_"));
+    frame.render_widget(Paragraph::new(line), inner);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

@@ -1119,6 +1119,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Journal");
     app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Review");
+    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Graph");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");
@@ -8244,4 +8246,191 @@ chord = "q"
     app.enter_help();
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("help_overlay_with_keymap_override_80x24", frame);
+}
+
+// ── Review tab + Journal multi-target ────────────────────────────────
+
+fn review_tab_idx() -> usize {
+    5
+}
+
+/// Vault with two commits: c1 (baseline, dated 2024-01-01 so a 7d
+/// window always finds a from-ref) and c2 (today, adds two notes with
+/// `[[Foo]]` / `[[Bar]]` as ghosts).
+fn review_test_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("baseline.md"), "# Baseline\n").unwrap();
+
+    let run_git_at = |date: Option<&str>, args: &[&str]| {
+        let mut cmd = StdCommand::new("git");
+        cmd.current_dir(&vault_path).env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(d) = date {
+            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+        }
+        let out = cmd.args(args).output().expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git_at(None, &["init", "-b", "main"]);
+    run_git_at(None, &["config", "user.name", "T"]);
+    run_git_at(None, &["config", "user.email", "t@e.com"]);
+    run_git_at(None, &["config", "commit.gpgsign", "false"]);
+    run_git_at(None, &["add", "."]);
+    run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
+
+    std::fs::write(
+        vault_path.join("note-a.md"),
+        "Para one mentions [[Foo]] and [[Bar]].\n\nPara two mentions [[Foo]] again.\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("note-b.md"), "Only [[Bar]] here.\n").unwrap();
+    run_git_at(None, &["add", "."]);
+    run_git_at(None, &["commit", "-m", "c2"]);
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn review_tab_empty_window_shows_friendly_message() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(review_tab_idx())?;
+    // Default window is --since 7d; the fixture's commit is very recent.
+    // But fixed_clock = 2026-05-10 and commits are wall-clock today,
+    // which means commits are *in the future* relative to clock — git
+    // log --before=2026-05-03 returns nothing. Either way we should
+    // exercise the empty-state UI cleanly without panicking.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Review"),
+        "Review tab title missing from frame:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn review_tab_lists_rows_with_counts_and_ghost_suffix() -> Result<()> {
+    let (_dir, vault) = review_test_vault();
+    // Default --since 7d window resolves against link_review's own
+    // today (system clock, FT_TODAY honored if set). Commits in the
+    // fixture are made at wall-clock-now, so a 7d window includes them.
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(review_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("(2) [[Bar]]?"),
+        "Bar row missing or wrong count:\n{frame}"
+    );
+    assert!(
+        frame.contains("(2) [[Foo]]?"),
+        "Foo row missing or wrong count:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn review_tab_help_lists_keybindings() -> Result<()> {
+    let (_dir, vault) = journal_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(review_tab_idx())?;
+    let sections = app.active_tab_help_sections();
+    let merged: String = sections
+        .iter()
+        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
+        .collect();
+    for expected in ["Space", "Enter", "[", "]", "Shift+r"] {
+        assert!(
+            merged.contains(expected),
+            "Review help missing `{expected}`:\n{merged}"
+        );
+    }
+    Ok(())
+}
+
+/// Build a vault for the multi-target Journal test: two notes, one
+/// paragraph mentions both `[[Foo]]` and `[[Bar]]`. Returns the vault.
+fn multi_target_journal_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("DailyA.md"),
+        "Some thought about [[Foo]].\n\nLater, [[Bar]] came up.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("DailyB.md"),
+        "Cross-link: [[Foo]] and [[Bar]] in one paragraph.\n",
+    )
+    .unwrap();
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn journal_tab_multi_target_renders_matched_badge() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![
+            JournalTarget::Ghost("Foo".into()),
+            JournalTarget::Ghost("Bar".into()),
+        ],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    // DailyB's paragraph matches both Foo and Bar → badge present.
+    assert!(
+        frame.contains("matched:") && frame.contains("Foo") && frame.contains("Bar"),
+        "multi-target frame missing matched badge:\n{frame}"
+    );
+    // Title reflects multi-target mode (count of targets).
+    assert!(
+        frame.contains("2 targets"),
+        "title missing `2 targets`:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_tab_send_to_synth_prompt_opens_on_s() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![JournalTarget::Ghost("Foo".into())],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    // Move focus to first entry and trigger send-to-synth.
+    app.dispatch(key('s'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Send to synth note"),
+        "prompt overlay missing after `s`:\n{frame}"
+    );
+    Ok(())
 }

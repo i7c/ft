@@ -36,6 +36,42 @@ pub enum JournalTarget {
     Ghost(String),
 }
 
+/// Cross-tab request for the Journal tab to enter multi-target mode.
+/// Built by the Review tab when the user presses Enter on a selection
+/// of links; consumed by the Journal tab's `queue_journal_for_multi`
+/// hook and turned into a multi-source journal load on the next
+/// `on_focus`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiTargetRequest {
+    pub targets: Vec<JournalTarget>,
+    /// Window range that produced these targets, if any. Enables the
+    /// Journal tab's `--in-window` toggle when present.
+    pub window: Option<JournalWindow>,
+}
+
+/// Serializable mirror of `ft_core::link_review::WindowRange` for the
+/// cross-tab handoff. Kept here (rather than importing the core enum
+/// into `tab.rs` directly) to avoid pulling link-review types into the
+/// Tab trait surface; the Journal tab converts back to the core type
+/// when running the in-window filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalWindow {
+    Since(chrono::Duration),
+    Range { from: String, to: String },
+}
+
+impl JournalWindow {
+    pub fn to_core(&self) -> ft_core::link_review::WindowRange {
+        match self {
+            JournalWindow::Since(d) => ft_core::link_review::WindowRange::Since(*d),
+            JournalWindow::Range { from, to } => ft_core::link_review::WindowRange::Range {
+                from: from.clone(),
+                to: to.clone(),
+            },
+        }
+    }
+}
+
 impl JournalTarget {
     /// Single-line user-facing label: the vault-relative path for a
     /// note, the raw target string (suffixed with `(ghost)`) for a
@@ -88,6 +124,13 @@ pub enum AppRequest {
     /// for either.
     JournalFor {
         target: JournalTarget,
+    },
+    /// Switch to the Journal tab and queue a multi-target request.
+    /// Raised by the Review tab on Enter; the Journal tab consumes
+    /// the request on its next `on_focus` and builds the multi-source
+    /// journal across all `targets`.
+    JournalForMulti {
+        request: MultiTargetRequest,
     },
     /// Install a new active modal. The App writes the variant into its
     /// `active_modal` slot and, on the next event, dispatches keys to
@@ -232,6 +275,11 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::JournalFor { target } => f
                 .debug_struct("JournalFor")
                 .field("target", target)
+                .finish(),
+            AppRequest::JournalForMulti { request } => f
+                .debug_struct("JournalForMulti")
+                .field("targets_count", &request.targets.len())
+                .field("has_window", &request.window.is_some())
                 .finish(),
             AppRequest::OpenModal(modal) => {
                 f.debug_tuple("OpenModal").field(&modal.name()).finish()
@@ -430,6 +478,12 @@ pub trait Tab {
     /// tab's next `on_focus`. Default is a no-op: other tabs ignore
     /// the request.
     fn queue_journal_for(&mut self, _target: &JournalTarget) {}
+
+    /// Hook for the cross-tab multi-target Journal handoff (see
+    /// [`AppRequest::JournalForMulti`]). The Journal tab overrides this
+    /// to store the request; it's consumed on next `on_focus` and turned
+    /// into a multi-source journal load. Default is a no-op.
+    fn queue_journal_for_multi(&mut self, _request: &MultiTargetRequest) {}
 
     /// Hook for the in-tree search picker (see
     /// [`AppRequest::GraphJumpToNodes`]). The Graph tab overrides

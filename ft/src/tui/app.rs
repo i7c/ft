@@ -32,7 +32,7 @@ use crate::tui::{
     modal_commands,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{
-        graph::GraphTab, journal::JournalTab, notes::NotesTab, tasks::TasksTab,
+        graph::GraphTab, journal::JournalTab, notes::NotesTab, review::ReviewTab, tasks::TasksTab,
         timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
@@ -606,6 +606,13 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::JournalForMulti { request } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_for_multi(&request);
+                    self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
             AppRequest::OpenModal(modal) => {
                 self.open_modal(*modal);
                 Ok(())
@@ -1115,8 +1122,8 @@ fn build_tabs_with_overlays(
     use crate::tui::{
         keymap::KeymapOverlay,
         tabs::{
-            graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP, tasks::TASKS_KEYMAP,
-            timeblocks::TIMEBLOCKS_KEYMAP,
+            graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
+            review::REVIEW_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1157,6 +1164,7 @@ fn build_tabs_with_overlays(
     let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
     let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
     let journal_overlay = build_overlay("tab/journal", &JOURNAL_KEYMAP);
+    let review_overlay = build_overlay("tab/review", &REVIEW_KEYMAP);
 
     let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
         (
@@ -1223,6 +1231,7 @@ fn build_tabs_with_overlays(
         Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
         Box::new(TimeblocksTab::new().with_keymap_overlay(&timeblocks_overlay)),
         Box::new(JournalTab::new().with_keymap_overlay(&journal_overlay)),
+        Box::new(ReviewTab::new().with_keymap_overlay(&review_overlay)),
     ];
 
     let effective_global_keymap = APP_KEYMAP.with_overlay(&global_overlay);
@@ -1367,6 +1376,7 @@ impl App {
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
             Box::new(JournalTab::new()),
+            Box::new(ReviewTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(
@@ -1404,6 +1414,7 @@ impl App {
             // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
             Box::new(JournalTab::new()),
+            Box::new(ReviewTab::new()),
         ];
         Self::with_tabs(
             Arc::new(vault),
@@ -1842,6 +1853,13 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::JournalForMulti { request } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_for_multi(&request);
+                    self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
             AppRequest::Toast { text, style } => {
                 *self.toast.borrow_mut() = Some(Toast {
                     text,
@@ -2063,6 +2081,18 @@ impl App {
         let target = crate::tui::tab::JournalTarget::Note(std::path::PathBuf::from(path));
         if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
             self.tabs[idx].queue_journal_for(&target);
+        }
+    }
+
+    /// Queue a multi-target Journal request for tests. Mirrors what the
+    /// Review tab does when the user presses Enter on a selection.
+    #[cfg(test)]
+    pub fn queue_journal_for_multi_tab_test(
+        &mut self,
+        request: crate::tui::tab::MultiTargetRequest,
+    ) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+            self.tabs[idx].queue_journal_for_multi(&request);
         }
     }
 
