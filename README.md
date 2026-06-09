@@ -19,6 +19,15 @@ Created task at journal/2026-05-10.md:42
 $ ft tasks complete dentist --on today
 Completed journal/2026-05-10.md:42
   - [x] Call dentist ⏫ 📅 2026-05-11 ✅ 2026-05-10
+
+$ ft review --since 7d
+(3) [[Eigen-decomposition]]
+(2) [[Memoization]]
+(1) [[Curry-Howard]]?
+
+$ ft synth verify --all
+Synthesis/eigen-and-memo.md
+  ok             | Synthesis/eigen-and-memo.md:5 → notes/spectral.md L42-44 @abc1234
 ```
 
 ## User guide
@@ -37,6 +46,7 @@ feature, common workflows, and the design philosophy:
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |
+| [synthesis.md](docs/guide/synthesis.md)                  | The review → multi-source journal → synth-note ritual.     |
 | [tui.md](docs/guide/tui.md)                              | The TUI tour and the command/keymap model.                  |
 | [git-sync.md](docs/guide/git-sync.md)                    | One-shot commit + pull + push.                              |
 | [scripting.md](docs/guide/scripting.md)                  | Pipelines, exit codes, `--json-errors`, `ft do`.            |

@@ -26,6 +26,7 @@ silently default.
 | `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](query-dsl.md) presets.               |
+| `[synth]`               | table                             | either        | Synthesis ritual: default folder for new synth notes; path-prefix exclude filter for `ft review`. |
 
 `default_vault` is only honored in the user config; setting it in a
 vault config does nothing (the vault has already been chosen by the
@@ -378,6 +379,31 @@ overdue = "due before today and not done"
 ```
 
 The query syntax is documented in [query-dsl.md](query-dsl.md).
+
+## `[synth]`
+
+Settings for the synthesis ritual (`ft review`, `ft notes journal --link`,
+`ft synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
+walkthrough.
+
+```toml
+[synth]
+# Default folder for `ft synth scaffold <bare-name>` (the CLI's
+# convenience fallback when no folder is part of the path). Has no
+# effect on the TUI flow, which always asks where to put new notes.
+# Vault-relative. Trailing slash optional. Default: "Synthesis/".
+folder = "Synthesis/"
+
+# Files whose vault-relative path starts with any listed prefix are
+# excluded from `ft review`. Conventional use: filter out your
+# periodic-notes folder so daily-note repetition doesn't drown out
+# real signal. Default: empty.
+exclude_prefixes = ["journal/"]
+```
+
+Both keys are optional. Synth notes themselves are identified by
+`ft-synth: true` in their YAML frontmatter, not by location — they
+can live anywhere in the vault regardless of `folder`.
 
 ## Discovery and merge
 

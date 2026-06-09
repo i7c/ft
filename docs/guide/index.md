@@ -23,6 +23,7 @@ linked from each chapter.
 | Capture thoughts in one keystroke                        | [capture-and-templates.md](capture-and-templates.md) |
 | Plan your day in timeblocks                              | [timeblocks.md](timeblocks.md)        |
 | Query and walk the link graph                            | [graph.md](graph.md)                  |
+| Run the review → journal → synth-note ritual             | [synthesis.md](synthesis.md)          |
 | Live in the TUI                                          | [tui.md](tui.md)                      |
 | Keep the vault repo in sync                              | [git-sync.md](git-sync.md)            |
 | Wire `ft` into shell pipelines or other tools            | [scripting.md](scripting.md)          |
@@ -43,8 +44,12 @@ linked from each chapter.
   moved.
 - **Git sync.** Commit, pull, and push the vault repo in one command,
   with the same operation available on a background thread in the TUI.
-- **Interactive TUI.** Four tabs (Graph, Tasks, Notes, Timeblocks,
-  Journal) tied together by a common command/keymap registry.
+- **Interactive TUI.** Six tabs (Graph, Tasks, Notes, Timeblocks,
+  Journal, Review) tied together by a common command/keymap registry.
+- **Synthesis ritual.** Review recently-mentioned `[[wikilinks]]`,
+  aggregate cross-vault context across a chosen subset, and produce
+  "synth notes" whose quoted excerpts are pinned to verifiable git
+  commits. See [synthesis.md](synthesis.md).
 
 ## What `ft` does *not* do
 
