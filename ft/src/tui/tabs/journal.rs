@@ -1263,7 +1263,7 @@ fn render_loaded(
         }
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
-                lines.push(Line::from(Span::raw(wrapped)));
+                lines.push(Line::from(inline_markdown_spans(&wrapped)));
             }
         }
         lines.push(Line::from(""));
@@ -1309,6 +1309,119 @@ fn render_loaded(
 /// enough for the paragraph text the journal renders — single-cell
 /// ASCII and BMP-letter Unicode). A `width` of 0 returns the original
 /// line unchanged to avoid an infinite loop.
+/// Build styled spans for one already-wrapped body line, applying
+/// minimal inline-markdown styling: `[[wikilinks]]` (gold), `[text](url)`
+/// markdown links (orange underlined), `**bold**` (bold), and
+/// `` `code` `` (dim). Italic and strikethrough are intentionally
+/// skipped — single-asterisk emphasis is ambiguous in prose (often used
+/// for multiplication or footnotes).
+///
+/// Applied AFTER wrap, so a token split across wrap boundaries
+/// degrades to plain text on both fragments. Acceptable for a feed of
+/// short paragraphs.
+fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    let mut plain_start = 0usize;
+
+    let flush_plain = |out: &mut Vec<Span<'static>>, plain_start: &mut usize, end: usize| {
+        if end > *plain_start {
+            out.push(Span::raw(line[*plain_start..end].to_string()));
+        }
+        *plain_start = end;
+    };
+
+    while i < bytes.len() {
+        // [[wikilink]] or [[wikilink|display]]
+        if bytes[i] == b'[' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            if let Some(end) = find_balanced(line, i, "[[", "]]") {
+                flush_plain(&mut out, &mut plain_start, i);
+                out.push(Span::styled(
+                    line[i..end].to_string(),
+                    Style::default().fg(palette::SECONDARY),
+                ));
+                i = end;
+                plain_start = end;
+                continue;
+            }
+        }
+        // [text](url) markdown link — keep it simple: a `[` not followed
+        // by `[` that has a matching `](...)`.
+        if bytes[i] == b'[' && i + 1 < bytes.len() && bytes[i + 1] != b'[' {
+            if let Some(end) = find_md_link(line, i) {
+                flush_plain(&mut out, &mut plain_start, i);
+                out.push(Span::styled(
+                    line[i..end].to_string(),
+                    Style::default()
+                        .fg(palette::PRIMARY)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                i = end;
+                plain_start = end;
+                continue;
+            }
+        }
+        // **bold**
+        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            if let Some(end) = find_balanced(line, i, "**", "**") {
+                flush_plain(&mut out, &mut plain_start, i);
+                out.push(Span::styled(
+                    line[i..end].to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                i = end;
+                plain_start = end;
+                continue;
+            }
+        }
+        // `inline code`
+        if bytes[i] == b'`' {
+            if let Some(end) = find_balanced(line, i, "`", "`") {
+                flush_plain(&mut out, &mut plain_start, i);
+                out.push(Span::styled(
+                    line[i..end].to_string(),
+                    Style::default().fg(palette::DIM),
+                ));
+                i = end;
+                plain_start = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    flush_plain(&mut out, &mut plain_start, bytes.len());
+    out
+}
+
+/// Find the end (exclusive byte offset) of a balanced `open…close`
+/// span starting at `start`. Returns `None` when no closing token is
+/// found on the same line.
+fn find_balanced(line: &str, start: usize, open: &str, close: &str) -> Option<usize> {
+    let after_open = start + open.len();
+    if after_open > line.len() {
+        return None;
+    }
+    line[after_open..]
+        .find(close)
+        .map(|rel| after_open + rel + close.len())
+}
+
+/// Find the end of a `[text](url)` markdown link starting at `start`.
+/// Returns `None` if either bracket isn't balanced on this line.
+fn find_md_link(line: &str, start: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    if start >= bytes.len() || bytes[start] != b'[' {
+        return None;
+    }
+    let close_text = line[start + 1..].find(']')? + start + 1;
+    if close_text + 1 >= bytes.len() || bytes[close_text + 1] != b'(' {
+        return None;
+    }
+    let close_url = line[close_text + 2..].find(')')? + close_text + 2;
+    Some(close_url + 1)
+}
+
 fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![line.to_string()];
@@ -1540,7 +1653,56 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_line;
+    use super::{inline_markdown_spans, wrap_line};
+
+    fn rendered_text(spans: &[ratatui::text::Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn inline_markdown_plain_passes_through() {
+        let spans = inline_markdown_spans("just some prose, nothing special.");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "just some prose, nothing special.");
+    }
+
+    #[test]
+    fn inline_markdown_wikilink_is_styled_and_text_preserved() {
+        let spans = inline_markdown_spans("see [[Foo]] for context");
+        assert_eq!(
+            rendered_text(&spans),
+            "see [[Foo]] for context",
+            "rendered text must round-trip verbatim"
+        );
+        // The wikilink span exists and is colored.
+        assert!(spans
+            .iter()
+            .any(|s| s.content == "[[Foo]]" && s.style.fg == Some(crate::tui::palette::SECONDARY)));
+    }
+
+    #[test]
+    fn inline_markdown_bold_and_code_and_md_link() {
+        let line = "**urgent**: read `config.toml` and see [docs](https://x.dev)";
+        let spans = inline_markdown_spans(line);
+        assert_eq!(rendered_text(&spans), line);
+        let bold = spans.iter().any(|s| s.content == "**urgent**");
+        let code = spans.iter().any(|s| s.content == "`config.toml`");
+        let link = spans.iter().any(|s| s.content == "[docs](https://x.dev)");
+        assert!(bold, "missing bold span: {spans:?}");
+        assert!(code, "missing code span: {spans:?}");
+        assert!(link, "missing md-link span: {spans:?}");
+    }
+
+    #[test]
+    fn inline_markdown_unterminated_token_stays_plain() {
+        // No closing `]]` → must not panic and must not eat the rest of the line.
+        let spans = inline_markdown_spans("see [[Foo without close");
+        assert_eq!(rendered_text(&spans), "see [[Foo without close");
+        // Whole line is one plain span (no styled match found).
+        assert!(spans
+            .iter()
+            .all(|s| s.style.fg.is_none() && s.style.add_modifier.is_empty()));
+    }
 
     #[test]
     fn wrap_line_short_fits_on_one_line() {
