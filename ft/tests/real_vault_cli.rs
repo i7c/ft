@@ -177,3 +177,48 @@ fn real_vault_dry_run_move_does_not_modify() {
     // emptiness).
     .failure();
 }
+
+// ── ft review / ft synth against the real vault ────────────────────────────
+
+#[test]
+fn real_vault_review_since_7d_runs() {
+    if !gated() {
+        return;
+    }
+    // A real vault may legitimately have no new links in the last 7d
+    // (the command prints "no new links in window" and exits 0).
+    ft().args(["--vault", REAL_VAULT, "review", "--since", "7d"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn real_vault_review_json_is_valid_json() {
+    if !gated() {
+        return;
+    }
+    let out = ft()
+        .args(["--vault", REAL_VAULT, "review", "--since", "30d", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Must parse as a JSON array of row objects.
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert!(v.is_array(), "ft review --json must emit a JSON array");
+}
+
+#[test]
+fn real_vault_synth_verify_all_runs() {
+    if !gated() {
+        return;
+    }
+    // `ft synth verify --all` exits 0 when every section is `ok` and
+    // 1 when any section drifted. A vault with no synth notes prints
+    // "no synth notes found" and exits 0. Accept either as long as
+    // the command doesn't panic / fail to launch.
+    let _ = ft()
+        .args(["--vault", REAL_VAULT, "synth", "verify", "--all"])
+        .assert();
+}

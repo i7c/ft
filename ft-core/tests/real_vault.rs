@@ -99,3 +99,73 @@ fn real_vault_round_trip() {
 
     println!("real_vault_round_trip: {parsed} tasks OK, {skipped} skipped, 0 mismatches");
 }
+
+// ── ft-core synth ritual against the real vault ─────────────────────────
+
+#[test]
+fn real_vault_link_review_runs() {
+    use chrono::Duration;
+    use ft_core::link_review::{compute_link_review, WindowRange};
+    use ft_core::vault::{Scan, Vault};
+
+    if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let vault_path = PathBuf::from("/Users/cmw/git/fortytwo");
+    let vault = match Vault::discover(Some(vault_path.clone())) {
+        Ok(v) => v,
+        Err(_) => return, // vault not present on this machine
+    };
+    if ft_core::git::discover_repo(&vault.path).is_none() {
+        return;
+    }
+    let scan = Scan::default();
+    let graph = ft_core::graph::Graph::build(&vault, &scan).expect("build graph");
+    let cfg = vault.config.config.synth.clone();
+    let window = WindowRange::Since(Duration::days(7));
+    let review = compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
+        .expect("compute_link_review on real vault");
+    // Sanity: rows are sorted by count desc, alphabetical tiebreak.
+    for w in review.rows.windows(2) {
+        assert!(
+            w[0].count > w[1].count || (w[0].count == w[1].count && w[0].target <= w[1].target),
+            "rows must be sorted by count desc, target asc"
+        );
+    }
+    println!(
+        "real_vault_link_review: {} rows ({} ghosts) over since-7d",
+        review.rows.len(),
+        review.rows.iter().filter(|r| r.is_ghost).count()
+    );
+}
+
+#[test]
+fn real_vault_synth_verify_all_runs() {
+    use ft_core::synth::verify::verify_all;
+    use ft_core::vault::Vault;
+
+    if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let vault_path = PathBuf::from("/Users/cmw/git/fortytwo");
+    let vault = match Vault::discover(Some(vault_path.clone())) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if ft_core::git::discover_repo(&vault.path).is_none() {
+        return;
+    }
+    let groups = verify_all(&vault, &vault.path).expect("verify_all on real vault");
+    let total_sections: usize = groups.iter().map(|(_, rs)| rs.len()).sum();
+    let drifted: usize = groups
+        .iter()
+        .flat_map(|(_, rs)| rs.iter())
+        .filter(|r| !matches!(r.status, ft_core::synth::verify::SectionStatus::Ok))
+        .count();
+    println!(
+        "real_vault_synth_verify_all: {} synth notes, {} sections, {} non-ok",
+        groups.len(),
+        total_sections,
+        drifted
+    );
+}

@@ -8110,6 +8110,10 @@ fn capture_var_prompt_esc_cancels() -> Result<()> {
 
 #[test]
 fn capture_var_prompt_snapshot() -> Result<()> {
+    // Pin FT_TODAY so the capture preset's `%Y-%m-%d` filename render
+    // stays stable across calendar dates. Otherwise the snapshot rots
+    // every midnight.
+    std::env::set_var("FT_TODAY", "2026-05-10");
     let (_dir, vault) = capture_preset_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
 

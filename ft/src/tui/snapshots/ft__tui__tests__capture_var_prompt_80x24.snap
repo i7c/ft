@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 8129
+assertion_line: 8135
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
@@ -11,7 +11,7 @@ expression: frame
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
 │  c     create note (blank)                                                   │
-│  C     create ┌ capture · create · var · 2026-06-08-meeting.m┐               │
+│  C     create ┌ capture · create · var · 2026-05-10-meeting.m┐               │
 │  t     open to│                                              │               │
 │  p     periodi│▏ topic = █                                   │               │
 │  ?     show th│                                              │               │

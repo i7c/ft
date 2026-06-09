@@ -94,3 +94,7 @@ depth.
   tag grammar, full CLI reference, and TUI keymap
 - [docs/append-and-capture.md](docs/append-and-capture.md) —
   exhaustive reference for append-with-template and quick capture
+- [docs/architecture.md#synthesis-ritual-link_review--synth](docs/architecture.md#synthesis-ritual-link_review--synth)
+  — the post-connecting ritual (`ft review`, `ft notes journal --link`,
+  `ft synth scaffold` / `verify`), the `[!ft-source]` callout grammar
+  used in synth notes, and the new `[synth]` config table

@@ -162,6 +162,81 @@ where atoms are predicates like `Status(Open)`, `DueBefore(date)`, etc.
 DSL with flag filters by AND-ing the parsed expression with a typed
 `Filter`. See `docs/query-dsl.md` for the supported subset.
 
+### Synthesis ritual (`link_review` + `synth`)
+
+The synthesis ritual is the "post-connecting" workflow for the
+quick-capture style note-taking the user-guide philosophy chapter
+describes: review recently-mentioned `[[wikilinks]]`, aggregate
+cross-vault context for a chosen subset, and produce synth notes whose
+quoted excerpts are pinned to verifiable git provenance. It runs
+through three composable layers:
+
+```rust
+// Engine 2: git log diff scan + paragraph-frequency dedup.
+pub fn ft_core::link_review::compute_link_review(
+    graph: &Graph, vault: &Vault, repo: &Path,
+    window: &WindowRange, cfg: &Synth,
+) -> Result<LinkReview>;
+
+// Engine 1 (generalized): one journal feed across many targets.
+// targets.len() == 1 preserves the original Related-aliases +
+// self-exclusion semantics; multi-target skips both.
+pub fn ft_core::journal::build_journal(
+    graph: &Graph, targets: &[NoteId],
+    vault: &Vault, repo: &Path, cache: &mut BlameCache,
+) -> Result<JournalReport>;
+
+// Plan/apply for synth-note scaffolding.
+pub fn ft_core::synth::scaffold::plan_synth_scaffold(...)
+    -> Result<SynthScaffoldPlan>;          // pure: no I/O writes
+pub fn ft_core::synth::scaffold::apply_synth_scaffold(...)
+    -> Result<PathBuf>;                    // writes via fs::write_atomic
+
+// Per-section verification against the pinned git blob.
+pub fn ft_core::synth::verify::verify_synth_note(...)
+    -> Vec<VerificationResult>;
+pub fn ft_core::synth::verify::verify_all(...)
+    -> Vec<(PathBuf, Vec<VerificationResult>)>;
+```
+
+A **protected section** is an Obsidian-style callout written verbatim
+into the synth note's markdown:
+
+```
+> [!ft-source] notes/foo.md L42-44 @abc1234 #7f3a91
+> The original paragraph text
+> spanning two lines.
+```
+
+The header tokens are, in order: vault-relative source path, inclusive
+line range, short (7-hex) commit SHA, and a 6-hex blake3 content-hash
+prefix. `synth::callout::{serialize, parse, compute_section_hash}`
+round-trip cleanly; `verify_synth_note` strips the `> ` prefix from the
+body and compares against the git blob slice at the pinned commit,
+reporting `Ok` / `Drifted` / `SourceMissing` / `Malformed` per section.
+
+A synth note is identified by an `ft-synth: true` frontmatter marker.
+This lets the link-review skip wikilinks quoted inside `[!ft-source]`
+callouts of a synth note (recycled material doesn't double-count on
+the next ritual) while still counting links the user wrote in their
+own prose between callouts.
+
+CLI surface lives in `ft/src/cmd/{review.rs, synth.rs}` and the
+extended `ft/src/cmd/notes.rs::run_journal` (which now accepts repeated
+`--link "[[X]]"` flags in addition to the positional note argument).
+The TUI exposes the flow through a new `Review` tab
+(`ft/src/tui/tabs/review.rs`) that hands selected links off to the
+Journal tab via `AppRequest::JournalForMulti` carrying a
+`MultiTargetRequest`. The Journal tab gained: multi-target rendering
+with a `matched: X, Y` badge when an entry's paragraph hits more than
+one selected target, an in-window-only toggle (`w`), entry multi-select
+(`Space`), and a `s` chord that opens an inline send-to-synth prompt
+running the plan/apply scaffold and triggering the editor handoff.
+
+Config: a new `[synth]` table with `folder` (default `"Synthesis/"`)
+and `exclude_prefixes` (default empty; users typically add their
+periodic-notes folder).
+
 ## Adding things
 
 ### A new subcommand
