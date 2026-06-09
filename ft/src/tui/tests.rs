@@ -8419,7 +8419,7 @@ fn journal_tab_multi_target_renders_matched_badge() -> Result<()> {
 }
 
 #[test]
-fn journal_tab_send_to_synth_prompt_opens_on_s() -> Result<()> {
+fn journal_tab_send_to_synth_existing_opens_picker_on_s() -> Result<()> {
     use crate::tui::tab::{JournalTarget, MultiTargetRequest};
     let (_dir, vault) = multi_target_journal_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
@@ -8429,12 +8429,66 @@ fn journal_tab_send_to_synth_prompt_opens_on_s() -> Result<()> {
     };
     app.queue_journal_for_multi_tab_test(request);
     app.switch_to(journal_tab_idx())?;
-    // Move focus to first entry and trigger send-to-synth.
+    // `s` opens the existing-note fuzzy picker.
     app.dispatch(key('s'))?;
     let frame = render(&mut app, 80, 24);
+    // The fuzzy picker shows a search input row + the vault's notes.
     assert!(
-        frame.contains("Send to synth note"),
-        "prompt overlay missing after `s`:\n{frame}"
+        frame.contains("DailyA") || frame.contains("DailyB"),
+        "existing-note picker should list vault notes:\n{frame}"
     );
     Ok(())
+}
+
+#[test]
+fn journal_tab_send_to_synth_new_opens_folder_picker_on_shift_s() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![JournalTarget::Ghost("Foo".into())],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    // Shift+S opens the folder picker for create-new.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('S'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // The folder picker shows `.` (vault root) at minimum.
+    assert!(
+        frame.contains('.') || frame.contains("synth"),
+        "folder picker overlay should be open:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn upsert_ft_synth_marker_inserts_into_existing_frontmatter() {
+    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    let input = "---\ntitle: Foo\n---\n\nbody\n";
+    let out = upsert_ft_synth_marker(input);
+    assert!(out.contains("ft-synth: true"));
+    assert!(out.contains("title: Foo"));
+    assert!(out.contains("body"));
+}
+
+#[test]
+fn upsert_ft_synth_marker_adds_fresh_frontmatter_when_missing() {
+    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    let input = "# heading\n\nbody\n";
+    let out = upsert_ft_synth_marker(input);
+    assert!(out.starts_with("---\nft-synth: true\n---\n"));
+    assert!(out.contains("# heading"));
+}
+
+#[test]
+fn upsert_ft_synth_marker_replaces_false_value() {
+    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    let input = "---\nft-synth: false\n---\n";
+    let out = upsert_ft_synth_marker(input);
+    assert!(out.contains("ft-synth: true"));
+    assert!(!out.contains("ft-synth: false"));
 }

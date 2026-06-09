@@ -16,6 +16,7 @@
 //! session warm up; the on-disk file at `.ft/cache/blame.msgpack` is
 //! refreshed best-effort after every successful `build_journal` call.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -41,12 +42,15 @@ use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
+use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::palette;
 use crate::tui::tab::{
     AppRequest, EventOutcome, JournalTarget, JournalWindow, MultiTargetRequest, Tab, TabCtx,
     ToastStyle,
 };
-use crate::tui::widgets::picker::{FuzzyPicker, PickerOutcome, VaultFilePickerSource};
+use crate::tui::widgets::{
+    EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+};
 
 // ── Commands ─────────────────────────────────────────────────────────
 
@@ -165,8 +169,17 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
-        name: "journal.send-to-synth",
-        description: "Send selected (or all) entries as a synth-note scaffold",
+        name: "journal.send-to-synth-existing",
+        description: "Pick an existing note to append the selected (or all) entries to",
+        scope: CommandScope::Tab("journal"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.send-to-synth-new",
+        description: "Create a new synth note for the selected (or all) entries",
         scope: CommandScope::Tab("journal"),
         group: "Synth",
         args_schema: &[],
@@ -199,8 +212,48 @@ pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Multi-target + synth
         .bind("Space", "journal.toggle-entry-selection")
         .bind("w", "journal.toggle-in-window")
-        .bind("s", "journal.send-to-synth")
+        .bind("s", "journal.send-to-synth-existing")
+        .bind("S", "journal.send-to-synth-new")
 });
+
+/// Send-to-synth multi-step flow state. Active only when the user has
+/// pressed `s` (append-to-existing) or `S` (create-new); when `None`
+/// the tab handles keys normally.
+///
+/// Both branches converge to a `(target_path, plan_create)` decision
+/// that drives `plan_synth_scaffold` / `apply_synth_scaffold` and the
+/// editor handoff.
+pub enum SynthSendState {
+    /// `s` — fuzzy picker over every `.md` in the vault.
+    PickExisting(FuzzyPicker<VaultFilePickerSource>),
+    /// User picked a real note but its frontmatter lacks
+    /// `ft-synth: true`. Inline 3-way prompt: append anyway, mark and
+    /// append, or cancel.
+    NonSynthPrompt {
+        path: PathBuf,
+        focus: NonSynthChoice,
+    },
+    /// `S` — fuzzy picker over every vault folder. `.` selects the
+    /// vault root.
+    PickFolder(FuzzyPicker<PathListPickerSource>),
+    /// `S` step 2 — typed title prompt; folder is the picked folder.
+    /// The title's `.md` extension is added on submit if missing.
+    TitlePrompt {
+        folder: PathBuf,
+        buf: EditBuffer,
+        error: Option<String>,
+    },
+}
+
+/// User's choice when sending to an existing non-synth note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonSynthChoice {
+    /// Append protected sections without touching frontmatter.
+    AppendAnyway,
+    /// Insert/upgrade frontmatter to include `ft-synth: true`, then
+    /// append.
+    MarkAndAppend,
+}
 
 pub struct JournalTab {
     /// What's currently loaded. `None` puts the tab in its empty-state
@@ -250,10 +303,10 @@ pub struct JournalTab {
     /// user knows why the feed didn't change. Cleared on next
     /// successful load or `c`.
     last_error: Option<String>,
-    /// Synth-prompt state. When `Some`, the tab shows an inline prompt
-    /// for entering a synth-note target path; keys go to the prompt
-    /// until `Enter` or `Esc`.
-    synth_prompt: Option<String>,
+    /// Send-to-synth multi-step state. `Some` while the picker or
+    /// prompt overlay owns the keyboard; cleared on completion or
+    /// `Esc`.
+    synth_send: Option<SynthSendState>,
     keymap: crate::tui::keymap::KeyMap,
 }
 
@@ -280,7 +333,7 @@ impl JournalTab {
             queued_multi: None,
             cache: None,
             last_error: None,
-            synth_prompt: None,
+            synth_send: None,
             keymap: JOURNAL_KEYMAP.clone(),
         }
     }
@@ -559,46 +612,202 @@ impl JournalTab {
         }
     }
 
-    fn open_synth_prompt(&mut self) {
+    /// Drive the synth send-to flow per its current state. Returns
+    /// `Consumed` whenever a `synth_send` is active; the caller in
+    /// `handle_event` will exit early without further keymap lookup.
+    fn handle_synth_send_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
+        use crossterm::event::KeyCode;
+        let Some(state) = self.synth_send.take() else {
+            return EventOutcome::NotHandled;
+        };
+        match state {
+            SynthSendState::PickExisting(mut picker) => match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, hit.path),
+                PickerOutcome::Cancelled => {}
+                PickerOutcome::StillOpen => {
+                    self.synth_send = Some(SynthSendState::PickExisting(picker));
+                }
+                PickerOutcome::NotHandled => {
+                    self.synth_send = Some(SynthSendState::PickExisting(picker));
+                }
+            },
+            SynthSendState::NonSynthPrompt { path, focus } => match k.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => self.commit_non_synth_choice(ctx, &path, focus),
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.commit_non_synth_choice(ctx, &path, NonSynthChoice::AppendAnyway);
+                }
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    self.commit_non_synth_choice(ctx, &path, NonSynthChoice::MarkAndAppend);
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {}
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    let next = match focus {
+                        NonSynthChoice::AppendAnyway => NonSynthChoice::MarkAndAppend,
+                        NonSynthChoice::MarkAndAppend => NonSynthChoice::AppendAnyway,
+                    };
+                    self.synth_send = Some(SynthSendState::NonSynthPrompt { path, focus: next });
+                }
+                _ => {
+                    self.synth_send = Some(SynthSendState::NonSynthPrompt { path, focus });
+                }
+            },
+            SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
+                PickerOutcome::Selected(folder) => {
+                    let folder = if folder == Path::new(".") {
+                        PathBuf::new()
+                    } else {
+                        folder
+                    };
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf: EditBuffer::default(),
+                        error: None,
+                    });
+                }
+                PickerOutcome::Cancelled => {}
+                PickerOutcome::StillOpen => {
+                    self.synth_send = Some(SynthSendState::PickFolder(picker));
+                }
+                PickerOutcome::NotHandled => {
+                    self.synth_send = Some(SynthSendState::PickFolder(picker));
+                }
+            },
+            SynthSendState::TitlePrompt {
+                folder,
+                mut buf,
+                error: _,
+            } => match k.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => {
+                    let title = buf.text.trim().to_string();
+                    if title.is_empty() {
+                        self.synth_send = Some(SynthSendState::TitlePrompt {
+                            folder,
+                            buf,
+                            error: Some("title is required".into()),
+                        });
+                    } else {
+                        let filename = if title.ends_with(".md") {
+                            title
+                        } else {
+                            format!("{title}.md")
+                        };
+                        let target = if folder.as_os_str().is_empty() {
+                            PathBuf::from(&filename)
+                        } else {
+                            folder.join(&filename)
+                        };
+                        // Create-new: `apply_synth_scaffold` will write
+                        // frontmatter and content. No need to mark.
+                        self.commit_send(ctx, &target, false);
+                    }
+                }
+                KeyCode::Char(c) => {
+                    buf.insert(c);
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                KeyCode::Backspace => {
+                    buf.backspace();
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                KeyCode::Left => {
+                    buf.left();
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                KeyCode::Right => {
+                    buf.right();
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                KeyCode::Home => {
+                    buf.home();
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                KeyCode::End => {
+                    buf.end();
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+                _ => {
+                    self.synth_send = Some(SynthSendState::TitlePrompt {
+                        folder,
+                        buf,
+                        error: None,
+                    });
+                }
+            },
+        }
+        EventOutcome::Consumed
+    }
+
+    /// Existing note picked → check its frontmatter and either send
+    /// directly (synth-marked) or open the NonSynthPrompt.
+    fn on_existing_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
+        let abs = ctx.vault.path.join(&path);
+        let is_synth = std::fs::read_to_string(&abs)
+            .map(|c| ft_core::synth::callout::is_synth_note(&c))
+            .unwrap_or(false);
+        if is_synth {
+            self.commit_send(ctx, &path, false);
+        } else {
+            self.synth_send = Some(SynthSendState::NonSynthPrompt {
+                path,
+                focus: NonSynthChoice::MarkAndAppend,
+            });
+        }
+    }
+
+    fn commit_non_synth_choice(&mut self, ctx: &mut TabCtx, path: &Path, choice: NonSynthChoice) {
+        let mark = matches!(choice, NonSynthChoice::MarkAndAppend);
+        self.commit_send(ctx, path, mark);
+    }
+
+    /// `s` — open the existing-note fuzzy picker.
+    fn open_send_to_existing(&mut self, ctx: &TabCtx) {
         if self.entries.is_empty() {
             return;
         }
-        self.synth_prompt = Some(String::new());
+        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
+        self.synth_send = Some(SynthSendState::PickExisting(FuzzyPicker::new(source)));
     }
 
-    fn confirm_synth_prompt(&mut self, ctx: &mut TabCtx) {
-        let Some(raw_target) = self.synth_prompt.take() else {
-            return;
-        };
-        let target_rel = raw_target.trim();
-        if target_rel.is_empty() {
-            crate::tui::notes_actions::queue_toast(
-                ctx,
-                "send-to-synth: target path is empty",
-                ToastStyle::Error,
-            );
+    /// `S` — open the folder fuzzy picker for the create-new flow.
+    fn open_send_to_new(&mut self, ctx: &TabCtx) {
+        if self.entries.is_empty() {
             return;
         }
-        let target_rel = if std::path::Path::new(target_rel)
-            .extension()
-            .and_then(|s| s.to_str())
-            == Some("md")
-        {
-            target_rel.to_string()
-        } else {
-            format!("{target_rel}.md")
-        };
-        // If user typed just a name, resolve under synth.folder.
-        let target_path = std::path::PathBuf::from(&target_rel);
-        let final_path = if target_path.parent().map(|p| !p.as_os_str().is_empty()) == Some(true) {
-            target_path
-        } else {
-            let folder = &ctx.vault.config.config.synth.folder;
-            std::path::PathBuf::from(folder).join(&target_rel)
-        };
+        let folders = enumerate_vault_folders(ctx.vault);
+        let source = PathListPickerSource::new(folders);
+        self.synth_send = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
+    }
 
-        // Build the entry slice: selected entries, or all if none selected.
-        let entries: Vec<JournalEntry> = if self.entry_selected.is_empty() {
+    /// Entries to ship to the scaffold: selected entries when any are
+    /// selected, otherwise the full feed.
+    fn entries_to_send(&self) -> Vec<JournalEntry> {
+        if self.entry_selected.is_empty() {
             self.entries.clone()
         } else {
             self.entries
@@ -607,7 +816,16 @@ impl JournalTab {
                 .filter(|(i, _)| self.entry_selected.contains(i))
                 .map(|(_, e)| e.clone())
                 .collect()
-        };
+        }
+    }
+
+    /// Perform the actual scaffold + handoff. `vault_rel_path` is the
+    /// vault-relative target; `mark_synth` ensures the on-disk file's
+    /// frontmatter includes `ft-synth: true` before the scaffold is
+    /// applied (no-op when the file already has the marker or is being
+    /// created — `apply_synth_scaffold` writes the marker fresh).
+    fn commit_send(&mut self, ctx: &mut TabCtx, vault_rel_path: &Path, mark_synth: bool) {
+        let entries = self.entries_to_send();
         if entries.is_empty() {
             crate::tui::notes_actions::queue_toast(
                 ctx,
@@ -617,7 +835,18 @@ impl JournalTab {
             return;
         }
 
-        let plan = match plan_synth_scaffold(ctx.vault, &ctx.vault.path, &final_path, &entries) {
+        if mark_synth {
+            if let Err(e) = mark_note_as_synth(&ctx.vault.path.join(vault_rel_path)) {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    &format!("could not add ft-synth marker: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        }
+
+        let plan = match plan_synth_scaffold(ctx.vault, &ctx.vault.path, vault_rel_path, &entries) {
             Ok(p) => p,
             Err(e) => {
                 crate::tui::notes_actions::queue_toast(
@@ -645,7 +874,7 @@ impl JournalTab {
                 "{} {} synth section(s) to {}",
                 if plan.create { "created" } else { "appended" },
                 plan.sections.len(),
-                final_path.display()
+                vault_rel_path.display()
             ),
             ToastStyle::Success,
         );
@@ -653,10 +882,6 @@ impl JournalTab {
             path: written,
             line: 1,
         });
-    }
-
-    fn cancel_synth_prompt(&mut self) {
-        self.synth_prompt = None;
     }
 
     fn open_picker(&mut self, ctx: &TabCtx) {
@@ -810,8 +1035,12 @@ impl Tab for JournalTab {
                 self.toggle_in_window(ctx);
                 CommandOutcome::Handled
             }
-            "journal.send-to-synth" => {
-                self.open_synth_prompt();
+            "journal.send-to-synth-existing" => {
+                self.open_send_to_existing(ctx);
+                CommandOutcome::Handled
+            }
+            "journal.send-to-synth-new" => {
+                self.open_send_to_new(ctx);
                 CommandOutcome::Handled
             }
             _ => CommandOutcome::NotHandled,
@@ -823,33 +1052,10 @@ impl Tab for JournalTab {
             return Ok(EventOutcome::NotHandled);
         };
 
-        // Synth prompt has highest priority — characters and editing
-        // keys go to the prompt buffer.
-        if self.synth_prompt.is_some() {
-            use crossterm::event::KeyCode;
-            match k.code {
-                KeyCode::Esc => {
-                    self.cancel_synth_prompt();
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Enter => {
-                    self.confirm_synth_prompt(ctx);
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Backspace => {
-                    if let Some(buf) = self.synth_prompt.as_mut() {
-                        buf.pop();
-                    }
-                    return Ok(EventOutcome::Consumed);
-                }
-                KeyCode::Char(c) => {
-                    if let Some(buf) = self.synth_prompt.as_mut() {
-                        buf.push(c);
-                    }
-                    return Ok(EventOutcome::Consumed);
-                }
-                _ => return Ok(EventOutcome::Consumed),
-            }
+        // Send-to-synth flow (existing/new picker + prompts) captures
+        // keys before the keymap is consulted.
+        if self.synth_send.is_some() {
+            return Ok(self.handle_synth_send_key(k, ctx));
         }
 
         // Picker overlay captures the keyboard while open — the picker
@@ -894,8 +1100,8 @@ impl Tab for JournalTab {
             picker.render(frame, popup_area);
         }
 
-        if let Some(buf) = self.synth_prompt.as_deref() {
-            render_synth_prompt(frame, area, buf);
+        if let Some(state) = self.synth_send.as_mut() {
+            render_synth_send(frame, area, state);
         }
     }
 
@@ -926,7 +1132,8 @@ impl Tab for JournalTab {
                 &[
                     ("Space", "toggle multi-select on the current entry"),
                     ("w", "toggle in-window-only filter (multi-target + window)"),
-                    ("s", "send selected (or all) entries to a synth note"),
+                    ("s", "pick an existing note to append the scaffold to"),
+                    ("Shift+s", "create a new synth note (folder + title)"),
                 ],
             ),
         ]
@@ -1173,26 +1380,143 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
-/// Render the inline send-to-synth prompt. A two-line popup near the
-/// bottom of the journal area: a hint line and the input buffer.
-fn render_synth_prompt(frame: &mut Frame, area: Rect, buf: &str) {
-    let height = 3.min(area.height);
-    let y = area.y + area.height.saturating_sub(height);
-    let prompt_area = Rect {
-        x: area.x,
-        y,
-        width: area.width,
-        height,
+/// Insert `ft-synth: true` into the YAML frontmatter of the file at
+/// `absolute_path`. If a frontmatter block is already present, the
+/// existing `ft-synth: ...` line is replaced (or added if missing); if
+/// no frontmatter exists, a fresh `---\nft-synth: true\n---\n\n` block
+/// is prepended.
+fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
+    let content = std::fs::read_to_string(absolute_path)?;
+    let new_content = upsert_ft_synth_marker(&content);
+    if new_content == content {
+        return Ok(());
+    }
+    ft_core::fs::write_atomic(absolute_path, &new_content).map_err(std::io::Error::other)
+}
+
+/// Pure transform: ensure the result has `ft-synth: true` in YAML
+/// frontmatter. Idempotent.
+pub fn upsert_ft_synth_marker(content: &str) -> String {
+    let lines: Vec<&str> = content.split('\n').collect();
+    let has_fm = lines.first() == Some(&"---");
+    if !has_fm {
+        let mut out = String::from("---\nft-synth: true\n---\n");
+        if !content.starts_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(content);
+        return out;
+    }
+    let end_idx = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, l)| **l == "---")
+        .map(|(i, _)| i);
+    let Some(end_idx) = end_idx else {
+        // Unterminated frontmatter — bail and just prepend a fresh block.
+        return format!("---\nft-synth: true\n---\n\n{content}");
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Send to synth note (path or name) — Enter to confirm, Esc to cancel ")
-        .style(Style::default().fg(palette::PRIMARY));
-    let inner = block.inner(prompt_area);
-    frame.render_widget(Clear, prompt_area);
-    frame.render_widget(block, prompt_area);
-    let line = Line::from(format!("> {buf}_"));
-    frame.render_widget(Paragraph::new(line), inner);
+    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    let mut found = false;
+    for line in new_lines.iter_mut().take(end_idx).skip(1) {
+        if line.trim_start().starts_with("ft-synth:") {
+            *line = "ft-synth: true".to_string();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        new_lines.insert(end_idx, "ft-synth: true".to_string());
+    }
+    new_lines.join("\n")
+}
+
+/// Render whichever step of the send-to-synth flow is active.
+fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) {
+    match state {
+        SynthSendState::PickExisting(picker) => {
+            let popup = centered_rect(70, 70, area);
+            frame.render_widget(Clear, popup);
+            picker.render(frame, popup);
+        }
+        SynthSendState::PickFolder(picker) => {
+            let popup = centered_rect(70, 70, area);
+            frame.render_widget(Clear, popup);
+            picker.render(frame, popup);
+        }
+        SynthSendState::NonSynthPrompt { path, focus } => {
+            let height = 5.min(area.height);
+            let y = area.y + area.height.saturating_sub(height);
+            let prompt_area = Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height,
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" This isn't a synth note ")
+                .style(Style::default().fg(palette::PRIMARY));
+            let inner = block.inner(prompt_area);
+            frame.render_widget(Clear, prompt_area);
+            frame.render_widget(block, prompt_area);
+            let header = format!("{}", path.display());
+            let (a_style, m_style) = match focus {
+                NonSynthChoice::AppendAnyway => (
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                    Style::default().fg(palette::DIM),
+                ),
+                NonSynthChoice::MarkAndAppend => (
+                    Style::default().fg(palette::DIM),
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                ),
+            };
+            let lines = vec![
+                Line::from(Span::styled(header, Style::default().fg(palette::DIM))),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(" [a] append anyway ", a_style),
+                    Span::raw("  "),
+                    Span::styled(" [m] mark and append ", m_style),
+                    Span::raw("    [c] cancel"),
+                ]),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+        SynthSendState::TitlePrompt { folder, buf, error } => {
+            let height = 4.min(area.height);
+            let y = area.y + area.height.saturating_sub(height);
+            let prompt_area = Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height,
+            };
+            let folder_disp = if folder.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                folder.display().to_string()
+            };
+            let title =
+                format!(" New synth note in {folder_disp}/ — Enter to create, Esc to cancel ");
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().fg(palette::PRIMARY));
+            let inner = block.inner(prompt_area);
+            frame.render_widget(Clear, prompt_area);
+            frame.render_widget(block, prompt_area);
+            let mut lines = vec![Line::from(format!("Title: {}_", buf.text))];
+            if let Some(err) = error {
+                lines.push(Line::from(Span::styled(
+                    format!("error: {err}"),
+                    Style::default().fg(palette::ERROR),
+                )));
+            }
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
