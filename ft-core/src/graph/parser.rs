@@ -20,7 +20,7 @@
 //! out of scope for v1 — uncommon in Obsidian vaults.
 
 use crate::graph::LinkForm;
-use crate::markdown::LineSkipState;
+use crate::markdown::{is_blockquote_line, LineSkipState};
 
 /// Per-occurrence link record returned by [`extract_links`]. Resolution
 /// to a [`crate::graph::LinkTarget`] happens later, in
@@ -43,9 +43,10 @@ pub struct RawLink {
 
 /// Extract every link occurrence from `content` in document order.
 ///
-/// Lines inside frontmatter / fenced code / indented code are skipped
-/// entirely; inline code spans within a content line are skipped at the
-/// span level (the line still contributes other links outside the span).
+/// Lines inside frontmatter / fenced code / indented code / blockquotes
+/// are skipped entirely; inline code spans within a content line are
+/// skipped at the span level (the line still contributes other links
+/// outside the span).
 pub fn extract_links(content: &str) -> Vec<RawLink> {
     let mut out = Vec::new();
     let mut state = LineSkipState::new();
@@ -62,7 +63,7 @@ pub fn extract_links(content: &str) -> Vec<RawLink> {
         // also fine because they trim_end where needed.
         let line_no_newline = line.strip_suffix('\n').unwrap_or(line);
 
-        if state.skip_line(line_no_newline) {
+        if state.skip_line(line_no_newline) || is_blockquote_line(line_no_newline) {
             line_start += line.len();
             continue;
         }
@@ -633,5 +634,21 @@ after [[D]]
         let links = extract("[F](<foo bar.md>)\n");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target_text, "foo bar.md");
+    }
+
+    #[test]
+    fn skips_links_inside_blockquotes() {
+        let s = "before [[A]]\n> [[B]] in quote\n> > [[C]] nested\nafter [[D]]\n";
+        let links = extract(s);
+        let targets: Vec<_> = links.iter().map(|l| l.target_text.as_str()).collect();
+        assert_eq!(targets, vec!["A", "D"]);
+    }
+
+    #[test]
+    fn skips_links_inside_callouts() {
+        let s = "> [!callout] Title\n> See [[Foo]]\n> [Bar](bar.md)\n\nplain [[Real]]\n";
+        let links = extract(s);
+        let targets: Vec<_> = links.iter().map(|l| l.target_text.as_str()).collect();
+        assert_eq!(targets, vec!["Real"]);
     }
 }

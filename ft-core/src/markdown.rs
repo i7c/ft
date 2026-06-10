@@ -213,6 +213,13 @@ impl LineSkipState {
     }
 }
 
+/// True when `line` is a blockquote continuation. Blockquote lines
+/// start with `>` after optional whitespace, matching both simple
+/// blockquotes and Obsidian callout syntax (`> [!note]`).
+pub(crate) fn is_blockquote_line(line: &str) -> bool {
+    line.trim_start().starts_with('>')
+}
+
 /// Detect a fenced code block opener / closer at the start of `s`. Returns
 /// the fence char (`'`'` or `'~'`) and the number of consecutive fence
 /// chars when 3 or more are present, otherwise `None`.
