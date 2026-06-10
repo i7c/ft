@@ -2,7 +2,11 @@
 
 ### Requirement: `EditBuffer` supports readline-style editing operations
 
-The `EditBuffer` widget SHALL support these operations: `move_line_start`, `move_line_end`, `move_char_back`, `move_char_forward`, `move_word_back`, `move_word_forward`, `kill_to_end`, `kill_to_start`, `kill_word_back`, `kill_word_forward`, `yank`, `transpose_chars`, `delete_char_back`, `delete_char_forward`. Word boundaries SHALL be defined as maximal runs of `[A-Za-z0-9_]`.
+The `EditBuffer` widget SHALL support these operations: `move_line_start`, `move_line_end`, `move_char_back`, `move_char_forward`, `move_word_back`, `move_word_forward`, `kill_to_end`, `kill_to_start`, `kill_word_back`, `kill_word_forward`, `yank`, `transpose_chars`, `delete_char_back`, `delete_char_forward`. Word boundaries SHALL be defined as maximal runs of `[A-Za-z0-9_]`, applied uniformly to every word-aware operation including the pre-existing `delete_word_backward` (which previously used whitespace boundaries).
+
+#### Scenario: `Ctrl+W` (delete_word_backward) uses character-class boundaries
+- **WHEN** the buffer contains `foo.bar.baz` with the cursor at position 11 and `delete_word_backward` is invoked
+- **THEN** the buffer becomes `foo.bar.` (only `baz` is killed); the prior whitespace-bounded behavior (which killed the entire string in one stroke) is replaced
 
 #### Scenario: Line-start jump
 - **WHEN** the buffer contains `hello world` with the cursor at position 7

@@ -1,20 +1,31 @@
+## 0. Migrate graph query bar onto `EditBuffer`
+
+- [ ] 0.1 Introduce `QueryBarState { buf: EditBuffer, … }` on `View` in `ft/src/tui/tabs/graph.rs`; remove `query_text: String` and `input_cursor: usize`
+- [ ] 0.2 Update every seeding site (`v.query_text = …; v.input_cursor = …`) — around lines 2388, 2574, 2687 — to `v.query.buf = EditBuffer::from(...)`
+- [ ] 0.3 Update every read site (renderer, `query_snippet`, `rewrite_query_for_root`, `apply_query`) to use `v.query.buf.text` and `v.query.buf.cursor` (char count); convert to byte offset where needed via `text.char_indices().nth(cursor)`
+- [ ] 0.4 Rewrite `QueryBar::handle_event` (`ft/src/tui/modal.rs:968`): keep `Esc → Closed`, `Enter → fire GraphApplyQueryBar + Closed`; forward **all** other keys via `AppRequest::GraphQueryBarKey` (no modifier filter)
+- [ ] 0.5 Rewrite `GraphTab::graph_query_bar_key` (`ft/src/tui/tabs/graph.rs:2727`) to delegate to `v.query.buf.handle_event(...)` (no hand-rolled `match` over `KeyCode`)
+- [ ] 0.6 Snapshot test: open query bar, type characters, arrow / Home / End / Backspace — baseline behaviour preserved (no regression before any new bindings are wired)
+- [ ] 0.7 `cargo build --release` + `cargo test --workspace` green after migration, before §1 starts
+
 ## 1. EditBuffer operations + kill ring
 
-- [ ] 1.1 Add `kill_ring: Option<Vec<char>>` field to `EditBuffer`
-- [ ] 1.2 Implement `move_line_start`, `move_line_end` (set cursor to 0 / `text.len()`)
-- [ ] 1.3 Implement `move_word_back`, `move_word_forward` using the `[A-Za-z0-9_]` boundary rule
-- [ ] 1.4 Implement `kill_to_end`, `kill_to_start`: drain the range, store in kill ring, reposition cursor
-- [ ] 1.5 Implement `kill_word_back`, `kill_word_forward`: same as kill_to_* but bounded by word boundaries
-- [ ] 1.6 Implement `yank`: insert `kill_ring.clone()` at cursor (no-op if `None`)
-- [ ] 1.7 Implement `transpose_chars`: swap chars at and before cursor
-- [ ] 1.8 Unit tests for each operation, including edge cases (cursor at 0, cursor at end, empty buffer, ASCII vs multi-byte chars)
+- [ ] 1.1 Add `kill_ring: Option<String>` field to `EditBuffer` (the buffer stores `text: String`; kill ring matches)
+- [ ] 1.2 Implement `move_line_start`, `move_line_end` (set cursor to 0 / char count of `text`)
+- [ ] 1.3 Implement `move_word_back`, `move_word_forward` using the unified `[A-Za-z0-9_]` boundary rule
+- [ ] 1.4 Implement `kill_to_end`, `kill_to_start`: extract the range as `String`, replace it in `text`, store in kill ring, reposition cursor (in char-index space, translating to byte ranges via `char_indices`)
+- [ ] 1.5 Implement `kill_word_back`, `kill_word_forward`: same shape as kill_to_* but bounded by word boundaries
+- [ ] 1.6 **Behavior change**: rework existing `delete_word_backward` to use `[A-Za-z0-9_]` (today: whitespace-bounded). Update existing tests; add a regression test showing the new boundary against punctuation (`foo.bar` → two kills)
+- [ ] 1.7 Implement `yank`: insert `kill_ring.clone()` at cursor (no-op if `None`); does not clear the ring
+- [ ] 1.8 Implement `transpose_chars`: swap chars at and before cursor
+- [ ] 1.9 Unit tests for each operation, including edge cases (cursor at 0, cursor at end, empty buffer, ASCII vs multi-byte chars)
 
 ## 2. Edit-buffer keymap
 
 - [ ] 2.1 Define `edit.*` commands in `ft/src/tui/widgets/edit_keymap.rs`: `edit.move-line-start`, `edit.move-line-end`, `edit.move-char-back`, `edit.move-char-forward`, `edit.move-word-back`, `edit.move-word-forward`, `edit.kill-to-end`, `edit.kill-to-start`, `edit.kill-word-back`, `edit.kill-word-forward`, `edit.yank`, `edit.transpose-chars`, `edit.delete-char-back`, `edit.delete-char-forward`, `edit.complete`, `edit.dismiss-popup`
 - [ ] 2.2 Build static `EDIT_KEYMAP: KeyMap`: bind every chord listed in design.md to the corresponding command
 - [ ] 2.3 `EditBuffer::handle_event` becomes: lookup chord in `EDIT_KEYMAP`, dispatch to `dispatch_edit_command` if found; otherwise treat as raw char insert
-- [ ] 2.4 Register `edit.*` commands in the central registry (under scope `EditBuffer`); they appear in `ft commands list`
+- [ ] 2.4 Add a `CommandScope::Widget(&'static str)` variant in `ft/src/tui/command.rs`; update `CommandScope::as_str` (`widget/{w}`), the registry filter logic, and any `match` arms over `CommandScope`. Register `edit.*` under `CommandScope::Widget("edit-buffer")`; verify it appears in `ft commands list`
 - [ ] 2.5 Tests: each chord in each mount site (query bar, picker input, rename modal, quickline) produces the expected buffer state
 
 ## 3. `CompletionProvider` trait + items
@@ -48,8 +59,8 @@
 
 ## 7. Mount sites
 
-- [ ] 7.1 Audit every site that uses `EditBuffer` (`query bar`, `FuzzyPicker` internal, `GraphRenameState`, quickline, capture var prompt) and confirm the new bindings work in each
-- [ ] 7.2 Integration test in `ft/src/tui/tests.rs` per site: open the input, press `Ctrl+A`, type, press `Ctrl+E`, press `Ctrl+K`, snapshot the buffer state
+- [ ] 7.1 Audit every `EditBuffer` mount site and confirm new bindings work: graph query bar (post-§0), `FuzzyPicker` input (`ft/src/tui/widgets/picker.rs:88`), `GraphRenameState.buffer` (`ft/src/tui/tabs/graph.rs:985`), `AppendState.buf`, `CaptureVarPromptState.buf`, `CreateSubdirState.buf`, `Mode::Quickline/EditDesc/Form` fields in timeblocks, tasks search `edit_state` + `Quickline.input`, journal entry `buf`
+- [ ] 7.2 Integration test in `ft/src/tui/tests.rs` per site: open the input, press `Ctrl+A`, type, press `Ctrl+E`, press `Ctrl+K`, snapshot the buffer state. Query-bar test goes first since it's the headline feature.
 
 ## 8. Docs
 

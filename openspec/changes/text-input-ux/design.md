@@ -1,11 +1,12 @@
 ## Context
 
-The existing `EditBuffer` (`ft/src/tui/widgets/edit_buffer.rs`) is a single-line `Vec<char>` with a `cursor: usize` index. It supports char insertion, deletion (`Backspace`, `Delete`), cursor arrows, and (partially) `Ctrl+W` word-back delete. Beyond that, every text-input site has its own local behaviour, and none of the standard readline conventions are wired up. The DSL query bar is the most painful site because queries are long and editing them feels mechanical (arrow-key your way back, character-by-character).
+The existing `EditBuffer` (`ft/src/tui/widgets/edit_buffer.rs`) is a single-line `String` with `cursor: usize` as a *character* count. It supports char insertion, deletion (`Backspace`, `Delete`), cursor arrows, and (partially) `Ctrl+W` whitespace-bounded word-back delete. Beyond that, every text-input site has its own local behaviour, and none of the standard readline conventions are wired up. The DSL query bar is the most painful site because queries are long and editing them feels mechanical (arrow-key your way back, character-by-character).
 
-Three things have to land together for the experience to actually improve:
+Three blockers, not two:
 
+0. **The DSL query bar doesn't actually use `EditBuffer` today.** `View.query_text: String` + `View.input_cursor: usize` (byte cursor) on `GraphTab`, with the `QueryBar` modal forwarding only an allowlist of plain-modifier keys (`Char | Backspace | Delete | Left | Right | Home | End`, `NONE | SHIFT`). Even with new bindings on the widget, the query bar would never see `Ctrl+A`/`Ctrl+E`/`Alt+B`. Migrating the query bar onto `EditBuffer` is step zero.
 1. The buffer needs the right operations (word jumps, line jumps, kill operations).
-2. The keymap needs to actually invoke them. With the commands-and-keymaps change in flight, this is now a uniform `EDIT_KEYMAP` of `edit.*` commands.
+2. The keymap needs to actually invoke them. With the commands-and-keymaps change archived, this is now a uniform `EDIT_KEYMAP` of `edit.*` commands.
 3. Completion has to be designable now even if it's not implementable yet — otherwise the next change has to retrofit the popup and the dispatch ordering. Doing the scaffold cleanly the first time costs less than adding it later.
 
 ## Goals / Non-Goals
@@ -30,13 +31,68 @@ Three things have to land together for the experience to actually improve:
 
 ## Decisions
 
+### Migrate the graph query bar onto `EditBuffer`
+
+The query bar's per-view state changes from:
+
+```rust
+struct View {
+    query_text: String,
+    input_cursor: usize, // byte offset
+    // …
+}
+```
+
+to:
+
+```rust
+struct View {
+    query: QueryBarState,
+    // …
+}
+
+struct QueryBarState {
+    buf: EditBuffer,
+    // existing fields like parsed query, snippet, etc. stay
+}
+```
+
+Touchpoints:
+
+- `QueryBar::handle_event` (`ft/src/tui/modal.rs:968`) stops the hardcoded `match (key.code, key.modifiers)` filter. `Esc` → `Closed`, `Enter` → fire `GraphApplyQueryBar` then `Closed`; **everything else** forwards via `AppRequest::GraphQueryBarKey { view_id, key }` regardless of modifier. The buffer's keymap decides what to do with `Ctrl+A`, `Alt+B`, plain `Char`, etc.
+- `GraphTab::graph_query_bar_key` (`ft/src/tui/tabs/graph.rs:2727`) becomes a one-liner: route the key through `v.query.buf.handle_event(...)`.
+- Read sites that touch `v.query_text` / `v.input_cursor` (the seeding paths around lines 2388, 2574, 2687, the rendering code, the `query_snippet` helper) switch to `v.query.buf.text` and `v.query.buf.cursor`. The byte-vs-char offset distinction matters at render time — the existing renderer uses byte offsets, so we adapt at the render boundary (char offset → byte via `text.char_indices().nth(cursor)`).
+
+The migration is mechanical but touches enough call sites to deserve its own task block (§0 below).
+
+**Alternative considered: skip migration; document the gap.** Rejected — the headline value prop of this change is "DSL queries become editable." Without the migration the change ships a feature the user can't reach.
+
+### Add `CommandScope::Widget(&'static str)`
+
+The existing scope enum (`ft/src/tui/command.rs:87`) is `Global | Tab(&str) | Modal(&str)`. The `edit.*` set belongs to none of those — it lives on a widget that any modal or tab might mount. Add a fourth variant:
+
+```rust
+pub enum CommandScope {
+    Global,
+    Tab(&'static str),
+    Modal(&'static str),
+    Widget(&'static str), // new
+}
+```
+
+Ripples: `CommandScope::as_str` gains a `format!("widget/{w}")` arm; `ft commands list --scope widget/edit-buffer` filters by it; the `?` overlay grouping treats widget scopes like modal scopes for display order; the docs generator emits a "Widget commands" section.
+
+**Alternative considered: register under `Modal("edit-buffer")`.** Rejected — `EditBuffer` is plainly not a modal (the modal driver doesn't know about it), and shoehorning would mislead future readers grepping for modal handling.
+
 ### One kill-ring slot, replaced on each kill
+
+The existing `EditBuffer` stores `text: String` with `cursor: usize` as a *char* count (not a byte offset) — see `ft/src/tui/widgets/edit_buffer.rs:11`. The new fields slot in alongside; the kill ring stores a `String` so it round-trips back through `insert` unchanged.
 
 ```rust
 struct EditBuffer {
-    text: Vec<char>,
-    cursor: usize,
-    kill_ring: Option<Vec<char>>,
+    text: String,
+    cursor: usize,             // character count, not byte offset
+    kill_ring: Option<String>,
     completion: Option<Box<dyn CompletionProvider>>,
     popup: Option<CompletionPopup>,
 }
@@ -44,13 +100,22 @@ struct EditBuffer {
 
 Every kill operation (`Ctrl+K`, `Ctrl+U`, `Ctrl+W`, `Alt+D`) replaces the previous `kill_ring` with the killed text. `Ctrl+Y` inserts the kill ring at the cursor.
 
+Word ops work in char-index space against `self.text.chars().collect::<Vec<_>>()` (or an on-the-fly iterator) and translate to byte ranges via `char_indices` only when calling `String::replace_range` — same shape as the current `delete_word_backward`.
+
 **Alternative considered: multi-slot ring with `Alt+Y` cycling.** Rejected for v1 — readline's `Alt+Y` is rarely-discovered and not worth the bookkeeping.
 
 ### Word boundaries
 
-A word is a maximal run of `[A-Za-z0-9_]`. `move_word_forward` from inside or just before a word moves to one past its end; `move_word_back` from inside or just after a word moves to its start. Whitespace runs are skipped.
+A word is a maximal run of `[A-Za-z0-9_]`. `move_word_forward` from inside or just before a word moves to one past its end; `move_word_back` from inside or just after a word moves to its start. Non-word runs (whitespace *and* punctuation) are skipped.
 
-This matches the existing `Ctrl+W` semantics that the buffer partially supports today (verified by reading `delete_prev_word`). Extending to forward-word ops is symmetric.
+**This is a behavior change for the existing `Ctrl+W`.** Today `delete_word_backward` is `unix-word-rubout` (whitespace-bounded — `foo.bar.baz` is one kill). After this change, the same input is three kills. We chose the unified rule because:
+
+- It matches Emacs/readline `Alt+B`/`Alt+F`/`Alt+D` and is what users typing DSL queries (`priority=High`, `path includes "ops/"`) actually want — character-class words, not whitespace runs.
+- Carrying two definitions of "word" inside one widget invites the next reader to ask which rule applies where.
+
+Release notes in `docs/keybindings.md` call the change out so users who relied on the old behavior aren't surprised.
+
+**Alternative considered: keep `Ctrl+W` whitespace-bounded, use `[A-Za-z0-9_]` only for `Alt+B/F/D`.** Rejected — two rules is the worst of both worlds.
 
 ### Bindings table
 
@@ -122,6 +187,8 @@ pub trait CompletionProvider {
 ```
 
 The provider is queried by `EditBuffer` on each input event that matches the provider's `trigger_on()`. The popup is opened with the returned items. Items are ordered by the provider; the popup does no re-ranking (providers control relevance).
+
+**Char-vs-byte adapter.** `EditBuffer.cursor` is a *character* count; `CompletionContext.cursor_byte` and `CompletionItem.replace_span` are *byte* offsets. The buffer converts when building the context (`self.text.char_indices().nth(self.cursor).map(|(b, _)| b).unwrap_or(self.text.len())`) and when applying an accepted item's `replace_span` (a byte range arrives, becomes a `String::replace_range` directly, and the cursor is updated by counting chars from 0 to the new byte position). Providers always see and emit byte offsets so they can index into `text` without a conversion table.
 
 **Alternative considered: provider returns ranked candidates and popup re-ranks.** Rejected — providers know their domain (graph DSL knows attribute vs. value context); re-ranking would discard that knowledge.
 
