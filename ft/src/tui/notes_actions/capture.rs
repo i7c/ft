@@ -131,6 +131,7 @@ pub struct CaptureCommit {
 }
 
 /// Result of attempting to execute a capture preset.
+#[allow(clippy::large_enum_variant)] // single-slot at App level; size doesn't matter
 pub enum CaptureResult {
     /// Executed immediately (no vars to prompt for).
     Executed,

@@ -367,6 +367,7 @@ impl PaneState {
 /// keymaps need. `DeleteConfirm` is a two-stroke chord: first `d`
 /// transitions Idle → DeleteConfirm, second `d` commits and returns to
 /// Idle.
+#[allow(clippy::large_enum_variant)] // single-slot tab-level state; size doesn't matter
 pub(crate) enum Mode {
     Idle,
     /// First `d` of the `d d` delete chord. Holds the pane + selected

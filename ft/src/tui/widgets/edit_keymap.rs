@@ -22,7 +22,10 @@ use crossterm::event::KeyEvent;
 
 use crate::tui::command::{Command, CommandDef, CommandScope};
 use crate::tui::keymap::{KeyChord, KeyMap};
-use crate::tui::widgets::edit_buffer::EditBuffer;
+use crate::tui::widgets::completion::{
+    CompletionContext, CompletionPopup, CompletionTrigger, PopupOutcome,
+};
+use crate::tui::widgets::edit_buffer::{is_word_char, EditBuffer};
 
 const EDIT_SCOPE: CommandScope = CommandScope::Widget("edit-buffer");
 
@@ -178,32 +181,151 @@ pub fn dispatch_edit_command(buf: &mut EditBuffer, cmd: &Command) -> bool {
 }
 
 impl EditBuffer {
-    /// Dispatch one key event against [`EDIT_KEYMAP`]. Returns
-    /// [`EditOutcome::Consumed`] if the chord matched a binding *or*
-    /// the key was a printable char inserted as-is. Returns
-    /// [`EditOutcome::NotHandled`] for chords with `Ctrl`/`Alt`
-    /// modifiers that don't match any binding (so e.g. an unbound
-    /// `Ctrl+R` falls through to the host modal or tab).
+    /// Dispatch one key event.
+    ///
+    /// 1. If a completion popup is open, the popup gets the first
+    ///    crack at the key. `Accepted` applies the chosen item and
+    ///    closes the popup; `Dismissed` closes the popup; `Consumed`
+    ///    stays open; `NotHandled` falls through to step 2.
+    /// 2. Run the chord through [`EDIT_KEYMAP`] and
+    ///    [`dispatch_edit_command`].
+    /// 3. Fall back to printable-char insert if the chord wasn't bound
+    ///    and the key is a plain or shift-modified `Char`.
+    /// 4. If a provider is attached and the trigger matches the input,
+    ///    query the provider and open / refresh / close the popup.
+    ///
+    /// Returns [`EditOutcome::Consumed`] for any handled event and
+    /// [`EditOutcome::NotHandled`] for an unbound modifier chord so
+    /// the host modal can still see it.
     pub fn handle_event(&mut self, key: KeyEvent) -> EditOutcome {
+        // 1. Popup first.
+        if let Some(state) = self.completion.as_mut() {
+            if let Some(popup) = state.popup.as_mut() {
+                match popup.handle_event(key) {
+                    PopupOutcome::Consumed => return EditOutcome::Consumed,
+                    PopupOutcome::Dismissed => {
+                        state.popup = None;
+                        return EditOutcome::Consumed;
+                    }
+                    PopupOutcome::Accepted(item) => {
+                        state.popup = None;
+                        self.apply_completion(item);
+                        return EditOutcome::Consumed;
+                    }
+                    PopupOutcome::NotHandled => {
+                        // Fall through to normal dispatch + post-mutation
+                        // re-query below.
+                    }
+                }
+            }
+        }
+
+        // 2 + 3. Run the standard edit dispatch.
         let chord = KeyChord::from_key_event(key);
-        if let Some(cmd) = EDIT_KEYMAP.lookup(chord) {
-            if dispatch_edit_command(self, cmd) {
-                return EditOutcome::Consumed;
+        let dispatched = if let Some(cmd) = EDIT_KEYMAP.lookup(chord) {
+            dispatch_edit_command(self, cmd)
+        } else {
+            false
+        };
+        let mut inserted_char: Option<char> = None;
+        let outcome = if dispatched {
+            EditOutcome::Consumed
+        } else {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            if let KeyCode::Char(c) = key.code {
+                let mods = key.modifiers;
+                let printable =
+                    !mods.contains(KeyModifiers::CONTROL) && !mods.contains(KeyModifiers::ALT);
+                if printable {
+                    self.insert(c);
+                    inserted_char = Some(c);
+                    EditOutcome::Consumed
+                } else {
+                    EditOutcome::NotHandled
+                }
+            } else {
+                EditOutcome::NotHandled
             }
+        };
+
+        // 4. Provider re-query after a mutation. We only fire on a
+        // printable-char insert in §3-§5; richer mutation events (kill,
+        // yank) can re-query in a follow-up. Manual `Tab`-to-complete
+        // also lives in a follow-up — the popup currently owns `Tab`
+        // for item-accept, so the buffer can't bind `Tab` to a manual
+        // open at the same time.
+        if let Some(c) = inserted_char {
+            self.maybe_query_completion(CompletionTrigger::OnInput, Some(c));
         }
-        // No binding matched. Fall back to "printable char insert" for
-        // plain or shift-modified chars; everything else falls through.
-        use crossterm::event::{KeyCode, KeyModifiers};
-        if let KeyCode::Char(c) = key.code {
-            let mods = key.modifiers;
-            let printable =
-                !mods.contains(KeyModifiers::CONTROL) && !mods.contains(KeyModifiers::ALT);
-            if printable {
-                self.insert(c);
-                return EditOutcome::Consumed;
-            }
+
+        outcome
+    }
+
+    /// Apply an accepted [`crate::tui::widgets::CompletionItem`] to
+    /// the buffer: replace `item.replace_span` (or, if `None`, the
+    /// word around the cursor) with `item.insert_text`, then place the
+    /// cursor immediately after the inserted text.
+    fn apply_completion(&mut self, item: crate::tui::widgets::CompletionItem) {
+        let replace = item
+            .replace_span
+            .clone()
+            .unwrap_or_else(|| self.current_word_byte_range());
+        // Clamp to text bounds in case the provider returned a stale
+        // span (text mutated between query and accept).
+        let start = replace.start.min(self.text.len());
+        let end = replace.end.min(self.text.len()).max(start);
+        self.text.replace_range(start..end, &item.insert_text);
+        // Cursor lands one past the inserted text — convert byte
+        // offset to char count.
+        let cursor_byte = start + item.insert_text.len();
+        self.cursor = self.text[..cursor_byte].chars().count();
+    }
+
+    /// Byte range of the word containing the cursor, using the buffer's
+    /// `[A-Za-z0-9_]` word rule. If the cursor isn't inside a word,
+    /// returns an empty range at the cursor.
+    fn current_word_byte_range(&self) -> std::ops::Range<usize> {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut start = self.cursor;
+        let mut end = self.cursor;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
         }
-        EditOutcome::NotHandled
+        while end < chars.len() && is_word_char(chars[end]) {
+            end += 1;
+        }
+        let start_byte: usize = chars[..start].iter().map(|c| c.len_utf8()).sum();
+        let end_byte: usize = chars[..end].iter().map(|c| c.len_utf8()).sum();
+        start_byte..end_byte
+    }
+
+    fn maybe_query_completion(&mut self, trigger: CompletionTrigger, ch: Option<char>) {
+        let Some(state) = self.completion.as_mut() else {
+            return;
+        };
+        let trigger_set = state.provider.trigger_on();
+        if !trigger_set.matches(trigger, ch) {
+            return;
+        }
+        let cursor_byte = self
+            .text
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(b, _)| b)
+            .unwrap_or(self.text.len());
+        let ctx = CompletionContext {
+            text: &self.text,
+            cursor_byte,
+            trigger,
+        };
+        let items = state.provider.complete(&ctx);
+        if items.is_empty() {
+            state.popup = None;
+        } else if let Some(popup) = state.popup.as_mut() {
+            popup.refresh(items);
+        } else {
+            state.popup = Some(CompletionPopup::new(items));
+        }
     }
 }
 
@@ -230,6 +352,7 @@ mod tests {
             text: "hello".to_string(),
             cursor: 0,
             kill_ring: None,
+            completion: None,
         };
         let out = buf.handle_event(key(KeyCode::Char('e'), KeyModifiers::CONTROL));
         assert_eq!(out, EditOutcome::Consumed);
@@ -242,6 +365,7 @@ mod tests {
             text: "hello world".to_string(),
             cursor: 5,
             kill_ring: None,
+            completion: None,
         };
         buf.handle_event(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
         assert_eq!(buf.text, "hello");
@@ -254,6 +378,7 @@ mod tests {
             text: "hello".to_string(),
             cursor: 5,
             kill_ring: Some(" world".to_string()),
+            completion: None,
         };
         buf.handle_event(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
         assert_eq!(buf.text, "hello world");
@@ -280,6 +405,7 @@ mod tests {
             text: "foo bar".to_string(),
             cursor: 3,
             kill_ring: None,
+            completion: None,
         };
         buf.handle_event(key(KeyCode::Char('d'), KeyModifiers::ALT));
         assert_eq!(buf.text, "foo");
@@ -334,6 +460,117 @@ mod tests {
         assert_eq!(buf.cursor, 0);
         buf.handle_event(key(KeyCode::End, KeyModifiers::NONE));
         assert_eq!(buf.cursor, 5);
+    }
+
+    #[test]
+    fn printable_char_with_provider_opens_popup() {
+        use crate::tui::widgets::completion::tests::StubProvider;
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(StubProvider::new(&["node", "edge"])));
+        buf.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(buf.text, "n");
+        assert!(buf.popup_is_open(), "provider should have opened the popup");
+    }
+
+    #[test]
+    fn tab_accepts_selected_item_and_closes_popup() {
+        use crate::tui::widgets::completion::tests::StubProvider;
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(StubProvider::new(&["node", "edge"])));
+        // Type 'n' → popup opens; replace_span is None → current word is "n".
+        buf.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(buf.popup_is_open());
+        // Tab accepts "node" (first item, selected by default).
+        let out = buf.handle_event(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(out, EditOutcome::Consumed);
+        assert!(!buf.popup_is_open(), "Tab should close the popup");
+        assert_eq!(buf.text, "node", "buffer should reflect the inserted text");
+        assert_eq!(buf.cursor, 4, "cursor lands after the inserted text");
+    }
+
+    #[test]
+    fn down_arrow_navigates_popup_then_tab_accepts() {
+        use crate::tui::widgets::completion::tests::StubProvider;
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(StubProvider::new(&["alpha", "beta", "gamma"])));
+        buf.handle_event(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        buf.handle_event(key(KeyCode::Down, KeyModifiers::NONE));
+        buf.handle_event(key(KeyCode::Down, KeyModifiers::NONE));
+        buf.handle_event(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(buf.text, "gamma");
+    }
+
+    #[test]
+    fn esc_dismisses_popup_without_modifying_buffer() {
+        use crate::tui::widgets::completion::tests::StubProvider;
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(StubProvider::new(&["node", "edge"])));
+        buf.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(buf.popup_is_open());
+        let out = buf.handle_event(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(out, EditOutcome::Consumed);
+        assert!(!buf.popup_is_open());
+        assert_eq!(buf.text, "n", "Esc should leave the buffer alone");
+    }
+
+    #[test]
+    fn popup_open_blocks_unbound_keys_from_falling_through() {
+        // Popup is open; Esc is consumed by the popup, so the host
+        // modal would not see it. This is the precedence the design
+        // calls for.
+        use crate::tui::widgets::completion::tests::StubProvider;
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(StubProvider::new(&["node"])));
+        buf.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        let out = buf.handle_event(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(out, EditOutcome::Consumed);
+    }
+
+    #[test]
+    fn provider_returning_empty_closes_popup() {
+        use crate::tui::widgets::completion::{
+            CompletionContext, CompletionItem, CompletionProvider, TriggerSet,
+        };
+        #[derive(Debug)]
+        struct ToggleProvider {
+            opened: bool,
+        }
+        impl CompletionProvider for ToggleProvider {
+            fn complete(&mut self, _ctx: &CompletionContext) -> Vec<CompletionItem> {
+                if self.opened {
+                    Vec::new()
+                } else {
+                    self.opened = true;
+                    vec![CompletionItem {
+                        label: "x".into(),
+                        insert_text: "x".into(),
+                        replace_span: None,
+                        kind: crate::tui::widgets::CompletionKind::Other,
+                        description: None,
+                    }]
+                }
+            }
+            fn trigger_on(&self) -> TriggerSet {
+                TriggerSet::printable()
+            }
+        }
+        let mut buf = EditBuffer::default();
+        buf.set_completion(Box::new(ToggleProvider { opened: false }));
+        buf.handle_event(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(buf.popup_is_open());
+        buf.handle_event(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert!(!buf.popup_is_open(), "empty result should close the popup");
+    }
+
+    #[test]
+    fn buffer_without_provider_ignores_popup_logic() {
+        // Sanity: every existing call site (mount sites with no
+        // provider attached) sees the same behaviour as before.
+        let mut buf = EditBuffer::from("hello");
+        let out = buf.handle_event(key(KeyCode::Char('!'), KeyModifiers::NONE));
+        assert_eq!(out, EditOutcome::Consumed);
+        assert_eq!(buf.text, "hello!");
+        assert!(!buf.popup_is_open());
     }
 
     #[test]

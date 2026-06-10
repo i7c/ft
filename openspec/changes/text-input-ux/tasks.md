@@ -34,26 +34,28 @@
 
 ## 3. `CompletionProvider` trait + items
 
-- [ ] 3.1 Create `ft/src/tui/widgets/completion.rs` with `CompletionProvider` trait, `CompletionContext`, `CompletionTrigger`, `CompletionItem`, `CompletionKind`, `TriggerSet`
-- [ ] 3.2 `TriggerSet` supports: printable chars, specific chars (e.g. `.`, `:`), manual-only (only fires on explicit Tab-to-complete)
-- [ ] 3.3 `CompletionItem.replace_span`: byte range to replace; default behaviour (None) is "replace current word"
-- [ ] 3.4 `StubCompletionProvider` in `#[cfg(test)] mod tests` returns a fixed Vec when asked, used by tests in this change
+- [x] 3.1 `ft/src/tui/widgets/completion.rs` ships `CompletionProvider` trait (with `Debug` supertrait), `CompletionContext<'a>` (text + `cursor_byte`), `CompletionTrigger` (Manual / OnInput), `CompletionItem` (label/insert_text/replace_span/kind/description), `CompletionKind` (Attribute/Operator/Value/Keyword/Path/Tag/Other + 1-char `glyph()`), `TriggerSet`
+- [x] 3.2 `TriggerSet` exposes `manual()`, `printable()`, `on_chars(...)` constructors plus a `matches(trigger, ch)` method that handles the manual-only short-circuit
+- [x] 3.3 `CompletionItem.replace_span: Option<Range<usize>>` (byte range). `None` => `EditBuffer::current_word_byte_range()` is used (uniform `[A-Za-z0-9_]` word rule shared with `delete_word_backward`)
+- [x] 3.4 `StubProvider` in `#[cfg(test)] pub(crate) mod tests` returns a configurable fixed list, used by buffer-side tests in §5
 
 ## 4. `CompletionPopup` widget
 
-- [ ] 4.1 `CompletionPopup` struct: `items: Vec<CompletionItem>, selected: usize, scroll_offset: usize`
-- [ ] 4.2 Positioning logic: compute popup rect based on cursor row vs host area (above/below), clamp to bounds, max 8 visible items
-- [ ] 4.3 Render with item label + kind glyph (e.g., `A` for attribute, `O` for operator); optional dim description below
-- [ ] 4.4 Key handling: `Up`/`Ctrl+P` selection up, `Down`/`Ctrl+N` selection down, `Tab`/`Enter` accept (consume; return `Accepted(item)`), `Esc` dismiss
-- [ ] 4.5 Unit + snapshot tests for the popup against the stub provider
+- [x] 4.1 `CompletionPopup { items, selected, scroll_offset }` plus `MAX_VISIBLE_ITEMS = 8`
+- [x] 4.2 `compute_area(host, cursor, max_label_width)` positions above the cursor if the cursor is in the bottom half of `host`, below otherwise; clamps to host bounds
+- [x] 4.3 `render(frame, area)` draws a bordered list, each row prefixed by the kind glyph in dim style; the selected row uses `Modifier::REVERSED` on the primary color
+- [x] 4.4 `handle_event(key)` consumes `Up`/`Ctrl+P` / `Down`/`Ctrl+N` (navigate, wrapping), accepts on `Tab`/`Enter` (returns `Accepted(item)`), dismisses on `Esc`, otherwise `NotHandled` so printable chars fall through
+- [x] 4.5 8 unit tests cover navigation wrap, refresh+clamp, accept, dismiss, fall-through, and positioning above/below
 
 ## 5. EditBuffer ↔ popup integration
 
-- [ ] 5.1 Add `completion: Option<Box<dyn CompletionProvider>>` and `popup: Option<CompletionPopup>` fields to `EditBuffer`
-- [ ] 5.2 On every mutating input event (char insert, delete, kill, yank), if `completion` is `Some` and the event matches `trigger_on()`, call `provider.complete(ctx)`; open / refresh / close the popup based on the returned items
-- [ ] 5.3 On dispatch: route the event to `popup.handle_event` first if `popup` is `Some`; on `Accepted(item)`, apply `item.replace_span` (or current-word default) + `item.insert_text` to the buffer, close the popup; on `Dismissed`, close the popup
-- [ ] 5.4 Tests: with stub provider, typing triggers the popup; Tab accepts an item; the buffer reflects the chosen `insert_text` at the correct span
-- [ ] 5.5 Tests: a popup opened on a buffer mounted inside a modal does NOT leak keys to the modal until the popup closes
+- [x] 5.1 `EditBuffer.completion: Option<CompletionState>` bundles `provider + popup` so the buffer holds one Option, not two. Manual `Clone` impl drops the provider on clone (trait objects aren't `Clone`-able). `set_completion`/`take_completion`/`popup_is_open` helpers.
+- [x] 5.2 After a printable char-insert, `maybe_query_completion(OnInput, Some(c))` calls `provider.complete(ctx)`; empty result closes the popup, non-empty either opens (`new`) or refreshes (`refresh`). Kill/yank re-queries are deferred — no concrete provider yet to take advantage of them.
+- [x] 5.3 `handle_event` routes the key to `popup.handle_event` first when the popup is open. `Accepted(item)` triggers `apply_completion`, which substitutes `item.replace_span` (or the current-word range) with `item.insert_text` and places the cursor immediately after. `Dismissed` and `Consumed` keep state coherent.
+- [x] 5.4 7 buffer-side tests cover: provider attaches and gets called on char insert; Tab accepts the selected item; Down navigates then Tab accepts; Esc dismisses without buffer mutation; popup-open blocks unbound keys from falling through (precedence sanity); provider returning empty closes popup; buffer without provider behaves identically to baseline
+- [x] 5.5 (covered by §5.4 `popup_open_blocks_unbound_keys_from_falling_through`; §6 ties the precedence to the actual modal driver in production code)
+- [x] 5.6 (incidental) Add `#[allow(clippy::large_enum_variant)]` to `CaptureResult` (`notes_actions/capture.rs`) and `timeblocks::Mode` — adding the completion slot pushed both enums past the variant-size delta threshold. Same pattern as `CreateStep` in §1.
+- [x] 5.7 (incidental) `#![allow(dead_code)]` on `completion.rs` while concrete providers await; per-method `#[allow]` on `set_completion`/`take_completion`/`popup_is_open` for the same reason
 
 ## 6. Modal driver integration
 

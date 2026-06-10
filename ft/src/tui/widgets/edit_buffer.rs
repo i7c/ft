@@ -19,14 +19,16 @@
 //! kill replaces the previous contents; `yank` does not clear the ring,
 //! so multiple yanks insert multiple copies.
 
+use crate::tui::widgets::completion::{CompletionProvider, CompletionState};
+
 /// Returns true iff `c` is a "word char" under this buffer's word
 /// rule: ASCII alphanumeric or `_`. Whitespace and punctuation are
 /// non-word.
-fn is_word_char(c: char) -> bool {
+pub(crate) fn is_word_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct EditBuffer {
     pub text: String,
     /// Cursor position as a character offset (not byte offset).
@@ -35,6 +37,25 @@ pub struct EditBuffer {
     /// `yank`. `None` if nothing has been killed since the buffer was
     /// constructed (or since the ring was cleared).
     pub kill_ring: Option<String>,
+    /// Optional completion provider + open-popup state. `None` for
+    /// buffers without autocompletion (the common case). Set via
+    /// [`Self::set_completion`].
+    pub completion: Option<CompletionState>,
+}
+
+impl Clone for EditBuffer {
+    /// Clones the text, cursor, and kill ring. The completion provider
+    /// is **not** cloned (trait objects aren't `Clone`-able); a cloned
+    /// buffer starts with no provider attached. In practice the only
+    /// callers that clone are tests of bare buffers without providers.
+    fn clone(&self) -> Self {
+        Self {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            kill_ring: self.kill_ring.clone(),
+            completion: None,
+        }
+    }
 }
 
 impl EditBuffer {
@@ -44,7 +65,33 @@ impl EditBuffer {
             text: text.to_string(),
             cursor,
             kill_ring: None,
+            completion: None,
         }
+    }
+
+    // No production caller attaches a provider yet — the graph DSL,
+    // file-path, and tag providers are explicit follow-ups against
+    // this scaffold. Tests use these methods to exercise the popup
+    // dispatch path.
+    /// Attach a completion provider. Any open popup is discarded.
+    #[allow(dead_code)]
+    pub fn set_completion(&mut self, provider: Box<dyn CompletionProvider>) {
+        self.completion = Some(CompletionState::new(provider));
+    }
+
+    /// Remove the attached provider (if any) and close any open popup.
+    #[allow(dead_code)]
+    pub fn take_completion(&mut self) -> Option<Box<dyn CompletionProvider>> {
+        self.completion.take().map(|s| s.provider)
+    }
+
+    /// Is a completion popup currently open?
+    #[allow(dead_code)]
+    pub fn popup_is_open(&self) -> bool {
+        self.completion
+            .as_ref()
+            .map(|s| s.popup.is_some())
+            .unwrap_or(false)
     }
 
     /// Byte offset corresponding to the char index `char_idx`. Returns
@@ -282,6 +329,7 @@ mod tests {
             text: text.to_string(),
             cursor,
             kill_ring: None,
+            completion: None,
         }
     }
 
@@ -424,6 +472,7 @@ mod tests {
             text: "hello".to_string(),
             cursor: 5,
             kill_ring: Some(" world".to_string()),
+            completion: None,
         };
         b.yank();
         assert_eq!(b.text, "hello world");
@@ -445,6 +494,7 @@ mod tests {
             text: String::new(),
             cursor: 0,
             kill_ring: Some("foo".to_string()),
+            completion: None,
         };
         b.yank();
         b.yank();
@@ -500,6 +550,7 @@ mod tests {
             text: String::new(),
             cursor: 0,
             kill_ring: Some("café".to_string()),
+            completion: None,
         };
         b.yank();
         assert_eq!(b.text, "café");

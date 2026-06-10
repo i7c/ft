@@ -1,9 +1,15 @@
 //! Shared TUI widgets used across multiple tabs / views.
 
+pub mod completion;
 pub mod edit_buffer;
 pub mod edit_keymap;
 pub mod picker;
 
+#[allow(unused_imports)] // public surface; consumers land in follow-ups
+pub use completion::{
+    CompletionContext, CompletionItem, CompletionKind, CompletionPopup, CompletionProvider,
+    CompletionState, CompletionTrigger, PopupOutcome, TriggerSet,
+};
 pub use edit_buffer::EditBuffer;
 pub use edit_keymap::{EDIT_COMMANDS, EDIT_KEYMAP};
 // Re-exported eagerly so the picker is reachable as
