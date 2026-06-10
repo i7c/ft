@@ -308,6 +308,7 @@ fn scope_filter_matches(scope: &str, filter: &str) -> bool {
         "global" => scope == "global",
         "tab" => scope.starts_with("tab/"),
         "modal" => scope.starts_with("modal/"),
+        "widget" => scope.starts_with("widget/"),
         other => scope == other,
     }
 }
@@ -318,8 +319,10 @@ fn scope_matches(scope: &CommandScope, filter: Option<&str>) -> bool {
         (CommandScope::Global, "global") => true,
         (CommandScope::Tab(_), "tab") => true,
         (CommandScope::Modal(_), "modal") => true,
+        (CommandScope::Widget(_), "widget") => true,
         (CommandScope::Tab(t), other) => other == format!("tab/{t}"),
         (CommandScope::Modal(m), other) => other == format!("modal/{m}"),
+        (CommandScope::Widget(w), other) => other == format!("widget/{w}"),
         _ => false,
     }
 }
@@ -407,6 +410,18 @@ mod tests {
         assert!(scope_matches(
             &CommandScope::Modal("create"),
             Some("modal/create")
+        ));
+        assert!(scope_matches(
+            &CommandScope::Widget("edit-buffer"),
+            Some("widget")
+        ));
+        assert!(scope_matches(
+            &CommandScope::Widget("edit-buffer"),
+            Some("widget/edit-buffer")
+        ));
+        assert!(!scope_matches(
+            &CommandScope::Widget("edit-buffer"),
+            Some("widget/other")
         ));
     }
 

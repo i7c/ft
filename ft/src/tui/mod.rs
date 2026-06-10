@@ -67,8 +67,11 @@ pub mod registry {
             modal_commands::MOVE_OUTER_COMMANDS,
         ];
 
+        let widget_slices: &[&'static [CommandDef]] = &[crate::tui::widgets::EDIT_COMMANDS];
+
         let mut slices: Vec<&'static [CommandDef]> = tab_slices.to_vec();
         slices.extend_from_slice(modal_slices);
+        slices.extend_from_slice(widget_slices);
         slices.push(app_commands::APP_COMMANDS);
         CommandRegistry::from_slices(&slices)
     }
@@ -124,6 +127,7 @@ pub mod registry {
             ),
             ("modal/related", &modal_commands::RELATED_KEYMAP),
             ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+            ("widget/edit-buffer", &crate::tui::widgets::EDIT_KEYMAP),
         ];
 
         let mut errors: Vec<String> = Vec::new();
@@ -205,6 +209,7 @@ pub mod registry {
             ),
             ("modal/related", &modal_commands::RELATED_KEYMAP),
             ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+            ("widget/edit-buffer", &crate::tui::widgets::EDIT_KEYMAP),
         ];
 
         let mut out: Vec<(String, String, String)> = Vec::new();

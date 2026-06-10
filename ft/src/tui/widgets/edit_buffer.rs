@@ -1,10 +1,3 @@
-// New methods (`move_word_*`, `kill_*`, `yank`, `transpose_chars`)
-// land in this file but aren't called yet — §2 of text-input-ux wires
-// them up via `EDIT_KEYMAP`. Until then they're only exercised by
-// tests, so allow dead code at the module level. Drop this attribute
-// when the keymap dispatch ships.
-#![allow(dead_code)]
-
 //! Single-line edit buffer with char-precise cursor handling. Used by every
 //! TUI surface that takes typed input (search query bar, edit popup fields,
 //! the new-task quickline, the fuzzy picker).

@@ -94,6 +94,11 @@ pub enum CommandScope {
     /// Owned by a specific modal variant; the inner name matches the
     /// `Modal::name()` (e.g. `"create"`, `"section-move"`).
     Modal(&'static str),
+    /// Owned by a reusable widget that may be mounted inside any tab
+    /// or modal. The inner name identifies the widget
+    /// (e.g. `"edit-buffer"`). The widget's keymap takes precedence
+    /// over the host modal / host tab for chords it binds.
+    Widget(&'static str),
 }
 
 impl CommandScope {
@@ -102,6 +107,7 @@ impl CommandScope {
             CommandScope::Global => "global".into(),
             CommandScope::Tab(t) => format!("tab/{t}"),
             CommandScope::Modal(m) => format!("modal/{m}"),
+            CommandScope::Widget(w) => format!("widget/{w}"),
         }
     }
 }
@@ -278,5 +284,9 @@ mod tests {
         assert_eq!(CommandScope::Global.as_str(), "global");
         assert_eq!(CommandScope::Tab("graph").as_str(), "tab/graph");
         assert_eq!(CommandScope::Modal("create").as_str(), "modal/create");
+        assert_eq!(
+            CommandScope::Widget("edit-buffer").as_str(),
+            "widget/edit-buffer"
+        );
     }
 }

@@ -5979,6 +5979,114 @@ fn graph_tab_query_bar_basic_editing_preserved_after_migration() -> Result<()> {
     Ok(())
 }
 
+/// §2 wired EDIT_KEYMAP into the buffer. Readline chords that were
+/// previously dropped by the modal forwarder now reach the buffer and
+/// rewrite the query text.
+#[test]
+fn graph_tab_query_bar_ctrl_a_e_k_work_after_keymap_wired() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..400 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "alpha beta gamma".chars() {
+        app.dispatch(key(c))?;
+    }
+
+    // Ctrl+A → cursor to start; type 'Z' → 'Z' lands at position 0.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(key('Z'))?;
+
+    // Ctrl+E → cursor to end; Ctrl+K with nothing to kill → no-op.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('k'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let frame = render(&mut app, 80, 24);
+    let line = frame
+        .lines()
+        .find(|l| l.contains("Zalpha"))
+        .unwrap_or_else(|| panic!("expected query bar to contain 'Zalpha':\n{frame}"));
+    assert!(
+        line.contains("> Zalpha beta gamma"),
+        "Ctrl+A then 'Z' should have inserted 'Z' at the start:\n{line}"
+    );
+
+    Ok(())
+}
+
+/// §2 alt-keys: word-jump and word-kill bindings work in the graph
+/// query bar.
+#[test]
+fn graph_tab_query_bar_alt_bindings_work() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..400 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "foo bar baz".chars() {
+        app.dispatch(key(c))?;
+    }
+
+    // Alt+B → cursor jumps from end (11) back to start of `baz` (8).
+    // Then Alt+D kills the word forward ("baz"), leaving "foo bar ".
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::ALT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('d'),
+        KeyModifiers::ALT,
+    )))?;
+
+    let frame = render(&mut app, 80, 24);
+    let line = frame
+        .lines()
+        .find(|l| l.contains("foo bar"))
+        .unwrap_or_else(|| panic!("expected query bar to contain 'foo bar':\n{frame}"));
+    assert!(
+        !line.contains("baz"),
+        "Alt+B then Alt+D should have killed `baz`:\n{line}"
+    );
+
+    // Ctrl+Y should yank `baz` back into the buffer.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('y'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("foo bar baz"),
+        "Ctrl+Y should yank `baz` back from the kill ring:\n{frame}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn graph_tab_o_opens_selected_note_in_editor() -> Result<()> {
     // dirs fixture has Areas/finance.md, Projects/alpha.md, root.md, and

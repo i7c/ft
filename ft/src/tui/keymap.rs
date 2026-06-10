@@ -334,6 +334,7 @@ pub fn parse_scope(s: &str) -> Option<CommandScope> {
         "modal/capture-picker" => Some(CommandScope::Modal("capture-picker")),
         "modal/related" => Some(CommandScope::Modal("related")),
         "modal/move" => Some(CommandScope::Modal("move")),
+        "widget/edit-buffer" => Some(CommandScope::Widget("edit-buffer")),
         _ => None,
     }
 }

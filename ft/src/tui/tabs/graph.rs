@@ -2727,26 +2727,17 @@ impl Tab for GraphTab {
         // `view_id` racing a view-close becomes a no-op rather than a
         // panic.
         //
-        // §2 of text-input-ux will replace this body with a single
-        // `EDIT_KEYMAP` dispatch; for now we mirror the pre-migration
-        // bind set against the buffer's existing methods so behaviour
-        // doesn't change. New readline bindings (Ctrl+A/E/K/...) land
-        // in §2 once the keymap exists.
+        // The buffer's `handle_event` runs the chord through
+        // `EDIT_KEYMAP` (readline bindings: Ctrl+A/E/K/W, Alt+B/F/D,
+        // …) and falls back to printable-char insert. Anything the
+        // buffer didn't recognise is dropped here — the QueryBar modal
+        // already consumed it at the modal layer so it never reaches
+        // tab- or global-level bindings.
         if view_id >= self.views.len() {
             return;
         }
         self.active = view_id;
-        let buf = &mut self.active_view_mut().query_buf;
-        match (key.code, key.modifiers) {
-            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => buf.insert(c),
-            (KeyCode::Backspace, _) => buf.backspace(),
-            (KeyCode::Delete, _) => buf.delete(),
-            (KeyCode::Left, _) => buf.left(),
-            (KeyCode::Right, _) => buf.right(),
-            (KeyCode::Home, _) => buf.home(),
-            (KeyCode::End, _) => buf.end(),
-            _ => {}
-        }
+        let _ = self.active_view_mut().query_buf.handle_event(key);
     }
 
     fn graph_apply_query_bar(&mut self, view_id: usize) {

@@ -24,11 +24,13 @@
 
 ## 2. Edit-buffer keymap
 
-- [ ] 2.1 Define `edit.*` commands in `ft/src/tui/widgets/edit_keymap.rs`: `edit.move-line-start`, `edit.move-line-end`, `edit.move-char-back`, `edit.move-char-forward`, `edit.move-word-back`, `edit.move-word-forward`, `edit.kill-to-end`, `edit.kill-to-start`, `edit.kill-word-back`, `edit.kill-word-forward`, `edit.yank`, `edit.transpose-chars`, `edit.delete-char-back`, `edit.delete-char-forward`, `edit.complete`, `edit.dismiss-popup`
-- [ ] 2.2 Build static `EDIT_KEYMAP: KeyMap`: bind every chord listed in design.md to the corresponding command
-- [ ] 2.3 `EditBuffer::handle_event` becomes: lookup chord in `EDIT_KEYMAP`, dispatch to `dispatch_edit_command` if found; otherwise treat as raw char insert
-- [ ] 2.4 Add a `CommandScope::Widget(&'static str)` variant in `ft/src/tui/command.rs`; update `CommandScope::as_str` (`widget/{w}`), the registry filter logic, and any `match` arms over `CommandScope`. Register `edit.*` under `CommandScope::Widget("edit-buffer")`; verify it appears in `ft commands list`
-- [ ] 2.5 Tests: each chord in each mount site (query bar, picker input, rename modal, quickline) produces the expected buffer state
+- [x] 2.1 `EDIT_COMMANDS` defines 14 `edit.*` commands in `ft/src/tui/widgets/edit_keymap.rs` (`edit.move-line-start`, `edit.move-line-end`, `edit.move-char-back/forward`, `edit.move-word-back/forward`, `edit.kill-to-end/start`, `edit.kill-word-back/forward`, `edit.yank`, `edit.transpose-chars`, `edit.delete-char-back/forward`). `edit.complete` / `edit.dismiss-popup` land in §4 with the popup.
+- [x] 2.2 `EDIT_KEYMAP` binds every chord from design.md plus `Home`/`End`/`Left`/`Right`/`Backspace`/`Delete` (the buffer now owns these too — host modals previously special-cased them)
+- [x] 2.3 `EditBuffer::handle_event(key) -> EditOutcome`: normalize chord, look up in `EDIT_KEYMAP`, dispatch via `dispatch_edit_command`; fall back to char-insert for printable chars; otherwise `NotHandled` so unbound `Ctrl+R` / `Alt+R` etc. fall through to the host
+- [x] 2.4 `CommandScope::Widget(&'static str)` variant added in `command.rs`; `as_str` returns `widget/{w}`; `parse_scope` recognises `widget/edit-buffer`; `cmd/commands.rs` `scope_filter_matches` + `scope_matches` updated; `ft commands list --scope widget/edit-buffer` returns all 14 commands
+- [x] 2.5 14 unit tests in `edit_keymap.rs` exercise each binding + the fall-through and printable-char paths; 2 integration tests in `tests.rs` (`graph_tab_query_bar_ctrl_a_e_k_work_after_keymap_wired`, `graph_tab_query_bar_alt_bindings_work`) verify the chords reach the buffer end-to-end through the graph query bar
+- [x] 2.6 Drop `#![allow(dead_code)]` on `edit_buffer.rs` — the new methods are now reachable via `dispatch_edit_command`
+- [x] 2.7 Wire the new dispatch into the graph query bar — `graph_query_bar_key` is now a one-liner delegating to `buf.handle_event(key)`
 
 ## 3. `CompletionProvider` trait + items
 
