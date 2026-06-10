@@ -970,35 +970,28 @@ impl Modal for QueryBar {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
         };
-        match (k.code, k.modifiers) {
-            (KeyCode::Esc, _) => ModalOutcome::Closed,
-            (KeyCode::Enter, _) => {
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Enter => {
                 *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphApplyQueryBar {
                     view_id: self.view_id,
                 });
                 ModalOutcome::Closed
             }
-            // Forward editing keys to the host. `Char | Backspace |
-            // Delete | Left | Right | Home | End` mirror the
-            // pre-migration `handle_input_event` set; other keys fall
-            // through.
-            (
-                KeyCode::Char(_)
-                | KeyCode::Backspace
-                | KeyCode::Delete
-                | KeyCode::Left
-                | KeyCode::Right
-                | KeyCode::Home
-                | KeyCode::End,
-                _,
-            ) => {
+            // Forward every other key — including chords with `Ctrl` or
+            // `Alt` modifiers — to the host. The view's `EditBuffer`
+            // decides what to do with them. The pre-migration version
+            // dropped Ctrl/Alt chords here; that ate `Ctrl+A`, `Alt+B`,
+            // etc. before they could reach any binding. We consume
+            // unconditionally so the modal swallows the chord and it
+            // never falls through to tab- or global-level shortcuts.
+            _ => {
                 *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphQueryBarKey {
                     view_id: self.view_id,
                     key: k,
                 });
                 ModalOutcome::Consumed
             }
-            _ => ModalOutcome::Consumed,
         }
     }
     fn render(&mut self, _frame: &mut Frame, _area: Rect, _ctx: &TabCtx) {}

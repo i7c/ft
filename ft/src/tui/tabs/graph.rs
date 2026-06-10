@@ -2385,8 +2385,7 @@ impl GraphTab {
     fn apply_preset_to_active_view(&mut self, dsl: &str) {
         let graph = self.graph.as_ref();
         let v = &mut self.views[self.active];
-        v.query_text = dsl.to_string();
-        v.input_cursor = dsl.len();
+        v.set_query_text(dsl);
         v.apply_query(graph);
     }
 
@@ -2571,8 +2570,7 @@ impl GraphTab {
             format!("node where kind in {{{kind_str}}} and path = \"{escaped_path}\"{expand_part}");
 
         let v = &mut self.views[self.active];
-        v.query_text = new_query;
-        v.input_cursor = v.query_text.len();
+        v.set_query_text(new_query);
         v.apply_query(Some(graph));
     }
 
@@ -2675,7 +2673,7 @@ impl Tab for GraphTab {
             // a query is already present (test paths construct the tab
             // with state pre-populated).
             let v0 = &mut self.views[0];
-            if v0.query_text.trim().is_empty() {
+            if v0.query_buf.text.trim().is_empty() {
                 let seed = ctx
                     .vault
                     .config
@@ -2684,8 +2682,7 @@ impl Tab for GraphTab {
                     .default_query
                     .clone()
                     .unwrap_or_else(|| BUILTIN_DEFAULT_QUERY.to_string());
-                v0.query_text = seed;
-                v0.input_cursor = v0.query_text.len();
+                v0.set_query_text(seed);
                 let graph = self.graph.as_ref();
                 v0.apply_query(graph);
             } else {
@@ -2725,69 +2722,29 @@ impl Tab for GraphTab {
     }
 
     fn graph_query_bar_key(&mut self, view_id: usize, key: crossterm::event::KeyEvent) {
-        // Per-key forwarding from the `QueryBar` modal. Mirrors the
-        // pre-migration `handle_input_event` editing rules: insert,
-        // backspace, delete, arrows, home/end. Ignores keys for
-        // non-active views so a `view_id` racing a view-close becomes
-        // a no-op rather than a panic.
+        // Per-key forwarding from the `QueryBar` modal into the view's
+        // `EditBuffer`. Ignores keys for non-active views so a
+        // `view_id` racing a view-close becomes a no-op rather than a
+        // panic.
+        //
+        // §2 of text-input-ux will replace this body with a single
+        // `EDIT_KEYMAP` dispatch; for now we mirror the pre-migration
+        // bind set against the buffer's existing methods so behaviour
+        // doesn't change. New readline bindings (Ctrl+A/E/K/...) land
+        // in §2 once the keymap exists.
         if view_id >= self.views.len() {
             return;
         }
-        // Switch active view to the targeted one for consistency with
-        // the pre-migration behaviour (`/` always edited the active
-        // view's buffer; multi-view layouts may have shifted active
-        // between modal open and key forward).
         self.active = view_id;
-        let v = self.active_view_mut();
+        let buf = &mut self.active_view_mut().query_buf;
         match (key.code, key.modifiers) {
-            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                v.query_text.insert(v.input_cursor, c);
-                v.input_cursor += c.len_utf8();
-            }
-            (KeyCode::Backspace, _) if v.input_cursor > 0 => {
-                let prev = v
-                    .query_text
-                    .char_indices()
-                    .rev()
-                    .find(|(i, _)| *i < v.input_cursor)
-                    .map(|(_, c)| c.len_utf8());
-                if let Some(len) = prev {
-                    let start = v.input_cursor - len;
-                    v.query_text.replace_range(start..v.input_cursor, "");
-                    v.input_cursor = start;
-                }
-            }
-            (KeyCode::Delete, _) if v.input_cursor < v.query_text.len() => {
-                let ch = v.query_text[v.input_cursor..].chars().next().unwrap();
-                let end = v.input_cursor + ch.len_utf8();
-                v.query_text.replace_range(v.input_cursor..end, "");
-            }
-            (KeyCode::Left, _) if v.input_cursor > 0 => {
-                let prev = v
-                    .query_text
-                    .char_indices()
-                    .rev()
-                    .find(|(i, _)| *i < v.input_cursor)
-                    .map(|(i, _)| i);
-                if let Some(i) = prev {
-                    v.input_cursor = i;
-                }
-            }
-            (KeyCode::Right, _) if v.input_cursor < v.query_text.len() => {
-                let next = v.query_text[v.input_cursor..]
-                    .chars()
-                    .next()
-                    .map(|c| v.input_cursor + c.len_utf8());
-                if let Some(i) = next {
-                    v.input_cursor = i;
-                }
-            }
-            (KeyCode::Home, _) => {
-                v.input_cursor = 0;
-            }
-            (KeyCode::End, _) => {
-                v.input_cursor = v.query_text.len();
-            }
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => buf.insert(c),
+            (KeyCode::Backspace, _) => buf.backspace(),
+            (KeyCode::Delete, _) => buf.delete(),
+            (KeyCode::Left, _) => buf.left(),
+            (KeyCode::Right, _) => buf.right(),
+            (KeyCode::Home, _) => buf.home(),
+            (KeyCode::End, _) => buf.end(),
             _ => {}
         }
     }
@@ -3510,8 +3467,12 @@ impl Tab for GraphTab {
 
         // Extract view info before mutable borrow for tree rendering.
         let query_snippet = self.views[self.active].query_snippet();
-        let query_text = self.views[self.active].query_text.clone();
-        let input_cursor = self.views[self.active].input_cursor;
+        let query_text = self.views[self.active].query_buf.text.clone();
+        // EditBuffer.cursor is a char count; for the single-line input
+        // bar that matches the visual column for ASCII queries. Multi-
+        // byte chars still render correctly because every column step
+        // is one terminal cell wide for the queries we render here.
+        let input_cursor = self.views[self.active].query_buf.cursor;
 
         // ── Input bar ────────────────────────────────────────────────
         let prompt_style = if input_mode {
@@ -3752,14 +3713,16 @@ impl Tab for GraphTab {
 // ── ExpandedView ──────────────────────────────────────────────────────
 
 /// Per-view state. A graph tab owns a `Vec<ExpandedView>` and renders the
-/// active one. The view holds both *spec* fields (`query_text`,
+/// active one. The view holds both *spec* fields (`query_buf`,
 /// `expanded_paths`, `selected_path`) and *derived* fields (`tree`,
 /// `selected`, `scroll_offset`); spec fields survive a graph rebuild and
 /// drive the rebuild of derived fields via [`Self::restore_expansion`].
 #[derive(Debug, Default)]
 pub struct ExpandedView {
-    query_text: String,
-    input_cursor: usize,
+    /// Editable query text + cursor. Single source of truth for the
+    /// query bar; the `QueryBar` modal forwards every key event into
+    /// this buffer.
+    query_buf: EditBuffer,
     parse_error: Option<String>,
     query: Option<GraphQuery>,
     /// Root-anchored paths the user has expanded. Each path is the
@@ -3783,12 +3746,19 @@ pub struct ExpandedView {
 }
 
 impl ExpandedView {
-    /// Parse `query_text`, swap in the parsed query, and rebuild the
-    /// tree against the current graph. Clears expansion state — a new
-    /// query starts fresh.
+    /// Replace the query text with `s` and place the cursor at the end.
+    /// Used by seeding paths (preset apply, default query, `z`
+    /// rewrites) — never on a user keystroke.
+    fn set_query_text(&mut self, s: impl AsRef<str>) {
+        self.query_buf = EditBuffer::from(s.as_ref());
+    }
+
+    /// Parse the editable query text, swap in the parsed query, and
+    /// rebuild the tree against the current graph. Clears expansion
+    /// state — a new query starts fresh.
     fn apply_query(&mut self, graph: Option<&Graph>) {
         self.parse_error = None;
-        if self.query_text.trim().is_empty() {
+        if self.query_buf.text.trim().is_empty() {
             self.query = None;
             self.expanded_paths.clear();
             self.selected_path = None;
@@ -3797,7 +3767,7 @@ impl ExpandedView {
             self.scroll_offset = 0;
             return;
         }
-        match parse_query(&self.query_text) {
+        match parse_query(&self.query_buf.text) {
             Ok(q) => {
                 self.query = Some(q);
                 self.expanded_paths.clear();
@@ -3959,7 +3929,7 @@ impl ExpandedView {
 
     /// Width-limited query snippet for the tab strip label.
     fn query_snippet(&self) -> String {
-        let s = self.query_text.trim();
+        let s = self.query_buf.text.trim();
         if s.is_empty() {
             return "(empty)".to_string();
         }
@@ -4673,7 +4643,7 @@ mod view_tests {
     fn view_with_query() -> (Graph, ExpandedView) {
         let g = dirs_graph();
         let mut v = ExpandedView {
-            query_text: dirs_query_text().to_string(),
+            query_buf: EditBuffer::from(dirs_query_text()),
             ..Default::default()
         };
         v.apply_query(Some(&g));
@@ -4867,7 +4837,9 @@ mod view_tests {
     #[test]
     fn query_snippet_truncates_long_text() {
         let v = ExpandedView {
-            query_text: "node where kind = Directory and path = \"\"; expand where ...".into(),
+            query_buf: EditBuffer::from(
+                "node where kind = Directory and path = \"\"; expand where ...",
+            ),
             ..Default::default()
         };
         let snip = v.query_snippet();
@@ -4886,7 +4858,7 @@ mod view_tests {
         let tab = GraphTab::new();
         assert_eq!(tab.views.len(), 1);
         assert_eq!(tab.active, 0);
-        assert!(tab.views[0].query_text.is_empty());
+        assert!(tab.views[0].query_buf.text.is_empty());
     }
 
     #[test]
@@ -4903,10 +4875,10 @@ mod view_tests {
     #[test]
     fn close_last_view_replaces_with_empty() {
         let mut tab = GraphTab::new();
-        tab.views[0].query_text = "node where indegree = 0;".into();
+        tab.views[0].query_buf.text = "node where indegree = 0;".into();
         tab.close_view();
         assert_eq!(tab.views.len(), 1);
-        assert!(tab.views[0].query_text.is_empty());
+        assert!(tab.views[0].query_buf.text.is_empty());
     }
 
     #[test]
@@ -4980,7 +4952,7 @@ mod view_tests {
 
         let mut tab = GraphTab::new();
         tab.graph = Some(graph);
-        tab.views[0].query_text = "node where kind = Note;".to_string();
+        tab.views[0].query_buf.text = "node where kind = Note;".to_string();
 
         // Ctrl+P → tab posts OpenModal(PresetPicker(... for_active_view=true ...)).
         tab.open_preset_picker_for_active_view(&ctx);
@@ -5017,7 +4989,7 @@ mod view_tests {
         // The active view's query is replaced with the preset DSL.
         // `fs` is the first preset alphabetically, so the picker lands on it.
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             r#"node where path = ""; expand where edge.kind in {directory-contains};"#,
             "active view query should be replaced by the selected preset DSL"
         );
@@ -5042,7 +5014,7 @@ mod view_tests {
         let scan = vault.scan();
         let graph = Graph::build(&vault, &scan).unwrap();
         let mut v = ExpandedView {
-            query_text: query_text.to_string(),
+            query_buf: EditBuffer::from(query_text),
             ..Default::default()
         };
         v.apply_query(Some(&graph));
@@ -5072,7 +5044,7 @@ mod view_tests {
         );
         tab.rewrite_query_for_root();
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};"
         );
     }
@@ -5086,7 +5058,7 @@ mod view_tests {
         );
         tab.rewrite_query_for_root();
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             "node where kind in {Directory} and path = \"Areas\"; expand where edge.kind in {directory-contains};"
         );
     }
@@ -5100,7 +5072,7 @@ mod view_tests {
         );
         tab.rewrite_query_for_root();
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains};"
         );
     }
@@ -5113,7 +5085,7 @@ mod view_tests {
         let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let mut v = ExpandedView {
-            query_text: "node where kind = Ghost;".to_string(),
+            query_buf: EditBuffer::from("node where kind = Ghost;"),
             ..Default::default()
         };
         v.apply_query(Some(&graph));
@@ -5121,9 +5093,9 @@ mod view_tests {
         let mut tab = GraphTab::new();
         tab.graph = Some(graph);
         tab.views[0] = v;
-        let before = tab.views[0].query_text.clone();
+        let before = tab.views[0].query_buf.text.clone();
         tab.rewrite_query_for_root();
-        assert_eq!(tab.views[0].query_text, before, "ghost should be no-op");
+        assert_eq!(tab.views[0].query_buf.text, before, "ghost should be no-op");
     }
 
     #[test]
@@ -5160,7 +5132,7 @@ mod view_tests {
         };
         let graph = Graph::build(&vault, &scan).unwrap();
         let mut v = ExpandedView {
-            query_text: "node where kind = Task;".to_string(),
+            query_buf: EditBuffer::from("node where kind = Task;"),
             ..Default::default()
         };
         v.apply_query(Some(&graph));
@@ -5168,9 +5140,9 @@ mod view_tests {
         let mut tab = GraphTab::new();
         tab.graph = Some(graph);
         tab.views[0] = v;
-        let before = tab.views[0].query_text.clone();
+        let before = tab.views[0].query_buf.text.clone();
         tab.rewrite_query_for_root();
-        assert_eq!(tab.views[0].query_text, before, "task should be no-op");
+        assert_eq!(tab.views[0].query_buf.text, before, "task should be no-op");
     }
 
     #[test]
@@ -5182,7 +5154,7 @@ mod view_tests {
         );
         tab.rewrite_query_for_root();
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};"
         );
     }
@@ -5196,7 +5168,7 @@ mod view_tests {
         );
         tab.rewrite_query_for_root();
         assert_eq!(
-            tab.views[0].query_text,
+            tab.views[0].query_buf.text,
             "node where kind in {Note} and path = \"foo.md\";"
         );
     }
@@ -5369,7 +5341,7 @@ mod search_tests {
 
         let mut tab = GraphTab::new();
         tab.graph = Some(g);
-        tab.views[0].query_text =
+        tab.views[0].query_buf.text =
             "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
                 .to_string();
         let graph_ref = tab.graph.as_ref().unwrap();
@@ -5410,8 +5382,7 @@ mod nav_tests {
 
     fn tab_with_query(graph: Graph, query_text: &str) -> GraphTab {
         let mut v = ExpandedView {
-            query_text: query_text.to_string(),
-            input_cursor: query_text.len(),
+            query_buf: EditBuffer::from(query_text),
             ..Default::default()
         };
         v.apply_query(Some(&graph));

@@ -39,31 +39,30 @@ The query bar's per-view state changes from:
 struct View {
     query_text: String,
     input_cursor: usize, // byte offset
+    parse_error: Option<String>,
+    query: Option<GraphQuery>,   // parsed
     // …
 }
 ```
 
-to:
+to a single `query_buf: EditBuffer` field replacing both the text and the cursor:
 
 ```rust
 struct View {
-    query: QueryBarState,
+    query_buf: EditBuffer,
+    parse_error: Option<String>,
+    query: Option<GraphQuery>,
     // …
-}
-
-struct QueryBarState {
-    buf: EditBuffer,
-    // existing fields like parsed query, snippet, etc. stay
 }
 ```
 
+The parsed `query` and `parse_error` are already separate siblings — there's nothing to bundle into a wrapper struct, so we don't introduce one. A small `set_query_text(s)` helper handles the "seed from preset / default / `z` rewrite" pattern (writes the buffer, cursor lands at end).
+
 Touchpoints:
 
-- `QueryBar::handle_event` (`ft/src/tui/modal.rs:968`) stops the hardcoded `match (key.code, key.modifiers)` filter. `Esc` → `Closed`, `Enter` → fire `GraphApplyQueryBar` then `Closed`; **everything else** forwards via `AppRequest::GraphQueryBarKey { view_id, key }` regardless of modifier. The buffer's keymap decides what to do with `Ctrl+A`, `Alt+B`, plain `Char`, etc.
-- `GraphTab::graph_query_bar_key` (`ft/src/tui/tabs/graph.rs:2727`) becomes a one-liner: route the key through `v.query.buf.handle_event(...)`.
-- Read sites that touch `v.query_text` / `v.input_cursor` (the seeding paths around lines 2388, 2574, 2687, the rendering code, the `query_snippet` helper) switch to `v.query.buf.text` and `v.query.buf.cursor`. The byte-vs-char offset distinction matters at render time — the existing renderer uses byte offsets, so we adapt at the render boundary (char offset → byte via `text.char_indices().nth(cursor)`).
-
-The migration is mechanical but touches enough call sites to deserve its own task block (§0 below).
+- `QueryBar::handle_event` (`ft/src/tui/modal.rs`) stops the hardcoded `match (key.code, key.modifiers)` filter. `Esc` → `Closed`, `Enter` → fire `GraphApplyQueryBar` then `Closed`; **everything else** forwards via `AppRequest::GraphQueryBarKey { view_id, key }` regardless of modifier. The buffer's keymap (wired in §2) decides what to do with `Ctrl+A`, `Alt+B`, plain `Char`, etc. The modal returns `Consumed` for forwarded keys so tab-/global-level chords (e.g. `Ctrl+W` → close-view) don't fire while the user is editing the query.
+- `GraphTab::graph_query_bar_key` (`ft/src/tui/tabs/graph.rs`) becomes a small `match` against `KeyCode` that calls the buffer's existing methods (`insert`/`backspace`/`delete`/`left`/`right`/`home`/`end`) — mirroring pre-migration behavior. §2 replaces this body with a single `EDIT_KEYMAP` dispatch.
+- Read sites that touch `v.query_text` / `v.input_cursor` (the seeding paths, rendering code, `query_snippet`) switch to `v.query_buf.text` and `v.query_buf.cursor`. The renderer uses `cursor` as a column offset directly; the existing code computed visual position from a byte offset assuming ASCII queries, so behavior is unchanged for ASCII and slightly more correct for multi-byte single-cell chars.
 
 **Alternative considered: skip migration; document the gap.** Rejected — the headline value prop of this change is "DSL queries become editable." Without the migration the change ships a feature the user can't reach.
 

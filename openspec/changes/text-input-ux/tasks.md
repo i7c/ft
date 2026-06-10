@@ -1,12 +1,12 @@
 ## 0. Migrate graph query bar onto `EditBuffer`
 
-- [ ] 0.1 Introduce `QueryBarState { buf: EditBuffer, … }` on `View` in `ft/src/tui/tabs/graph.rs`; remove `query_text: String` and `input_cursor: usize`
-- [ ] 0.2 Update every seeding site (`v.query_text = …; v.input_cursor = …`) — around lines 2388, 2574, 2687 — to `v.query.buf = EditBuffer::from(...)`
-- [ ] 0.3 Update every read site (renderer, `query_snippet`, `rewrite_query_for_root`, `apply_query`) to use `v.query.buf.text` and `v.query.buf.cursor` (char count); convert to byte offset where needed via `text.char_indices().nth(cursor)`
-- [ ] 0.4 Rewrite `QueryBar::handle_event` (`ft/src/tui/modal.rs:968`): keep `Esc → Closed`, `Enter → fire GraphApplyQueryBar + Closed`; forward **all** other keys via `AppRequest::GraphQueryBarKey` (no modifier filter)
-- [ ] 0.5 Rewrite `GraphTab::graph_query_bar_key` (`ft/src/tui/tabs/graph.rs:2727`) to delegate to `v.query.buf.handle_event(...)` (no hand-rolled `match` over `KeyCode`)
-- [ ] 0.6 Snapshot test: open query bar, type characters, arrow / Home / End / Backspace — baseline behaviour preserved (no regression before any new bindings are wired)
-- [ ] 0.7 `cargo build --release` + `cargo test --workspace` green after migration, before §1 starts
+- [x] 0.1 Replace `query_text: String` + `input_cursor: usize` with a single `query_buf: EditBuffer` field on `ExpandedView` in `ft/src/tui/tabs/graph.rs`. (Simpler than the design's `QueryBarState` wrapper since there are no other co-located fields to bundle; the parsed `query: Option<GraphQuery>` already lives as a sibling.)
+- [x] 0.2 Add a `set_query_text(s: impl AsRef<str>)` helper on `ExpandedView` and switch every seeding site (preset apply, default seed, `z` rewrite) to use it
+- [x] 0.3 Update read sites (renderer, `query_snippet`, `apply_query`) to read `v.query_buf.text` / `v.query_buf.cursor`. The renderer uses the char cursor directly as a column offset (correct for ASCII; acceptable for multi-byte single-cell chars).
+- [x] 0.4 Rewrite `QueryBar::handle_event` (`ft/src/tui/modal.rs`): keep `Esc → Closed`, `Enter → fire GraphApplyQueryBar + Closed`; forward **all** other keys via `AppRequest::GraphQueryBarKey` (no modifier filter)
+- [x] 0.5 Rewrite `GraphTab::graph_query_bar_key`: delegate to the buffer's existing methods (`insert`/`backspace`/`delete`/`left`/`right`/`home`/`end`). §2 will replace this body with a single `EDIT_KEYMAP` dispatch once the keymap exists.
+- [x] 0.6 Integration test `graph_tab_query_bar_basic_editing_preserved_after_migration` in `ft/src/tui/tests.rs`: open query bar, type, exercise Home/End/Left/Right/Backspace/Delete, assert the rendered query line matches
+- [x] 0.7 `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check` all clean
 
 ## 1. EditBuffer operations + kill ring
 

@@ -5907,6 +5907,78 @@ fn graph_tab_populated_default_query_renders() -> Result<()> {
     Ok(())
 }
 
+/// §0 baseline regression: after migrating the query bar onto
+/// `EditBuffer`, every pre-migration edit key (Char insert, Backspace,
+/// Delete, Left, Right, Home, End) still produces the same visible
+/// query text the old hand-rolled handler did. New readline bindings
+/// land in §2 — this test only guards the migration.
+#[test]
+fn graph_tab_query_bar_basic_editing_preserved_after_migration() -> Result<()> {
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    // Open the query bar and clear any default-seeded query.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..300 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    // Type a known string: "abcdef".
+    for c in "abcdef".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Home then two Rights → cursor between 'b' and 'c'. Insert 'X'.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(key('X'))?;
+    // End, then Backspace → drop trailing 'f'.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::NONE,
+    )))?;
+    // Home then Delete → drop leading 'a'.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Delete,
+        KeyModifiers::NONE,
+    )))?;
+
+    let frame = render(&mut app, 80, 24);
+    let query_line = frame
+        .lines()
+        .find(|l| l.contains("bXcde"))
+        .unwrap_or_else(|| panic!("expected query bar to contain 'bXcde':\n{frame}"));
+    assert!(
+        query_line.contains("> bXcde"),
+        "query line should be '> bXcde':\n{query_line}"
+    );
+    assert!(
+        !query_line.contains('a') || query_line.matches('a').count() == 0,
+        "leading 'a' should have been Delete-d:\n{query_line}"
+    );
+    assert!(
+        !query_line.contains('f'),
+        "trailing 'f' should have been Backspace-d:\n{query_line}"
+    );
+
+    // Esc closes the modal without applying (cancel path).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    Ok(())
+}
+
 #[test]
 fn graph_tab_o_opens_selected_note_in_editor() -> Result<()> {
     // dirs fixture has Areas/finance.md, Projects/alpha.md, root.md, and
