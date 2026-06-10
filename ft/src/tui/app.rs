@@ -233,6 +233,7 @@ impl App {
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
+                host_popup_open: false,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
         }
@@ -280,6 +281,7 @@ impl App {
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
             active_modal_name: self.active_modal_name(),
+            host_popup_open: false,
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
@@ -435,6 +437,13 @@ impl App {
                 // to avoid a second borrow of `self.active_modal`
                 // while we already hold a mutable borrow.
                 let active_modal_name = Some(modal.name());
+                // The modal needs to know whether the host tab's
+                // focused EditBuffer has an open completion popup
+                // (e.g. QueryBar uses this to decide whether `Esc`
+                // dismisses the popup or closes the modal). Compute
+                // it from the active tab BEFORE entering the modal's
+                // handle_event so the modal can branch synchronously.
+                let host_popup_open = self.tabs[self.active].host_popup_open();
                 let ctx = TabCtx {
                     vault: &self.vault,
                     recents: &self.recents,
@@ -442,6 +451,7 @@ impl App {
                     last_refresh: &self.last_refresh,
                     pending_request: &self.pending_request,
                     active_modal_name,
+                    host_popup_open,
                 };
                 Some(modal.handle_event(ev.clone(), &ctx))
             } else {
@@ -474,6 +484,7 @@ impl App {
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
+                host_popup_open: false,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
         };
@@ -564,6 +575,7 @@ impl App {
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
             active_modal_name: self.active_modal_name(),
+            host_popup_open: false,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
@@ -647,6 +659,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_focus_query_bar(&ctx);
                 }
@@ -666,6 +679,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_commit_rename(
                         &ctx,
@@ -689,6 +703,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                 }
@@ -715,6 +730,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
                 }
@@ -729,6 +745,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
                 }
@@ -743,6 +760,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
                 }
@@ -757,6 +775,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                 }
@@ -771,6 +790,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_navigate_periodic(&ctx, period);
                 }
@@ -788,6 +808,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
                 }
@@ -802,6 +823,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_create_subdir(&ctx, parent, name);
                 }
@@ -884,6 +906,7 @@ impl App {
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
+                host_popup_open: false,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
         }
@@ -1022,6 +1045,7 @@ impl App {
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
+                host_popup_open: false,
             };
             self.tabs[self.active].refresh(&mut ctx)?;
         }
@@ -1465,6 +1489,7 @@ impl App {
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
             active_modal_name: self.active_modal_name(),
+            host_popup_open: false,
         };
         self.tabs[self.active].on_focus(&mut ctx)?;
         self.drain_simple_requests();
@@ -1532,6 +1557,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_focus_query_bar(&ctx);
                     }
@@ -1550,6 +1576,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_commit_rename(
                             &ctx,
@@ -1572,6 +1599,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                     }
@@ -1595,6 +1623,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
                     }
@@ -1608,6 +1637,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
                     }
@@ -1621,6 +1651,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
                     }
@@ -1634,6 +1665,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                     }
@@ -1647,6 +1679,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_navigate_periodic(&ctx, period);
                     }
@@ -1706,6 +1739,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_focus_query_bar(&ctx);
                     }
@@ -1724,6 +1758,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_commit_rename(
                             &ctx,
@@ -1746,6 +1781,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                     }
@@ -1769,6 +1805,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
                     }
@@ -1782,6 +1819,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
                     }
@@ -1795,6 +1833,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
                     }
@@ -1808,6 +1847,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                     }
@@ -1821,6 +1861,7 @@ impl App {
                             last_refresh: &self.last_refresh,
                             pending_request: &self.pending_request,
                             active_modal_name: self.active_modal_name(),
+                            host_popup_open: false,
                         };
                         self.tabs[idx].graph_navigate_periodic(&ctx, period);
                     }
@@ -1902,6 +1943,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_focus_query_bar(&ctx);
                 }
@@ -1921,6 +1963,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_commit_rename(
                         &ctx,
@@ -1944,6 +1987,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
                 }
@@ -1970,6 +2014,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
                 }
@@ -1984,6 +2029,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
                 }
@@ -1998,6 +2044,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
                 }
@@ -2012,6 +2059,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
                 }
@@ -2026,6 +2074,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_navigate_periodic(&ctx, period);
                 }
@@ -2043,6 +2092,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
                 }
@@ -2057,6 +2107,7 @@ impl App {
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
                         active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
                     };
                     self.tabs[idx].graph_create_subdir(&ctx, parent, name);
                 }
@@ -2094,6 +2145,21 @@ impl App {
         if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
             self.tabs[idx].queue_journal_for_multi(&request);
         }
+    }
+
+    /// Test-only: attach a completion provider to the active tab's
+    /// currently-focused [`EditBuffer`] so popup-integration tests can
+    /// exercise the §6 modal-driver precedence end-to-end. Defaults to
+    /// a no-op for tabs that don't mount an `EditBuffer` behind a
+    /// modal forwarder.
+    ///
+    /// [`EditBuffer`]: crate::tui::widgets::EditBuffer
+    #[cfg(test)]
+    pub fn set_focused_buffer_completion_for_test(
+        &mut self,
+        provider: Box<dyn crate::tui::widgets::CompletionProvider>,
+    ) {
+        self.tabs[self.active].set_focused_buffer_completion_for_test(provider);
     }
 
     /// True iff the active tab reports that its currently-selected

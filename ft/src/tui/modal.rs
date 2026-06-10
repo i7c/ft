@@ -970,6 +970,19 @@ impl Modal for QueryBar {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
         };
+        // When a completion popup is open on the view's `EditBuffer`,
+        // forward *every* key (including Esc and Enter) into the
+        // buffer so the popup gets first crack. Esc dismisses the
+        // popup; Enter / Tab accept the highlighted item. Without
+        // this branch the modal would close on Esc before the popup
+        // ever saw it.
+        if ctx.host_popup_open {
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphQueryBarKey {
+                view_id: self.view_id,
+                key: k,
+            });
+            return ModalOutcome::Consumed;
+        }
         match k.code {
             KeyCode::Esc => ModalOutcome::Closed,
             KeyCode::Enter => {

@@ -432,6 +432,13 @@ pub struct TabCtx<'a> {
     /// flag (extract-modal-driver §5). Populated by the App when
     /// building the context for `handle_event` and `render`.
     pub active_modal_name: Option<&'static str>,
+    /// Whether the active tab's currently-focused `EditBuffer` has an
+    /// open completion popup. Filled by the App via
+    /// [`Tab::host_popup_open`]; consulted by the modal that owns the
+    /// buffer (currently only `QueryBar`) to decide whether `Esc`
+    /// should dismiss the popup (forward to the buffer) or close the
+    /// modal (handle directly). `false` everywhere else.
+    pub host_popup_open: bool,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
@@ -448,6 +455,32 @@ pub trait Tab {
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome>;
+
+    /// Whether the tab's currently-focused [`EditBuffer`] has an open
+    /// completion popup. The default returns `false`; tabs that mount
+    /// an `EditBuffer` inside a modal forwarder (currently only
+    /// `GraphTab` with its query bar) override this so the App can
+    /// pre-fill [`TabCtx::host_popup_open`] before dispatching a key
+    /// event to the active modal.
+    ///
+    /// [`EditBuffer`]: crate::tui::widgets::EditBuffer
+    fn host_popup_open(&self) -> bool {
+        false
+    }
+
+    /// Test-only: attach a completion provider to the tab's
+    /// currently-focused [`EditBuffer`] (the one a modal forwarder
+    /// routes keys into). Default is a no-op; only [`GraphTab`]
+    /// overrides this for the query bar buffer.
+    ///
+    /// [`EditBuffer`]: crate::tui::widgets::EditBuffer
+    /// [`GraphTab`]: crate::tui::tabs::graph::GraphTab
+    #[cfg(test)]
+    fn set_focused_buffer_completion_for_test(
+        &mut self,
+        _provider: Box<dyn crate::tui::widgets::CompletionProvider>,
+    ) {
+    }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx);
 

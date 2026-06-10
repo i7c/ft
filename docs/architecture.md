@@ -366,6 +366,38 @@ no-op, host overrides. The recipe for adding a new modal action:
 flag. Used by `GraphTab::render` to style the query prompt yellow
 and position the cursor when `Some("query-bar")`.
 
+### Completion popup dispatch precedence
+
+When a modal forwards keys to an `EditBuffer` that has an open
+[`CompletionPopup`], the popup gets the first crack at every event.
+The buffer's `handle_event`:
+
+1. If `completion.popup` is `Some`, dispatches the key to the popup
+   first. `Accepted(item)` applies the chosen item and closes the
+   popup; `Dismissed` closes the popup (consuming `Esc`); `Consumed`
+   absorbs navigation chords; `NotHandled` falls through to step 2.
+2. Looks the chord up in `EDIT_KEYMAP` and dispatches the matched
+   `edit.*` command, or inserts a printable char.
+3. After an input mutation, if a provider is attached and its
+   `TriggerSet` matches, queries the provider and opens / refreshes
+   / closes the popup.
+
+The modal host needs to know whether a popup is open so it can decide
+whether `Esc` should reach the buffer (and dismiss the popup) or be
+handled at the modal layer (closing the modal). `Tab::host_popup_open`
+returns this state; the App pre-fills `TabCtx::host_popup_open` from
+the active tab's value before invoking `ActiveModal::handle_event`.
+Currently only `GraphTab` overrides `host_popup_open` (for its query
+bar buffer) and only `QueryBar` reads `ctx.host_popup_open` (to
+forward all keys — including `Esc` and `Enter` — to the buffer when
+the popup is up).
+
+Outside the popup-open path, `Esc` and `Enter` still close / apply
+the modal directly. This means the modal layer's semantics are
+unchanged for buffers without a provider attached — most mount sites.
+
+[`CompletionPopup`]: ../ft/src/tui/widgets/completion.rs
+
 ### Status-bar modal indicator
 
 When a modal is active, the status bar's right cell renders

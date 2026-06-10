@@ -2664,6 +2664,25 @@ impl Tab for GraphTab {
         "Graph"
     }
 
+    fn host_popup_open(&self) -> bool {
+        // The graph query bar is the only EditBuffer this tab mounts
+        // behind a modal forwarder; check the active view's buffer.
+        self.views
+            .get(self.active)
+            .map(|v| v.query_buf.popup_is_open())
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    fn set_focused_buffer_completion_for_test(
+        &mut self,
+        provider: Box<dyn crate::tui::widgets::CompletionProvider>,
+    ) {
+        if let Some(v) = self.views.get_mut(self.active) {
+            v.query_buf.set_completion(provider);
+        }
+    }
+
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
         if self.graph.is_none() {
             let scan = ctx.vault.scan();
@@ -4935,6 +4954,7 @@ mod view_tests {
             last_refresh: &last_refresh,
             pending_request: &pending_request,
             active_modal_name: None,
+            host_popup_open: false,
         };
 
         // Build graph so views can resolve queries.

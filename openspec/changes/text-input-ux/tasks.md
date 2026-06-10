@@ -59,9 +59,10 @@
 
 ## 6. Modal driver integration
 
-- [ ] 6.1 Confirm the dispatch order works: `ActiveModal.handle_event` calls the modal's `handle_event`, which (if it owns an `EditBuffer`) calls the buffer's `handle_event`, which (if popup is open) calls the popup's `handle_event` first
-- [ ] 6.2 Document this precedence in `docs/architecture.md` (the modal driver section)
-- [ ] 6.3 Test: query bar modal with popup open, press Esc → popup closes (not the modal); press Esc again → modal closes
+- [x] 6.1 The popup is owned by `EditBuffer`, so `EditBuffer::handle_event` is the natural intercept point. The modal driver itself stays untouched; instead the App pre-fills a new `TabCtx::host_popup_open: bool` from `Tab::host_popup_open` (default `false`, overridden by `GraphTab` to read its active view's buffer). The `QueryBar` modal branches on `ctx.host_popup_open`: when true, every key (including `Esc` and `Enter`) is forwarded through the buffer so the popup intercepts; when false, the existing modal-level `Esc → Closed` / `Enter → ApplyQueryBar + Closed` semantics fire.
+- [x] 6.2 Added a "Completion popup dispatch precedence" subsection under the "Modal driver (TUI)" chapter of `docs/architecture.md`, calling out the three-step buffer dispatch (popup → keymap → mutation re-query) and the `host_popup_open` plumbing.
+- [x] 6.3 Integration test `graph_tab_query_bar_esc_dismisses_popup_before_modal` (`ft/src/tui/tests.rs`) attaches a local stub provider via the new `App::set_focused_buffer_completion_for_test`, types a char to open the popup, and asserts: first `Esc` keeps the modal open (popup dismissed); second `Esc` closes the modal.
+- [x] 6.4 (incidental) Mechanical churn — the new `TabCtx::host_popup_open` field lands at every TabCtx construction site (44 in `app.rs`, 1 in `tabs/graph.rs`). All non-dispatch sites pass `false`; only the modal-dispatch site computes the real value via `self.tabs[self.active].host_popup_open()`.
 
 ## 7. Mount sites
 

@@ -6087,6 +6087,77 @@ fn graph_tab_query_bar_alt_bindings_work() -> Result<()> {
     Ok(())
 }
 
+/// §6 modal-driver precedence: with a completion popup open on the
+/// graph query bar, `Esc` dismisses the popup (modal stays open);
+/// pressing `Esc` again closes the modal. Wires the host_popup_open
+/// signal end-to-end: GraphTab → TabCtx → QueryBar::handle_event.
+#[test]
+fn graph_tab_query_bar_esc_dismisses_popup_before_modal() -> Result<()> {
+    use crate::tui::widgets::{
+        CompletionContext, CompletionItem, CompletionKind, CompletionProvider, TriggerSet,
+    };
+
+    /// Local provider for this test (the StubProvider in
+    /// `completion::tests` is `pub(crate)` to the widgets module, so
+    /// we re-declare a minimal one here).
+    #[derive(Debug)]
+    struct LocalStub;
+    impl CompletionProvider for LocalStub {
+        fn complete(&mut self, _ctx: &CompletionContext) -> Vec<CompletionItem> {
+            vec![CompletionItem {
+                label: "node".into(),
+                insert_text: "node".into(),
+                replace_span: None,
+                kind: CompletionKind::Keyword,
+                description: None,
+            }]
+        }
+        fn trigger_on(&self) -> TriggerSet {
+            TriggerSet::printable()
+        }
+    }
+
+    let (_dir, vault) = dirs_vault_for_graph();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Attach the provider before opening the modal — the provider
+    // sits on the view's buffer and gets queried on each char insert.
+    app.set_focused_buffer_completion_for_test(Box::new(LocalStub));
+
+    app.dispatch(key('/'))?;
+    // Clear the default-seeded query, then type a char so the
+    // provider returns its item and the popup opens.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..400 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(key('n'))?;
+
+    // First Esc: popup is open, so QueryBar forwards Esc through the
+    // buffer, the popup dismisses, the modal stays open.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("query-bar"),
+        "first Esc with popup open should dismiss the popup, not the modal"
+    );
+
+    // Second Esc: popup is closed (host_popup_open = false), so
+    // QueryBar handles Esc itself and closes.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    assert_eq!(
+        app.active_modal_name(),
+        None,
+        "second Esc with no popup should close the modal"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn graph_tab_o_opens_selected_note_in_editor() -> Result<()> {
     // dirs fixture has Areas/finance.md, Projects/alpha.md, root.md, and
