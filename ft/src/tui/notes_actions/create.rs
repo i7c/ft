@@ -139,6 +139,7 @@ impl CollisionChoice {
 
 /// Result of feeding a key event to the create flow. The caller maps
 /// these to its own tab-level state transitions.
+#[allow(clippy::large_enum_variant)] // single-slot at App level; size doesn't matter
 pub enum CreateStep {
     /// Key consumed; no state change.
     Stay,

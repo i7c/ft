@@ -10,15 +10,17 @@
 
 ## 1. EditBuffer operations + kill ring
 
-- [ ] 1.1 Add `kill_ring: Option<String>` field to `EditBuffer` (the buffer stores `text: String`; kill ring matches)
-- [ ] 1.2 Implement `move_line_start`, `move_line_end` (set cursor to 0 / char count of `text`)
-- [ ] 1.3 Implement `move_word_back`, `move_word_forward` using the unified `[A-Za-z0-9_]` boundary rule
-- [ ] 1.4 Implement `kill_to_end`, `kill_to_start`: extract the range as `String`, replace it in `text`, store in kill ring, reposition cursor (in char-index space, translating to byte ranges via `char_indices`)
-- [ ] 1.5 Implement `kill_word_back`, `kill_word_forward`: same shape as kill_to_* but bounded by word boundaries
-- [ ] 1.6 **Behavior change**: rework existing `delete_word_backward` to use `[A-Za-z0-9_]` (today: whitespace-bounded). Update existing tests; add a regression test showing the new boundary against punctuation (`foo.bar` → two kills)
-- [ ] 1.7 Implement `yank`: insert `kill_ring.clone()` at cursor (no-op if `None`); does not clear the ring
-- [ ] 1.8 Implement `transpose_chars`: swap chars at and before cursor
-- [ ] 1.9 Unit tests for each operation, including edge cases (cursor at 0, cursor at end, empty buffer, ASCII vs multi-byte chars)
+- [x] 1.1 Add `kill_ring: Option<String>` field to `EditBuffer`
+- [x] 1.2 The existing `home`/`end` methods already do "cursor → 0 / char count". The §2 keymap will map `edit.move-line-start` → `home()` etc.; no rename needed for 18 existing callers.
+- [x] 1.3 Implement `move_word_back`, `move_word_forward` using the unified `[A-Za-z0-9_]` boundary rule
+- [x] 1.4 Implement `kill_to_end`, `kill_to_start` via a private `kill_range(start_char, end_char)` helper that translates char indices to byte offsets, mutates `text`, and updates `kill_ring`
+- [x] 1.5 Implement `kill_word_back`, `kill_word_forward` on top of `kill_range`
+- [x] 1.6 **Behavior change**: rework `delete_word_backward` to delegate to `kill_word_back` — same `[A-Za-z0-9_]` boundary, now also populates the kill ring so `Ctrl+Y` can recover the loss. Existing call sites (18 of them) keep working; their tests still pass because every existing case (whitespace-separated words) produces identical output under both rules.
+- [x] 1.7 Implement `yank`: insert `kill_ring.clone()` at cursor (no-op if `None` or empty); ring is not cleared
+- [x] 1.8 Implement `transpose_chars` matching Emacs semantics (mid-line: swap (cur-1, cur), cursor += 1; at end: swap last two; at start: no-op)
+- [x] 1.9 24 unit tests covering each op + edge cases (cursor at 0, at end, empty buffer, ASCII vs multi-byte chars, punctuation under the new word rule)
+- [x] 1.10 (incidental) Add `#[allow(clippy::large_enum_variant)]` to `CreateStep` (`ft/src/tui/notes_actions/create.rs`) — adding 24 bytes to `EditBuffer` for the kill ring pushed the variant-size delta past clippy's default threshold; same allow pattern as `ActiveModal` (`modal.rs:197`) since this enum is single-slot at the App level
+- [x] 1.11 (incidental) Module-level `#[allow(dead_code)]` on `ft/src/tui/widgets/edit_buffer.rs` while new methods await §2 wiring
 
 ## 2. Edit-buffer keymap
 
