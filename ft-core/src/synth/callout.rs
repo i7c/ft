@@ -73,14 +73,19 @@ pub fn compute_section_hash(body: &str) -> String {
 
 /// Render a [`ProtectedSection`] to its canonical markdown form.
 ///
+/// Paths are always wrapped in double-quotes so the grammar stays
+/// unambiguous regardless of whether the path contains spaces.
+/// Literal `"` characters in the path are not supported (they would
+/// break the grammar); callers should not pass such paths.
+///
 /// The output has no trailing newline; callers control how sections
 /// are joined into the surrounding document.
 pub fn serialize(section: &ProtectedSection) -> String {
     let mut out = String::new();
-    out.push_str("> [!ft-source] ");
+    out.push_str("> [!ft-source] \"");
     out.push_str(&section.source_path.to_string_lossy());
     out.push_str(&format!(
-        " L{}-{} @{} #{}",
+        "\" L{}-{} @{} #{}",
         section.line_start, section.line_end, section.commit_sha, section.content_hash
     ));
     for line in section.body.split('\n') {
@@ -201,7 +206,7 @@ pub fn header_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^>\s*\[!ft-source\]\s+(\S+)\s+L(\d+)-(\d+)\s+@([0-9a-f]{7,40})\s+#([0-9a-f]{6,})\s*$",
+            r#"^>\s*\[!ft-source\]\s+"([^"]+)"\s+L(\d+)-(\d+)\s+@([0-9a-f]{7,40})\s+#([0-9a-f]{6,})\s*$"#,
         )
         .expect("ft-source header regex must compile")
     })
@@ -283,7 +288,7 @@ mod tests {
         let s = sample();
         let out = serialize(&s);
         let expected = "\
-> [!ft-source] notes/foo.md L42-44 @abc1234 #7f3a91
+> [!ft-source] \"notes/foo.md\" L42-44 @abc1234 #7f3a91
 > Some original paragraph
 > spanning two lines.";
         assert_eq!(out, expected);
@@ -294,7 +299,7 @@ mod tests {
         let text = "\
 intro line
 
-> [!ft-source] notes/foo.md L42-44 @abc1234 #7f3a91
+> [!ft-source] \"notes/foo.md\" L42-44 @abc1234 #7f3a91
 > Some original paragraph
 > spanning two lines.
 
@@ -327,11 +332,39 @@ after text
     }
 
     #[test]
+    fn parse_round_trips_path_with_spaces() {
+        // Regression: vaults commonly have folders like `My Notes/` or
+        // `Areas/Personal Notes/`. The scaffold serializer writes them
+        // verbatim; verify must be able to read them back.
+        let s = ProtectedSection {
+            source_path: PathBuf::from("My Notes/sub folder/foo.md"),
+            line_start: 42,
+            line_end: 44,
+            commit_sha: "abc1234".to_string(),
+            content_hash: "7f3a91".to_string(),
+            body: "Some original paragraph\nspanning two lines.".to_string(),
+        };
+        let out = serialize(&s);
+        let parsed = parse(&out);
+        assert_eq!(
+            parsed.len(),
+            1,
+            "callout with spaces in source path should round-trip; serialized:\n{out}\nparsed: {parsed:?}"
+        );
+        assert_eq!(parsed[0].source_path, s.source_path);
+        assert_eq!(parsed[0].line_start, s.line_start);
+        assert_eq!(parsed[0].line_end, s.line_end);
+        assert_eq!(parsed[0].commit_sha, s.commit_sha);
+        assert_eq!(parsed[0].content_hash, s.content_hash);
+        assert_eq!(parsed[0].body, s.body);
+    }
+
+    #[test]
     fn parse_two_adjacent_callouts() {
         let text = "\
-> [!ft-source] a.md L1-1 @aaaaaaa #aaaaaa
+> [!ft-source] \"a.md\" L1-1 @aaaaaaa #aaaaaa
 > first body
-> [!ft-source] b.md L5-7 @bbbbbbb #bbbbbb
+> [!ft-source] \"b.md\" L5-7 @bbbbbbb #bbbbbb
 > second body line 1
 > second body line 2
 ";
@@ -345,7 +378,7 @@ after text
     fn parse_ignores_malformed_header() {
         // Missing the content-hash → not a valid header. Parser skips.
         let text = "\
-> [!ft-source] a.md L1-1 @aaaaaaa
+> [!ft-source] \"a.md\" L1-1 @aaaaaaa
 > not a real callout body
 ";
         let got = parse(text);
@@ -358,7 +391,7 @@ after text
 > [!note] some other callout
 > body here
 
-> [!ft-source] real.md L1-2 @ccccccc #cccccc
+> [!ft-source] \"real.md\" L1-2 @ccccccc #cccccc
 > real body
 ";
         let got = parse(text);
@@ -382,7 +415,7 @@ after text
         let text = "\
 some intro
 
-> [!ft-source] a.md L1-1 @aaaaaaa #aaaaaa
+> [!ft-source] \"a.md\" L1-1 @aaaaaaa #aaaaaa
 > body line 1
 > body line 2
 
@@ -426,8 +459,10 @@ after
     use proptest::prelude::*;
 
     fn arb_section() -> impl Strategy<Value = ProtectedSection> {
-        // Path: nonempty, no whitespace, no newlines, ends in `.md`.
-        let path_strat = "[a-zA-Z][a-zA-Z0-9_/-]{0,40}\\.md".prop_map(PathBuf::from);
+        // Path: nonempty, no `"` (would break the quoted form), no
+        // newlines; spaces ARE allowed since the quoted grammar accepts
+        // them. Always ends in `.md`.
+        let path_strat = "[a-zA-Z][a-zA-Z0-9_/ -]{0,40}\\.md".prop_map(PathBuf::from);
         // Line numbers: small u32, line_end >= line_start.
         let lines_strat = (1u32..=10_000u32, 0u32..=200u32)
             .prop_map(|(start, span)| (start, start.saturating_add(span)));

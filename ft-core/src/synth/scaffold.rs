@@ -278,7 +278,7 @@ mod tests {
         assert!(abs.exists());
         let content = std::fs::read_to_string(&abs).unwrap();
         assert!(content.starts_with("---\nft-synth: true\n---\n"));
-        assert!(content.contains("> [!ft-source] notes/source.md L1-2 @"));
+        assert!(content.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
         assert!(content.contains("> First paragraph here.\n> Line two of first."));
         let _ = tmp;
     }
@@ -305,7 +305,7 @@ mod tests {
         // Existing prose preserved at the top.
         assert!(content.contains("User prose already here."));
         // New section appended.
-        assert!(content.contains("> [!ft-source] notes/source.md L1-2 @"));
+        assert!(content.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
         assert!(content.contains("> First paragraph here.\n> Line two of first."));
     }
 

@@ -7,7 +7,7 @@
 //! callout blocks of the form
 //!
 //! ```text
-//! > [!ft-source] <vault-rel-path> L<a>-<b> @<sha7> #<hash6>
+//! > [!ft-source] "<vault-rel-path>" L<a>-<b> @<sha7> #<hash6>
 //! > <paragraph line 1>
 //! > <paragraph line 2>
 //! ```

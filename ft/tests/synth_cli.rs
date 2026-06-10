@@ -64,9 +64,9 @@ fn scaffold_create_writes_frontmatter_and_callouts() {
     written.assert(predicates::path::is_file());
     let body = std::fs::read_to_string(written.path()).unwrap();
     assert!(body.starts_with("---\nft-synth: true\n---\n"));
-    assert!(body.contains("> [!ft-source] notes/source.md L1-2 @"));
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
     assert!(body.contains("> First paragraph mentions [[Foo]]."));
-    assert!(body.contains("> [!ft-source] notes/source.md L4-4 @"));
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L4-4 @"));
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn scaffold_append_preserves_existing_content() {
 
     let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
     assert!(body.contains("User prose written earlier."));
-    assert!(body.contains("> [!ft-source] notes/source.md L"));
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L"));
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn scaffold_from_picks_specific_paragraph() {
     .success();
     let body = std::fs::read_to_string(tmp.child("Synthesis/picked.md").path()).unwrap();
     // Exactly one section, from the second paragraph (line 4).
-    assert!(body.contains("> [!ft-source] notes/source.md L4-4 @"));
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L4-4 @"));
     assert!(body.contains("> Second paragraph mentions [[Foo]] again."));
     // First-paragraph content should NOT appear.
     assert!(!body.contains("> First paragraph mentions"));

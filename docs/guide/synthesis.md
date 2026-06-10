@@ -105,13 +105,13 @@ ft-synth: true
 
 I keep coming back to this idea that …
 
-> [!ft-source] notes/spectral.md L42-44 @abc1234 #7f3a91
+> [!ft-source] "notes/spectral.md" L42-44 @abc1234 #7f3a91
 > An eigen-decomposition factors a matrix into directions of
 > stretching and scaling. Most of linear algebra rides on it.
 
 … which connects to …
 
-> [!ft-source] daily/2026-05-08.md L12-13 @def5678 #2a1b9c
+> [!ft-source] "daily/2026-05-08.md" L12-13 @def5678 #2a1b9c
 > Memoizing the recursive build of the Hessian is what made the
 > whole thing tractable.
 

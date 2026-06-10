@@ -15,12 +15,12 @@ A synth note SHALL be identified by the presence of `ft-synth: true` in its YAML
 - **THEN** it is treated as a regular note (callouts inside it do not protect anything from link-review counting)
 
 ### Requirement: Protected-section callout grammar
-A protected section SHALL be an Obsidian-style callout whose header line matches the form `> [!ft-source] <vault-rel-path> L<a>-<b> @<sha7> #<hash6>` and whose body consists of one or more `> <line>` lines. Each protected section SHALL correspond to exactly one source paragraph (no fusing of adjacent paragraphs from the same source). The header tokens SHALL appear in fixed order; whitespace between tokens SHALL be one or more space characters. The hash SHALL be the first 6 hex chars of the blake3 digest of the source paragraph text (joined with `\n`, no trailing newline). The commit hash SHALL be the first 7 hex chars of the full git commit SHA.
+A protected section SHALL be an Obsidian-style callout whose header line matches the form `> [!ft-source] "<vault-rel-path>" L<a>-<b> @<sha7> #<hash6>` and whose body consists of one or more `> <line>` lines. The vault-relative path SHALL be wrapped in straight double-quotes (`"`) so the grammar remains unambiguous regardless of whether the path contains spaces. Paths containing a literal `"` character are not supported. Each protected section SHALL correspond to exactly one source paragraph (no fusing of adjacent paragraphs from the same source). The header tokens SHALL appear in fixed order; whitespace between tokens SHALL be one or more space characters. The hash SHALL be the first 6 hex chars of the blake3 digest of the source paragraph text (joined with `\n`, no trailing newline). The commit hash SHALL be the first 7 hex chars of the full git commit SHA.
 
 #### Scenario: Well-formed protected section
 - **WHEN** a synth note contains:
   ```
-  > [!ft-source] notes/foo.md L42-44 @abc1234 #7f3a91
+  > [!ft-source] "notes/foo.md" L42-44 @abc1234 #7f3a91
   > Some original paragraph
   > spanning two lines.
   ```

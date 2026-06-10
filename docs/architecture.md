@@ -203,7 +203,7 @@ A **protected section** is an Obsidian-style callout written verbatim
 into the synth note's markdown:
 
 ```
-> [!ft-source] notes/foo.md L42-44 @abc1234 #7f3a91
+> [!ft-source] "notes/foo.md" L42-44 @abc1234 #7f3a91
 > The original paragraph text
 > spanning two lines.
 ```

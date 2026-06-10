@@ -649,7 +649,7 @@ mod tests {
 ft-synth: true
 ---
 
-> [!ft-source] notes/x.md L1-1 @aaaaaaa #aaaaaa
+> [!ft-source] \"notes/x.md\" L1-1 @aaaaaaa #aaaaaa
 > Original line mentions [[Foo]] verbatim.
 
 Then I add a thought about [[Bar]].
