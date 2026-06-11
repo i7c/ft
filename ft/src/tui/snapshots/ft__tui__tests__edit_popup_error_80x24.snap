@@ -8,12 +8,12 @@ expression: frame
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ tasks ───────────────────────────────────────────────────────────────────────┐
 │ ── overdu┌ edit task ─────────────────────────────────────────────┐          │
-│▶   !!  Pa│                                                        │ 📅  2d ago│
-│    !   Re│  description : Pay rent                                │ yesterday│
+│▶   !!  Pa│                                                        │          │
+│    !   Re│  description : Pay rent                                │          │
 │ ── upcomi│          due : not-a-date│                             │          │
-│        Re│    scheduled :                                         │  📅  today│
+│        Re│    scheduled :                                         │          │
 │    !!  Su│     priority : high                                    │  tomorrow│
-│    v   Bu│         tags :                                         │  📅  in 5d│
+│    v   Bu│         tags :                                         │          │
 │          │   recurrence :                                         │          │
 │          │                                                        │          │
 │          │  ⚠ due: could not parse `not-a-date` as a date (try YYY│          │

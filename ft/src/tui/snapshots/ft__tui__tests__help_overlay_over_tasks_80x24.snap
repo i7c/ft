@@ -8,12 +8,12 @@ expression: frame
 └─────────│  Global                                                  │─────────┘
 ┌ tasks ──│  q / Ctrl+c  Quit the TUI                                │─────────┐
 │ ── overd│  ?           Open the keymap help overlay                │         │
-│▶   !!  P│  g           Enter the git-sync leader (then `s` to sync)│📅  2d ago│
-│    !   R│  Tab         Switch to the next tab                      │yesterday│
+│▶   !!  P│  g           Enter the git-sync leader (then `s` to sync)│         │
+│    !   R│  Tab         Switch to the next tab                      │         │
 │ ── upcom│  BackTab     Switch to the previous tab                  │         │
-│        R│  1..9        Switch to the tab at the given 0-based index│ 📅  today│
+│        R│  1..9        Switch to the tab at the given 0-based index│         │
 │    !!  S│                                                          │ tomorrow│
-│    v   B│  press ? or Esc to close                                 │ 📅  in 5d│
+│    v   B│  press ? or Esc to close                                 │         │
 │         │                                                          │         │
 │         │                                                          │         │
 │         │                                                          │         │
