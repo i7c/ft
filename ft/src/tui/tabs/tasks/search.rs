@@ -1212,6 +1212,9 @@ impl SearchView {
             }
         }
 
+        // Popup-frame chords (focus moves, close) take precedence over
+        // the buffer's EDIT_KEYMAP. `Tab`/`BackTab`/`Up`/`Down`
+        // navigate between fields; the focused buffer never sees them.
         match (k.code, k.modifiers) {
             (KeyCode::Esc, _) => {
                 self.popup = None;
@@ -1220,24 +1223,9 @@ impl SearchView {
             (KeyCode::BackTab, _) => popup.focus = popup.prev_field(),
             (KeyCode::Down, _) => popup.focus = popup.next_field(),
             (KeyCode::Up, _) => popup.focus = popup.prev_field(),
-            (KeyCode::Backspace, m)
-                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-            {
-                popup.focused_buffer_mut().delete_word_backward();
+            _ => {
+                let _ = popup.focused_buffer_mut().handle_event(k);
             }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                popup.focused_buffer_mut().delete_word_backward();
-            }
-            (KeyCode::Backspace, _) => popup.focused_buffer_mut().backspace(),
-            (KeyCode::Delete, _) => popup.focused_buffer_mut().delete(),
-            (KeyCode::Left, _) => popup.focused_buffer_mut().left(),
-            (KeyCode::Right, _) => popup.focused_buffer_mut().right(),
-            (KeyCode::Home, _) => popup.focused_buffer_mut().home(),
-            (KeyCode::End, _) => popup.focused_buffer_mut().end(),
-            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                popup.focused_buffer_mut().insert(c);
-            }
-            _ => {}
         }
         Ok(EventOutcome::Consumed)
     }
@@ -1420,61 +1408,18 @@ impl SearchView {
     }
 
     fn handle_edit_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
-        match (k.code, k.modifiers) {
-            (KeyCode::Esc, _) => {
+        match k.code {
+            KeyCode::Esc => {
                 self.cancel_edit();
             }
-            (KeyCode::Enter, _) => {
+            KeyCode::Enter => {
                 self.apply_edit(ctx);
             }
-            (KeyCode::Backspace, m)
-                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-            {
+            _ => {
                 if let Some(b) = self.edit_state.as_mut() {
-                    b.delete_word_backward();
+                    let _ = b.handle_event(k);
                 }
             }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.delete_word_backward();
-                }
-            }
-            (KeyCode::Backspace, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.backspace();
-                }
-            }
-            (KeyCode::Delete, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.delete();
-                }
-            }
-            (KeyCode::Left, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.left();
-                }
-            }
-            (KeyCode::Right, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.right();
-                }
-            }
-            (KeyCode::Home, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.home();
-                }
-            }
-            (KeyCode::End, _) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.end();
-                }
-            }
-            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                if let Some(b) = self.edit_state.as_mut() {
-                    b.insert(c);
-                }
-            }
-            _ => {}
         }
         EventOutcome::Consumed
     }
@@ -1486,8 +1431,10 @@ impl SearchView {
             return Ok(EventOutcome::Consumed);
         };
 
-        // Submitting clears `error` for re-evaluation; navigation keys
-        // leave it alone so a stale error stays visible.
+        // Quickline-specific chords: Esc/Enter/Ctrl+E. Everything else
+        // is forwarded to the buffer's EDIT_KEYMAP, which clears the
+        // error on any text mutation. Cursor-only moves preserve the
+        // error so a stale message stays visible until the user retypes.
         match (k.code, k.modifiers) {
             (KeyCode::Esc, _) => {
                 self.quickline = None;
@@ -1503,33 +1450,13 @@ impl SearchView {
                 self.popup = Some(EditPopup::from_quickline(&parse));
                 self.quickline = None;
             }
-            (KeyCode::Backspace, m)
-                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-            {
-                ql.input.delete_word_backward();
-                ql.error = None;
+            _ => {
+                let before = ql.input.text.clone();
+                let _ = ql.input.handle_event(k);
+                if ql.input.text != before {
+                    ql.error = None;
+                }
             }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                ql.input.delete_word_backward();
-                ql.error = None;
-            }
-            (KeyCode::Backspace, _) => {
-                ql.input.backspace();
-                ql.error = None;
-            }
-            (KeyCode::Delete, _) => {
-                ql.input.delete();
-                ql.error = None;
-            }
-            (KeyCode::Left, _) => ql.input.left(),
-            (KeyCode::Right, _) => ql.input.right(),
-            (KeyCode::Home, _) => ql.input.home(),
-            (KeyCode::End, _) => ql.input.end(),
-            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                ql.input.insert(c);
-                ql.error = None;
-            }
-            _ => {}
         }
         Ok(EventOutcome::Consumed)
     }

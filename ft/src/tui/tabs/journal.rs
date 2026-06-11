@@ -703,55 +703,11 @@ impl JournalTab {
                         self.commit_send(ctx, &target, false);
                     }
                 }
-                KeyCode::Char(c) => {
-                    buf.insert(c);
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-                KeyCode::Backspace => {
-                    buf.backspace();
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-                KeyCode::Left => {
-                    buf.left();
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-                KeyCode::Right => {
-                    buf.right();
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-                KeyCode::Home => {
-                    buf.home();
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-                KeyCode::End => {
-                    buf.end();
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
+                // All text edits + cursor moves + readline chords go
+                // through the buffer's EDIT_KEYMAP. Any returned
+                // outcome (Consumed or NotHandled) re-parks the state.
                 _ => {
+                    let _ = buf.handle_event(k);
                     self.synth_send = Some(SynthSendState::TitlePrompt {
                         folder,
                         buf,

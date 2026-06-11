@@ -9,10 +9,8 @@
 //!
 //! Word boundaries follow a uniform `[A-Za-z0-9_]` rule: a word is a
 //! maximal run of those chars. Every word-aware operation
-//! (`delete_word_backward`, `move_word_back`, `move_word_forward`,
-//! `kill_word_back`, `kill_word_forward`) uses the same definition.
-//! This is a deliberate change from the pre-`text-input-ux` behaviour
-//! of `delete_word_backward`, which used whitespace boundaries.
+//! (`move_word_back`, `move_word_forward`, `kill_word_back`,
+//! `kill_word_forward`) uses the same definition.
 //!
 //! A single-slot kill ring backs the kill/yank operations (`Ctrl+K`,
 //! `Ctrl+U`, `Ctrl+W`, `Alt+D` populate it; `Ctrl+Y` reads it). Each
@@ -260,16 +258,6 @@ impl EditBuffer {
         self.kill_range(self.cursor, i);
     }
 
-    /// Delete the word before the cursor (without involving the kill
-    /// ring's read side — but, post-`text-input-ux`, kills *do* populate
-    /// the ring so `Ctrl+Y` can recover the loss). Word boundary is the
-    /// shared `[A-Za-z0-9_]` rule. Pre-`text-input-ux` this used
-    /// whitespace boundaries; e.g. `foo.bar.baz` was one delete, now
-    /// it's three.
-    pub fn delete_word_backward(&mut self) {
-        self.kill_word_back();
-    }
-
     // ── Yank ─────────────────────────────────────────────────────────
 
     /// Insert the kill ring's contents at the cursor and advance the
@@ -453,15 +441,6 @@ mod tests {
         assert_eq!(b.text, "foo  baz");
         assert_eq!(b.cursor, 4);
         assert_eq!(b.kill_ring.as_deref(), Some("bar"));
-    }
-
-    #[test]
-    fn delete_word_backward_delegates_to_kill_word_back() {
-        // Public alias kept for the 18 existing callers.
-        let mut b = buf("alpha beta", 10);
-        b.delete_word_backward();
-        assert_eq!(b.text, "alpha ");
-        assert_eq!(b.kill_ring.as_deref(), Some("beta"));
     }
 
     // ── yank ─────────────────────────────────────────────────────────

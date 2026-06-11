@@ -1879,6 +1879,108 @@ fn ctrl_w_deletes_word_in_query_bar() -> Result<()> {
     Ok(())
 }
 
+/// §7 per-mount-site coverage: readline bindings reach the tasks tab
+/// `/` search picker via `EditBuffer::handle_event`. Pre-§7 the
+/// picker hand-rolled key dispatch and dropped Ctrl+A/E/Alt+B.
+#[test]
+fn ctrl_a_jumps_to_start_in_tasks_search_picker() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "xyz".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Ctrl+A jumps cursor to start; insert 'Z' there.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(key('Z'))?;
+    let frame = render(&mut app, 80, 24);
+    // After Ctrl+A then Z, the buffer holds "Zxyz" with the cursor
+    // between Z and x; the renderer paints the cursor as a `│` glyph
+    // between them. Strip all `│` (box-drawing + cursor) from the
+    // line so we can match the contiguous buffer text.
+    let query_line = frame
+        .lines()
+        .find(|l| l.contains('Z') && l.contains("xyz"))
+        .unwrap_or_else(|| panic!("expected query line with Z + xyz:\n{frame}"));
+    let stripped: String = query_line.chars().filter(|&c| c != '│').collect();
+    assert!(
+        stripped.contains("Zxyz"),
+        "stripped query line should contain `Zxyz`:\n{stripped}\n(raw: {query_line})"
+    );
+    Ok(())
+}
+
+/// §7: readline bindings reach the tasks tab edit popup (`e`) via
+/// `EditBuffer::handle_event`. The popup wraps multiple fields and
+/// previously hand-rolled key dispatch.
+#[test]
+fn ctrl_a_jumps_to_start_in_tasks_edit_popup() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Focus starts on description, which holds "Pay rent" in the fixture.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    // Ctrl+A jumps to start of description; insert "X".
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(key('X'))?;
+    let frame = render(&mut app, 80, 24);
+    let line = frame
+        .lines()
+        .find(|l| l.contains('X') && l.contains("Pay rent"))
+        .unwrap_or_else(|| panic!("expected line with X + Pay rent:\n{frame}"));
+    let stripped: String = line.chars().filter(|&c| c != '│').collect();
+    assert!(
+        stripped.contains("XPay rent"),
+        "stripped description line should contain `XPay rent`:\n{stripped}\n(raw: {line})"
+    );
+    Ok(())
+}
+
+/// §7: readline bindings reach the tasks tab quickline (`c`).
+#[test]
+fn alt_b_word_jump_in_tasks_quickline() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "buy milk".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Cursor at end (8). Alt+B → cursor lands at 4 (start of "milk").
+    // Insert 'X' there.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::ALT,
+    )))?;
+    app.dispatch(key('X'))?;
+    let frame = render(&mut app, 80, 24);
+    let line = frame
+        .lines()
+        .find(|l| l.contains("buy") && l.contains('X') && l.contains("milk"))
+        .unwrap_or_else(|| panic!("expected quickline with buy + X + milk:\n{frame}"));
+    let stripped: String = line.chars().filter(|&c| c != '│').collect();
+    assert!(
+        stripped.contains("buy Xmilk"),
+        "stripped quickline should contain `buy Xmilk`:\n{stripped}\n(raw: {line})"
+    );
+    Ok(())
+}
+
 #[test]
 fn ctrl_backspace_deletes_word_in_edit_popup_field() -> Result<()> {
     let (_dir, vault) = populated_vault();

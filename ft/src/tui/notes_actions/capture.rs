@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ft_core::config::{CaptureAction, CapturePreset};
 use ft_core::fs::write_atomic;
 use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
@@ -245,10 +245,9 @@ pub fn handle_capture_var_key(
     k: KeyEvent,
     ctx: &TabCtx,
 ) -> bool {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    match (k.code, ctrl) {
-        (KeyCode::Esc, _) => return true,
-        (KeyCode::Enter, _) => {
+    match k.code {
+        KeyCode::Esc => return true,
+        KeyCode::Enter => {
             let key_name = state
                 .commit
                 .vars_needed
@@ -268,31 +267,9 @@ pub fn handle_capture_var_key(
                 state.buf.cursor = 0;
             }
         }
-        (KeyCode::Char('w'), true) => {
-            state.buf.delete_word_backward();
+        _ => {
+            let _ = state.buf.handle_event(k);
         }
-        (KeyCode::Char(c), false) => {
-            state.buf.insert(c);
-        }
-        (KeyCode::Backspace, _) => {
-            state.buf.backspace();
-        }
-        (KeyCode::Delete, _) => {
-            state.buf.delete();
-        }
-        (KeyCode::Left, _) => {
-            state.buf.left();
-        }
-        (KeyCode::Right, _) => {
-            state.buf.right();
-        }
-        (KeyCode::Home, _) => {
-            state.buf.home();
-        }
-        (KeyCode::End, _) => {
-            state.buf.end();
-        }
-        _ => {}
     }
     false
 }

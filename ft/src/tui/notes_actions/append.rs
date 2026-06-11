@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ft_core::fs::write_atomic;
 use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
 use ft_core::notes::template::render as render_template;
@@ -33,7 +33,8 @@ use crate::tui::{
     },
     tab::{AppRequest, TabCtx, ToastStyle},
     widgets::{
-        EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+        edit_keymap::EditOutcome, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
+        VaultFilePickerSource,
     },
 };
 
@@ -257,10 +258,9 @@ fn handle_var_key(
     buf: &mut EditBuffer,
     ctx: &TabCtx,
 ) -> AppendStep {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    match (k.code, ctrl) {
-        (KeyCode::Esc, _) => AppendStep::Finished,
-        (KeyCode::Enter, _) => {
+    match k.code {
+        KeyCode::Esc => AppendStep::Finished,
+        KeyCode::Enter => {
             let key_name = template
                 .vars_needed
                 .get(*next_idx)
@@ -284,39 +284,12 @@ fn handle_var_key(
                 AppendStep::Stay
             }
         }
-        (KeyCode::Char('w'), true) => {
-            buf.delete_word_backward();
-            AppendStep::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            buf.insert(c);
-            AppendStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            buf.backspace();
-            AppendStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            buf.delete();
-            AppendStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            buf.left();
-            AppendStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            buf.right();
-            AppendStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            buf.home();
-            AppendStep::Stay
-        }
-        (KeyCode::End, _) => {
-            buf.end();
-            AppendStep::Stay
-        }
-        _ => AppendStep::NotHandled,
+        // Delegate all text edits + cursor moves to the buffer's
+        // EDIT_KEYMAP (Ctrl+A/E, Alt+B/F/D, Ctrl+W, Ctrl+Y, etc.).
+        _ => match buf.handle_event(k) {
+            EditOutcome::Consumed => AppendStep::Stay,
+            EditOutcome::NotHandled => AppendStep::NotHandled,
+        },
     }
 }
 

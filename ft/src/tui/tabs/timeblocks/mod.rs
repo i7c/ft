@@ -886,35 +886,10 @@ impl TimeblocksTab {
                 self.commit_quickline(ctx, &input);
                 EventOutcome::Consumed
             }
-            KeyCode::Backspace => {
-                buf.backspace();
+            _ => {
+                let _ = buf.handle_event(k);
                 EventOutcome::Consumed
             }
-            KeyCode::Delete => {
-                buf.delete();
-                EventOutcome::Consumed
-            }
-            KeyCode::Left => {
-                buf.left();
-                EventOutcome::Consumed
-            }
-            KeyCode::Right => {
-                buf.right();
-                EventOutcome::Consumed
-            }
-            KeyCode::Home => {
-                buf.home();
-                EventOutcome::Consumed
-            }
-            KeyCode::End => {
-                buf.end();
-                EventOutcome::Consumed
-            }
-            KeyCode::Char(c) => {
-                buf.insert(c);
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
         }
     }
 
@@ -1033,35 +1008,10 @@ impl TimeblocksTab {
                 self.commit_edit_desc(ctx, pane, block_idx, new_desc);
                 EventOutcome::Consumed
             }
-            KeyCode::Backspace => {
-                buf.backspace();
+            _ => {
+                let _ = buf.handle_event(k);
                 EventOutcome::Consumed
             }
-            KeyCode::Delete => {
-                buf.delete();
-                EventOutcome::Consumed
-            }
-            KeyCode::Left => {
-                buf.left();
-                EventOutcome::Consumed
-            }
-            KeyCode::Right => {
-                buf.right();
-                EventOutcome::Consumed
-            }
-            KeyCode::Home => {
-                buf.home();
-                EventOutcome::Consumed
-            }
-            KeyCode::End => {
-                buf.end();
-                EventOutcome::Consumed
-            }
-            KeyCode::Char(c) => {
-                buf.insert(c);
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
         }
     }
 
@@ -1150,35 +1100,10 @@ impl TimeblocksTab {
                 }
                 EventOutcome::Consumed
             }
-            KeyCode::Backspace => {
-                form_buf_mut(state).backspace();
+            _ => {
+                let _ = form_buf_mut(state).handle_event(k);
                 EventOutcome::Consumed
             }
-            KeyCode::Delete => {
-                form_buf_mut(state).delete();
-                EventOutcome::Consumed
-            }
-            KeyCode::Left => {
-                form_buf_mut(state).left();
-                EventOutcome::Consumed
-            }
-            KeyCode::Right => {
-                form_buf_mut(state).right();
-                EventOutcome::Consumed
-            }
-            KeyCode::Home => {
-                form_buf_mut(state).home();
-                EventOutcome::Consumed
-            }
-            KeyCode::End => {
-                form_buf_mut(state).end();
-                EventOutcome::Consumed
-            }
-            KeyCode::Char(c) => {
-                form_buf_mut(state).insert(c);
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
         }
     }
 
@@ -1229,35 +1154,10 @@ impl TimeblocksTab {
                 self.commit_tagging(ctx, pane, block_idx, &input);
                 EventOutcome::Consumed
             }
-            KeyCode::Backspace => {
-                buf.backspace();
+            _ => {
+                let _ = buf.handle_event(k);
                 EventOutcome::Consumed
             }
-            KeyCode::Delete => {
-                buf.delete();
-                EventOutcome::Consumed
-            }
-            KeyCode::Left => {
-                buf.left();
-                EventOutcome::Consumed
-            }
-            KeyCode::Right => {
-                buf.right();
-                EventOutcome::Consumed
-            }
-            KeyCode::Home => {
-                buf.home();
-                EventOutcome::Consumed
-            }
-            KeyCode::End => {
-                buf.end();
-                EventOutcome::Consumed
-            }
-            KeyCode::Char(c) => {
-                buf.insert(c);
-                EventOutcome::Consumed
-            }
-            _ => EventOutcome::Consumed,
         }
     }
 

@@ -39,7 +39,9 @@ use regex::Regex;
 use crate::tui::{
     notes_actions::queue_toast,
     tab::{AppRequest, TabCtx, ToastStyle},
-    widgets::{EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome},
+    widgets::{
+        edit_keymap::EditOutcome, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
+    },
 };
 
 // ── State ────────────────────────────────────────────────────────────
@@ -435,10 +437,9 @@ fn handle_filename_key(
     error: &mut Option<String>,
     ctx: &TabCtx,
 ) -> CreateStep {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    match (k.code, ctrl) {
-        (KeyCode::Esc, _) => CreateStep::Transition(begin_folder_picking(ctx, template.take())),
-        (KeyCode::Enter, _) => {
+    match k.code {
+        KeyCode::Esc => CreateStep::Transition(begin_folder_picking(ctx, template.take())),
+        KeyCode::Enter => {
             let trimmed = buf.text.trim();
             if trimmed.is_empty() {
                 *error = Some("filename is required".into());
@@ -490,43 +491,13 @@ fn handle_filename_key(
                 }
             }
         }
-        (KeyCode::Char('w'), true) => {
-            buf.delete_word_backward();
-            *error = None;
-            CreateStep::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            buf.insert(c);
-            *error = None;
-            CreateStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            buf.backspace();
-            *error = None;
-            CreateStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            buf.delete();
-            *error = None;
-            CreateStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            buf.left();
-            CreateStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            buf.right();
-            CreateStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            buf.home();
-            CreateStep::Stay
-        }
-        (KeyCode::End, _) => {
-            buf.end();
-            CreateStep::Stay
-        }
-        _ => CreateStep::NotHandled,
+        _ => match buf.handle_event(k) {
+            EditOutcome::Consumed => {
+                *error = None;
+                CreateStep::Stay
+            }
+            EditOutcome::NotHandled => CreateStep::NotHandled,
+        },
     }
 }
 
@@ -541,10 +512,9 @@ fn handle_var_key(
     buf: &mut EditBuffer,
     ctx: &TabCtx,
 ) -> CreateStep {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    match (k.code, ctrl) {
-        (KeyCode::Esc, _) => CreateStep::Finished,
-        (KeyCode::Enter, _) => {
+    match k.code {
+        KeyCode::Esc => CreateStep::Finished,
+        KeyCode::Enter => {
             let key_name = template
                 .vars_needed
                 .get(*next_idx)
@@ -571,39 +541,10 @@ fn handle_var_key(
                 CreateStep::Stay
             }
         }
-        (KeyCode::Char('w'), true) => {
-            buf.delete_word_backward();
-            CreateStep::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            buf.insert(c);
-            CreateStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            buf.backspace();
-            CreateStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            buf.delete();
-            CreateStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            buf.left();
-            CreateStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            buf.right();
-            CreateStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            buf.home();
-            CreateStep::Stay
-        }
-        (KeyCode::End, _) => {
-            buf.end();
-            CreateStep::Stay
-        }
-        _ => CreateStep::NotHandled,
+        _ => match buf.handle_event(k) {
+            EditOutcome::Consumed => CreateStep::Stay,
+            EditOutcome::NotHandled => CreateStep::NotHandled,
+        },
     }
 }
 

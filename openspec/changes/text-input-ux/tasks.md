@@ -66,8 +66,11 @@
 
 ## 7. Mount sites
 
-- [ ] 7.1 Audit every `EditBuffer` mount site and confirm new bindings work: graph query bar (post-§0), `FuzzyPicker` input (`ft/src/tui/widgets/picker.rs:88`), `GraphRenameState.buffer` (`ft/src/tui/tabs/graph.rs:985`), `AppendState.buf`, `CaptureVarPromptState.buf`, `CreateSubdirState.buf`, `Mode::Quickline/EditDesc/Form` fields in timeblocks, tasks search `edit_state` + `Quickline.input`, journal entry `buf`
-- [ ] 7.2 Integration test in `ft/src/tui/tests.rs` per site: open the input, press `Ctrl+A`, type, press `Ctrl+E`, press `Ctrl+K`, snapshot the buffer state. Query-bar test goes first since it's the headline feature.
+- [x] 7.1 Every mount site refactored from hand-rolled `match (key.code, modifiers)` to delegate to `buf.handle_event(key)`. Sites converted: `FuzzyPicker::handle_key` (`widgets/picker.rs`), `AppendState` var prompt (`notes_actions/append.rs`), `CreateState` filename + var prompts (`notes_actions/create.rs`, two functions), `CaptureVarPromptState::handle_capture_var_key` (`notes_actions/capture.rs`), section-move rename + new-target + var prompts (`notes_actions/section_move.rs`, three functions), `GraphRenameState` (`tabs/graph.rs`), `CreateSubdirState` (`modal.rs`), timeblocks Quickline / EditDesc / Form / Tagging handlers (`tabs/timeblocks/mod.rs`, four functions), tasks search edit popup + edit-state + quickline (`tabs/tasks/search.rs`, three functions), journal title prompt (`tabs/journal.rs`).
+- [x] 7.2 Site-specific chords (Esc/Enter for close+commit, Tab/Up/Down for picker nav, Ctrl+E for quickline-to-form expand) handled at the site; everything else delegated to the buffer. Picker keeps `Ctrl+J`/`Ctrl+K` for nav (these override the buffer's `kill-to-end`).
+- [x] 7.3 Three new integration tests in `tests.rs` prove the post-refactor mount sites route Ctrl+A / Alt+B end-to-end through real key dispatch: `ctrl_a_jumps_to_start_in_tasks_search_picker` (FuzzyPicker mount), `ctrl_a_jumps_to_start_in_tasks_edit_popup` (multi-field popup mount), `alt_b_word_jump_in_tasks_quickline` (quickline mount). The existing `ctrl_w_deletes_word_in_query_bar`, `ctrl_backspace_deletes_word_in_query_bar`, and `ctrl_backspace_deletes_word_in_edit_popup_field` tests still pass — those routed through the now-deleted `delete_word_backward`, which folded into `kill_word_back` under the unified word rule.
+- [x] 7.4 `EditBuffer::delete_word_backward` deleted — every caller now goes through `EDIT_KEYMAP` dispatch, so the public alias was dead code. Test that exercised it also deleted.
+- [x] 7.5 (incidental) Removed `KeyModifiers` import from `notes_actions/append.rs` and `notes_actions/capture.rs` since handlers no longer destructure modifiers.
 
 ## 8. Docs
 

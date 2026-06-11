@@ -39,7 +39,8 @@ use crate::tui::{
     },
     tab::{TabCtx, ToastStyle},
     widgets::{
-        EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+        edit_keymap::EditOutcome, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
+        VaultFilePickerSource,
     },
 };
 
@@ -743,13 +744,12 @@ fn handle_rename_buffer_key(
     let Some(rb) = editing.as_mut() else {
         return MoveStep::NotHandled;
     };
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    match (k.code, ctrl) {
-        (KeyCode::Esc, _) => {
+    match k.code {
+        KeyCode::Esc => {
             *editing = None;
             MoveStep::Stay
         }
-        (KeyCode::Enter, _) => {
+        KeyCode::Enter => {
             let trimmed = rb.buf.text.trim();
             if trimmed.is_empty() {
                 queue_toast(ctx, "rename cannot be empty", ToastStyle::Error);
@@ -767,41 +767,14 @@ fn handle_rename_buffer_key(
             *editing = None;
             MoveStep::Stay
         }
-        (KeyCode::Char('w'), true) => {
-            rb.buf.delete_word_backward();
+        // All edits + cursor moves go through the buffer's keymap.
+        // Unrecognised chords are swallowed (return Stay, not
+        // NotHandled) so compose-level keys (`r`, `Shift+↑`, …) don't
+        // fire under the rename buffer.
+        _ => {
+            let _ = rb.buf.handle_event(k);
             MoveStep::Stay
         }
-        (KeyCode::Char(c), false) => {
-            rb.buf.insert(c);
-            MoveStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            rb.buf.backspace();
-            MoveStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            rb.buf.delete();
-            MoveStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            rb.buf.left();
-            MoveStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            rb.buf.right();
-            MoveStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            rb.buf.home();
-            MoveStep::Stay
-        }
-        (KeyCode::End, _) => {
-            rb.buf.end();
-            MoveStep::Stay
-        }
-        // Swallow everything else so compose-level keys (`r`, `Shift+↑`,
-        // navigation, Enter-modifiers) can't fire under the buffer.
-        _ => MoveStep::Stay,
     }
 }
 
@@ -1378,43 +1351,13 @@ fn handle_new_target_filename_key(
                 ),
             }
         }
-        (KeyCode::Char('w'), true) => {
-            buf.delete_word_backward();
-            *error = None;
-            MoveStep::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            buf.insert(c);
-            *error = None;
-            MoveStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            buf.backspace();
-            *error = None;
-            MoveStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            buf.delete();
-            *error = None;
-            MoveStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            buf.left();
-            MoveStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            buf.right();
-            MoveStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            buf.home();
-            MoveStep::Stay
-        }
-        (KeyCode::End, _) => {
-            buf.end();
-            MoveStep::Stay
-        }
-        _ => MoveStep::NotHandled,
+        _ => match buf.handle_event(k) {
+            EditOutcome::Consumed => {
+                *error = None;
+                MoveStep::Stay
+            }
+            EditOutcome::NotHandled => MoveStep::NotHandled,
+        },
     }
 }
 
@@ -1468,39 +1411,10 @@ fn handle_new_target_var_key(
                 MoveStep::Stay
             }
         }
-        (KeyCode::Char('w'), true) => {
-            buf.delete_word_backward();
-            MoveStep::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            buf.insert(c);
-            MoveStep::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            buf.backspace();
-            MoveStep::Stay
-        }
-        (KeyCode::Delete, _) => {
-            buf.delete();
-            MoveStep::Stay
-        }
-        (KeyCode::Left, _) => {
-            buf.left();
-            MoveStep::Stay
-        }
-        (KeyCode::Right, _) => {
-            buf.right();
-            MoveStep::Stay
-        }
-        (KeyCode::Home, _) => {
-            buf.home();
-            MoveStep::Stay
-        }
-        (KeyCode::End, _) => {
-            buf.end();
-            MoveStep::Stay
-        }
-        _ => MoveStep::NotHandled,
+        _ => match buf.handle_event(k) {
+            EditOutcome::Consumed => MoveStep::Stay,
+            EditOutcome::NotHandled => MoveStep::NotHandled,
+        },
     }
 }
 

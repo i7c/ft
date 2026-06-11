@@ -1011,9 +1011,9 @@ impl Modal for GraphRenameState {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
         };
-        match (k.code, k.modifiers) {
-            (KeyCode::Esc, _) => ModalOutcome::Closed,
-            (KeyCode::Enter, _) => {
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Enter => {
                 let new_name = self.buffer.text.trim().to_string();
                 if new_name.is_empty() {
                     queue_toast(ctx, "name cannot be empty", ToastStyle::Error);
@@ -1040,39 +1040,14 @@ impl Modal for GraphRenameState {
                 // pre-migration UX (`reopen_on_error` in `commit_rename`).
                 ModalOutcome::Closed
             }
-            (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-                self.buffer.insert(c);
+            // All edits + cursor moves + readline chords (Ctrl+A/E,
+            // Alt+B/F/D, etc.) go through the buffer's EDIT_KEYMAP.
+            // Unrecognised chords are still Consumed so they don't
+            // leak through to tab- or global-level bindings.
+            _ => {
+                let _ = self.buffer.handle_event(k);
                 ModalOutcome::Consumed
             }
-            (KeyCode::Backspace, _) => {
-                self.buffer.backspace();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Delete, _) => {
-                self.buffer.delete();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Left, _) => {
-                self.buffer.left();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Right, _) => {
-                self.buffer.right();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Home, _) => {
-                self.buffer.home();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::End, _) => {
-                self.buffer.end();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
-                self.buffer.delete_word_backward();
-                ModalOutcome::Consumed
-            }
-            _ => ModalOutcome::Consumed,
         }
     }
 

@@ -138,70 +138,43 @@ impl<S: PickerSource> FuzzyPicker<S> {
     where
         S::Item: Clone,
     {
+        // Picker-specific chords take precedence over the buffer's
+        // EDIT_KEYMAP. `Ctrl+K`/`Ctrl+J` are picker nav (also bound to
+        // `Up`/`Down`); inside an `EditBuffer` mounted standalone the
+        // same chords would mean `kill-to-end` / unbound — but inside
+        // a picker, navigation wins.
         match (key.code, key.modifiers) {
-            (KeyCode::Esc, _) => PickerOutcome::Cancelled,
+            (KeyCode::Esc, _) => return PickerOutcome::Cancelled,
             (KeyCode::Enter, _) => {
                 if let Some(item) = self.items.get(self.selected) {
-                    PickerOutcome::Selected(item.data.clone())
-                } else {
-                    PickerOutcome::StillOpen
+                    return PickerOutcome::Selected(item.data.clone());
                 }
+                return PickerOutcome::StillOpen;
             }
             (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                 self.select_prev();
-                PickerOutcome::StillOpen
+                return PickerOutcome::StillOpen;
             }
             (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                 self.select_next();
+                return PickerOutcome::StillOpen;
+            }
+            _ => {}
+        }
+        // Delegate everything else (text edits, readline cursor jumps,
+        // kill/yank, etc.) to the buffer's keymap dispatch. The buffer
+        // returns `Consumed` for any chord it handled; refresh the
+        // result list if the text changed.
+        use crate::tui::widgets::edit_keymap::EditOutcome;
+        let before = self.input.text.clone();
+        match self.input.handle_event(key) {
+            EditOutcome::Consumed => {
+                if self.input.text != before {
+                    self.refresh();
+                }
                 PickerOutcome::StillOpen
             }
-            // Text-edit keys go through EditBuffer; mirror the same set the
-            // existing query bar and edit popup use so Ctrl+W / Ctrl+⌫
-            // already work via `delete_word_backward`.
-            (KeyCode::Backspace, m)
-                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-            {
-                self.input.delete_word_backward();
-                self.refresh();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                self.input.delete_word_backward();
-                self.refresh();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Backspace, _) => {
-                self.input.backspace();
-                self.refresh();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Delete, _) => {
-                self.input.delete();
-                self.refresh();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Left, _) => {
-                self.input.left();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Right, _) => {
-                self.input.right();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Home, _) => {
-                self.input.home();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::End, _) => {
-                self.input.end();
-                PickerOutcome::StillOpen
-            }
-            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                self.input.insert(c);
-                self.refresh();
-                PickerOutcome::StillOpen
-            }
-            _ => PickerOutcome::NotHandled,
+            EditOutcome::NotHandled => PickerOutcome::NotHandled,
         }
     }
 

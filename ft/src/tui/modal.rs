@@ -560,55 +560,23 @@ impl Modal for CreateSubdirState {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
         };
-        let ctrl = k
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL);
-        match (k.code, ctrl) {
-            (KeyCode::Esc, _) => ModalOutcome::Closed,
-            (KeyCode::Enter, _) => {
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Enter => {
                 *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphCreateSubdir {
                     parent: self.parent.clone(),
                     name: self.buf.text.clone(),
                 });
                 ModalOutcome::Closed
             }
-            (KeyCode::Char('w'), true) => {
-                self.buf.delete_word_backward();
-                self.error = None;
+            _ => {
+                let before = self.buf.text.clone();
+                let _ = self.buf.handle_event(k);
+                if self.buf.text != before {
+                    self.error = None;
+                }
                 ModalOutcome::Consumed
             }
-            (KeyCode::Char(c), false) => {
-                self.buf.insert(c);
-                self.error = None;
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Backspace, _) => {
-                self.buf.backspace();
-                self.error = None;
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Delete, _) => {
-                self.buf.delete();
-                self.error = None;
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Left, _) => {
-                self.buf.left();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Right, _) => {
-                self.buf.right();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::Home, _) => {
-                self.buf.home();
-                ModalOutcome::Consumed
-            }
-            (KeyCode::End, _) => {
-                self.buf.end();
-                ModalOutcome::Consumed
-            }
-            _ => ModalOutcome::Consumed,
         }
     }
 
