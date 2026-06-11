@@ -80,8 +80,10 @@
 
 ## 9. Build validation
 
-- [ ] 9.1 `cargo build --release` — clean
-- [ ] 9.2 `cargo test --workspace` — all tests pass
-- [ ] 9.3 `cargo clippy --workspace --tests -- -D warnings` — clean
-- [ ] 9.4 `cargo fmt --check` — clean
-- [ ] 9.5 `ft completions docs --check` — clean
+- [x] 9.1 `cargo build --release` — clean
+- [x] 9.2 `cargo test --workspace` — 562 (ft binary) + 822 (ft-core) + per-bin integration suites, all green, no failures
+- [x] 9.3 `cargo clippy --workspace --tests -- -D warnings` — clean
+- [x] 9.4 `cargo fmt --check` — clean
+- [x] 9.5 `ft commands docs --check` — clean (the §5 task originally read `ft completions docs --check`; the real subcommand is `ft commands docs --check`, the registry-sync check from `commands-and-keymaps`. `ft completions` only emits shell scripts.)
+- [x] 9.6 `ft commands list --scope widget/edit-buffer` returns all 14 `edit.*` commands; `--scope widget` matches the family. End-to-end scope plumbing verified.
+- [x] 9.7 `openspec validate text-input-ux --strict` clean across all spec deltas.
