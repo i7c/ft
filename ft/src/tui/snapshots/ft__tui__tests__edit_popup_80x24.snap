@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 1405
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
-┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
-│                      ││status in {Open, InProgress} and due < 2026-05-18     │
-│ Sun 10 May           │└──────────────────────────────────────────────────────┘
-│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
-│                      ││ ── ove┌ edit task ───────────────────────────┐       │
-│ ── views ──          ││▶   !! │                                      │       │
-│ ▶ Search             ││    !  │  description : Pay rent│             │       │
-│                      ││ ── upc│          due : 2026-05-08            │       │
-│                      ││       │    scheduled :                       │       │
-│                      ││    !! │     priority : high                  │6-05-11│
-│                      ││    v  │         tags :                       │       │
-│                      ││       │   recurrence :                       │       │
-│                      ││       │                                      │       │
-│                      ││       │  Tab/Shift+Tab next · Ctrl+S save · E│       │
-│                      ││       │                                      │       │
-│                      ││       │                                      │       │
-│                      ││       │                                      │       │
-│                      ││       └──────────────────────────────────────┘       │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-└──────────────────────┘└──────────────────────────────────────────────────────┘
+┌ query ───────────────────────────────────────────────────────────────────────┐
+│status in {Open, InProgress} and due < 2026-05-18                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────┐
+│ ── overdu┌ edit task ─────────────────────────────────────────────┐          │
+│▶   !!  Pa│                                                        │ 📅  2d ago│
+│    !   Re│  description : Pay rent│                               │ yesterday│
+│ ── upcomi│          due : 2026-05-08                              │          │
+│        Re│    scheduled :                                         │  📅  today│
+│    !!  Su│     priority : high                                    │  tomorrow│
+│    v   Bu│         tags :                                         │  📅  in 5d│
+│          │   recurrence :                                         │          │
+│          │                                                        │          │
+│          │  Tab/Shift+Tab next · Ctrl+S save · Esc cancel         │          │
+│          │                                                        │          │
+│          │                                                        │          │
+│          │                                                        │          │
+│          └────────────────────────────────────────────────────────┘          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

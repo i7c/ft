@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 160
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
-┌ sidebar ─────────────┐┌ query (editing) ─────────────────────────────────────┐
-│                      ││status in {Open, InProgress} and due < 2026-05-18│    │
-│ Sun 10 May           │└──────────────────────────────────────────────────────┘
-│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
-│                      ││ ── overdue (2) ──                                    │
-│ ── views ──          ││▶   !!  Pay rent           📅  2026-05-08              │
-│ ▶ Search             ││    !   Renew passport     📅  2026-05-09              │
-│                      ││ ── upcoming (3) ──                                   │
-│                      ││        Reply to Sara      📅  2026-05-10              │
-│                      ││    !!  Submit Q2 report   📅  2026-05-12 ⏳  2026-05-11│
-│                      ││    v   Buy birthday gift  📅  2026-05-15              │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-└──────────────────────┘└──────────────────────────────────────────────────────┘
+┌ query (editing) ─────────────────────────────────────────────────────────────┐
+│status in {Open, InProgress} and due < 2026-05-18│                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────┐
+│ ── overdue (2) ──                                                            │
+│▶   !!  Pay rent                                                     📅  2d ago│
+│    !   Renew passport                                            📅  yesterday│
+│ ── upcoming (3) ──                                                           │
+│        Reply to Sara                                                 📅  today│
+│    !!  Submit Q2 report                                  📅  in 2d ⏳  tomorrow│
+│    v   Buy birthday gift                                             📅  in 5d│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

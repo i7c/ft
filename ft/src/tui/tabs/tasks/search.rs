@@ -736,15 +736,12 @@ impl SearchView {
             return;
         }
 
-        // Inner width inside the borders. The fixed cells are: cursor (2)
-        // + status glyph (2) + priority label (4) + due block (14)
-        // + scheduled block (14) = 36. The description column flexes to fill
-        // what's left, with a small floor so very narrow terminals still
-        // render something readable.
+        // Inner width inside the borders. Passed into task_line so each row
+        // can compute its own description width based on which date columns
+        // are present.
         let inner_width = area.width.saturating_sub(2);
-        let desc_width = inner_width.saturating_sub(36).max(16) as usize;
 
-        let lines = self.build_lines(today, desc_width);
+        let lines = self.build_lines(today, inner_width);
         let scroll = self.scroll;
         let list = Paragraph::new(lines)
             .scroll((scroll, 0))
@@ -752,7 +749,7 @@ impl SearchView {
         frame.render_widget(list, area);
     }
 
-    fn build_lines(&self, today: NaiveDate, desc_width: usize) -> Vec<Line<'static>> {
+    fn build_lines(&self, today: NaiveDate, inner_width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line> = Vec::with_capacity(self.matches.len() + 4);
         let upcoming_start = self.overdue_count;
 
@@ -764,7 +761,7 @@ impl SearchView {
                     &self.tasks[task_idx],
                     today,
                     selected,
-                    desc_width,
+                    inner_width,
                 ));
             }
         }
@@ -777,7 +774,7 @@ impl SearchView {
                     &self.tasks[task_idx],
                     today,
                     selected,
-                    desc_width,
+                    inner_width,
                 ));
             }
         }
@@ -1824,6 +1821,28 @@ fn horizontal_scroll(cursor: usize, total: usize, width: usize) -> usize {
 
 // --- row formatting ----------------------------------------------------------
 
+/// Format a date relative to `today`. Near-term dates get human-readable
+/// labels; dates further out fall back to ISO for precision.
+fn relative_date(d: NaiveDate, today: NaiveDate) -> String {
+    let diff = (d - today).num_days();
+    match diff {
+        0 => "today".into(),
+        1 => "tomorrow".into(),
+        -1 => "yesterday".into(),
+        n if (-6..=-2).contains(&n) => format!("{}d ago", -n),
+        n if (2..=6).contains(&n) => format!("in {}d", n),
+        n if (-13..=-7).contains(&n) => "1w ago".into(),
+        n if (7..=13).contains(&n) => "in 1w".into(),
+        n if (-20..=-14).contains(&n) => "2w ago".into(),
+        n if (14..=20).contains(&n) => "in 2w".into(),
+        n if (-27..=-21).contains(&n) => "3w ago".into(),
+        n if (21..=27).contains(&n) => "in 3w".into(),
+        n if (-30..=-28).contains(&n) => "4w ago".into(),
+        n if (28..=30).contains(&n) => "in 4w".into(),
+        _ => d.format("%Y-%m-%d").to_string(),
+    }
+}
+
 fn divider_line(label: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {label}"),
@@ -1833,12 +1852,12 @@ fn divider_line(label: &str) -> Line<'static> {
     ))
 }
 
-fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -> Line<'static> {
+fn task_line(task: &Task, today: NaiveDate, selected: bool, inner_width: u16) -> Line<'static> {
     let pri_label = priority_label(task.priority);
     let pri_color = priority_color(task.priority);
     let (status_glyph, status_color) = status_marker(task.status);
 
-    let due_str = task.due.map(|d| d.format("%Y-%m-%d").to_string());
+    let due_str = task.due.map(|d| relative_date(d, today));
     let due_color = task
         .due
         .map(|d| {
@@ -1850,7 +1869,7 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
         })
         .unwrap_or(palette::DIM);
 
-    let scheduled_str = task.scheduled.map(|d| d.format("%Y-%m-%d").to_string());
+    let scheduled_str = task.scheduled.map(|d| relative_date(d, today));
 
     let cursor = if selected { "▶ " } else { "  " };
     let pri_text = if pri_label.is_empty() {
@@ -1860,20 +1879,6 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     };
     let status_text = format!("{status_glyph} ");
 
-    // Truncate the description only when it exceeds the budget the caller
-    // computed from the actual viewport width; otherwise pad to keep the
-    // due / scheduled columns aligned across rows.
-    let desc = task.description.replace('\n', " ");
-    let desc_count = desc.chars().count();
-    let desc_trimmed = if desc_count > desc_width {
-        let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();
-        format!("{cut}…")
-    } else {
-        desc
-    };
-    let desc_padded = format!("{:<width$}", desc_trimmed, width = desc_width);
-
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
     // Non-selected done/cancelled rows fade so they visually recede when the
     // query includes terminal statuses (e.g. `status is any`). Selected rows
     // keep the highlight so the cursor is always clearly visible.
@@ -1888,20 +1893,51 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
         Style::default()
     };
 
-    spans.push(Span::styled(cursor.to_string(), row_style));
-    spans.push(Span::styled(status_text, row_style.fg(status_color)));
-    spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
-    spans.push(Span::styled(desc_padded, row_style));
-    if let Some(due) = due_str {
-        spans.push(Span::styled(" 📅 ", row_style.fg(palette::DIM)));
-        spans.push(Span::styled(due, row_style.fg(due_color)));
+    // Build spans for the fixed columns first so we can measure them.
+    let mut fixed_spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    fixed_spans.push(Span::styled(cursor.to_string(), row_style));
+    fixed_spans.push(Span::styled(status_text, row_style.fg(status_color)));
+    fixed_spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
+
+    let mut tail_spans: Vec<Span<'static>> = Vec::new();
+    let mut tail_width: usize = 0;
+    if let Some(due) = &due_str {
+        let prefix = Span::styled(" 📅 ", row_style.fg(palette::DIM));
+        let label = Span::styled(due.clone(), row_style.fg(due_color));
+        tail_width += prefix.width() + label.width();
+        tail_spans.push(prefix);
+        tail_spans.push(label);
+    }
+    if let Some(sch) = &scheduled_str {
+        let prefix = Span::styled(" ⏳ ", row_style.fg(palette::DIM));
+        let label = Span::styled(sch.clone(), row_style.fg(palette::PRIMARY));
+        tail_width += prefix.width() + label.width();
+        tail_spans.push(prefix);
+        tail_spans.push(label);
+    }
+
+    // Fixed overhead: cursor(2) + status(2) + priority(4) = 8 chars.
+    let fixed_overhead: u16 = 8;
+    // Description gets whatever remains after fixed columns + tail dates.
+    let desc_budget = inner_width
+        .saturating_sub(fixed_overhead)
+        .saturating_sub(tail_width as u16);
+    let desc_width = desc_budget.max(8) as usize;
+
+    let desc = task.description.replace('\n', " ");
+    let desc_count = desc.chars().count();
+    let desc_trimmed = if desc_count > desc_width {
+        let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();
+        format!("{cut}…")
     } else {
-        spans.push(Span::styled("              ", row_style));
-    }
-    if let Some(sch) = scheduled_str {
-        spans.push(Span::styled(" ⏳ ", row_style.fg(palette::DIM)));
-        spans.push(Span::styled(sch, row_style.fg(palette::PRIMARY)));
-    }
+        desc
+    };
+    let desc_padded = format!("{:<width$}", desc_trimmed, width = desc_width);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4 + tail_spans.len());
+    spans.append(&mut fixed_spans);
+    spans.push(Span::styled(desc_padded, row_style));
+    spans.append(&mut tail_spans);
     Line::from(spans)
 }
 

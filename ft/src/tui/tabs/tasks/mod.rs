@@ -5,66 +5,30 @@ mod view;
 use std::sync::LazyLock;
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
-use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
-    Frame,
-};
+use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
     command::{ArgSpec, Command, CommandDef, CommandOutcome, CommandScope},
     event::Event,
     help::HelpSection,
-    keymap::{KeyChord, KeyMap},
-    palette,
+    keymap::KeyMap,
     tab::{EventOutcome, Tab, TabCtx},
 };
+
+/// Empty tab-level keymap (sidebar removed). Kept as a named static so
+/// downstream sites that reference it (`app.rs`, `mod.rs`) compile without
+/// change. The tab delegates all keys to the active view.
+pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(KeyMap::empty);
 
 use search::SearchView;
 use view::View;
 
 // ── Commands ─────────────────────────────────────────────────────────
 
-/// Every command the Tasks tab exposes. Includes both the tab-level
-/// sidebar commands (handled by `TasksTab::dispatch_command` directly)
-/// and the SearchView commands (delegated to the active view's
-/// `dispatch_command`). Pre-declared here so the build-time
-/// `CommandRegistry` sees the full surface in one slice.
+/// Every command the Tasks tab exposes. Pre-declared here so the
+/// build-time `CommandRegistry` sees the full surface in one slice.
 pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
-    // Tab-level: sidebar view selection.
-    CommandDef {
-        name: "tasks.select-prev-view",
-        description: "Select the previous view in the sidebar",
-        scope: CommandScope::Tab("tasks"),
-        group: "Sidebar",
-        args_schema: &[],
-        opens_modal: false,
-        is_primary: false,
-    },
-    CommandDef {
-        name: "tasks.select-next-view",
-        description: "Select the next view in the sidebar",
-        scope: CommandScope::Tab("tasks"),
-        group: "Sidebar",
-        args_schema: &[],
-        opens_modal: false,
-        is_primary: false,
-    },
-    CommandDef {
-        name: "tasks.confirm-view",
-        description: "Confirm the sidebar's selected view (no-op for now)",
-        scope: CommandScope::Tab("tasks"),
-        group: "Sidebar",
-        args_schema: &[],
-        opens_modal: false,
-        is_primary: false,
-    },
-    // SearchView: see `tabs/tasks/search.rs::SEARCH_COMMANDS` for the
-    // canonical declarations. They're collected into this single slice
-    // so the registry sees them.
+    // SearchView commands (see `tabs/tasks/search.rs` for implementation).
     CommandDef {
         name: "tasks.edit-query",
         description: "Open the query editor",
@@ -237,127 +201,38 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
     },
 ];
 
-/// Tab-level keymap — sidebar navigation only. Looked up when the
-/// active view returns `NotHandled` for an event (mirrors the
-/// pre-migration fall-through). The view-level keymap lives in
-/// `search::SEARCH_KEYMAP`.
-pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
-    KeyMap::new()
-        .bind("Up", "tasks.select-prev-view")
-        .bind("Down", "tasks.select-next-view")
-        .bind("Enter", "tasks.confirm-view")
-});
-
-/// Function pointer for "what time is it now?". Production uses
-/// [`Local::now`]; tests inject a fixed value for deterministic snapshots.
-pub type ClockFn = fn() -> DateTime<Local>;
-
-fn local_now() -> DateTime<Local> {
-    Local::now()
-}
-
-const SIDEBAR_WIDTH: u16 = 24;
-
 pub struct TasksTab {
+    /// Views vec and active_view kept for future multi-view expansion
+    /// (the sidebar was removed but the View trait abstraction remains).
     views: Vec<Box<dyn View>>,
     active_view: usize,
-    clock: ClockFn,
-    keymap: crate::tui::keymap::KeyMap,
 }
 
 impl TasksTab {
     pub fn new() -> Self {
-        Self::with_clock(local_now)
-    }
-
-    pub fn with_clock(clock: ClockFn) -> Self {
         let views: Vec<Box<dyn View>> = vec![Box::new(SearchView::new())];
         Self {
             views,
             active_view: 0,
-            clock,
-            keymap: TASKS_KEYMAP.clone(),
         }
     }
 
-    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
-        self.keymap = TASKS_KEYMAP.with_overlay(overlay);
+    pub fn with_clock(_clock: crate::tui::tabs::tasks::ClockFn) -> Self {
+        // ClockFn kept for API compatibility; the sidebar (which used it)
+        // is removed, but tests still call this constructor.
+        Self::new()
+    }
+
+    pub fn with_keymap_overlay(self, _overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        // Keymap overlay kept for API compatibility; the sidebar keymap
+        // (which used it) is removed.
         self
     }
-
-    fn select_prev_view(&mut self) {
-        if self.views.is_empty() {
-            return;
-        }
-        if self.active_view == 0 {
-            self.active_view = self.views.len() - 1;
-        } else {
-            self.active_view -= 1;
-        }
-    }
-
-    fn select_next_view(&mut self) {
-        if self.views.is_empty() {
-            return;
-        }
-        self.active_view = (self.active_view + 1) % self.views.len();
-    }
-
-    fn render_sidebar(&self, frame: &mut Frame, area: Rect) {
-        let now = (self.clock)();
-        let date = now.format("%a %d %b").to_string();
-        let time = now.format("%H:%M:%S").to_string();
-
-        let mut lines: Vec<Line> = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!(" {date}"),
-                Style::default().fg(palette::WHITE),
-            )),
-            Line::from(Span::styled(
-                format!(" {time}"),
-                Style::default()
-                    .fg(palette::PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                " ── views ──",
-                Style::default().fg(palette::DIM),
-            )),
-        ];
-
-        for (i, v) in self.views.iter().enumerate() {
-            let (marker, style) = if i == self.active_view {
-                (
-                    " ▶ ",
-                    Style::default()
-                        .fg(palette::PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ("   ", Style::default().fg(palette::WHITE))
-            };
-            lines.push(Line::from(vec![
-                Span::raw(marker),
-                Span::styled(v.title().to_string(), style),
-            ]));
-        }
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" sidebar ")
-            .border_style(Style::default().fg(palette::DIM));
-        let para = Paragraph::new(lines).block(block);
-        frame.render_widget(para, area);
-    }
-
-    fn render_viewport(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        if let Some(v) = self.views.get_mut(self.active_view) {
-            v.render(frame, area, ctx);
-        }
-    }
 }
+
+/// Re-exported for test compatibility. The sidebar (which used the
+/// live clock) is gone, but existing test code still references this type.
+pub type ClockFn = fn() -> chrono::DateTime<chrono::Local>;
 
 impl Tab for TasksTab {
     fn title(&self) -> &str {
@@ -376,68 +251,28 @@ impl Tab for TasksTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &self.keymap
+        &TASKS_KEYMAP
     }
 
-    fn dispatch_command(&mut self, cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
-        // Tab-level commands only — view-level (`tasks.cursor-up` etc.)
-        // are dispatched by SearchView before the keymap fall-through
-        // reaches the tab. `_ctx` is unused because the sidebar
-        // selection is purely tab-local state.
-        match cmd.name {
-            "tasks.select-prev-view" => {
-                self.select_prev_view();
-                CommandOutcome::Handled
-            }
-            "tasks.select-next-view" => {
-                self.select_next_view();
-                CommandOutcome::Handled
-            }
-            "tasks.confirm-view" => {
-                // No-op for now; the sidebar dropdown is in-place
-                // selection, not a confirm-then-apply flow.
-                CommandOutcome::Handled
-            }
-            _ => CommandOutcome::NotHandled,
-        }
+    fn dispatch_command(&mut self, _cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
+        // No tab-level commands — all go to the active view.
+        CommandOutcome::NotHandled
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
-        // The active view gets first dibs — its selection model owns the same
-        // keys (↑/↓/Enter) as the sidebar dropdown. The dropdown only handles
-        // these keys when the view returns NotHandled (e.g. while the search
-        // list is empty or the view has no opinion).
-        let view_outcome = if let Some(v) = self.views.get_mut(self.active_view) {
-            v.handle_event(ev.clone(), ctx)?
+        // The sidebar is gone; route every event directly to the active view.
+        if let Some(v) = self.views.get_mut(self.active_view) {
+            v.handle_event(ev, ctx)
         } else {
-            EventOutcome::NotHandled
-        };
-        if view_outcome != EventOutcome::NotHandled {
-            return Ok(view_outcome);
+            Ok(EventOutcome::NotHandled)
         }
-
-        // View didn't handle — try the tab-level keymap (sidebar).
-        let Event::Key(k) = ev else {
-            return Ok(EventOutcome::NotHandled);
-        };
-        let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
-            return Ok(EventOutcome::NotHandled);
-        };
-        Ok(match self.dispatch_command(&cmd, ctx) {
-            CommandOutcome::Handled => EventOutcome::Consumed,
-            CommandOutcome::NotHandled => EventOutcome::NotHandled,
-        })
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
-            .split(area);
-
-        self.render_sidebar(frame, chunks[0]);
-        self.render_viewport(frame, chunks[1], ctx);
+        // Full-width viewport — no sidebar split.
+        if let Some(v) = self.views.get_mut(self.active_view) {
+            v.render(frame, area, ctx);
+        }
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {

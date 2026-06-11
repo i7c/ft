@@ -1,25 +1,24 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 1575
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
-┌ sidebar │Keybindings — Tasks                                       │─────────┐
-│         │                                                          │5-18     │
-│ Sun 10 M│  Global                                                  │─────────┘
-│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │─────────┐
-│         │  ?           Open the keymap help overlay                │         │
-│ ── views│  g           Enter the git-sync leader (then `s` to sync)│         │
-│ ▶ Search│  Tab         Switch to the next tab                      │         │
-│         │  BackTab     Switch to the previous tab                  │         │
-│         │  1..9        Switch to the tab at the given 0-based index│         │
-│         │                                                          │026-05-11│
-│         │  Sidebar                                                 │         │
-│         │  ↑           Select the previous view in the sidebar     │         │
-│         │  ↓           Select the next view in the sidebar         │         │
-│         │  Enter       Confirm the sidebar's selected view (no-op f│         │
+┌ query ──│Keybindings — Tasks                                       │─────────┐
+│status in│                                                          │         │
+└─────────│  Global                                                  │─────────┘
+┌ tasks ──│  q / Ctrl+c  Quit the TUI                                │─────────┐
+│ ── overd│  ?           Open the keymap help overlay                │         │
+│▶   !!  P│  g           Enter the git-sync leader (then `s` to sync)│📅  2d ago│
+│    !   R│  Tab         Switch to the next tab                      │yesterday│
+│ ── upcom│  BackTab     Switch to the previous tab                  │         │
+│        R│  1..9        Switch to the tab at the given 0-based index│ 📅  today│
+│    !!  S│                                                          │ tomorrow│
+│    v   B│  press ? or Esc to close                                 │ 📅  in 5d│
 │         │                                                          │         │
-│         │  press ? or Esc to close                                 │         │
+│         │                                                          │         │
+│         │                                                          │         │
+│         │                                                          │         │
+│         │                                                          │         │
 │         │                                                          │         │
 │         │                                                          │         │
 │         │                                                          │         │

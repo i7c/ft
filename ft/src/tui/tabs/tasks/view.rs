@@ -10,6 +10,7 @@ use crate::tui::{
 /// the active one renders into the viewport. v1 ships only "Search"; "Board"
 /// and "Calendar" are explicitly out of scope.
 pub trait View {
+    #[allow(dead_code)]
     fn title(&self) -> &str;
 
     fn on_focus(&mut self, _ctx: &mut TabCtx) -> Result<()> {
