@@ -65,6 +65,8 @@ pub mod registry {
             modal_commands::CAPTURE_PICKER_COMMANDS,
             modal_commands::RELATED_COMMANDS,
             modal_commands::MOVE_OUTER_COMMANDS,
+            modal_commands::JOURNAL_SOURCES_COMMANDS,
+            modal_commands::JOURNAL_APPEND_REPLACE_COMMANDS,
         ];
 
         let widget_slices: &[&'static [CommandDef]] = &[crate::tui::widgets::EDIT_COMMANDS];
@@ -127,6 +129,14 @@ pub mod registry {
             ),
             ("modal/related", &modal_commands::RELATED_KEYMAP),
             ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+            (
+                "modal/journal-sources",
+                &modal_commands::JOURNAL_SOURCES_KEYMAP,
+            ),
+            (
+                "modal/journal-append-or-replace",
+                &modal_commands::JOURNAL_APPEND_REPLACE_KEYMAP,
+            ),
             ("widget/edit-buffer", &crate::tui::widgets::EDIT_KEYMAP),
         ];
 
@@ -209,6 +219,14 @@ pub mod registry {
             ),
             ("modal/related", &modal_commands::RELATED_KEYMAP),
             ("modal/move", &modal_commands::MOVE_OUTER_KEYMAP),
+            (
+                "modal/journal-sources",
+                &modal_commands::JOURNAL_SOURCES_KEYMAP,
+            ),
+            (
+                "modal/journal-append-or-replace",
+                &modal_commands::JOURNAL_APPEND_REPLACE_KEYMAP,
+            ),
             ("widget/edit-buffer", &crate::tui::widgets::EDIT_KEYMAP),
         ];
 

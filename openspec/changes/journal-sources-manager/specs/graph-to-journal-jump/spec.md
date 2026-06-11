@@ -22,30 +22,30 @@ When the graph tab is focused and the currently-selected row is a `NodeKind::Not
 
 ## ADDED Requirements
 
-### Requirement: Graph tab `Shift+A` appends multi-selection to Journal sources
+### Requirement: Graph tab `Ctrl+J` appends multi-selection to Journal sources
 
-When the Graph tab is focused, pressing `Shift+A` SHALL raise an `AppRequest::JournalAddSources` carrying the active view's `multi_selected` set (or the cursor row if `multi_selected` is empty), with each entry resolved to a `JournalTarget::Note` or `JournalTarget::Ghost` depending on its node kind. Directory, Task, and Paragraph rows in the selection SHALL be filtered out silently. The default mode on the resulting AppRequest SHALL be `Append` (the Journal tab raises a prompt; user can still pick Replace there).
+When the Graph tab is focused, pressing `Ctrl+J` SHALL raise an `AppRequest::JournalAddSources` carrying the active view's `multi_selected` set (or the cursor row if `multi_selected` is empty), with each entry resolved to a `JournalTarget::Note` or `JournalTarget::Ghost` depending on its node kind. Directory, Task, and Paragraph rows in the selection SHALL be filtered out silently. The default mode on the resulting AppRequest SHALL be `Append` (the Journal tab raises a prompt; user can still pick Replace there).
 
 #### Scenario: Multi-selection mapped to targets
-- **WHEN** the user has multi-selected `Foo.md` (Note) and `Phantom` (Ghost) and presses `Shift+A`
+- **WHEN** the user has multi-selected `Foo.md` (Note) and `Phantom` (Ghost) and presses `Ctrl+J`
 - **THEN** an `AppRequest::JournalAddSources { targets: [Note("Foo.md"), Ghost("Phantom")], default_mode: Append }` is raised
 
 #### Scenario: Empty multi-selection falls back to cursor row
-- **WHEN** `multi_selected` is empty and the cursor is on `Foo.md` (Note) and the user presses `Shift+A`
+- **WHEN** `multi_selected` is empty and the cursor is on `Foo.md` (Note) and the user presses `Ctrl+J`
 - **THEN** an `AppRequest::JournalAddSources { targets: [Note("Foo.md")], default_mode: Append }` is raised
 
 #### Scenario: Non-Note/Ghost rows in selection are filtered
-- **WHEN** `multi_selected` contains `Foo.md` and a Directory row, and the user presses `Shift+A`
+- **WHEN** `multi_selected` contains `Foo.md` and a Directory row, and the user presses `Ctrl+J`
 - **THEN** only `Note("Foo.md")` is in the resulting targets list (Directory silently skipped)
 
 #### Scenario: Selection of only non-eligible rows yields a toast
-- **WHEN** `multi_selected` contains only Directory rows and the user presses `Shift+A`
+- **WHEN** `multi_selected` contains only Directory rows and the user presses `Ctrl+J`
 - **THEN** no AppRequest is raised and an error toast is queued (`no Note or Ghost rows selected`)
 
-### Requirement: Help overlay on graph tab lists `Shift+A`
+### Requirement: Help overlay on graph tab lists `Ctrl+J`
 
-The graph tab's `help_sections()` SHALL include `Shift+A: append selected (or cursor) to Journal sources` in the same section that lists `Shift+J`.
+The graph tab's `help_sections()` SHALL include `Ctrl+J: append selected (or cursor) to Journal sources` in the same section that lists `Shift+J`.
 
 #### Scenario: Help mentions the new chord
 - **WHEN** the user presses `?` on the graph tab
-- **THEN** the overlay contains a row mentioning `Shift+A` and the append-to-Journal-sources action
+- **THEN** the overlay contains a row mentioning `Ctrl+J` and the append-to-Journal-sources action

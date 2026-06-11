@@ -625,6 +625,31 @@ impl App {
                 }
                 Ok(())
             }
+            AppRequest::JournalAddSources {
+                targets,
+                default_mode,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_add_sources(targets, default_mode);
+                    self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
+            AppRequest::JournalCommitSources { sources, window } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    let mut ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
+                    };
+                    self.tabs[idx].queue_journal_commit_sources(&mut ctx, sources, window);
+                }
+                Ok(())
+            }
             AppRequest::OpenModal(modal) => {
                 self.open_modal(*modal);
                 Ok(())
@@ -1898,6 +1923,31 @@ impl App {
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
                     self.tabs[idx].queue_journal_for_multi(&request);
                     self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
+            AppRequest::JournalAddSources {
+                targets,
+                default_mode,
+            } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    self.tabs[idx].queue_journal_add_sources(targets, default_mode);
+                    self.switch_tab(idx)?;
+                }
+                Ok(())
+            }
+            AppRequest::JournalCommitSources { sources, window } => {
+                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                    let mut ctx = TabCtx {
+                        vault: &self.vault,
+                        recents: &self.recents,
+                        today: self.today,
+                        last_refresh: &self.last_refresh,
+                        pending_request: &self.pending_request,
+                        active_modal_name: self.active_modal_name(),
+                        host_popup_open: false,
+                    };
+                    self.tabs[idx].queue_journal_commit_sources(&mut ctx, sources, window);
                 }
                 Ok(())
             }

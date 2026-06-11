@@ -17,6 +17,6 @@ pub use edit_keymap::{EDIT_COMMANDS, EDIT_KEYMAP};
 // `#[allow(unused_imports)]` keeps the re-exports legal until then.
 #[allow(unused_imports)]
 pub use picker::{
-    FuzzyPicker, PathListPickerSource, PickerItem, PickerOutcome, PickerSource,
-    VaultFilePickerSource,
+    FuzzyPicker, JournalSourceHit, JournalSourcePickerSource, PathListPickerSource, PickerItem,
+    PickerOutcome, PickerSource, VaultFilePickerSource,
 };

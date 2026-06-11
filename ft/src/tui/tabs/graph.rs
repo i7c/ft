@@ -660,6 +660,15 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "graph.add-to-journal-sources",
+        description: "Append selected (or cursor) Note/Ghost rows to the Journal tab's sources",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
     // Query bar
     CommandDef {
         name: "graph.query-bar",
@@ -915,6 +924,7 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Cross-tab
         .bind("R", "graph.related")
         .bind("J", "graph.journal")
+        .bind("Ctrl+j", "graph.add-to-journal-sources")
         // Query bar / search
         .bind("/", "graph.query-bar")
         .bind("z", "graph.rewrite-for-root")
@@ -2967,6 +2977,48 @@ impl Tab for GraphTab {
                 }
                 CommandOutcome::Handled
             }
+            "graph.add-to-journal-sources" => {
+                let targets: Vec<crate::tui::tab::JournalTarget> = match self.graph.as_ref() {
+                    Some(graph) => {
+                        let v = self.active_view();
+                        // Multi-selection drives the target list when
+                        // non-empty; otherwise fall back to the cursor row.
+                        let ids: Vec<ft_core::graph::NoteId> = if v.multi_selected.is_empty() {
+                            v.tree
+                                .rows()
+                                .get(v.selected)
+                                .map(|r| vec![r.note_id])
+                                .unwrap_or_default()
+                        } else {
+                            v.multi_selected
+                                .iter()
+                                .filter_map(|k| graph.id_for_key(k))
+                                .collect()
+                        };
+                        ids.into_iter()
+                            .filter_map(|id| match graph.node(id) {
+                                NodeKind::Note(n) => {
+                                    Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
+                                }
+                                NodeKind::Ghost(g) => {
+                                    Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    None => Vec::new(),
+                };
+                if targets.is_empty() {
+                    queue_toast(ctx, "no Note or Ghost rows selected", ToastStyle::Error);
+                } else {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalAddSources {
+                        targets,
+                        default_mode: crate::tui::tab::AppendOrReplaceMode::Append,
+                    });
+                }
+                CommandOutcome::Handled
+            }
             // Query / search
             "graph.query-bar" => {
                 *ctx.pending_request.borrow_mut() =
@@ -3721,7 +3773,10 @@ impl Tab for GraphTab {
             ),
             HelpSection::new(
                 "Cross-tab",
-                &[("Shift+J", "open Journal tab for the selected note")],
+                &[
+                    ("Shift+J", "open Journal tab for the selected note"),
+                    ("Ctrl+J", "append selected (or cursor) to Journal sources"),
+                ],
             ),
         ]
     }

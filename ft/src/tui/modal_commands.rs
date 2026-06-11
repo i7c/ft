@@ -524,6 +524,120 @@ pub static CONFIRM_DELETE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("l", "confirm-delete.cursor-right")
 });
 
+// ── Journal sources manager ─────────────────────────────────────────
+
+const JOURNAL_SOURCES_SCOPE: CommandScope = CommandScope::Modal("journal-sources");
+
+pub static JOURNAL_SOURCES_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "journal-sources.add",
+        description: "Open the inner fuzzy picker to add a source",
+        scope: JOURNAL_SOURCES_SCOPE,
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "journal-sources.remove",
+        description: "Remove the focused source",
+        scope: JOURNAL_SOURCES_SCOPE,
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "journal-sources.clear",
+        description: "Clear all sources",
+        scope: JOURNAL_SOURCES_SCOPE,
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    confirm_def("journal-sources.commit", JOURNAL_SOURCES_SCOPE),
+    cancel_def("journal-sources.cancel", JOURNAL_SOURCES_SCOPE),
+    nav_def(
+        "journal-sources.cursor-up",
+        "Focus the previous source row",
+        JOURNAL_SOURCES_SCOPE,
+    ),
+    nav_def(
+        "journal-sources.cursor-down",
+        "Focus the next source row",
+        JOURNAL_SOURCES_SCOPE,
+    ),
+];
+
+pub static JOURNAL_SOURCES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("a", "journal-sources.add")
+        .bind("d", "journal-sources.remove")
+        .bind("c", "journal-sources.clear")
+        .bind("Enter", "journal-sources.commit")
+        .bind("Esc", "journal-sources.cancel")
+        .bind("Up", "journal-sources.cursor-up")
+        .bind("k", "journal-sources.cursor-up")
+        .bind("Down", "journal-sources.cursor-down")
+        .bind("j", "journal-sources.cursor-down")
+});
+
+// ── Journal append-or-replace prompt ────────────────────────────────
+
+const JOURNAL_APPEND_REPLACE_SCOPE: CommandScope = CommandScope::Modal("journal-append-or-replace");
+
+pub static JOURNAL_APPEND_REPLACE_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "journal-append-or-replace.append",
+        description: "Union the incoming targets with the current sources",
+        scope: JOURNAL_APPEND_REPLACE_SCOPE,
+        group: "Flow",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "journal-append-or-replace.replace",
+        description: "Replace the current sources with the incoming targets",
+        scope: JOURNAL_APPEND_REPLACE_SCOPE,
+        group: "Flow",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    cancel_def(
+        "journal-append-or-replace.cancel",
+        JOURNAL_APPEND_REPLACE_SCOPE,
+    ),
+    confirm_def(
+        "journal-append-or-replace.commit",
+        JOURNAL_APPEND_REPLACE_SCOPE,
+    ),
+    nav_def(
+        "journal-append-or-replace.cursor-left",
+        "Focus the previous choice",
+        JOURNAL_APPEND_REPLACE_SCOPE,
+    ),
+    nav_def(
+        "journal-append-or-replace.cursor-right",
+        "Focus the next choice",
+        JOURNAL_APPEND_REPLACE_SCOPE,
+    ),
+];
+
+pub static JOURNAL_APPEND_REPLACE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("a", "journal-append-or-replace.append")
+        .bind("r", "journal-append-or-replace.replace")
+        .bind("c", "journal-append-or-replace.cancel")
+        .bind("Esc", "journal-append-or-replace.cancel")
+        .bind("Enter", "journal-append-or-replace.commit")
+        .bind("Left", "journal-append-or-replace.cursor-left")
+        .bind("Tab", "journal-append-or-replace.cursor-right")
+        .bind("Right", "journal-append-or-replace.cursor-right")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +661,8 @@ mod tests {
             MOVE_OUTER_COMMANDS,
             CONFIRM_DELETE_COMMANDS,
             CREATE_SUBDIR_COMMANDS,
+            JOURNAL_SOURCES_COMMANDS,
+            JOURNAL_APPEND_REPLACE_COMMANDS,
         ];
         let mut seen: HashSet<&'static str> = HashSet::new();
         let mut total = 0;

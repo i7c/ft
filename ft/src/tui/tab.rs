@@ -84,6 +84,17 @@ impl JournalTarget {
     }
 }
 
+/// Whether an external "add these targets" hand-off should append to
+/// the Journal tab's current source set or replace it. Carried on
+/// [`AppRequest::JournalAddSources`] as the initial focus of the
+/// Append-or-Replace prompt; the user can still flip the choice in the
+/// prompt before committing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppendOrReplaceMode {
+    Append,
+    Replace,
+}
+
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
 /// a status-bar toast) without each tab reaching for terminal state.
@@ -131,6 +142,25 @@ pub enum AppRequest {
     /// journal across all `targets`.
     JournalForMulti {
         request: MultiTargetRequest,
+    },
+    /// Switch to the Journal tab and queue an "add these targets"
+    /// request. Raised by the graph tab's `Shift+A` keybinding (and
+    /// any future cross-tab adders). The Journal tab consumes the
+    /// request on its next `on_focus` and raises the Append-or-Replace
+    /// prompt — the user decides whether to union with the current
+    /// source set or replace it.
+    JournalAddSources {
+        targets: Vec<JournalTarget>,
+        default_mode: AppendOrReplaceMode,
+    },
+    /// Commit a new source set to the Journal tab. Raised by the
+    /// Sources Manager modal on Enter and by the Append-or-Replace
+    /// prompt on commit; the App routes it back to the Journal tab
+    /// which replaces `sources` (and the optional `window`) with the
+    /// provided values and rebuilds the journal feed.
+    JournalCommitSources {
+        sources: Vec<JournalTarget>,
+        window: Option<JournalWindow>,
     },
     /// Install a new active modal. The App writes the variant into its
     /// `active_modal` slot and, on the next event, dispatches keys to
@@ -280,6 +310,19 @@ impl std::fmt::Debug for AppRequest {
                 .debug_struct("JournalForMulti")
                 .field("targets_count", &request.targets.len())
                 .field("has_window", &request.window.is_some())
+                .finish(),
+            AppRequest::JournalAddSources {
+                targets,
+                default_mode,
+            } => f
+                .debug_struct("JournalAddSources")
+                .field("targets_count", &targets.len())
+                .field("default_mode", default_mode)
+                .finish(),
+            AppRequest::JournalCommitSources { sources, window } => f
+                .debug_struct("JournalCommitSources")
+                .field("sources_count", &sources.len())
+                .field("has_window", &window.is_some())
                 .finish(),
             AppRequest::OpenModal(modal) => {
                 f.debug_tuple("OpenModal").field(&modal.name()).finish()
@@ -517,6 +560,31 @@ pub trait Tab {
     /// to store the request; it's consumed on next `on_focus` and turned
     /// into a multi-source journal load. Default is a no-op.
     fn queue_journal_for_multi(&mut self, _request: &MultiTargetRequest) {}
+
+    /// Hook for the cross-tab "add sources" handoff (see
+    /// [`AppRequest::JournalAddSources`]). The Journal tab overrides
+    /// this to store the request; it's consumed on next `on_focus` and
+    /// turned into an Append-or-Replace prompt. Default is a no-op.
+    fn queue_journal_add_sources(
+        &mut self,
+        _targets: Vec<JournalTarget>,
+        _default_mode: AppendOrReplaceMode,
+    ) {
+    }
+
+    /// Hook for the Sources Manager / Append-or-Replace commit (see
+    /// [`AppRequest::JournalCommitSources`]). The Journal tab overrides
+    /// this to replace its `sources` slot and rebuild the feed
+    /// synchronously. Takes a `&mut TabCtx` so the override can run
+    /// `rebuild_journal` without bouncing through `on_focus`. Default
+    /// is a no-op.
+    fn queue_journal_commit_sources(
+        &mut self,
+        _ctx: &mut TabCtx,
+        _sources: Vec<JournalTarget>,
+        _window: Option<JournalWindow>,
+    ) {
+    }
 
     /// Hook for the in-tree search picker (see
     /// [`AppRequest::GraphJumpToNodes`]). The Graph tab overrides

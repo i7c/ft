@@ -30,14 +30,14 @@ The Journal tab SHALL render a `Sources` strip at the top of its inner area (ins
 
 ### Requirement: Sources Manager modal lists every current source
 
-The Journal tab SHALL provide a Sources Manager modal that lists every current source as one navigable row, opened via the `/` chord or the `+` chord. The modal SHALL be installed on the App's `ActiveModal` slot via `AppRequest::OpenModal`.
+The Journal tab SHALL provide a Sources Manager modal that lists every current source as one navigable row, opened via the `/` chord or the `a` chord (alias). The modal SHALL be installed on the App's `ActiveModal` slot via `AppRequest::OpenModal`.
 
 #### Scenario: Manager lists current sources in insertion order
 - **WHEN** the user has loaded three sources `[Foo.md, Bar.md, Baz (ghost)]` and presses `/`
 - **THEN** the modal opens listing three rows in the same order, with the first row visually focused
 
-#### Scenario: `+` chord opens the manager landed on add-source mode
-- **WHEN** the user presses `+` on the Journal tab
+#### Scenario: `a` chord opens the manager landed on add-source mode
+- **WHEN** the user presses `a` on the Journal tab
 - **THEN** the manager opens with the add-source fuzzy picker already in focus
 
 #### Scenario: `/` chord opens the manager landed on add-source mode

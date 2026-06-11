@@ -52,7 +52,9 @@ use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateS
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
-use crate::tui::tab::{empty_keymap, AppRequest, TabCtx};
+use crate::tui::tab::{
+    empty_keymap, AppRequest, AppendOrReplaceMode, JournalTarget, JournalWindow, TabCtx,
+};
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
     SearchPickerModal,
@@ -62,6 +64,9 @@ use crate::tui::tabs::notes::view::{
     render_periodic_leader,
 };
 use crate::tui::widgets::EditBuffer;
+use crate::tui::widgets::{
+    FuzzyPicker, JournalSourceHit, JournalSourcePickerSource, PickerOutcome,
+};
 
 // ── Trait ────────────────────────────────────────────────────────────
 
@@ -186,6 +191,42 @@ pub struct ConfirmDeleteState {
     pub focus: ConfirmChoice,
 }
 
+/// State for the Journal-tab Sources Manager modal. Owns a live
+/// `sources` working set the user can mutate (add/remove/clear) plus
+/// an optional inner fuzzy picker; on `Enter` it commits the working
+/// set back to the Journal tab via [`AppRequest::JournalCommitSources`].
+/// On `Esc` it cancels without committing.
+pub struct JournalSourcesModal {
+    /// Working copy of the source set — mutations stay local until the
+    /// user commits with Enter.
+    pub sources: Vec<JournalTarget>,
+    /// Row cursor into `sources`. Clamped on every mutation.
+    pub cursor: usize,
+    /// Window from the Journal tab's current state, passed back on
+    /// commit so the Journal tab can keep it attached after rebuild.
+    pub window: Option<JournalWindow>,
+    /// Inner add-source picker. `Some` while the picker overlay owns
+    /// the keyboard; cleared on selection or `Esc`.
+    pub picker: Option<FuzzyPicker<JournalSourcePickerSource>>,
+}
+
+/// State for the Append-or-Replace prompt modal. Raised when an
+/// external `AppRequest::JournalAddSources` arrives on the Journal
+/// tab; commits one of two `AppRequest::JournalCommitSources` shapes
+/// depending on the user's pick.
+pub struct JournalAppendOrReplaceModal {
+    /// Sources the Journal tab currently holds — needed to compute the
+    /// union when the user picks Append.
+    pub current_sources: Vec<JournalTarget>,
+    /// Targets being added by the external request.
+    pub incoming_targets: Vec<JournalTarget>,
+    /// Window from the Journal tab's current state, preserved on
+    /// either commit path (the prompt itself does not change the window).
+    pub window: Option<JournalWindow>,
+    /// Which choice is currently focused.
+    pub focus: AppendOrReplaceMode,
+}
+
 /// The set of modal variants the App may hold at a given time. Each
 /// variant wraps the state type that owns the modal's data; the variant
 /// itself is the discriminator for dispatch.
@@ -230,6 +271,12 @@ pub enum ActiveModal {
     ConfirmDelete(ConfirmDeleteState),
     /// Single-line prompt for creating a subdirectory.
     CreateSubdir(CreateSubdirState),
+    /// Sources Manager for the Journal tab: view / add / remove /
+    /// clear sources, with an inner ghost-aware fuzzy picker.
+    JournalSources(JournalSourcesModal),
+    /// Append-or-Replace prompt raised on the Journal tab when an
+    /// external `JournalAddSources` request arrives.
+    JournalAppendOrReplace(JournalAppendOrReplaceModal),
 }
 
 impl Modal for ActiveModal {
@@ -251,6 +298,8 @@ impl Modal for ActiveModal {
             }
             ActiveModal::ConfirmDelete(s) => s.handle_event(ev, ctx),
             ActiveModal::CreateSubdir(s) => s.handle_event(ev, ctx),
+            ActiveModal::JournalSources(s) => s.handle_event(ev, ctx),
+            ActiveModal::JournalAppendOrReplace(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -272,6 +321,8 @@ impl Modal for ActiveModal {
             }
             ActiveModal::ConfirmDelete(s) => s.render(frame, area, ctx),
             ActiveModal::CreateSubdir(s) => s.render(frame, area, ctx),
+            ActiveModal::JournalSources(s) => s.render(frame, area, ctx),
+            ActiveModal::JournalAppendOrReplace(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -291,6 +342,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.keymap_help(),
             ActiveModal::ConfirmDelete(s) => s.keymap_help(),
             ActiveModal::CreateSubdir(s) => s.keymap_help(),
+            ActiveModal::JournalSources(s) => s.keymap_help(),
+            ActiveModal::JournalAppendOrReplace(s) => s.keymap_help(),
         }
     }
 
@@ -310,6 +363,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => "query-bar",
             ActiveModal::ConfirmDelete(_) => "confirm-delete",
             ActiveModal::CreateSubdir(_) => "create-subdir",
+            ActiveModal::JournalSources(_) => "journal-sources",
+            ActiveModal::JournalAppendOrReplace(_) => "journal-append-or-replace",
         }
     }
 
@@ -329,6 +384,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.commands(),
             ActiveModal::ConfirmDelete(s) => s.commands(),
             ActiveModal::CreateSubdir(s) => s.commands(),
+            ActiveModal::JournalSources(s) => s.commands(),
+            ActiveModal::JournalAppendOrReplace(s) => s.commands(),
         }
     }
 
@@ -348,6 +405,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => empty_keymap(),
             ActiveModal::ConfirmDelete(s) => s.keymap(),
             ActiveModal::CreateSubdir(s) => s.keymap(),
+            ActiveModal::JournalSources(s) => s.keymap(),
+            ActiveModal::JournalAppendOrReplace(s) => s.keymap(),
         }
     }
 
@@ -367,6 +426,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => CommandOutcome::NotHandled,
             ActiveModal::ConfirmDelete(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::CreateSubdir(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::JournalSources(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::JournalAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }
@@ -997,4 +1058,357 @@ impl Modal for QueryBar {
     fn keymap(&self) -> &KeyMap {
         &mc::QUERY_BAR_KEYMAP
     }
+}
+
+// ── Journal sources manager ─────────────────────────────────────────
+
+impl Modal for JournalSourcesModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        // Inner picker captures the keyboard ahead of the row-list
+        // keymap. Selecting an item appends it to `sources` (deduping)
+        // and closes the picker back to the row list; Esc just closes
+        // the picker.
+        if let Some(picker) = self.picker.as_mut() {
+            match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => {
+                    let target = match hit {
+                        JournalSourceHit::Note(p) => JournalTarget::Note(p),
+                        JournalSourceHit::Ghost(r) => JournalTarget::Ghost(r),
+                    };
+                    if !self.sources.iter().any(|s| s == &target) {
+                        self.sources.push(target);
+                    }
+                    self.picker = None;
+                    self.clamp_cursor();
+                    return ModalOutcome::Consumed;
+                }
+                PickerOutcome::Cancelled => {
+                    self.picker = None;
+                    return ModalOutcome::Consumed;
+                }
+                PickerOutcome::StillOpen => return ModalOutcome::Consumed,
+                PickerOutcome::NotHandled => return ModalOutcome::Consumed,
+            }
+        }
+        // Row-list keymap.
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Enter => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+                    sources: self.sources.clone(),
+                    window: self.window.clone(),
+                });
+                ModalOutcome::Closed
+            }
+            KeyCode::Char('a') => {
+                self.open_picker(ctx);
+                ModalOutcome::Consumed
+            }
+            KeyCode::Char('d') => {
+                if !self.sources.is_empty() && self.cursor < self.sources.len() {
+                    self.sources.remove(self.cursor);
+                    self.clamp_cursor();
+                }
+                ModalOutcome::Consumed
+            }
+            KeyCode::Char('c') => {
+                self.sources.clear();
+                self.cursor = 0;
+                ModalOutcome::Consumed
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                }
+                ModalOutcome::Consumed
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !self.sources.is_empty() && self.cursor + 1 < self.sources.len() {
+                    self.cursor += 1;
+                }
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_journal_sources(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Journal sources",
+            &[
+                ("a", "add"),
+                ("d", "remove"),
+                ("c", "clear"),
+                ("Enter", "commit"),
+                ("Esc", "cancel"),
+                ("↑/↓ · j/k", "navigate"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "journal-sources"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::JOURNAL_SOURCES_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::JOURNAL_SOURCES_KEYMAP
+    }
+}
+
+impl JournalSourcesModal {
+    fn clamp_cursor(&mut self) {
+        if self.sources.is_empty() {
+            self.cursor = 0;
+        } else if self.cursor >= self.sources.len() {
+            self.cursor = self.sources.len() - 1;
+        }
+    }
+
+    /// Open the inner add-source fuzzy picker. Builds a fresh graph
+    /// snapshot at open time so ghost rows reflect current vault
+    /// state (same pattern Journal's `load_for_multi` uses).
+    fn open_picker(&mut self, ctx: &TabCtx) {
+        let scan = ctx.vault.scan();
+        let graph = match ft_core::graph::Graph::build(ctx.vault, &scan) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let source = JournalSourcePickerSource::new(
+            std::sync::Arc::clone(ctx.vault),
+            std::sync::Arc::clone(ctx.recents),
+            &graph,
+        );
+        self.picker = Some(FuzzyPicker::new(source));
+    }
+}
+
+fn render_journal_sources(frame: &mut Frame, area: Rect, state: &mut JournalSourcesModal) {
+    let popup_height = 16u16.min(area.height.saturating_sub(2));
+    let popup_width = 70u16.min(area.width.saturating_sub(4));
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+    frame.render_widget(Clear, popup_area);
+    let title = format!(" Journal Sources — {} source(s) ", state.sources.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(crate::tui::palette::PRIMARY));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if let Some(picker) = state.picker.as_mut() {
+        // Inner picker takes the whole inner area.
+        picker.render(frame, inner);
+        return;
+    }
+
+    // Layout: [row list … footer 1 row]
+    let list_height = inner.height.saturating_sub(1);
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: list_height,
+    };
+    let footer_area = Rect {
+        x: inner.x,
+        y: inner.y + list_height,
+        width: inner.width,
+        height: 1,
+    };
+
+    // Row list (or empty hint).
+    if state.sources.is_empty() {
+        let hint = Line::from(Span::styled(
+            "no sources — press `a` to add",
+            Style::default().fg(crate::tui::palette::DIM),
+        ));
+        frame.render_widget(Paragraph::new(hint), list_area);
+    } else {
+        let lines: Vec<Line> = state
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let style = if i == state.cursor {
+                    Style::default()
+                        .fg(crate::tui::palette::PRIMARY)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let cursor = if i == state.cursor { "▶ " } else { "  " };
+                Line::from(Span::styled(format!("{cursor}{}", t.label()), style))
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), list_area);
+    }
+
+    let footer = Line::from(Span::styled(
+        "a add  d remove  c clear  Enter commit  Esc cancel",
+        Style::default().fg(crate::tui::palette::DIM),
+    ));
+    frame.render_widget(Paragraph::new(footer), footer_area);
+}
+
+// ── Journal append-or-replace prompt ────────────────────────────────
+
+impl Modal for JournalAppendOrReplaceModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => ModalOutcome::Closed,
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                self.commit_append(ctx);
+                ModalOutcome::Closed
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.commit_replace(ctx);
+                ModalOutcome::Closed
+            }
+            KeyCode::Enter => {
+                match self.focus {
+                    AppendOrReplaceMode::Append => self.commit_append(ctx),
+                    AppendOrReplaceMode::Replace => self.commit_replace(ctx),
+                }
+                ModalOutcome::Closed
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                self.focus = match self.focus {
+                    AppendOrReplaceMode::Append => AppendOrReplaceMode::Replace,
+                    AppendOrReplaceMode::Replace => AppendOrReplaceMode::Append,
+                };
+                ModalOutcome::Consumed
+            }
+            _ => ModalOutcome::Consumed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        render_journal_append_or_replace(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Append or replace",
+            &[
+                ("a", "append"),
+                ("r", "replace"),
+                ("c / Esc", "cancel"),
+                ("Enter", "commit focused choice"),
+                ("←/→ · Tab", "switch focus"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "journal-append-or-replace"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::JOURNAL_APPEND_REPLACE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::JOURNAL_APPEND_REPLACE_KEYMAP
+    }
+}
+
+impl JournalAppendOrReplaceModal {
+    fn commit_append(&self, ctx: &TabCtx) {
+        // Union: current sources, then incoming targets not already
+        // present, in insertion order. JournalTarget derives Eq, so
+        // equality is structural.
+        let mut sources = self.current_sources.clone();
+        for t in &self.incoming_targets {
+            if !sources.iter().any(|s| s == t) {
+                sources.push(t.clone());
+            }
+        }
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+            sources,
+            window: self.window.clone(),
+        });
+    }
+
+    fn commit_replace(&self, ctx: &TabCtx) {
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+            sources: self.incoming_targets.clone(),
+            // Replace clears any previous window — the incoming
+            // request didn't carry one.
+            window: None,
+        });
+    }
+}
+
+fn render_journal_append_or_replace(
+    frame: &mut Frame,
+    area: Rect,
+    state: &JournalAppendOrReplaceModal,
+) {
+    let height = 5u16.min(area.height);
+    let y = area.y + area.height.saturating_sub(height);
+    let prompt_area = Rect {
+        x: area.x,
+        y,
+        width: area.width,
+        height,
+    };
+    let title = format!(
+        " Add {} target(s) to Journal sources? ",
+        state.incoming_targets.len()
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(crate::tui::palette::PRIMARY));
+    let inner = block.inner(prompt_area);
+    frame.render_widget(Clear, prompt_area);
+    frame.render_widget(block, prompt_area);
+
+    let (a_style, r_style) = match state.focus {
+        AppendOrReplaceMode::Append => (
+            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+            Style::default().fg(crate::tui::palette::DIM),
+        ),
+        AppendOrReplaceMode::Replace => (
+            Style::default().fg(crate::tui::palette::DIM),
+            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ),
+    };
+    let summary = Line::from(Span::styled(
+        format!(
+            "current: {} source(s); incoming: {} target(s)",
+            state.current_sources.len(),
+            state.incoming_targets.len()
+        ),
+        Style::default().fg(crate::tui::palette::DIM),
+    ));
+    let choices = Line::from(vec![
+        Span::styled(" [a] append ", a_style),
+        Span::raw("  "),
+        Span::styled(" [r] replace ", r_style),
+        Span::raw("    [c] cancel"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(vec![summary, Line::from(""), choices]),
+        inner,
+    );
 }

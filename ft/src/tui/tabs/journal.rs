@@ -35,7 +35,6 @@ use ft_core::git::discover_repo;
 use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::journal::{build_journal, JournalEntry};
 use ft_core::link_review::compute_link_review;
-use ft_core::search::Hit;
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
@@ -45,8 +44,8 @@ use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::palette;
 use crate::tui::tab::{
-    AppRequest, EventOutcome, JournalTarget, JournalWindow, MultiTargetRequest, Tab, TabCtx,
-    ToastStyle,
+    AppRequest, AppendOrReplaceMode, EventOutcome, JournalTarget, JournalWindow,
+    MultiTargetRequest, Tab, TabCtx, ToastStyle,
 };
 use crate::tui::widgets::{
     EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
@@ -59,13 +58,11 @@ use crate::tui::widgets::{
 /// at build time and `?` / `ft commands list` can introspect them.
 pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
     CommandDef {
-        name: "journal.open-picker",
-        description: "Open the fuzzy note picker to choose a journal source",
+        name: "journal.open-sources-manager",
+        description: "Open the Sources Manager modal (add/remove/clear sources)",
         scope: CommandScope::Tab("journal"),
-        group: "Source",
+        group: "Sources",
         args_schema: &[],
-        // Picker captures the keyboard for the duration of its session,
-        // so `ft do` can't reasonably drive it headlessly.
         opens_modal: true,
         is_primary: false,
     },
@@ -194,8 +191,9 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
 /// (see `handle_event`).
 pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
-        // Source
-        .bind("/", "journal.open-picker")
+        // Sources
+        .bind("/", "journal.open-sources-manager")
+        .bind("a", "journal.open-sources-manager")
         .bind("R", "journal.reload")
         .bind("c", "journal.clear")
         // Navigation — vim aliases
@@ -256,15 +254,10 @@ pub enum NonSynthChoice {
 }
 
 pub struct JournalTab {
-    /// What's currently loaded. `None` puts the tab in its empty-state
-    /// prompt. `Note(path)` for a real note, `Ghost(raw)` for an
-    /// unresolved-link concept.
-    target: Option<JournalTarget>,
-    /// In multi-target mode, the full list of selected targets and the
-    /// optional window that produced them. `target` is set to the first
-    /// entry so existing single-target rendering paths keep working;
-    /// multi-target rendering branches on `multi_targets.len() > 1`.
-    multi_targets: Vec<JournalTarget>,
+    /// The currently-loaded source set. Empty `Vec` = empty-state.
+    /// Every rebuild reads from this slot; cross-tab queues (Review
+    /// handoff, Graph jump) mutate it in `on_focus`.
+    sources: Vec<JournalTarget>,
     /// Captured window from a Review-tab handoff. Enables the
     /// `--in-window` toggle (`w`).
     window: Option<JournalWindow>,
@@ -287,15 +280,16 @@ pub struct JournalTab {
     /// 0-indexed scroll offset (in entries, not lines). Adjusted at
     /// render time when `selected` would otherwise fall offscreen.
     scroll_offset: usize,
-    /// Active fuzzy picker. `Some` while the picker overlay owns the
-    /// keyboard; cleared on selection or `Esc`.
-    picker: Option<FuzzyPicker<VaultFilePickerSource>>,
-    /// Queued target from a cross-tab jump. Consumed by `on_focus` to
-    /// kick off a load.
+    /// Queued single-target from the Graph tab's `Shift+J`. Consumed by
+    /// `on_focus` and replaces the source set with `vec![target]`.
     queued_for: Option<JournalTarget>,
     /// Queued multi-target request from the Review tab. Consumed by
-    /// `on_focus`; takes precedence over `queued_for` when both are set.
+    /// `on_focus`; replaces the source set with `request.targets`.
     queued_multi: Option<MultiTargetRequest>,
+    /// Queued AddSources request from the Graph tab's `Shift+A`.
+    /// Consumed by `on_focus` and turned into an
+    /// `ActiveModal::JournalAppendOrReplace` prompt.
+    queued_add_sources: Option<(Vec<JournalTarget>, AppendOrReplaceMode)>,
     /// Lazy-loaded blame cache; preserved across loads within the
     /// tab's session.
     cache: Option<BlameCache>,
@@ -319,8 +313,7 @@ impl Default for JournalTab {
 impl JournalTab {
     pub fn new() -> Self {
         Self {
-            target: None,
-            multi_targets: Vec::new(),
+            sources: Vec::new(),
             window: None,
             in_window_only: false,
             entries: Vec::new(),
@@ -328,9 +321,9 @@ impl JournalTab {
             entry_selected: std::collections::HashSet::new(),
             selected: 0,
             scroll_offset: 0,
-            picker: None,
             queued_for: None,
             queued_multi: None,
+            queued_add_sources: None,
             cache: None,
             last_error: None,
             synth_send: None,
@@ -343,116 +336,41 @@ impl JournalTab {
         self
     }
 
-    /// Run `build_journal` for `target` and replace `entries`. The
-    /// blame cache is loaded from disk on first use and saved
-    /// best-effort after a successful build. Accepts both notes and
-    /// ghosts — the engine treats either symmetrically once a
-    /// `NoteId` is in hand.
-    fn load_for(&mut self, target: JournalTarget, ctx: &mut TabCtx) {
+    /// Rebuild the journal feed from the current `sources` slot.
+    /// Handles every state: empty sources (clears entries; no error),
+    /// no git repo (banner, no entries), graph build failure (banner),
+    /// per-target resolution misses (banner if *all* miss). Re-applies
+    /// the in-window filter when applicable. Single seam — all source
+    /// mutations funnel through here.
+    fn rebuild_journal(&mut self, ctx: &mut TabCtx) {
+        // Pre-flight: empty source set is a valid "empty journal"
+        // state; entries clear, no error.
+        if self.sources.is_empty() {
+            self.entries.clear();
+            self.entry_matched_titles.clear();
+            self.entry_selected.clear();
+            self.selected = 0;
+            self.scroll_offset = 0;
+            self.last_error = None;
+            // The in-window filter is meaningless with zero sources.
+            self.in_window_only = false;
+            return;
+        }
+
         if discover_repo(&ctx.vault.path).is_none() {
             self.last_error = Some(
                 "vault is not inside a git repository — journal needs git history".to_string(),
             );
-            self.target = Some(target);
             self.entries.clear();
+            self.entry_matched_titles.clear();
+            self.entry_selected.clear();
             self.selected = 0;
             self.scroll_offset = 0;
             return;
         }
 
-        // Build a fresh graph; the App-level graph belongs to the Graph
-        // tab and isn't easily reachable from here.
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(e) => {
-                self.last_error = Some(format!("graph build failed: {e}"));
-                self.target = Some(target);
-                self.entries.clear();
-                return;
-            }
-        };
-
-        let resolved = match &target {
-            JournalTarget::Note(path) => graph.note_by_path(path),
-            JournalTarget::Ghost(raw) => graph.ghost_by_raw(raw),
-        };
-        let Some(note_id) = resolved else {
-            self.last_error = Some(format!("target not found in graph: {}", target.label()));
-            self.target = Some(target);
-            self.entries.clear();
-            return;
-        };
-
-        if self.cache.is_none() {
-            self.cache = Some(BlameCache::load(&ctx.vault.path).unwrap_or_default());
-        }
-        let cache = self.cache.as_mut().expect("just initialized");
-
-        // Pass `vault.path` as the git CWD: paragraph paths are
-        // vault-relative, and `git -C <vault>` finds the enclosing repo
-        // even when the vault is a subdirectory of it.
-        let vault_path = ctx.vault.path.clone();
-        match build_journal(&graph, &[note_id], ctx.vault, &vault_path, cache) {
-            Ok(report) => {
-                self.last_error = None;
-                self.target = Some(target);
-                // Single-target mode → drop multi-target state.
-                self.multi_targets.clear();
-                self.window = None;
-                self.in_window_only = false;
-                self.entries = report.entries;
-                self.entry_matched_titles = vec![vec![]; self.entries.len()];
-                self.entry_selected.clear();
-                self.selected = 0;
-                self.scroll_offset = 0;
-                if !report.skipped_blame.is_empty() {
-                    let first = report
-                        .skipped_blame
-                        .first()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default();
-                    let extra = report.skipped_blame.len().saturating_sub(1);
-                    let msg = if extra == 0 {
-                        format!("blame skipped 1 file: {first}")
-                    } else {
-                        format!(
-                            "blame skipped {} files (e.g. {first})",
-                            report.skipped_blame.len()
-                        )
-                    };
-                    crate::tui::notes_actions::queue_toast(ctx, &msg, ToastStyle::Info);
-                }
-                // Best-effort cache save — failures are logged via toast
-                // and otherwise non-fatal.
-                if let Err(e) = cache.save(&ctx.vault.path) {
-                    crate::tui::notes_actions::queue_toast(
-                        ctx,
-                        &format!("blame cache save: {e}"),
-                        ToastStyle::Info,
-                    );
-                }
-            }
-            Err(e) => {
-                self.last_error = Some(format!("build_journal failed: {e}"));
-                self.target = Some(target);
-                self.entries.clear();
-            }
-        }
-    }
-
-    /// Multi-target counterpart of [`Self::load_for`]. Runs
-    /// `build_journal` over `request.targets` and stashes the window
-    /// so the `w` key can later toggle in-window filtering.
-    fn load_for_multi(&mut self, request: MultiTargetRequest, ctx: &mut TabCtx) {
-        if discover_repo(&ctx.vault.path).is_none() {
-            self.last_error = Some(
-                "vault is not inside a git repository — journal needs git history".to_string(),
-            );
-            self.entries.clear();
-            return;
-        }
-
+        // Build a fresh graph; the App-level graph belongs to the
+        // Graph tab and isn't easily reachable from here.
         let scan = ctx.vault.scan();
         let graph = match Graph::build(ctx.vault, &scan) {
             Ok(g) => g,
@@ -463,10 +381,10 @@ impl JournalTab {
             }
         };
 
-        // Resolve every target to a NoteId in this fresh graph.
-        let mut ids: Vec<NoteId> = Vec::with_capacity(request.targets.len());
+        // Resolve every source to a NoteId in this fresh graph.
+        let mut ids: Vec<NoteId> = Vec::with_capacity(self.sources.len());
         let mut unresolved: Vec<String> = Vec::new();
-        for t in &request.targets {
+        for t in &self.sources {
             let id = match t {
                 JournalTarget::Note(p) => graph.note_by_path(p),
                 JournalTarget::Ghost(raw) => graph.ghost_by_raw(raw),
@@ -478,7 +396,7 @@ impl JournalTab {
         }
         if ids.is_empty() {
             self.last_error = Some(format!(
-                "no Journal-multi targets resolved in current graph: {}",
+                "no Journal sources resolved in current graph: {}",
                 unresolved.join(", ")
             ));
             self.entries.clear();
@@ -490,6 +408,7 @@ impl JournalTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
         let vault_path = ctx.vault.path.clone();
+
         let report = match build_journal(&graph, &ids, ctx.vault, &vault_path, cache) {
             Ok(r) => r,
             Err(e) => {
@@ -498,53 +417,75 @@ impl JournalTab {
                 return;
             }
         };
+
+        // Best-effort cache save — failures are logged via toast and
+        // otherwise non-fatal.
         let _ = cache.save(&ctx.vault.path);
 
         // Resolve every entry's `matched` NoteIds to display titles
-        // while the load-time graph is still in scope.
-        let entry_matched_titles: Vec<Vec<String>> = report
-            .entries
-            .iter()
-            .map(|e| {
-                e.matched
-                    .iter()
-                    .map(|id| match graph.node(*id) {
-                        NodeKind::Note(n) => n.title.clone(),
-                        NodeKind::Ghost(g) => g.raw.clone(),
-                        _ => String::new(),
-                    })
-                    .filter(|t| !t.is_empty())
-                    .collect()
-            })
-            .collect();
+        // while the load-time graph is still in scope. Single-source
+        // builds never render the badge so we leave it empty there.
+        let entry_matched_titles: Vec<Vec<String>> = if self.sources.len() > 1 {
+            report
+                .entries
+                .iter()
+                .map(|e| {
+                    e.matched
+                        .iter()
+                        .map(|id| match graph.node(*id) {
+                            NodeKind::Note(n) => n.title.clone(),
+                            NodeKind::Ghost(g) => g.raw.clone(),
+                            _ => String::new(),
+                        })
+                        .filter(|t| !t.is_empty())
+                        .collect()
+                })
+                .collect()
+        } else {
+            vec![vec![]; report.entries.len()]
+        };
+
+        if !report.skipped_blame.is_empty() {
+            let first = report
+                .skipped_blame
+                .first()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let extra = report.skipped_blame.len().saturating_sub(1);
+            let msg = if extra == 0 {
+                format!("blame skipped 1 file: {first}")
+            } else {
+                format!(
+                    "blame skipped {} files (e.g. {first})",
+                    report.skipped_blame.len()
+                )
+            };
+            crate::tui::notes_actions::queue_toast(ctx, &msg, ToastStyle::Info);
+        }
 
         self.last_error = None;
-        self.target = request.targets.first().cloned();
-        self.multi_targets = request.targets;
-        self.window = request.window;
-        self.in_window_only = false;
         self.entries = report.entries;
         self.entry_matched_titles = entry_matched_titles;
         self.entry_selected.clear();
         self.selected = 0;
         self.scroll_offset = 0;
+        // In-window filter only makes sense in multi-target mode with
+        // a window attached; otherwise clear it silently.
+        if !(self.sources.len() >= 2 && self.window.is_some()) {
+            self.in_window_only = false;
+        }
+        if self.in_window_only {
+            self.apply_in_window_filter(ctx);
+        }
     }
 
     /// Recompute and apply the in-window filter against the current
-    /// `entries`. Reloads from scratch (cheap) so toggling the filter
+    /// `entries`. Rebuilds from scratch (cheap) so toggling the filter
     /// on/off restores the full list without storing a shadow copy.
     fn refresh_after_filter_toggle(&mut self, ctx: &mut TabCtx) {
-        // We need the unfiltered list as the basis; the cleanest path is
-        // to re-run `load_for_multi` with the same request.
-        let request = MultiTargetRequest {
-            targets: self.multi_targets.clone(),
-            window: self.window.clone(),
-        };
-        let want_in_window = self.in_window_only;
-        self.load_for_multi(request, ctx);
-        if want_in_window {
-            self.apply_in_window_filter(ctx);
-        }
+        // `rebuild_journal` re-applies the filter at the end if
+        // `in_window_only` is still set, so we just rebuild.
+        self.rebuild_journal(ctx);
     }
 
     /// Drop entries whose paragraph lines don't overlap any added line
@@ -596,7 +537,7 @@ impl JournalTab {
     }
 
     fn toggle_in_window(&mut self, ctx: &mut TabCtx) {
-        if self.window.is_none() || self.multi_targets.len() <= 1 {
+        if self.window.is_none() || self.sources.len() <= 1 {
             return; // toggle only applies in multi-target mode with a window
         }
         self.in_window_only = !self.in_window_only;
@@ -840,31 +781,36 @@ impl JournalTab {
         });
     }
 
-    fn open_picker(&mut self, ctx: &TabCtx) {
-        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
-        self.picker = Some(FuzzyPicker::new(source));
-    }
-
-    fn handle_picker_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
-        let Some(mut picker) = self.picker.take() else {
-            return EventOutcome::NotHandled;
+    /// Open the Sources Manager modal pre-landed on its add-source
+    /// picker. Builds a fresh graph snapshot at open time so ghost
+    /// rows reflect current vault state.
+    fn open_sources_manager(&mut self, ctx: &TabCtx) {
+        let scan = ctx.vault.scan();
+        let graph = match Graph::build(ctx.vault, &scan) {
+            Ok(g) => g,
+            Err(e) => {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    &format!("graph build failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
         };
-        match picker.handle_key(k) {
-            PickerOutcome::Selected(hit) => {
-                let Hit { path, .. } = hit;
-                self.load_for(JournalTarget::Note(path), ctx);
-                EventOutcome::Consumed
-            }
-            PickerOutcome::Cancelled => EventOutcome::Consumed,
-            PickerOutcome::StillOpen => {
-                self.picker = Some(picker);
-                EventOutcome::Consumed
-            }
-            PickerOutcome::NotHandled => {
-                self.picker = Some(picker);
-                EventOutcome::NotHandled
-            }
-        }
+        let source = crate::tui::widgets::JournalSourcePickerSource::new(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+            &graph,
+        );
+        let modal = crate::tui::modal::JournalSourcesModal {
+            sources: self.sources.clone(),
+            cursor: 0,
+            window: self.window.clone(),
+            picker: Some(FuzzyPicker::new(source)),
+        };
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+            crate::tui::modal::ActiveModal::JournalSources(modal),
+        )));
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -907,14 +853,36 @@ impl Tab for JournalTab {
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        // Multi-target queue takes precedence; clear the single-note
-        // queue without executing it (spec: "Both slots set prefers
-        // multi-target").
+        // Priority: multi > single > add_sources. (Commits from the
+        // Sources Manager / Append-or-Replace modal arrive via
+        // `queue_journal_commit_sources` which rebuilds synchronously
+        // and doesn't go through `on_focus`.)
         if let Some(request) = self.queued_multi.take() {
             self.queued_for = None;
-            self.load_for_multi(request, ctx);
+            self.queued_add_sources = None;
+            self.sources = request.targets;
+            self.window = request.window;
+            self.in_window_only = false;
+            self.rebuild_journal(ctx);
         } else if let Some(target) = self.queued_for.take() {
-            self.load_for(target, ctx);
+            self.queued_add_sources = None;
+            self.sources = vec![target];
+            self.window = None;
+            self.in_window_only = false;
+            self.rebuild_journal(ctx);
+        } else if let Some((targets, default_mode)) = self.queued_add_sources.take() {
+            // Raise the Append/Replace prompt; don't mutate sources
+            // yet. The modal commits via `JournalCommitSources` which
+            // is serviced on the next focus.
+            let modal = crate::tui::modal::JournalAppendOrReplaceModal {
+                current_sources: self.sources.clone(),
+                incoming_targets: targets,
+                window: self.window.clone(),
+                focus: default_mode,
+            };
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                crate::tui::modal::ActiveModal::JournalAppendOrReplace(modal),
+            )));
         }
         Ok(())
     }
@@ -927,6 +895,26 @@ impl Tab for JournalTab {
         self.queued_multi = Some(request.clone());
     }
 
+    fn queue_journal_add_sources(
+        &mut self,
+        targets: Vec<JournalTarget>,
+        default_mode: AppendOrReplaceMode,
+    ) {
+        self.queued_add_sources = Some((targets, default_mode));
+    }
+
+    fn queue_journal_commit_sources(
+        &mut self,
+        ctx: &mut TabCtx,
+        sources: Vec<JournalTarget>,
+        window: Option<JournalWindow>,
+    ) {
+        self.sources = sources;
+        self.window = window;
+        self.in_window_only = false;
+        self.rebuild_journal(ctx);
+    }
+
     fn commands(&self) -> &'static [CommandDef] {
         JOURNAL_COMMANDS
     }
@@ -937,19 +925,23 @@ impl Tab for JournalTab {
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
         match cmd.name {
-            "journal.open-picker" => {
-                self.open_picker(ctx);
+            "journal.open-sources-manager" => {
+                self.open_sources_manager(ctx);
                 CommandOutcome::Handled
             }
             "journal.reload" => {
-                if let Some(target) = self.target.clone() {
-                    self.load_for(target, ctx);
+                if !self.sources.is_empty() {
+                    self.rebuild_journal(ctx);
                 }
                 CommandOutcome::Handled
             }
             "journal.clear" => {
-                self.target = None;
+                self.sources.clear();
+                self.window = None;
+                self.in_window_only = false;
                 self.entries.clear();
+                self.entry_matched_titles.clear();
+                self.entry_selected.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
                 self.last_error = None;
@@ -1009,16 +1001,11 @@ impl Tab for JournalTab {
         };
 
         // Send-to-synth flow (existing/new picker + prompts) captures
-        // keys before the keymap is consulted.
+        // keys before the keymap is consulted. (Source manager is on
+        // the App's `ActiveModal` slot — the App's modal-driver
+        // intercepts those keys before they reach this method.)
         if self.synth_send.is_some() {
             return Ok(self.handle_synth_send_key(k, ctx));
-        }
-
-        // Picker overlay captures the keyboard while open — the picker
-        // is tab-resident here (not in `ActiveModal`), so we route raw
-        // events to it before consulting the tab keymap.
-        if self.picker.is_some() {
-            return Ok(self.handle_picker_key(k, ctx));
         }
 
         let chord = KeyChord::from_key_event(k);
@@ -1032,29 +1019,19 @@ impl Tab for JournalTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
-        match &self.target {
-            None => render_empty(frame, area, self.last_error.as_deref()),
-            Some(target) => render_loaded(
-                frame,
-                area,
-                target,
-                &self.multi_targets,
-                &self.entries,
-                &self.entry_matched_titles,
-                self.selected,
-                &self.entry_selected,
-                &mut self.scroll_offset,
-                self.last_error.as_deref(),
-                self.in_window_only,
-                self.window.is_some(),
-            ),
-        }
-
-        if let Some(ref mut picker) = self.picker {
-            let popup_area = centered_rect(70, 70, area);
-            frame.render_widget(Clear, popup_area);
-            picker.render(frame, popup_area);
-        }
+        render_journal(
+            frame,
+            area,
+            &self.sources,
+            self.window.as_ref(),
+            self.in_window_only,
+            &self.entries,
+            &self.entry_matched_titles,
+            self.selected,
+            &self.entry_selected,
+            &mut self.scroll_offset,
+            self.last_error.as_deref(),
+        );
 
         if let Some(state) = self.synth_send.as_mut() {
             render_synth_send(frame, area, state);
@@ -1064,11 +1041,12 @@ impl Tab for JournalTab {
     fn help_sections(&self) -> Vec<HelpSection> {
         vec![
             HelpSection::new(
-                "Source",
+                "Sources",
                 &[
-                    ("/", "open the fuzzy note picker"),
-                    ("R", "reload the current note's journal"),
-                    ("c", "clear back to the picker prompt"),
+                    ("/", "open the Sources Manager (lands on add-source picker)"),
+                    ("a", "open the Sources Manager (alias for /)"),
+                    ("R", "reload the journal"),
+                    ("c", "clear all sources"),
                 ],
             ),
             HelpSection::new(
@@ -1096,74 +1074,210 @@ impl Tab for JournalTab {
     }
 }
 
-fn render_empty(frame: &mut Frame, area: Rect, last_error: Option<&str>) {
-    let block = Block::default().borders(Borders::ALL).title(" Journal ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "press `/` to pick a note",
-            Style::default().fg(palette::DIM),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Shift+J in the Graph tab on a Note row jumps straight here.",
-            Style::default().fg(palette::DIM),
-        )),
-    ];
-    if let Some(err) = last_error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("error: {err}"),
-            Style::default().fg(palette::ERROR),
-        )));
+/// Render the always-visible Sources strip (exactly 2 rows). Empty
+/// state, single-source, multi-source — all share the same shape so
+/// the entry-list scroll math stays stable across state transitions.
+fn render_sources_strip(
+    frame: &mut Frame,
+    area: Rect,
+    sources: &[JournalTarget],
+    window: Option<&JournalWindow>,
+    in_window_only: bool,
+) {
+    if area.height < 2 {
+        return;
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    let mut header = format!("Sources ({})", sources.len());
+    if let Some(w) = window {
+        header.push_str(&format!(" [window: {}]", window_label(w)));
+    }
+    if in_window_only {
+        header.push_str(" [filter: in-window]");
+    }
+    let header_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    let body_area = Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            header,
+            Style::default()
+                .fg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        header_area,
+    );
+
+    if sources.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "no sources loaded — press / to manage sources",
+                Style::default().fg(palette::DIM),
+            ))),
+            body_area,
+        );
+        return;
+    }
+
+    let labels: Vec<String> = sources.iter().map(|t| t.label()).collect();
+    let body_text = truncate_source_list(&labels, body_area.width as usize);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            body_text,
+            Style::default().fg(palette::DIM),
+        ))),
+        body_area,
+    );
+}
+
+/// Join `labels` with ", " up to `width` chars. When the joined string
+/// would exceed `width`, truncate after the last fully-fitting label
+/// and append `…, +K more` where K is the number of labels elided.
+fn truncate_source_list(labels: &[String], width: usize) -> String {
+    if labels.is_empty() {
+        return String::new();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let full = labels.join(", ");
+    if full.chars().count() <= width {
+        return full;
+    }
+    // Greedy: pack labels until adding the next one (with separator
+    // and suffix budget) would overflow.
+    let mut out = String::new();
+    let mut shown = 0usize;
+    for (i, label) in labels.iter().enumerate() {
+        let remaining = labels.len() - i;
+        let suffix = format!("…, +{remaining} more");
+        let sep = if shown == 0 { "" } else { ", " };
+        // Reserve space for the suffix if there's at least one more
+        // label past this one (or if appending this one alone would
+        // overflow).
+        let candidate = format!("{out}{sep}{label}");
+        let candidate_with_suffix = format!(
+            "{candidate}{}",
+            if i + 1 < labels.len() {
+                format!(", {suffix}")
+            } else {
+                String::new()
+            }
+        );
+        if candidate_with_suffix.chars().count() <= width
+            || (shown == 0 && i + 1 == labels.len() && candidate.chars().count() <= width)
+        {
+            out = candidate;
+            shown += 1;
+        } else {
+            break;
+        }
+    }
+    if shown < labels.len() {
+        let remaining = labels.len() - shown;
+        let sep = if shown == 0 { "" } else { ", " };
+        out.push_str(&format!("{sep}…, +{remaining} more"));
+        // If even the suffix alone overflows, hard-truncate.
+        if out.chars().count() > width {
+            out = out.chars().take(width).collect();
+        }
+    }
+    out
+}
+
+fn window_label(w: &JournalWindow) -> String {
+    match w {
+        JournalWindow::Since(d) => {
+            let days = d.num_days();
+            if days >= 1 {
+                format!("since {days}d")
+            } else {
+                format!("since {}h", d.num_hours())
+            }
+        }
+        JournalWindow::Range { from, to } => format!("range {from}..{to}"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_loaded(
+fn render_journal(
     frame: &mut Frame,
     area: Rect,
-    target: &JournalTarget,
-    multi_targets: &[JournalTarget],
+    sources: &[JournalTarget],
+    window: Option<&JournalWindow>,
+    in_window_only: bool,
     entries: &[JournalEntry],
     entry_matched_titles: &[Vec<String>],
     selected: usize,
     entry_selected: &std::collections::HashSet<usize>,
     scroll_offset: &mut usize,
     last_error: Option<&str>,
-    in_window_only: bool,
-    has_window: bool,
 ) {
-    let title = if multi_targets.len() > 1 {
-        let window_suffix = if has_window {
-            if in_window_only {
-                " · in-window"
-            } else {
-                " · all-time"
-            }
-        } else {
-            ""
-        };
+    // Tab block: title still carries entry-count for terminal-width
+    // compatibility but is no longer the sole signal of what's loaded.
+    let title = if sources.is_empty() {
+        " Journal ".to_string()
+    } else if sources.len() == 1 {
         format!(
-            " Journal — {} targets ({} entries){} ",
-            multi_targets.len(),
-            entries.len(),
-            window_suffix
+            " Journal — {} ({} entries) ",
+            sources[0].label(),
+            entries.len()
         )
     } else {
-        format!(" Journal — {} ({} entries) ", target.label(), entries.len())
+        format!(
+            " Journal — {} sources ({} entries) ",
+            sources.len(),
+            entries.len()
+        )
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Always-on Sources strip (2 rows) + entry list below.
+    if inner.height < 2 {
+        return;
+    }
+    let strip_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 2,
+    };
+    let body_area = Rect {
+        x: inner.x,
+        y: inner.y + 2,
+        width: inner.width,
+        height: inner.height.saturating_sub(2),
+    };
+    render_sources_strip(frame, strip_area, sources, window, in_window_only);
+
+    if sources.is_empty() {
+        // Empty-state body: just the error banner if any (the strip
+        // already says "no sources loaded — press / …").
+        if let Some(err) = last_error {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("error: {err}"),
+                    Style::default().fg(palette::ERROR),
+                ))),
+                body_area,
+            );
+        }
+        return;
+    }
+
     if entries.is_empty() {
         let mut lines = vec![Line::from(Span::styled(
-            "no journal entries for this note",
+            "no journal entries for these sources",
             Style::default().fg(palette::DIM),
         ))];
         if let Some(err) = last_error {
@@ -1173,7 +1287,7 @@ fn render_loaded(
                 Style::default().fg(palette::ERROR),
             )));
         }
-        frame.render_widget(Paragraph::new(lines), inner);
+        frame.render_widget(Paragraph::new(lines), body_area);
         return;
     }
 
@@ -1183,6 +1297,7 @@ fn render_loaded(
     // `entry_starts` stays in sync with the post-wrap visual line count —
     // that's what `scroll((y, 0))` indexes into. Without manual wrap the
     // cursor would drift relative to scroll on entries with long paragraphs.
+    let inner = body_area;
     let wrap_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
