@@ -74,9 +74,9 @@
 
 ## 8. Docs
 
-- [ ] 8.1 Update `docs/commands.md` (created by `commands-and-keymaps`) with the "Edit buffer commands" section
-- [ ] 8.2 Update `docs/keybindings.md` regeneration to include the edit-buffer chords; verify the CI freshness check still passes
-- [ ] 8.3 Add a "macOS terminal notes" subsection covering `Opt+Left/Right` interop
+- [x] 8.1 `docs/commands.md` gains an "Edit buffer commands (`widget/edit-buffer`)" section with a full chord → command → action table, the word-boundary rule, and notes on host-site precedence (picker `Ctrl+J`/`Ctrl+K` overrides). The `CommandScope` paragraph mentions the new `Widget(name)` variant.
+- [x] 8.2 `docs/keybindings.md` regenerated via `ft commands docs > docs/keybindings.md`. The new `## widget/edit-buffer` section lists all 14 `edit.*` commands. `ft commands docs --check` exits 0.
+- [x] 8.3 "macOS terminal notes" subsection inside the new edit-buffer commands section covers `Opt+Left/Right` interop: iTerm2/WezTerm/Ghostty/Kitty/Terminal.app modern default works as-is; older Terminal.app users enable "Use Option as Meta key"; tmux/screen pass-through caveat; `cat -v` / `showkey -a` diagnostic tip.
 
 ## 9. Build validation
 

@@ -25,11 +25,22 @@ new action means adding a `CommandDef` to one of the static slices.
 
 ### `CommandScope`
 
-`Global` (App-wide), `Tab(name)`, or `Modal(name)`. Scope drives:
+`Global` (App-wide), `Tab(name)`, `Modal(name)`, or `Widget(name)`.
+Scope drives:
 
 - `?` overlay grouping (global section first, then the active context).
 - `docs/keybindings.md` section ordering.
 - `ft commands list --scope <s>` filter resolution.
+
+`Widget(name)` is for command sets owned by a reusable widget that any
+tab or modal can mount. `Widget("edit-buffer")` is the one in use
+today — the readline-style `edit.*` commands (line jumps, word jumps,
+kill/yank, transpose, etc.) live on the shared `EditBuffer` widget
+that every text-input site mounts (graph query bar, fuzzy picker
+input, rename modal, quickline, capture var prompt, timeblocks form,
+journal entry). Routing keys through `EditBuffer::handle_event`
+guarantees one source of truth for what each chord does, regardless of
+which site mounted the widget.
 
 ### `KeyMap` and `KeyChord`
 
@@ -157,6 +168,61 @@ Inside a modal, verbs are reified per-modal — each modal owns its
 `<modal>.confirm`, `<modal>.cancel`, etc., so the registry stays
 collision-free. Helpers (`confirm_def`, `cancel_def`, `nav_def` in
 `ft/src/tui/modal_commands.rs`) keep the boilerplate down.
+
+## Edit buffer commands (`widget/edit-buffer`)
+
+The shared `EditBuffer` widget mounts inside every text input — the
+graph query bar, fuzzy picker input, rename modal, quickline, capture
+var prompt, timeblocks form, journal entry. It owns a readline-style
+keymap so the same chords work in every site:
+
+| Chord | Command | Action |
+| --- | --- | --- |
+| `Ctrl+A`, `Home` | `edit.move-line-start` | Cursor to line start |
+| `Ctrl+E`, `End` | `edit.move-line-end` | Cursor to line end |
+| `Ctrl+B`, `Left` | `edit.move-char-back` | Cursor one char back |
+| `Ctrl+F`, `Right` | `edit.move-char-forward` | Cursor one char forward |
+| `Alt+B`, `Alt+Left` | `edit.move-word-back` | Cursor one word back |
+| `Alt+F`, `Alt+Right` | `edit.move-word-forward` | Cursor one word forward |
+| `Ctrl+K` | `edit.kill-to-end` | Delete to end, save to kill ring |
+| `Ctrl+U` | `edit.kill-to-start` | Delete to start, save to kill ring |
+| `Ctrl+W`, `Ctrl+Backspace` | `edit.kill-word-back` | Delete word before cursor, save to kill ring |
+| `Alt+D` | `edit.kill-word-forward` | Delete word after cursor, save to kill ring |
+| `Ctrl+Y` | `edit.yank` | Insert kill ring at cursor |
+| `Ctrl+T` | `edit.transpose-chars` | Swap two chars around cursor |
+| `Backspace`, `Ctrl+H` | `edit.delete-char-back` | Delete char before cursor |
+| `Delete`, `Ctrl+D` | `edit.delete-char-forward` | Delete char at cursor |
+
+Word boundaries use `[A-Za-z0-9_]` uniformly: a word is a maximal run
+of those chars, so `foo.bar` is two words (`foo` and `bar`), not one.
+The kill ring is single-slot: each kill replaces the previous contents,
+and `Ctrl+Y` pastes it back without clearing — multiple yanks insert
+multiple copies.
+
+Sites that mount the widget can take precedence over its keymap by
+handling specific chords before delegating. The fuzzy picker, for
+example, keeps `Ctrl+J`/`Ctrl+K` bound to next/prev result so picker
+navigation wins over the buffer's `kill-to-end`.
+
+### macOS terminal notes
+
+On macOS, `Option`-key combinations need terminal-side cooperation:
+
+- **iTerm2 / WezTerm / Ghostty / Kitty / Terminal.app (modern)** —
+  default behavior sends `Alt+Left` / `Alt+Right` for `Opt+Left` /
+  `Opt+Right`. The widget binds both `Alt+B`/`Alt+F` *and*
+  `Alt+Left`/`Alt+Right`, so word-jumps work out of the box.
+- **Terminal.app (older)** — may send an escape-prefixed sequence
+  for `Opt+Left/Right` that crossterm interprets as `Esc` + arrow.
+  Enable "Use Option as Meta key" under Preferences → Profiles →
+  Keyboard to switch to the standard `Alt+arrow` encoding.
+- **tmux / screen** — pass through whatever the parent terminal sends;
+  if `Alt+arrow` doesn't reach `ft`, check that your `.tmux.conf`
+  doesn't rebind those chords first.
+
+If a chord doesn't seem to reach `ft`, run `ft commands list --scope
+widget/edit-buffer` to confirm the binding is registered, then check
+what your terminal actually emits with `cat -v` or `showkey -a`.
 
 ## `?` overlay
 
