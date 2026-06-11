@@ -32,7 +32,7 @@ use ft_core::graph::query::{parse as parse_query, GraphQuery};
 use ft_core::graph::rename::{
     apply_rename_plan, collect_directory_notes, plan_multi_rename, plan_rename,
 };
-use ft_core::graph::{Graph, NodeKind, NoteId};
+use ft_core::graph::{Graph, NodeKey, NodeKind, NoteId};
 
 use std::sync::Arc;
 
@@ -2376,11 +2376,12 @@ impl GraphTab {
         let Some(graph) = self.graph.as_ref() else {
             return;
         };
+        let key_path: Vec<NodeKey> = path.iter().map(|id| graph.stable_key(*id)).collect();
         let v = &mut self.views[self.active];
-        if path.len() > 1 {
-            v.add_expansion_path(path[..path.len() - 1].to_vec());
+        if key_path.len() > 1 {
+            v.add_expansion_path(key_path[..key_path.len() - 1].to_vec());
         }
-        v.selected_path = Some(path);
+        v.selected_path = Some(key_path);
         v.restore_expansion(graph);
         // Approximate visible-rows budget; render's scroll_to_selection
         // corrects against the real area on the next draw.
@@ -2585,13 +2586,15 @@ impl GraphTab {
 
     /// Re-derive every view's tree from the current graph (used on
     /// `refresh()` and after the first `on_focus` populates the graph
-    /// for views that already had a parsed query).
+    /// for views that already had a parsed query). Drops only the
+    /// `multi_selected` keys whose underlying nodes have actually
+    /// disappeared; existing marks survive a graph rebuild.
     fn restore_all_views(&mut self) {
         let Some(g) = self.graph.as_ref() else {
             return;
         };
         for v in self.views.iter_mut() {
-            v.multi_selected.clear();
+            v.multi_selected.retain(|k| g.id_for_key(k).is_some());
             v.restore_expansion(g);
         }
     }
@@ -2988,16 +2991,22 @@ impl Tab for GraphTab {
             }
             // Navigation
             "graph.cursor-down" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 v.selected = v.tree.move_selection_down(v.selected);
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 v.scroll_to_selection(vis);
                 CommandOutcome::Handled
             }
             "graph.cursor-up" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 v.selected = v.tree.move_selection_up(v.selected);
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 v.scroll_to_selection(vis);
                 CommandOutcome::Handled
             }
@@ -3005,7 +3014,7 @@ impl Tab for GraphTab {
                 let graph = self.graph.as_ref();
                 let v = &mut self.views[self.active];
                 if let (Some(g), Some(q)) = (graph, v.query.as_ref()) {
-                    let path = v.path_to(v.selected);
+                    let path = v.path_to(v.selected, g);
                     let was_expanded = v
                         .tree
                         .rows()
@@ -3023,10 +3032,13 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.collapse-or-jump-parent" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 let expanded = v.tree.rows().get(v.selected).is_some_and(|r| r.expanded);
                 if expanded {
-                    let path = v.path_to(v.selected);
+                    let path = v.path_to(v.selected, g);
                     v.tree.collapse_at(v.selected);
                     v.forget_expansion_subtree(&path);
                     v.scroll_to_selection(vis);
@@ -3039,7 +3051,7 @@ impl Tab for GraphTab {
                             pos -= 1;
                             if v.tree.rows()[pos].depth == target {
                                 v.selected = pos;
-                                v.refresh_selected_path();
+                                v.refresh_selected_path(g);
                                 v.scroll_to_selection(vis);
                                 break;
                             }
@@ -3049,34 +3061,46 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-first" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 v.selected = 0;
                 v.scroll_offset = 0;
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 CommandOutcome::Handled
             }
             "graph.cursor-last" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 v.selected = v.tree.len().saturating_sub(1);
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 v.scroll_to_selection(vis);
                 CommandOutcome::Handled
             }
             "graph.cursor-half-page-down" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 let rows = vis.max(1);
                 v.selected = (v.selected + rows / 2).min(v.tree.len().saturating_sub(1));
                 v.scroll_offset = (v.scroll_offset + rows / 2).min(v.tree.len().saturating_sub(1));
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 v.scroll_to_selection(vis);
                 CommandOutcome::Handled
             }
             "graph.cursor-half-page-up" => {
-                let v = self.active_view_mut();
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = &mut self.views[self.active];
                 let rows = vis.max(1);
                 v.selected = v.selected.saturating_sub(rows / 2);
                 v.scroll_offset = v.scroll_offset.saturating_sub(rows / 2);
-                v.refresh_selected_path();
+                v.refresh_selected_path(g);
                 v.scroll_to_selection(vis);
                 CommandOutcome::Handled
             }
@@ -3227,10 +3251,21 @@ impl Tab for GraphTab {
                         None
                     }
                 };
-                if let Some(s) = selected {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
-                        ActiveModal::MoveOuter(GraphMoveOuter::MoveTargetFromTree { selected: s }),
-                    )));
+                if let Some(keys) = selected {
+                    // Modal API speaks NoteIds (resolved against the
+                    // current live graph); drop any keys whose nodes
+                    // have already vanished.
+                    let graph = self.graph.as_ref();
+                    let ids: HashSet<NoteId> = graph
+                        .map(|g| keys.iter().filter_map(|k| g.id_for_key(k)).collect())
+                        .unwrap_or_default();
+                    if ids.is_empty() {
+                        return CommandOutcome::Handled;
+                    }
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::OpenModal(Box::new(ActiveModal::MoveOuter(
+                            GraphMoveOuter::MoveTargetFromTree { selected: ids },
+                        ))));
                     return CommandOutcome::Handled;
                 }
                 let graph = self.graph.as_ref();
@@ -3362,25 +3397,26 @@ impl Tab for GraphTab {
             }
             // Multi-select
             "graph.toggle-multi-select" => {
-                let (selectable, note_id, is_root) = {
-                    let v = self.active_view();
-                    let Some(row) = v.tree.rows().get(v.selected) else {
-                        return CommandOutcome::Handled;
-                    };
-                    let note_id = row.note_id;
-                    let (selectable, is_root) = match self.graph.as_ref().map(|g| g.node(note_id)) {
-                        Some(NodeKind::Note(_)) => (true, false),
-                        Some(NodeKind::Directory(d)) => (true, d.path.as_os_str().is_empty()),
-                        _ => (false, false),
-                    };
-                    (selectable, note_id, is_root)
+                let Some(g) = self.graph.as_ref() else {
+                    return CommandOutcome::Handled;
+                };
+                let v = self.active_view();
+                let Some(row) = v.tree.rows().get(v.selected) else {
+                    return CommandOutcome::Handled;
+                };
+                let note_id = row.note_id;
+                let (selectable, is_root) = match g.node(note_id) {
+                    NodeKind::Note(_) => (true, false),
+                    NodeKind::Directory(d) => (true, d.path.as_os_str().is_empty()),
+                    _ => (false, false),
                 };
                 if selectable && !is_root {
-                    let v = self.active_view_mut();
-                    if v.multi_selected.contains(&note_id) {
-                        v.multi_selected.remove(&note_id);
+                    let key = g.stable_key(note_id);
+                    let v = &mut self.views[self.active];
+                    if v.multi_selected.contains(&key) {
+                        v.multi_selected.remove(&key);
                     } else {
-                        v.multi_selected.insert(note_id);
+                        v.multi_selected.insert(key);
                     }
                 }
                 CommandOutcome::Handled
@@ -3532,11 +3568,12 @@ impl Tab for GraphTab {
                 } else {
                     ' '
                 };
-                let sel_marker = if v.multi_selected.contains(&row.note_id) {
-                    '●'
-                } else {
-                    ' '
-                };
+                let sel_marker = self
+                    .graph
+                    .as_ref()
+                    .map(|g| v.multi_selected.contains(&g.stable_key(row.note_id)))
+                    .unwrap_or(false);
+                let sel_marker = if sel_marker { '●' } else { ' ' };
                 let prefix = format!("{indent}{indicator} {sel_marker} ");
                 let base_style = if i == v.selected {
                     Style::default()
@@ -3711,20 +3748,22 @@ pub struct ExpandedView {
     parse_error: Option<String>,
     query: Option<GraphQuery>,
     /// Root-anchored paths the user has expanded. Each path is the
-    /// sequence of NoteIds from a root (inclusive) down to the
+    /// sequence of [`NodeKey`]s from a root (inclusive) down to the
     /// expanded node (inclusive). Closed under prefixes by
     /// construction — expanding a child always implies its parents are
-    /// also expanded.
-    expanded_paths: HashSet<Vec<NoteId>>,
+    /// also expanded. `NodeKey` (path-based) is used instead of
+    /// `NoteId` so the set survives `Graph::build`.
+    expanded_paths: HashSet<Vec<NodeKey>>,
     /// Path of the currently-selected row (root-to-leaf, inclusive).
     /// Used to restore selection across graph rebuilds; on a missing
     /// leaf we shed the tail and re-try until we hit an ancestor that
     /// still exists.
-    selected_path: Option<Vec<NoteId>>,
+    selected_path: Option<Vec<NodeKey>>,
     /// Space-toggled multi-selection. When non-empty, `r` triggers Flow
     /// A (move to directory) instead of Flow B (rename in place).
-    /// Cleared on graph rebuild (NoteIds are stale).
-    multi_selected: HashSet<NoteId>,
+    /// Stored as `NodeKey` so the marker set survives a graph rebuild
+    /// (e.g. a sibling file is deleted while the marks stand).
+    multi_selected: HashSet<NodeKey>,
     tree: TreeState,
     selected: usize,
     scroll_offset: usize,
@@ -3763,7 +3802,7 @@ impl ExpandedView {
                     let q = self.query.as_ref().unwrap();
                     let roots = q.select(g);
                     self.tree.build_from(&roots, g, q);
-                    self.refresh_selected_path();
+                    self.refresh_selected_path(g);
                 }
             }
             Err(e) => self.parse_error = Some(e.to_string()),
@@ -3771,9 +3810,11 @@ impl ExpandedView {
     }
 
     /// Re-derive the flat tree from the saved expansion paths against
-    /// the given graph. Paths whose nodes no longer exist are
-    /// truncated; selection falls back to the nearest restored
-    /// ancestor (then row 0).
+    /// the given graph. Paths whose nodes no longer exist are dropped;
+    /// selection falls back to the nearest restored ancestor (then
+    /// row 0). `scroll_offset` is preserved — the next render's
+    /// `scroll_to_selection(visible)` only moves the view if the new
+    /// `selected` actually ended up off-screen.
     fn restore_expansion(&mut self, graph: &Graph) {
         if self.query.is_none() {
             // No parsed query (empty text, or a parse error): nothing
@@ -3792,13 +3833,13 @@ impl ExpandedView {
 
         // Replay expansions shortest-path-first so parents are expanded
         // before their children.
-        let mut sorted: Vec<Vec<NoteId>> = std::mem::take(&mut self.expanded_paths)
+        let mut sorted: Vec<Vec<NodeKey>> = std::mem::take(&mut self.expanded_paths)
             .into_iter()
             .collect();
         sorted.sort_by_key(|p| p.len());
-        let mut restored: HashSet<Vec<NoteId>> = HashSet::new();
+        let mut restored: HashSet<Vec<NodeKey>> = HashSet::new();
         for path in sorted {
-            if let Some(idx) = self.find_row_for_path(&path) {
+            if let Some(idx) = self.find_row_for_path(&path, graph) {
                 let already = self.tree.rows()[idx].expanded;
                 if already || self.tree.expand_at(idx, graph, &query) {
                     restored.insert(path);
@@ -3814,31 +3855,40 @@ impl ExpandedView {
         if let Some(path) = self.selected_path.clone() {
             let mut len = path.len();
             while len > 0 {
-                if let Some(idx) = self.find_row_for_path(&path[..len]) {
+                if let Some(idx) = self.find_row_for_path(&path[..len], graph) {
                     self.selected = idx;
                     break;
                 }
                 len -= 1;
             }
         }
-        // Heuristic scroll — render's scroll_to_selection will correct
-        // against the real visible budget on first draw.
-        self.scroll_offset = self.selected.saturating_sub(10);
-        self.refresh_selected_path();
+        // Preserve `scroll_offset` deliberately — only the next render
+        // (which knows the real visible budget) is allowed to scroll,
+        // and only when `selected` is off-screen. This keeps the
+        // viewport pinned across editor close / rename / delete.
+        self.refresh_selected_path(graph);
     }
 
     /// Locate the row corresponding to a root-anchored path, walking
-    /// only through currently-visible children of each step. Returns
-    /// `None` if any node along the path isn't in the visible tree.
-    fn find_row_for_path(&self, path: &[NoteId]) -> Option<usize> {
+    /// only through currently-visible children of each step. `path` is
+    /// expressed in build-stable [`NodeKey`]s; each step is converted
+    /// to a current-build `NoteId` once via `graph.id_for_key`. Returns
+    /// `None` if any step doesn't resolve or isn't in the visible tree.
+    fn find_row_for_path(&self, path: &[NodeKey], graph: &Graph) -> Option<usize> {
         if path.is_empty() {
             return None;
         }
+        // Resolve every key once; if any step is missing in the new
+        // graph, the path is dead.
+        let ids: Vec<NoteId> = path
+            .iter()
+            .map(|k| graph.id_for_key(k))
+            .collect::<Option<Vec<_>>>()?;
         let rows = self.tree.rows();
         let mut idx = rows
             .iter()
-            .position(|r| r.depth == 0 && r.note_id == path[0])?;
-        for &next in &path[1..] {
+            .position(|r| r.depth == 0 && r.note_id == ids[0])?;
+        for &next in &ids[1..] {
             let parent_depth = rows[idx].depth;
             let mut found = None;
             for (i, r) in rows.iter().enumerate().skip(idx + 1) {
@@ -3856,8 +3906,9 @@ impl ExpandedView {
     }
 
     /// Walk the visible tree backward from `index` to assemble its
-    /// root-to-leaf path. Returns an empty vec for out-of-bounds.
-    fn path_to(&self, index: usize) -> Vec<NoteId> {
+    /// root-to-leaf path, expressed in build-stable [`NodeKey`]s.
+    /// Returns an empty vec for out-of-bounds.
+    fn path_to(&self, index: usize, graph: &Graph) -> Vec<NodeKey> {
         let rows = self.tree.rows();
         if index >= rows.len() {
             return Vec::new();
@@ -3866,7 +3917,7 @@ impl ExpandedView {
         let mut next_depth = rows[index].depth + 1;
         for i in (0..=index).rev() {
             if rows[i].depth + 1 == next_depth {
-                out.push(rows[i].note_id);
+                out.push(graph.stable_key(rows[i].note_id));
                 next_depth = rows[i].depth;
                 if next_depth == 0 {
                     break;
@@ -3881,7 +3932,7 @@ impl ExpandedView {
     /// — by construction the user's prior expansions should already
     /// have those, but enforcing the invariant locally keeps
     /// `restore_expansion` simple).
-    fn add_expansion_path(&mut self, path: Vec<NoteId>) {
+    fn add_expansion_path(&mut self, path: Vec<NodeKey>) {
         for i in 1..=path.len() {
             self.expanded_paths.insert(path[..i].to_vec());
         }
@@ -3889,15 +3940,15 @@ impl ExpandedView {
 
     /// Drop a collapse target plus every path that extends it. Mirrors
     /// `TreeState::collapse_at`, which removes all descendant rows.
-    fn forget_expansion_subtree(&mut self, path: &[NoteId]) {
+    fn forget_expansion_subtree(&mut self, path: &[NodeKey]) {
         self.expanded_paths.retain(|p| !starts_with(p, path));
     }
 
-    fn refresh_selected_path(&mut self) {
+    fn refresh_selected_path(&mut self, graph: &Graph) {
         if self.tree.is_empty() {
             self.selected_path = None;
         } else {
-            self.selected_path = Some(self.path_to(self.selected));
+            self.selected_path = Some(self.path_to(self.selected, graph));
         }
     }
 
@@ -4635,64 +4686,66 @@ mod view_tests {
         (g, v)
     }
 
+    /// Test helper: vault-relative path → `NodeKey::Directory`.
+    fn dir_key(p: &str) -> NodeKey {
+        NodeKey::Directory(std::path::PathBuf::from(p))
+    }
+
     #[test]
     fn add_expansion_path_includes_all_prefixes() {
         let mut v = ExpandedView::default();
-        // Synthesize a couple of NoteIds via the dirs graph.
-        let g = dirs_graph();
-        let root = g.node_by_path(std::path::Path::new("")).unwrap();
-        let areas = g.node_by_path(std::path::Path::new("Areas")).unwrap();
-        let ops = g
-            .node_by_path(std::path::Path::new("Areas/operations"))
-            .unwrap();
-        v.add_expansion_path(vec![root, areas, ops]);
-        assert!(v.expanded_paths.contains(&vec![root]));
-        assert!(v.expanded_paths.contains(&vec![root, areas]));
+        let root = dir_key("");
+        let areas = dir_key("Areas");
+        let ops = dir_key("Areas/operations");
+        v.add_expansion_path(vec![root.clone(), areas.clone(), ops.clone()]);
+        assert!(v.expanded_paths.contains(&vec![root.clone()]));
+        assert!(v
+            .expanded_paths
+            .contains(&vec![root.clone(), areas.clone()]));
         assert!(v.expanded_paths.contains(&vec![root, areas, ops]));
     }
 
     #[test]
     fn forget_expansion_subtree_removes_descendants() {
-        let g = dirs_graph();
-        let root = g.node_by_path(std::path::Path::new("")).unwrap();
-        let areas = g.node_by_path(std::path::Path::new("Areas")).unwrap();
-        let ops = g
-            .node_by_path(std::path::Path::new("Areas/operations"))
-            .unwrap();
-        let projects = g.node_by_path(std::path::Path::new("Projects")).unwrap();
+        let root = dir_key("");
+        let areas = dir_key("Areas");
+        let ops = dir_key("Areas/operations");
+        let projects = dir_key("Projects");
         let mut v = ExpandedView::default();
-        v.add_expansion_path(vec![root, areas, ops]);
-        v.add_expansion_path(vec![root, projects]);
-        v.forget_expansion_subtree(&[root, areas]);
-        assert!(!v.expanded_paths.contains(&vec![root, areas]));
-        assert!(!v.expanded_paths.contains(&vec![root, areas, ops]));
+        v.add_expansion_path(vec![root.clone(), areas.clone(), ops.clone()]);
+        v.add_expansion_path(vec![root.clone(), projects.clone()]);
+        v.forget_expansion_subtree(&[root.clone(), areas.clone()]);
+        assert!(!v
+            .expanded_paths
+            .contains(&vec![root.clone(), areas.clone()]));
+        assert!(!v.expanded_paths.contains(&vec![root.clone(), areas, ops]));
         // Untouched siblings stay.
-        assert!(v.expanded_paths.contains(&vec![root, projects]));
+        assert!(v.expanded_paths.contains(&vec![root.clone(), projects]));
         assert!(v.expanded_paths.contains(&vec![root]));
     }
 
     #[test]
     fn path_to_walks_back_to_root() {
-        let (_g, v) = view_with_query();
-        assert_eq!(v.path_to(0).len(), 1);
+        let (g, v) = view_with_query();
+        assert_eq!(v.path_to(0, &g).len(), 1);
     }
 
     #[test]
     fn restore_expansion_walks_each_path() {
         let (g, mut v) = view_with_query();
         // Expand root then Areas/.
-        let root_id = v.tree.rows()[0].note_id;
+        let root_key = g.stable_key(v.tree.rows()[0].note_id);
         v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
-        v.add_expansion_path(vec![root_id]);
+        v.add_expansion_path(vec![root_key.clone()]);
         let areas_idx = v
             .tree
             .rows()
             .iter()
             .position(|r| r.display == "Areas/")
             .unwrap();
-        let areas_id = v.tree.rows()[areas_idx].note_id;
+        let areas_key = g.stable_key(v.tree.rows()[areas_idx].note_id);
         v.tree.expand_at(areas_idx, &g, v.query.as_ref().unwrap());
-        v.add_expansion_path(vec![root_id, areas_id]);
+        v.add_expansion_path(vec![root_key, areas_key]);
         let expected_len = v.tree.len();
 
         // Now drop and re-derive from spec.
@@ -4713,36 +4766,29 @@ mod view_tests {
     #[test]
     fn restore_expansion_truncates_at_missing_node() {
         let (g, mut v) = view_with_query();
-        let root_id = v.tree.rows()[0].note_id;
+        let root_key = g.stable_key(v.tree.rows()[0].note_id);
         v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
-        v.add_expansion_path(vec![root_id]);
-        // Add a fictitious deeper path whose intermediate node is
-        // bogus — restoration should drop it without panicking.
-        let bogus = g.node_by_path(std::path::Path::new("Areas")).unwrap();
-        let bogus2 = g
-            .node_by_path(std::path::Path::new("Areas/operations"))
-            .unwrap();
-        // Inject [root, bogus_not_in_tree, bogus2] — bogus IS in the graph
-        // but we'll remove Areas from the tree shape by replaying against
-        // an empty path set first, then adding only this fake path.
+        v.add_expansion_path(vec![root_key.clone()]);
+        // Inject a fictitious deeper path whose intermediate key
+        // doesn't appear as a child of root in the visible tree —
+        // restoration should drop it without panicking.
+        let stale = NodeKey::Directory(std::path::PathBuf::from("does/not/exist"));
         v.expanded_paths.clear();
-        v.expanded_paths.insert(vec![root_id]);
-        v.expanded_paths.insert(vec![root_id, bogus, bogus2]); // ok actually exists
+        v.expanded_paths.insert(vec![root_key.clone()]);
+        v.expanded_paths
+            .insert(vec![root_key, stale.clone(), dir_key("Areas/operations")]);
         v.tree = TreeState::default();
         v.restore_expansion(&g);
-        // The valid path expanded the root, plus Areas/ if its
-        // children include operations.
+        // The valid path expanded the root.
         assert!(v.tree.rows()[0].expanded);
-        // Verify expanded_paths retained only paths whose nodes survived.
+        // Verify expanded_paths retained only paths whose keys resolve.
         for path in &v.expanded_paths {
-            for &nid in path {
+            for key in path {
                 assert!(
-                    matches!(
-                        g.node(nid),
-                        NodeKind::Note(_) | NodeKind::Directory(_) | NodeKind::Ghost(_)
-                    ),
-                    "every restored path node must exist in the graph"
+                    g.id_for_key(key).is_some(),
+                    "every restored path key must resolve in the graph"
                 );
+                assert_ne!(key, &stale, "stale key must have been dropped");
             }
         }
     }
@@ -4752,8 +4798,8 @@ mod view_tests {
         let (g, mut v) = view_with_query();
         // Expand root, then select Areas/.
         v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
-        let root_id = v.tree.rows()[0].note_id;
-        v.add_expansion_path(vec![root_id]);
+        let root_key = g.stable_key(v.tree.rows()[0].note_id);
+        v.add_expansion_path(vec![root_key]);
         let areas_idx = v
             .tree
             .rows()
@@ -4761,7 +4807,7 @@ mod view_tests {
             .position(|r| r.display == "Areas/")
             .unwrap();
         v.selected = areas_idx;
-        v.refresh_selected_path();
+        v.refresh_selected_path(&g);
 
         // Drop derived state and restore.
         v.tree = TreeState::default();
@@ -4780,24 +4826,17 @@ mod view_tests {
     fn restore_expansion_falls_back_to_ancestor_when_selection_gone() {
         let (g, mut v) = view_with_query();
         v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
-        let root_id = v.tree.rows()[0].note_id;
-        v.add_expansion_path(vec![root_id]);
-        // Selection path: [root, NEVER_EXISTS]. We can't easily fabricate
-        // a fake NoteId, so instead point at a real id that the path-
-        // walker won't find as a child of root: use a Note's id as a
-        // bogus "child of root" — Notes ARE children of root via
-        // directory-contains, so this is actually a valid selection.
-        // Switch tactic: select Areas/, then *manually* corrupt the
-        // saved selected_path to [root, areas, BOGUS_NESTED] where
-        // BOGUS_NESTED is operations/ — which is not a child of areas
-        // unless areas is expanded. Restoration only expands root via
-        // expanded_paths, so areas isn't expanded → walker stops at
-        // areas → selection falls back to that ancestor.
+        let root_key = g.stable_key(v.tree.rows()[0].note_id);
+        v.add_expansion_path(vec![root_key.clone()]);
+        // selected_path = [root, areas, ops]. Restoration only expands
+        // root via expanded_paths, so areas isn't expanded → walker
+        // stops at areas → selection falls back to that ancestor.
         let areas = g.node_by_path(std::path::Path::new("Areas")).unwrap();
-        let ops = g
-            .node_by_path(std::path::Path::new("Areas/operations"))
-            .unwrap();
-        v.selected_path = Some(vec![root_id, areas, ops]);
+        v.selected_path = Some(vec![
+            root_key,
+            dir_key("Areas"),
+            dir_key("Areas/operations"),
+        ]);
         v.tree = TreeState::default();
         v.restore_expansion(&g);
 
@@ -4817,6 +4856,56 @@ mod view_tests {
         v.tree = TreeState::default();
         v.restore_expansion(&g);
         assert_eq!(v.selected, 0);
+    }
+
+    /// Regression: a freshly-built `Graph` assigns new `NodeIndex`
+    /// values (per the `NoteId` doc-comment, IDs aren't stable across
+    /// builds). Expansion must survive the rebuild by way of the
+    /// path-based `NodeKey`s, so the user-perceived "tree collapses
+    /// after delete / rename / git-sync" bug doesn't return.
+    #[test]
+    fn restore_expansion_survives_full_rebuild() {
+        let (g, mut v) = view_with_query();
+        // Expand root and Areas/.
+        let root_key = g.stable_key(v.tree.rows()[0].note_id);
+        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.add_expansion_path(vec![root_key.clone()]);
+        let areas_idx = v
+            .tree
+            .rows()
+            .iter()
+            .position(|r| r.display == "Areas/")
+            .unwrap();
+        let areas_key = g.stable_key(v.tree.rows()[areas_idx].note_id);
+        v.tree.expand_at(areas_idx, &g, v.query.as_ref().unwrap());
+        v.add_expansion_path(vec![root_key, areas_key]);
+        v.selected = areas_idx;
+        v.refresh_selected_path(&g);
+        let expanded_count_before = v.tree.len();
+
+        // Drop the old graph entirely and build a new one against the
+        // same vault. NoteIds in the new graph are not guaranteed
+        // equal to those in `g`, but `NodeKey`s are.
+        drop(g);
+        let g2 = dirs_graph();
+        v.tree = TreeState::default();
+        v.restore_expansion(&g2);
+
+        // Both expansions land in the rebuilt tree.
+        assert_eq!(v.tree.len(), expanded_count_before);
+        assert!(v.tree.rows()[0].expanded, "root stays expanded");
+        let restored_areas_idx = v
+            .tree
+            .rows()
+            .iter()
+            .position(|r| r.display == "Areas/")
+            .unwrap();
+        assert!(
+            v.tree.rows()[restored_areas_idx].expanded,
+            "Areas/ stays expanded after rebuild"
+        );
+        // Selection landed back on Areas/.
+        assert_eq!(v.selected, restored_areas_idx);
     }
 
     #[test]
@@ -5340,13 +5429,23 @@ mod search_tests {
         let row = v.tree.rows().get(v.selected).expect("a row is selected");
         assert_eq!(row.note_id, shifts_id, "cursor landed on shifts.md");
         assert_eq!(row.depth, 3, "shifts.md is at depth 3");
-        assert_eq!(v.selected_path.as_deref(), Some(path.as_slice()));
+        // The view stores paths as build-stable `NodeKey`s; rebuild
+        // the expected key path the same way `jump_to_path` does.
+        let g_ref = tab.graph.as_ref().unwrap();
+        let key_path: Vec<NodeKey> = path.iter().map(|id| g_ref.stable_key(*id)).collect();
+        assert_eq!(v.selected_path.as_deref(), Some(key_path.as_slice()));
         // Ancestors are recorded in expanded_paths (closed under prefixes).
-        assert!(v.expanded_paths.contains(&vec![root_id]));
-        assert!(v.expanded_paths.contains(&vec![root_id, areas_id]));
-        assert!(v.expanded_paths.contains(&vec![root_id, areas_id, ops_id]));
+        assert!(v.expanded_paths.contains(&vec![key_path[0].clone()]));
+        assert!(v
+            .expanded_paths
+            .contains(&vec![key_path[0].clone(), key_path[1].clone()]));
+        assert!(v.expanded_paths.contains(&vec![
+            key_path[0].clone(),
+            key_path[1].clone(),
+            key_path[2].clone(),
+        ]));
         // Target itself is NOT in expanded_paths.
-        assert!(!v.expanded_paths.contains(&path));
+        assert!(!v.expanded_paths.contains(&key_path));
     }
 }
 

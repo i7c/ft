@@ -67,6 +67,24 @@ impl NoteId {
     }
 }
 
+/// Build-independent identity for a graph node. Unlike [`NoteId`],
+/// `NodeKey` survives a [`Graph::build`]: the same on-disk node maps
+/// to the same key. Used by UI state (expanded paths, selection) so
+/// the tree shape is preserved across rebuilds.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NodeKey {
+    /// A real note backed by a markdown file. Vault-relative path.
+    Note(PathBuf),
+    /// A vault directory. Vault-relative path; root = empty path.
+    Directory(PathBuf),
+    /// An unresolved link target. Verbatim raw target string.
+    Ghost(String),
+    /// A task in a note. (source_file, 1-indexed source_line).
+    Task(PathBuf, usize),
+    /// A paragraph in a note. (source_file, 1-indexed line_start).
+    Paragraph(PathBuf, u32),
+}
+
 /// Per-node payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
@@ -452,6 +470,47 @@ impl Graph {
         self.paragraph_index
             .get(&(normalize_path(path), line_start))
             .copied()
+    }
+
+    /// The task node at `(source_file, source_line)`, if any.
+    /// `source_file` is vault-relative; `source_line` is 1-indexed.
+    pub fn task_by_loc(&self, source_file: &Path, source_line: usize) -> Option<NoteId> {
+        self.task_index
+            .get(&(normalize_path(source_file), source_line))
+            .copied()
+    }
+
+    /// A build-independent identity for a node. Two `Graph`s built from
+    /// the same on-disk state produce equal keys for the same nodes;
+    /// keys survive arbitrary [`Graph::build`] calls as long as the
+    /// underlying node still exists by path/raw/loc. Use with
+    /// [`Graph::id_for_key`] to re-resolve cross-build.
+    pub fn stable_key(&self, id: NoteId) -> NodeKey {
+        match self.node(id) {
+            NodeKind::Note(n) => NodeKey::Note(n.path.clone()),
+            NodeKind::Directory(d) => NodeKey::Directory(d.path.clone()),
+            NodeKind::Ghost(g) => NodeKey::Ghost(g.raw.clone()),
+            NodeKind::Task(t) => NodeKey::Task(t.source_file.clone(), t.source_line),
+            NodeKind::Paragraph(p) => NodeKey::Paragraph(p.source_file.clone(), p.line_start),
+        }
+    }
+
+    /// Resolve a stable key against this graph. Returns `None` if the
+    /// underlying node no longer exists.
+    pub fn id_for_key(&self, key: &NodeKey) -> Option<NoteId> {
+        match key {
+            NodeKey::Note(p) => {
+                let id = self.node_by_path(p)?;
+                matches!(self.node(id), NodeKind::Note(_)).then_some(id)
+            }
+            NodeKey::Directory(p) => {
+                let id = self.node_by_path(p)?;
+                matches!(self.node(id), NodeKind::Directory(_)).then_some(id)
+            }
+            NodeKey::Ghost(raw) => self.ghost_by_raw(raw),
+            NodeKey::Task(path, line) => self.task_by_loc(path, *line),
+            NodeKey::Paragraph(path, line_start) => self.paragraph_by_loc(path, *line_start),
+        }
     }
 
     /// The kind of node at `id`. Panics on a stale id (one whose node

@@ -7312,7 +7312,7 @@ fn graph_esc_empty_selection_passes_through() -> Result<()> {
 }
 
 #[test]
-fn graph_selections_clear_on_ctrl_r_refresh() -> Result<()> {
+fn graph_selections_survive_ctrl_r_refresh() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     switch_to_graph(&mut app)?;
@@ -7327,15 +7327,21 @@ fn graph_selections_clear_on_ctrl_r_refresh() -> Result<()> {
         KeyCode::Char(' '),
         KeyModifiers::NONE,
     )))?;
-    // Ctrl+r refresh.
+    let before = render(&mut app, 80, 24);
+    assert!(
+        before.contains('●'),
+        "Space should drop a selection marker — got:\n{before}"
+    );
+    // Ctrl+r refresh. The marked node still exists on disk, so the
+    // marker is rehydrated against the rebuilt graph and stays.
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('r'),
         KeyModifiers::CONTROL,
     )))?;
     let frame = render(&mut app, 80, 24);
     assert!(
-        !frame.contains('●'),
-        "selection marker should be gone after refresh — got:\n{frame}"
+        frame.contains('●'),
+        "selection marker should survive Ctrl+R refresh — got:\n{frame}"
     );
     Ok(())
 }
