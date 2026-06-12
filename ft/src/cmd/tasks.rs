@@ -12,7 +12,6 @@ use ft_core::{
         NodeKind,
     },
     query::{
-        filter::Filter,
         preset,
         sort::{parse_sort_key, sort_by_keys},
         SortKey, SortOrder,
@@ -193,7 +192,6 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Err(anyhow!("--has-due and --no-due are mutually exclusive"));
     }
 
-    let filter = build_filter(&args);
     let today = dates::today();
 
     // Resolve positional argument: preset (built-in or user) → expand to DSL.
@@ -203,14 +201,20 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         .as_deref()
         .map(|name| resolve_preset(name, &vault).unwrap_or_else(|| name.to_string()));
 
-    // Compose all query sources into a single AND of GraphQueries. Empty
-    // sources are skipped. Each source is parsed under Profile::Tasks so
-    // bare predicates (`priority = high`) desugar to the canonical
-    // `node where kind = Task and self.priority = high` form.
+    // CLI flags lower to a single DSL fragment (Profile::Tasks-flavored,
+    // bare predicates). It composes with positional / --query exactly
+    // the same way two `--query` sources would — one DSL evaluator,
+    // one source of truth for what predicates exist.
+    let flag_dsl = lower_flags_to_dsl(&args);
+
     let mut graph_queries: Vec<GraphQuery> = Vec::new();
-    for src in [positional_dsl.as_deref(), args.query.as_deref()]
-        .into_iter()
-        .flatten()
+    for src in [
+        positional_dsl.as_deref(),
+        args.query.as_deref(),
+        flag_dsl.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         let q = parse_query(src, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{src}`: {e}"))?;
@@ -222,8 +226,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let graph = crate::cmd::common::build_graph(&vault, &scan)?;
     let matched_task_keys: std::collections::HashSet<(PathBuf, usize)> = if graph_queries.is_empty()
     {
-        // No query — every task in scan is admissible (filter is the
-        // only remaining gate).
+        // No predicates at all — every task in the scan is admissible.
         scan.tasks
             .iter()
             .map(|t| (t.source_file.clone(), t.source_line))
@@ -252,7 +255,6 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let mut matches: Vec<&Task> = scan
         .tasks
         .iter()
-        .filter(|t| filter.matches(t))
         .filter(|t| matched_task_keys.contains(&(t.source_file.clone(), t.source_line)))
         .collect();
 
@@ -300,25 +302,68 @@ fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {
     preset::builtin(name).map(|s| s.to_string())
 }
 
-fn build_filter(args: &ListArgs) -> Filter {
-    let has_due = if args.has_due {
-        Some(true)
-    } else if args.no_due {
-        Some(false)
-    } else {
-        None
-    };
+/// Lower CLI flags (`--status`, `--priority`, `--tag`, `--path`,
+/// `--due-before`, `--due-after`, `--scheduled-before`,
+/// `--scheduled-after`, `--has-due`, `--no-due`) into a single DSL
+/// fragment under [`Profile::Tasks`]. Returns `None` when no flags are
+/// set (so the caller can skip parsing it).
+///
+/// Status / priority map to PascalCase tokens (`Open`, `High`) because
+/// `TaskData` stores them that way and the DSL does exact-match. Tag
+/// names get the leading `#` stripped (the DSL stores tags without it
+/// in `TaskData.tags`). String literals are escaped via Rust's `Debug`
+/// formatter so quotes / backslashes / control characters round-trip.
+fn lower_flags_to_dsl(args: &ListArgs) -> Option<String> {
+    let mut clauses: Vec<String> = Vec::new();
 
-    Filter {
-        statuses: args.status.iter().copied().map(Into::into).collect(),
-        priorities: args.priority.iter().copied().map(Into::into).collect(),
-        tags: args.tag.clone(),
-        paths: args.path.clone(),
-        due_before: args.due_before,
-        due_after: args.due_after,
-        scheduled_before: args.scheduled_before,
-        scheduled_after: args.scheduled_after,
-        has_due,
+    if !args.status.is_empty() {
+        let set = args
+            .status
+            .iter()
+            .map(|s| Status::from(*s).as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        clauses.push(format!("status in {{{set}}}"));
+    }
+    if !args.priority.is_empty() {
+        let set = args
+            .priority
+            .iter()
+            .map(|p| Priority::from(*p).as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        clauses.push(format!("priority in {{{set}}}"));
+    }
+    for tag in &args.tag {
+        let bare = tag.trim_start_matches('#');
+        clauses.push(format!("tags includes {:?}", bare));
+    }
+    for path in &args.path {
+        clauses.push(format!("path includes {:?}", path));
+    }
+    if let Some(d) = args.due_before {
+        clauses.push(format!("due < {d}"));
+    }
+    if let Some(d) = args.due_after {
+        clauses.push(format!("due > {d}"));
+    }
+    if let Some(d) = args.scheduled_before {
+        clauses.push(format!("scheduled < {d}"));
+    }
+    if let Some(d) = args.scheduled_after {
+        clauses.push(format!("scheduled > {d}"));
+    }
+    if args.has_due {
+        clauses.push("due is not null".into());
+    }
+    if args.no_due {
+        clauses.push("due is null".into());
+    }
+
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" and "))
     }
 }
 
