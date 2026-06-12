@@ -7,7 +7,6 @@
 //! (missing config, template render error, write error) surfaces as
 //! an error toast and skips the editor handoff.
 
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use ft_core::periodic::{create_or_get_periodic_path, Period};
 
 use crate::tui::{
@@ -36,15 +35,10 @@ pub fn run_periodic_open(ctx: &TabCtx, period: Period) {
     };
 
     // `today` is the App-wide ctx.today (FT_TODAY-aware via the test
-    // clock); `now` pins to FT_TODAY at 00:00 when set, else local
-    // wall clock — keeps periodic-note timestamps deterministic in
-    // tests without diverging from real-time creation in production.
+    // clock); `now` honors the same FT_TODAY override so template
+    // timestamps stay deterministic in tests.
     let today = ctx.today;
-    let now: NaiveDateTime = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .map(|d| d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
-        .unwrap_or_else(|| Local::now().naive_local());
+    let (_, now) = ft_core::dates::now_pair();
 
     let templates_dir = ctx.vault.templates_dir();
     let (abs_path, _created) = match create_or_get_periodic_path(

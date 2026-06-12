@@ -119,7 +119,7 @@ impl App {
     /// `TempDir`-rooted path so they don't write to the user's real
     /// state directory.
     pub fn new_with_recents(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
-        let today = resolve_today();
+        let today = ft_core::dates::today();
         let (tabs, effective_global_keymap, per_modal_overlays) =
             build_tabs_with_overlays(&vault.config.config);
         Self::with_tabs(
@@ -1145,15 +1145,6 @@ fn run_invocation(inv: &EditorInvocation) -> io::Result<()> {
         )));
     }
     Ok(())
-}
-
-/// Resolve "today" for the current run. Honors `FT_TODAY=YYYY-MM-DD` to keep
-/// the TUI deterministic in tests and reproducible with the CLI.
-fn resolve_today() -> NaiveDate {
-    std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive())
 }
 
 /// Build tabs with per-scope keymap overlays derived from `config`.

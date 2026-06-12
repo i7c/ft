@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate};
 
 use crate::config::Synth as SynthCfg;
 use crate::error::Result;
@@ -258,15 +258,8 @@ fn resolve_window(repo: &Path, window: &WindowRange) -> Result<(String, String)>
     }
 }
 
-/// Today's date, honoring `FT_TODAY=YYYY-MM-DD` for test/repro stability
-/// (matches the convention used across the rest of ft).
 fn today_naive() -> NaiveDate {
-    if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d") {
-            return d;
-        }
-    }
-    Utc::now().date_naive()
+    crate::dates::today()
 }
 
 #[cfg(test)]

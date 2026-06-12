@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::fs::write_atomic;
 use ft_core::notes::template::{render as render_template, TemplateContext};
@@ -719,11 +719,7 @@ pub(crate) fn build_template_context(
     today: NaiveDate,
     vars: BTreeMap<String, String>,
 ) -> TemplateContext {
-    let now: NaiveDateTime = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .map(|d| d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
-        .unwrap_or_else(|| Local::now().naive_local());
+    let (_, now) = ft_core::dates::now_pair();
     let mut ctx = TemplateContext::new(title, today, now);
     ctx.vars = vars;
     ctx

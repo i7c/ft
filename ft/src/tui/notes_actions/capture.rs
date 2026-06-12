@@ -417,10 +417,7 @@ fn resolve_create_pattern(
     preset: &CapturePreset,
     pattern: &str,
 ) -> Result<PathBuf, String> {
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
+    let today = ft_core::dates::today();
     let formatted = today.format(pattern).to_string();
     let filename = if formatted.ends_with(".md") {
         formatted

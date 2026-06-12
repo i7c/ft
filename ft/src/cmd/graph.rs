@@ -130,10 +130,7 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     let src = read_query_source(&args, &vault)?;
 
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
+    let today = ft_core::dates::today();
 
     let query = match parse_with(&src, args.profile.into(), today) {
         Ok(q) => q,

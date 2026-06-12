@@ -324,12 +324,7 @@ fn pick_paragraph(
 }
 
 fn today_naive() -> NaiveDate {
-    if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d") {
-            return d;
-        }
-    }
-    chrono::Utc::now().date_naive()
+    ft_core::dates::today()
 }
 
 /// Dedup journal entries by `(source_path, line_start)`. Sorts by date

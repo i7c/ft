@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{Local, NaiveDate};
 use clap::Args;
 use ft_core::{
     selector::{self, Selector},
@@ -105,10 +104,7 @@ fn handle_tasks_complete_by_id(
 ) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
 
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive());
+    let today = ft_core::dates::today();
 
     let scan = vault.scan();
     for err in &scan.errors {

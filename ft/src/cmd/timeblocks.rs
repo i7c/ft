@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{Local, NaiveDate, NaiveTime};
+use chrono::{NaiveDate, NaiveTime};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
     dates,
@@ -100,7 +100,7 @@ pub struct ListArgs {
 
 fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = today_from_env();
+    let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
     let heading = vault.config.config.timeblocks_heading().to_string();
@@ -162,7 +162,7 @@ pub struct AddArgs {
 
 fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = today_from_env();
+    let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
     let heading = vault.config.config.timeblocks_heading().to_string();
@@ -201,7 +201,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     // path, not a daily note) or when the file already exists.
     if args.file.is_none() && !path.exists() {
         if let Some(daily_cfg) = vault.config.config.periodic_notes.daily.as_ref() {
-            let (today_n, now_n) = today_now_from_env();
+            let (today_n, now_n) = dates::now_pair();
             ft_core::periodic::create_or_get_periodic_path(
                 &vault.path,
                 &vault.templates_dir(),
@@ -268,7 +268,7 @@ pub struct EditArgs {
 
 fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = today_from_env();
+    let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
     let heading = vault.config.config.timeblocks_heading().to_string();
@@ -420,7 +420,7 @@ pub struct DeleteArgs {
 
 fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = today_from_env();
+    let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
     let heading = vault.config.config.timeblocks_heading().to_string();
@@ -524,7 +524,7 @@ fn run_spent(args: SpentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     use ft_core::timeblock::report;
 
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = today_from_env();
+    let today = dates::today();
     let (from, to) = resolve_period(&args, today)?;
     if from > to {
         return Err(anyhow!("--from {} must not be after --to {}", from, to));
@@ -623,28 +623,6 @@ fn resolve_period(args: &SpentArgs, today: NaiveDate) -> Result<(NaiveDate, Naiv
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-fn today_from_env() -> NaiveDate {
-    std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive())
-}
-
-/// `(today, now)` pair for template rendering, honoring the `FT_TODAY`
-/// override so tests get a stable clock. Mirrors the helper in
-/// `cmd/notes.rs` — kept local rather than shared because the two CLI
-/// modules don't otherwise depend on each other.
-fn today_now_from_env() -> (NaiveDate, chrono::NaiveDateTime) {
-    use chrono::NaiveTime;
-    if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
-        }
-    }
-    let local = Local::now();
-    (local.date_naive(), local.naive_local())
-}
 
 fn parse_date_arg(s: Option<&str>, today: NaiveDate) -> Result<NaiveDate> {
     match s {

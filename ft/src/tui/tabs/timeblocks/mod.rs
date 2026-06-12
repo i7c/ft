@@ -1278,19 +1278,18 @@ fn queue_toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
 }
 
 /// `(today, now)` for template rendering — honors `FT_TODAY` for tests
-/// and falls back to the tab's clock for production. Mirrors the CLI
-/// helper so both surfaces stay in lockstep on template variables.
+/// and falls back to the tab's clock for production.
 fn today_now_for_template(
     ctx: &TabCtx,
     clock: ClockFn,
 ) -> (chrono::NaiveDate, chrono::NaiveDateTime) {
-    if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
-        }
+    // FT_TODAY (when set) takes precedence over the injected clock so the
+    // CLI and TUI agree on "today" under tests.
+    let _ = ctx; // ctx kept in signature for future use (e.g. real-clock-from-app)
+    if std::env::var_os("FT_TODAY").is_some() {
+        return ft_core::dates::now_pair();
     }
     let now = (clock)();
-    let _ = ctx; // ctx kept in signature for future use (e.g. real-clock-from-app)
     (now.date_naive(), now.naive_local())
 }
 

@@ -11,7 +11,7 @@ use std::process::{Command as ProcCommand, ExitCode};
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::fs::write_atomic;
 use ft_core::graph::rename::{apply_rename_plan, plan_rename, RenamePlan};
@@ -945,26 +945,12 @@ fn resolve_template_path(vault: &Vault, arg: &Path) -> Result<PathBuf> {
 }
 
 fn build_template_context(title: String, vars: &[(String, String)]) -> TemplateContext {
-    let (today, now) = today_now_from_env();
+    let (today, now) = ft_core::dates::now_pair();
     let mut ctx = TemplateContext::new(title, today, now);
     for (k, v) in vars {
         ctx.vars.insert(k.clone(), v.clone());
     }
     ctx
-}
-
-/// Resolve the `(today, now)` pair for template rendering. Honors the
-/// `FT_TODAY=YYYY-MM-DD` override (used by integration tests and pinned
-/// runs); otherwise reads the local wall clock.
-fn today_now_from_env() -> (NaiveDate, NaiveDateTime) {
-    use chrono::{Local, NaiveTime};
-    if let Ok(s) = std::env::var("FT_TODAY") {
-        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            return (d, d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()));
-        }
-    }
-    let local = Local::now();
-    (local.date_naive(), local.naive_local())
 }
 
 // ── ft notes periodic / ft notes today ───────────────────────────────────────
@@ -1097,7 +1083,7 @@ fn run_periodic_inner(
     };
 
     // 2. Resolve invocation `today`/`now` (FT_TODAY-aware).
-    let (today, now) = today_now_from_env();
+    let (today, now) = ft_core::dates::now_pair();
 
     // 3. Target date: --date if given, else `today`; then shift by --offset.
     let base_date = match date_override {

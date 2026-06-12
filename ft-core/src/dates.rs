@@ -8,10 +8,42 @@
 //!
 //! All forms are anchored to the `today` argument so callers can inject a
 //! deterministic date (matches the `FT_TODAY` override used elsewhere).
+//!
+//! [`today`] / [`now_pair`] are the single seam for resolving the current
+//! date/time across the binary, honoring the `FT_TODAY=YYYY-MM-DD`
+//! override (used by tests and reproducible scripts).
 
-use chrono::NaiveDate;
+use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use chrono_english::{parse_date_string, Dialect};
 use thiserror::Error;
+
+/// Resolve "today" for the current run.
+///
+/// Honors `FT_TODAY=YYYY-MM-DD` for deterministic tests and reproducible
+/// scripts; falls back to the local wall-clock date. Every consumer that
+/// needs "today" SHALL go through this function (or [`now_pair`]) so the
+/// override surface stays uniform.
+pub fn today() -> NaiveDate {
+    std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive())
+}
+
+/// Resolve the `(today, now)` pair for template rendering and any other
+/// caller that needs both. `FT_TODAY` pins `now` to midnight on the
+/// overridden date so snapshot tests are stable; otherwise both fields
+/// come from the local clock.
+pub fn now_pair() -> (NaiveDate, NaiveDateTime) {
+    if let Ok(s) = std::env::var("FT_TODAY") {
+        if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            let t = NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is valid");
+            return (d, d.and_time(t));
+        }
+    }
+    let local = Local::now();
+    (local.date_naive(), local.naive_local())
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DateError {

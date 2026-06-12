@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{Local, NaiveDate};
+use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
     dates,
@@ -194,13 +194,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     }
 
     let filter = build_filter(&args);
-    // `FT_TODAY=YYYY-MM-DD` overrides the system clock so DSL date keywords
-    // (`today`/`tomorrow`/`yesterday`) and presets like `today` / `overdue`
-    // are deterministic in tests and reproducible scripts.
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive());
+    let today = dates::today();
 
     // Resolve positional argument: preset (built-in or user) → expand to DSL.
     // Anything else is treated as a DSL string.
@@ -473,10 +467,7 @@ pub struct CreateArgs {
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive());
+    let today = dates::today();
 
     let target = resolve_target_path(&args, &vault, today)?;
 
@@ -617,10 +608,7 @@ pub struct CompleteArgs {
 fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
 
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive());
+    let today = dates::today();
     let on = match args.on.as_deref() {
         Some(s) => dates::parse(s, today).map_err(|e| anyhow!("--on: {e}"))?,
         None => today,
@@ -804,10 +792,7 @@ pub struct MoveArgs {
 
 fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let today = std::env::var("FT_TODAY")
-        .ok()
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Local::now().date_naive());
+    let today = dates::today();
 
     if args.selector.is_none() && args.query.is_none() {
         return Err(anyhow!("provide either a selector or --query"));
