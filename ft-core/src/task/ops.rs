@@ -147,14 +147,10 @@ pub fn create_task(
 }
 
 fn read_or_empty(path: &Path) -> Result<String, CreateError> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(CreateError::Read {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
+    crate::markdown::lines::read_or_empty(path).map_err(|source| CreateError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Returns the 1-indexed line number of any existing task whose description,
@@ -182,14 +178,8 @@ fn find_duplicate(content: &str, task: &Task) -> Option<usize> {
 /// Insert `line` into `content` according to `pos`. Returns the new content
 /// (always ending in `\n`) and the 1-indexed line number where `line` ended up.
 fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), CreateError> {
-    let mut lines: Vec<String> = if content.is_empty() {
-        Vec::new()
-    } else {
-        content
-            .split_inclusive('\n')
-            .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
-            .collect()
-    };
+    use crate::markdown::lines as md_lines;
+    let mut lines = md_lines::split(content);
 
     let inserted_at_idx = match pos {
         Position::Append => {
@@ -207,9 +197,9 @@ fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), 
             lines.insert(n - 1, line.to_string());
             n - 1
         }
-        Position::UnderHeading(heading) => match find_heading(&lines, heading) {
+        Position::UnderHeading(heading) => match md_lines::find_heading(&lines, heading) {
             Some((heading_idx, level)) => {
-                let insert_at = section_end(&lines, heading_idx, level);
+                let insert_at = md_lines::section_end(&lines, heading_idx, level);
                 lines.insert(insert_at, line.to_string());
                 insert_at
             }
@@ -224,55 +214,7 @@ fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), 
         },
     };
 
-    let mut joined = lines.join("\n");
-    joined.push('\n');
-    Ok((joined, inserted_at_idx + 1))
-}
-
-/// Find a heading by exact text match. Returns `(index, level)` where
-/// `level` is the number of leading `#` characters.
-fn find_heading(lines: &[String], target: &str) -> Option<(usize, usize)> {
-    for (i, l) in lines.iter().enumerate() {
-        if let Some((level, text)) = parse_heading(l) {
-            if text == target {
-                return Some((i, level));
-            }
-        }
-    }
-    None
-}
-
-fn parse_heading(line: &str) -> Option<(usize, &str)> {
-    let trimmed = line.trim_start();
-    let hashes = trimmed.bytes().take_while(|b| *b == b'#').count();
-    if hashes == 0 || hashes > 6 {
-        return None;
-    }
-    let after = &trimmed[hashes..];
-    let after = after.strip_prefix(' ')?;
-    Some((hashes, after.trim_end()))
-}
-
-/// Find the index *just after* the last line of the section opened by
-/// `heading_idx` at `level`. The section ends at the next heading whose
-/// level is `<= level`, or at the end of the file. Trailing blank lines
-/// belong to the *next* section, not this one — we insert before them so
-/// the heading visually owns its tasks.
-fn section_end(lines: &[String], heading_idx: usize, level: usize) -> usize {
-    let mut end = lines.len();
-    for (i, l) in lines.iter().enumerate().skip(heading_idx + 1) {
-        if let Some((lvl, _)) = parse_heading(l) {
-            if lvl <= level {
-                end = i;
-                break;
-            }
-        }
-    }
-    // Walk back over trailing blank lines — but never cross the heading itself.
-    while end > heading_idx + 1 && lines[end - 1].is_empty() {
-        end -= 1;
-    }
-    end
+    Ok((md_lines::join_with_newline(&lines), inserted_at_idx + 1))
 }
 
 // ── complete_task ────────────────────────────────────────────────────────────
@@ -344,10 +286,7 @@ pub fn complete_task(
         source: e,
     })?;
 
-    let mut lines: Vec<String> = content
-        .split_inclusive('\n')
-        .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
-        .collect();
+    let mut lines = crate::markdown::lines::split(&content);
 
     if line == 0 || line > lines.len() {
         return Err(CompleteError::LineMissing {
@@ -416,8 +355,7 @@ pub fn complete_task(
         lines[idx] = completed_line.clone();
     }
 
-    let mut joined = lines.join("\n");
-    joined.push('\n');
+    let joined = crate::markdown::lines::join_with_newline(&lines);
     write_atomic(target_path, &joined)?;
 
     let completed_line_no = if next_instance.is_some() {
@@ -474,10 +412,7 @@ where
         source: e,
     })?;
 
-    let mut lines: Vec<String> = content
-        .split_inclusive('\n')
-        .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
-        .collect();
+    let mut lines = crate::markdown::lines::split(&content);
 
     if line == 0 || line > lines.len() {
         return Err(UpdateError::LineMissing {
@@ -505,8 +440,7 @@ where
     let serialized = EmojiFormat.serialize_line(&task);
     lines[idx] = serialized;
 
-    let mut joined = lines.join("\n");
-    joined.push('\n');
+    let joined = crate::markdown::lines::join_with_newline(&lines);
     write_atomic(target_path, &joined)?;
 
     Ok(task)
@@ -641,7 +575,7 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
 
     let target_path = target.path().to_path_buf();
     let target_original = read_or_empty_move(&target_path)?;
-    let mut target_lines: Vec<String> = split_lines(&target_original);
+    let mut target_lines: Vec<String> = crate::markdown::lines::split(&target_original);
 
     // Ranges to remove from each source file plus the lines that are being
     // hoisted out (so we can splice them at the target). For source==target,
@@ -654,7 +588,7 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
 
     for (path, mut lines_to_move) in by_file {
         let original = read_or_empty_move(&path)?;
-        let raw_lines: Vec<String> = split_lines(&original);
+        let raw_lines: Vec<String> = crate::markdown::lines::split(&original);
 
         // Sort + dedupe + drop descendants of any other in-list line.
         lines_to_move.sort_unstable();
@@ -751,7 +685,7 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
     // Build edits.
     let mut edits: Vec<FileEdit> = Vec::new();
     for (path, w) in source_edits {
-        let new_content = join_lines(&w.new_lines);
+        let new_content = crate::markdown::lines::join_with_newline(&w.new_lines);
         edits.push(FileEdit {
             path,
             original: w.original,
@@ -784,35 +718,10 @@ struct FileEditWork {
 }
 
 fn read_or_empty_move(path: &Path) -> Result<String, MoveError> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(MoveError::Read {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
-}
-
-fn split_lines(content: &str) -> Vec<String> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content
-            .split_inclusive('\n')
-            .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
-            .collect()
-    }
-}
-
-fn join_lines(lines: &[String]) -> String {
-    if lines.is_empty() {
-        String::new()
-    } else {
-        let mut s = lines.join("\n");
-        s.push('\n');
-        s
-    }
+    crate::markdown::lines::read_or_empty(path).map_err(|source| MoveError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Find the last line of the block whose head is `start_idx` with indent
@@ -853,7 +762,7 @@ fn splice_into_target(
     target: &MoveTarget,
 ) -> String {
     if moved_lines.is_empty() {
-        return join_lines(&lines);
+        return crate::markdown::lines::join_with_newline(&lines);
     }
     match target {
         MoveTarget::Append(_) => {
@@ -861,25 +770,27 @@ fn splice_into_target(
                 lines.push(ml.clone());
             }
         }
-        MoveTarget::UnderHeading(_, heading) => match find_heading(&lines, heading) {
-            Some((heading_idx, level)) => {
-                let insert_at = section_end(&lines, heading_idx, level);
-                for (offset, ml) in moved_lines.iter().enumerate() {
-                    lines.insert(insert_at + offset, ml.clone());
+        MoveTarget::UnderHeading(_, heading) => {
+            match crate::markdown::lines::find_heading(&lines, heading) {
+                Some((heading_idx, level)) => {
+                    let insert_at = crate::markdown::lines::section_end(&lines, heading_idx, level);
+                    for (offset, ml) in moved_lines.iter().enumerate() {
+                        lines.insert(insert_at + offset, ml.clone());
+                    }
+                }
+                None => {
+                    if !lines.is_empty() && !lines.last().unwrap().is_empty() {
+                        lines.push(String::new());
+                    }
+                    lines.push(format!("## {heading}"));
+                    for ml in moved_lines {
+                        lines.push(ml.clone());
+                    }
                 }
             }
-            None => {
-                if !lines.is_empty() && !lines.last().unwrap().is_empty() {
-                    lines.push(String::new());
-                }
-                lines.push(format!("## {heading}"));
-                for ml in moved_lines {
-                    lines.push(ml.clone());
-                }
-            }
-        },
+        }
     }
-    join_lines(&lines)
+    crate::markdown::lines::join_with_newline(&lines)
 }
 
 #[cfg(test)]
@@ -1110,6 +1021,7 @@ mod tests {
 
     #[test]
     fn parse_heading_levels() {
+        use crate::markdown::lines::parse_heading;
         assert_eq!(parse_heading("# Top"), Some((1, "Top")));
         assert_eq!(parse_heading("### Three"), Some((3, "Three")));
         assert_eq!(parse_heading("###### Six"), Some((6, "Six")));

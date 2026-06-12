@@ -126,6 +126,105 @@ fn is_rule_separator(line: &str) -> bool {
     trimmed.len() >= 2 && trimmed.chars().all(|c| c == '-')
 }
 
+/// Line-buffer helpers shared by `task::ops`, `timeblock::doc`, and any
+/// other module that needs to splice into a markdown file.
+///
+/// All functions are line-oriented (work on `Vec<String>`). The
+/// canonical round-trip is:
+/// 1. `let mut lines = lines::split(&content);`
+/// 2. ... edit lines in place ...
+/// 3. `let new_content = lines::join_with_newline(&lines);`
+pub mod lines {
+    use std::io;
+    use std::path::Path;
+
+    /// Split `content` into newline-stripped lines (`\n` and `\r\n` both
+    /// trimmed). Empty input produces an empty vector — *not* a vector
+    /// with one empty element.
+    pub fn split(content: &str) -> Vec<String> {
+        if content.is_empty() {
+            Vec::new()
+        } else {
+            content
+                .split_inclusive('\n')
+                .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
+                .collect()
+        }
+    }
+
+    /// Join `lines` with `\n` and append a trailing `\n`. Empty input
+    /// produces an empty string.
+    pub fn join_with_newline(lines: &[String]) -> String {
+        if lines.is_empty() {
+            String::new()
+        } else {
+            let mut s = lines.join("\n");
+            s.push('\n');
+            s
+        }
+    }
+
+    /// Read `path` to string, treating `NotFound` as an empty file. Any
+    /// other I/O error is returned verbatim — callers wrap into their
+    /// own error type.
+    pub fn read_or_empty(path: &Path) -> io::Result<String> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => Ok(s),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Parse an ATX heading line, returning `(level, text)` when the
+    /// line is a heading. Level is the number of leading `#` chars
+    /// (1..=6). The required space after the hashes is consumed.
+    pub fn parse_heading(line: &str) -> Option<(usize, &str)> {
+        let trimmed = line.trim_start();
+        let hashes = trimmed.bytes().take_while(|b| *b == b'#').count();
+        if hashes == 0 || hashes > 6 {
+            return None;
+        }
+        let after = &trimmed[hashes..];
+        let after = after.strip_prefix(' ')?;
+        Some((hashes, after.trim_end()))
+    }
+
+    /// Find the first heading whose text exactly matches `target`.
+    /// Returns `(line_index, level)` where the index is 0-based.
+    pub fn find_heading(lines: &[String], target: &str) -> Option<(usize, usize)> {
+        for (i, l) in lines.iter().enumerate() {
+            if let Some((level, text)) = parse_heading(l) {
+                if text == target {
+                    return Some((i, level));
+                }
+            }
+        }
+        None
+    }
+
+    /// Index *just after* the last line of the section opened by
+    /// `heading_idx` at `level`. The section ends at the next heading
+    /// whose level is `<= level`, or at end of file. Trailing blank
+    /// lines belong to the *next* section, not this one — we step
+    /// back over them so callers inserting at the boundary land
+    /// before the blanks.
+    pub fn section_end(lines: &[String], heading_idx: usize, level: usize) -> usize {
+        let mut end = lines.len();
+        for (i, l) in lines.iter().enumerate().skip(heading_idx + 1) {
+            if let Some((lvl, _)) = parse_heading(l) {
+                if lvl <= level {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        while end > heading_idx + 1 && lines[end - 1].is_empty() {
+            end -= 1;
+        }
+        end
+    }
+}
+
 /// Tracks frontmatter / fenced code block / indented code block state
 /// across a line-by-line scan of a markdown file. Both the heading
 /// extractor (above) and the link parser (`crate::graph::parser`) use
