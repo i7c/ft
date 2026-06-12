@@ -112,18 +112,10 @@ pub fn build_task(input: &CreateInput) -> Task {
         start: input.start,
         scheduled: input.scheduled,
         due: input.due,
-        done: None,
-        cancelled: None,
         recurrence: input.recurrence.clone(),
         id: input.id.clone(),
         depends_on: input.depends_on.clone(),
-        on_completion: None,
-        block_link: None,
-        raw_trailing: None,
-        source_file: PathBuf::new(),
-        source_line: 0,
-        indent_level: 0,
-        parent: None,
+        ..Default::default()
     }
 }
 

@@ -4650,47 +4650,16 @@ mod tree_tests {
             tasks: vec![
                 Task {
                     description: "Task one".into(),
-                    status: Status::Open,
-                    priority: None,
-                    tags: vec![],
-                    due: None,
-                    scheduled: None,
                     source_file: PathBuf::from("root.md"),
                     source_line: 1,
-                    created: None,
-                    start: None,
-                    done: None,
-                    cancelled: None,
-                    recurrence: None,
-                    id: None,
-                    depends_on: vec![],
-                    on_completion: None,
-                    block_link: None,
-                    raw_trailing: None,
-                    indent_level: 0,
-                    parent: None,
+                    ..Default::default()
                 },
                 Task {
                     description: "Task two".into(),
                     status: Status::Done,
-                    priority: None,
-                    tags: vec![],
-                    due: None,
-                    scheduled: None,
                     source_file: PathBuf::from("root.md"),
                     source_line: 2,
-                    created: None,
-                    start: None,
-                    done: None,
-                    cancelled: None,
-                    recurrence: None,
-                    id: None,
-                    depends_on: vec![],
-                    on_completion: None,
-                    block_link: None,
-                    raw_trailing: None,
-                    indent_level: 0,
-                    parent: None,
+                    ..Default::default()
                 },
             ],
             errors: vec![],
@@ -5230,7 +5199,7 @@ mod view_tests {
 
     #[test]
     fn z_on_task_is_noop() {
-        use ft_core::task::{Status, Task};
+        use ft_core::task::Task;
         let dir = assert_fs::TempDir::new().unwrap();
         dir.child(".obsidian").create_dir_all().unwrap();
         dir.child("root.md").write_str("- [ ] A task\n").unwrap();
@@ -5238,25 +5207,9 @@ mod view_tests {
         let scan = Scan {
             tasks: vec![Task {
                 description: "A task".into(),
-                status: Status::Open,
-                priority: None,
-                tags: vec![],
-                due: None,
-                scheduled: None,
                 source_file: PathBuf::from("root.md"),
                 source_line: 1,
-                created: None,
-                start: None,
-                done: None,
-                cancelled: None,
-                recurrence: None,
-                id: None,
-                depends_on: vec![],
-                on_completion: None,
-                block_link: None,
-                raw_trailing: None,
-                indent_level: 0,
-                parent: None,
+                ..Default::default()
             }],
             errors: vec![],
         };

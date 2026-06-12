@@ -31,7 +31,7 @@ mod tests {
     use super::*;
     use crate::graph::query;
     use crate::graph::Graph;
-    use crate::task::{Status, Task};
+    use crate::task::Task;
     use crate::vault::{Scan, Vault};
     use assert_fs::prelude::*;
     use std::path::PathBuf;
@@ -61,25 +61,9 @@ mod tests {
         let scan = Scan {
             tasks: vec![Task {
                 description: "A task".into(),
-                status: Status::Open,
-                priority: None,
-                tags: vec![],
-                due: None,
-                scheduled: None,
                 source_file: PathBuf::from("root.md"),
                 source_line: 1,
-                created: None,
-                start: None,
-                done: None,
-                cancelled: None,
-                recurrence: None,
-                id: None,
-                depends_on: vec![],
-                on_completion: None,
-                block_link: None,
-                raw_trailing: None,
-                indent_level: 0,
-                parent: None,
+                ..Default::default()
             }],
             errors: vec![],
         };
@@ -119,25 +103,9 @@ mod tests {
         let scan = Scan {
             tasks: vec![Task {
                 description: "A task".into(),
-                status: Status::Open,
-                priority: None,
-                tags: vec![],
-                due: None,
-                scheduled: None,
                 source_file: PathBuf::from("root.md"),
                 source_line: 1,
-                created: None,
-                start: None,
-                done: None,
-                cancelled: None,
-                recurrence: None,
-                id: None,
-                depends_on: vec![],
-                on_completion: None,
-                block_link: None,
-                raw_trailing: None,
-                indent_level: 0,
-                parent: None,
+                ..Default::default()
             }],
             errors: vec![],
         };
@@ -173,25 +141,9 @@ mod tests {
         let scan = Scan {
             tasks: vec![Task {
                 description: "A task".into(),
-                status: Status::Open,
-                priority: None,
-                tags: vec![],
-                due: None,
-                scheduled: None,
                 source_file: PathBuf::from("root.md"),
                 source_line: 1,
-                created: None,
-                start: None,
-                done: None,
-                cancelled: None,
-                recurrence: None,
-                id: None,
-                depends_on: vec![],
-                on_completion: None,
-                block_link: None,
-                raw_trailing: None,
-                indent_level: 0,
-                parent: None,
+                ..Default::default()
             }],
             errors: vec![],
         };

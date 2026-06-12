@@ -105,7 +105,6 @@ fn priority_rank(p: Option<Priority>) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::Status;
     use chrono::NaiveDate;
     use std::path::PathBuf;
 
@@ -117,25 +116,11 @@ mod tests {
     ) -> Task {
         Task {
             description: desc.into(),
-            status: Status::Open,
             priority,
-            tags: Vec::new(),
-            created: None,
-            start: None,
-            scheduled: None,
             due: due.map(|(y, m, d)| NaiveDate::from_ymd_opt(y, m, d).unwrap()),
-            done: None,
-            cancelled: None,
-            recurrence: None,
-            id: None,
-            depends_on: Vec::new(),
-            on_completion: None,
-            block_link: None,
-            raw_trailing: None,
             source_file: PathBuf::from(path),
             source_line: 1,
-            indent_level: 0,
-            parent: None,
+            ..Default::default()
         }
     }
 

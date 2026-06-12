@@ -90,25 +90,9 @@ mod tests {
     fn task(desc: &str) -> Task {
         Task {
             description: desc.into(),
-            status: Status::Open,
-            priority: None,
-            tags: Vec::new(),
-            created: None,
-            start: None,
-            scheduled: None,
-            due: None,
-            done: None,
-            cancelled: None,
-            recurrence: None,
-            id: None,
-            depends_on: Vec::new(),
-            on_completion: None,
-            block_link: None,
-            raw_trailing: None,
             source_file: PathBuf::from("notes/test.md"),
             source_line: 1,
-            indent_level: 0,
-            parent: None,
+            ..Default::default()
         }
     }
 

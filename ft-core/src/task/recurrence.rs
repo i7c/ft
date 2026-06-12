@@ -274,25 +274,12 @@ mod tests {
     ) -> Task {
         Task {
             description: "x".into(),
-            status: super::super::Status::Open,
-            priority: None,
-            tags: vec![],
-            created: None,
             start,
             scheduled: sched,
             due,
-            done: None,
-            cancelled: None,
-            recurrence: None,
-            id: None,
-            depends_on: vec![],
-            on_completion: None,
-            block_link: None,
-            raw_trailing: None,
             source_file: PathBuf::from("x.md"),
             source_line: 1,
-            indent_level: 0,
-            parent: None,
+            ..Default::default()
         }
     }
 

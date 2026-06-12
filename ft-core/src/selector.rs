@@ -98,24 +98,10 @@ mod tests {
         Task {
             description: desc.into(),
             status,
-            priority: None,
-            tags: vec![],
-            created: None,
-            start: None,
-            scheduled: None,
-            due: None,
-            done: None,
-            cancelled: None,
-            recurrence: None,
             id: id.map(str::to_string),
-            depends_on: vec![],
-            on_completion: None,
-            block_link: None,
-            raw_trailing: None,
             source_file: PathBuf::from(file),
             source_line: line,
-            indent_level: 0,
-            parent: None,
+            ..Default::default()
         }
     }
 
