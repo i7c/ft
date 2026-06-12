@@ -187,6 +187,14 @@ impl Vault {
         dirs
     }
 
+    /// Return `path` stripped of the vault root prefix, or `path`
+    /// verbatim when it already is vault-relative (or sits outside the
+    /// vault). The result borrows from `path`; clone if you need to
+    /// store it. Used for user-facing display of absolute paths.
+    pub fn relativize<'a>(&self, path: &'a Path) -> &'a Path {
+        path.strip_prefix(&self.path).unwrap_or(path)
+    }
+
     /// Vault-relative path that holds ft note templates. Defaults to
     /// `templates-ft/` when `[notes] templates_dir` is unset in the
     /// vault config. The folder is **not** required to exist — callers

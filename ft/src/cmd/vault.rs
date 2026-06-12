@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use ft_core::vault::Vault;
 
 #[derive(Args)]
 pub struct VaultArgs;
 
 pub fn run(_args: VaultArgs, vault_flag: Option<PathBuf>) -> Result<()> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     println!("Vault: {}", vault.path.display());
     println!();

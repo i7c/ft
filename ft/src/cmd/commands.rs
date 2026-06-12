@@ -4,7 +4,7 @@
 //! prints it in one of three formats: a terminal table (default),
 //! NDJSON (one JSON object per line), or grouped JSON.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::tui::registry::{self, CommandDef, CommandScope};
@@ -92,9 +92,7 @@ fn run_check_keymap(
     args: CheckKeymapArgs,
     vault_flag: Option<std::path::PathBuf>,
 ) -> Result<std::process::ExitCode> {
-    use ft_core::vault::Vault;
-
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let errors = crate::tui::registry::validate_keymap(&vault.config.config);
 
     if errors.is_empty() {
@@ -252,9 +250,7 @@ fn list(args: ListArgs, vault_flag: Option<std::path::PathBuf>) -> Result<()> {
 }
 
 fn list_effective(args: ListArgs, vault_flag: Option<std::path::PathBuf>) -> Result<()> {
-    use ft_core::vault::Vault;
-
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let mut bindings = crate::tui::registry::effective_bindings(&vault.config.config);
 
     // Apply scope filter.

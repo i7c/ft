@@ -3,13 +3,19 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 
-/// Atomically write `content` to `path`.
+/// Atomically write `content` to `path`. Convenience over
+/// [`write_atomic_bytes`] for text payloads.
+pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
+    write_atomic_bytes(path, content.as_bytes())
+}
+
+/// Atomically write `bytes` to `path`.
 ///
 /// Strategy: write to a temp file in the same directory as `path`, fsync,
 /// then rename over `path`. Same-directory placement matters because rename
 /// is only guaranteed atomic within a single filesystem on POSIX. Existing
 /// file mode is preserved when the destination already exists.
-pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
+pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().ok_or_else(|| Error::Io {
         path: path.to_path_buf(),
         source: std::io::Error::new(
@@ -34,7 +40,7 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
         path: path.to_path_buf(),
         source: e,
     })?;
-    tmp.write_all(content.as_bytes()).map_err(|e| Error::Io {
+    tmp.write_all(bytes).map_err(|e| Error::Io {
         path: tmp.path().to_path_buf(),
         source: e,
     })?;

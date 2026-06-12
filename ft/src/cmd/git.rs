@@ -14,10 +14,9 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use ft_core::git::{discover_repo, status, sync, upstream, PullStrategy, SyncOptions, SyncOutcome};
-use ft_core::vault::Vault;
 
 #[derive(Args)]
 pub struct GitArgs {
@@ -51,7 +50,7 @@ pub fn run(args: GitArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 }
 
 fn run_sync(args: SyncArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let repo = discover_repo(&vault.path).ok_or_else(|| {
         anyhow!(

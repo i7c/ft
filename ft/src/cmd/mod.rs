@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod common;
 pub mod completions;
 #[path = "do.rs"]
 pub mod do_cmd;

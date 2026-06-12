@@ -10,7 +10,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::{NaiveDate, NaiveTime};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
@@ -99,7 +99,7 @@ pub struct ListArgs {
 }
 
 fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
@@ -161,7 +161,7 @@ pub struct AddArgs {
 }
 
 fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
@@ -188,7 +188,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             ));
         }
         doc.blocks.push(block);
-        print_diff(rel(&vault, &path), &doc.source_content, &doc.render());
+        print_diff(vault.relativize(&path), &doc.source_content, &doc.render());
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -221,7 +221,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         block.desc.trim()
     );
     ops::add_block(&path, &heading, block, opts).map_err(|e| anyhow!("{e}"))?;
-    println!("{}\n  {}", rel(&vault, &path).display(), block_summary);
+    println!("{}\n  {}", vault.relativize(&path).display(), block_summary);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -267,7 +267,7 @@ pub struct EditArgs {
 }
 
 fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
@@ -295,14 +295,14 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         for (i, b) in doc.blocks.iter_mut().enumerate() {
             b.source_line = i + 1;
         }
-        print_diff(rel(&vault, &path), &doc.source_content, &doc.render());
+        print_diff(vault.relativize(&path), &doc.source_content, &doc.render());
         return Ok(ExitCode::SUCCESS);
     }
 
     let doc = ops::edit_block(&path, &heading, &selector, mutation).map_err(|e| anyhow!("{e}"))?;
     // Report the line that was edited — selector::resolve may have moved
     // it after re-sort, so we find it by closest match in the new state.
-    println!("Edited {}", rel(&vault, &path).display());
+    println!("Edited {}", vault.relativize(&path).display());
     if let Some(b) = doc.blocks.iter().find(|b| b.source_line == 1) {
         // Print the first block as a basic confirmation; specific block
         // identity isn't tracked through the sort.
@@ -419,7 +419,7 @@ pub struct DeleteArgs {
 }
 
 fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
     let date = parse_date_arg(args.date.as_deref(), today)?;
     let path = resolve_path(&vault, date, args.file.as_deref())?;
@@ -450,7 +450,11 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     if args.dry_run {
         let mut new_doc = doc.clone();
         new_doc.blocks.remove(idx);
-        print_diff(rel(&vault, &path), &doc.source_content, &new_doc.render());
+        print_diff(
+            vault.relativize(&path),
+            &doc.source_content,
+            &new_doc.render(),
+        );
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -473,7 +477,10 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     }
 
     ops::delete_block(&path, &heading, &selector).map_err(|e| anyhow!("{e}"))?;
-    println!("Deleted from {}\n  {summary}", rel(&vault, &path).display());
+    println!(
+        "Deleted from {}\n  {summary}",
+        vault.relativize(&path).display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -523,7 +530,7 @@ pub struct SpentArgs {
 fn run_spent(args: SpentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     use ft_core::timeblock::report;
 
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
     let (from, to) = resolve_period(&args, today)?;
     if from > to {
@@ -635,10 +642,6 @@ fn resolve_path(vault: &Vault, date: NaiveDate, file_override: Option<&Path>) ->
     vault.resolve_target(date, file_override).map_err(|e| {
         anyhow!("{e}\nhint: add `[periodic_notes.daily]` to your config or pass `--file <PATH>`")
     })
-}
-
-fn rel<'a>(vault: &'a Vault, path: &'a Path) -> &'a Path {
-    path.strip_prefix(&vault.path).unwrap_or(path)
 }
 
 fn fmt_hhmm(t: NaiveTime) -> String {

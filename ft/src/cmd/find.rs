@@ -2,10 +2,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, ValueEnum};
 use ft_core::search::{fuzzy_find, Hit, Query, SearchOptions};
-use ft_core::vault::Vault;
 
 /// Output format for `ft find`.
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -45,7 +44,7 @@ pub struct FindArgs {
 }
 
 pub fn run(args: FindArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let query_str = args.query.join(" ");
     let query = Query::parse(&query_str);

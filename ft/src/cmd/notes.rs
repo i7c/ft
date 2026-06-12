@@ -127,7 +127,7 @@ pub struct OpenArgs {
 }
 
 fn run_open(args: OpenArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let query_str = args.query.join(" ");
     let query = Query::parse(&query_str);
@@ -317,7 +317,7 @@ pub struct MoveSectionArgs {
 }
 
 fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     if args.heading.is_empty() && args.heading_regex.is_empty() && args.from_query.is_none() {
         return Err(anyhow!(
@@ -461,14 +461,8 @@ fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Resul
     let (new_source, new_target) = move_sections(&source_content, &picks, &target_content, &plan)
         .map_err(|e| anyhow!("{e}"))?;
 
-    let source_rel = source_abs
-        .strip_prefix(&vault.path)
-        .unwrap_or(&source_abs)
-        .to_path_buf();
-    let target_rel = target_abs
-        .strip_prefix(&vault.path)
-        .unwrap_or(&target_abs)
-        .to_path_buf();
+    let source_rel = vault.relativize(&source_abs).to_path_buf();
+    let target_rel = vault.relativize(&target_abs).to_path_buf();
     print_diff(&source_rel, &source_content, &new_source);
     print_diff(&target_rel, &target_content, &new_target);
 
@@ -677,7 +671,7 @@ fn parse_var_kv(s: &str) -> std::result::Result<(String, String), String> {
 }
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     // 1. Resolve destination: vault-relative or absolute, append `.md`.
     let abs_dest = resolve_create_dest(&vault.path, &args.path);
@@ -737,18 +731,12 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     write_atomic(&abs_dest, &content).map_err(|e| anyhow!("write {}: {e}", abs_dest.display()))?;
 
     // 7. Tell the user what happened.
-    let rel_for_msg = abs_dest
-        .strip_prefix(&vault.path)
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| abs_dest.display().to_string());
+    let rel_for_msg = vault.relativize(&abs_dest).display().to_string();
     eprintln!("created {rel_for_msg}");
 
     // 8. Post-create handoff: obsidian URL or editor.
     if args.obsidian {
-        let rel = abs_dest
-            .strip_prefix(&vault.path)
-            .unwrap_or(&abs_dest)
-            .to_path_buf();
+        let rel = vault.relativize(&abs_dest).to_path_buf();
         let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");
@@ -768,7 +756,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 }
 
 fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     // 1. Resolve target path.
     let abs_target = resolve_target_path(&vault.path, &args.path);
@@ -824,10 +812,7 @@ fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         .map_err(|e| anyhow!("write {}: {e}", abs_target.display()))?;
 
     // 8. Tell the user.
-    let rel = abs_target
-        .strip_prefix(&vault.path)
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| abs_target.display().to_string());
+    let rel = vault.relativize(&abs_target).display().to_string();
     let where_msg = match &section_heading {
         Some(s) => format!("appended to \"{s}\" in {rel}"),
         None => format!("appended to {rel}"),
@@ -836,10 +821,7 @@ fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     // 9. Post-append handoff.
     if args.obsidian {
-        let rel_p = abs_target
-            .strip_prefix(&vault.path)
-            .unwrap_or(&abs_target)
-            .to_path_buf();
+        let rel_p = vault.relativize(&abs_target).to_path_buf();
         let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel_p, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");
@@ -1064,7 +1046,7 @@ fn run_periodic_inner(
     editor: Option<&str>,
     vault_name: Option<&str>,
 ) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     // 1. Pull the per-period config — exit 2 with a hint when missing.
     let cfg_opt = match period {
@@ -1122,20 +1104,14 @@ fn run_periodic_inner(
         }
     };
 
-    let rel = abs_path
-        .strip_prefix(&vault.path)
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| abs_path.display().to_string());
+    let rel = vault.relativize(&abs_path).display().to_string();
 
     let verb = if created { "Created" } else { "Opened" };
     println!("{verb} {rel}");
 
     // 5. Post-create handoff: obsidian URL or editor (skipped under --no-open).
     if obsidian {
-        let rel_p = abs_path
-            .strip_prefix(&vault.path)
-            .unwrap_or(&abs_path)
-            .to_path_buf();
+        let rel_p = vault.relativize(&abs_path).to_path_buf();
         let url = obsidian_url(vault_name, &vault.path, &rel_p, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");
@@ -1179,8 +1155,8 @@ pub struct LinksArgs {
 }
 
 fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
 
     let query = args.note.join(" ");
     let id = resolve_note_query(&graph, &vault, &query)?;
@@ -1272,10 +1248,10 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
             "`ft notes update-related` requires a TTY — the interactive modal cannot render with stdout redirected"
         ));
     }
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     // Validate the note resolves to a real note before tearing the
     // terminal apart for the TUI.
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
     let query = args.note.join(" ");
     let note_id = resolve_note_query(&graph, &vault, &query)?;
     let note_path = match graph.node(note_id) {
@@ -1345,8 +1321,8 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         return Err(anyhow!("--in-window requires --since or --range"));
     }
 
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
     // Verify the vault is inside a git repo, but then run blame from
     // `vault.path` itself: paragraph `source_file` paths are
     // vault-relative, and `git -C <vault>` finds the enclosing repo
@@ -1695,8 +1671,8 @@ pub struct MoveArgs {
 }
 
 fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
 
     let id = resolve_rename_source(&graph, &vault, &args.note)?;
 
@@ -1751,8 +1727,8 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 // ── ft notes mv ──────────────────────────────────────────────────────────────
 
 fn run_mv(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
 
     // Resolve the target to a directory.
     let target_rel = Path::new(args.target.trim());

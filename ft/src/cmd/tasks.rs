@@ -9,7 +9,7 @@ use ft_core::{
     dates,
     graph::{
         query::{parse_with as parse_query, GraphQuery, Profile},
-        Graph, NodeKind,
+        NodeKind,
     },
     query::{
         filter::Filter,
@@ -182,7 +182,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 }
 
 fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let scan = vault.scan();
 
     for err in &scan.errors {
@@ -219,7 +219,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     // Build the graph once. The query evaluator runs against the graph and
     // returns task NoteIds; we map those back to `&Task` for sort/render.
-    let graph = Graph::build(&vault, &scan).map_err(|e| anyhow!("graph build failed: {e}"))?;
+    let graph = crate::cmd::common::build_graph(&vault, &scan)?;
     let matched_task_keys: std::collections::HashSet<(PathBuf, usize)> = if graph_queries.is_empty()
     {
         // No query — every task in scan is admissible (filter is the
@@ -466,7 +466,7 @@ pub struct CreateArgs {
 }
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
 
     let target = resolve_target_path(&args, &vault, today)?;
@@ -520,7 +520,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     )
     .map_err(|e| match e {
         CreateError::Duplicate { path, line } => {
-            let rel = path.strip_prefix(&vault.path).unwrap_or(&path);
+            let rel = vault.relativize(&path);
             anyhow!(
                 "duplicate task already exists at {}:{} (use --force to insert anyway)",
                 rel.display(),
@@ -530,7 +530,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         other => anyhow!("{other}"),
     })?;
 
-    let display_path = target.strip_prefix(&vault.path).unwrap_or(&target);
+    let display_path = vault.relativize(&target);
     println!(
         "Created task at {}:{}\n  {}",
         display_path.display(),
@@ -606,7 +606,7 @@ pub struct CompleteArgs {
 }
 
 fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let today = dates::today();
     let on = match args.on.as_deref() {
@@ -625,9 +625,7 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let outcome = ops::complete_task(&absolute_path, chosen.source_line, CompleteOptions { on })
         .map_err(|e| translate_complete_error(e, &vault.path))?;
 
-    let rel = absolute_path
-        .strip_prefix(&vault.path)
-        .unwrap_or(&absolute_path);
+    let rel = vault.relativize(&absolute_path);
     println!(
         "Completed {}:{}\n  {}",
         rel.display(),
@@ -791,7 +789,7 @@ pub struct MoveArgs {
 }
 
 fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
 
     if args.selector.is_none() && args.query.is_none() {
@@ -808,7 +806,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let chosen: Vec<&Task> = if let Some(q) = args.query.as_deref() {
         let parsed = parse_query(q, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
-        let graph = Graph::build(&vault, &scan).map_err(|e| anyhow!("graph build failed: {e}"))?;
+        let graph = crate::cmd::common::build_graph(&vault, &scan)?;
         let ids = parsed.select(&graph);
         let keys: std::collections::HashSet<(PathBuf, usize)> = ids
             .into_iter()
@@ -898,7 +896,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             if edit.original == edit.new {
                 continue;
             }
-            let rel = edit.path.strip_prefix(&vault.path).unwrap_or(&edit.path);
+            let rel = vault.relativize(&edit.path);
             print_diff(rel, &edit.original, &edit.new);
         }
         return Ok(ExitCode::SUCCESS);
@@ -906,10 +904,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     ops::apply_move_plan(&plan).map_err(|e| anyhow!("{e}"))?;
 
-    let target_rel = target
-        .path()
-        .strip_prefix(&vault.path)
-        .unwrap_or(target.path());
+    let target_rel = vault.relativize(target.path());
     println!(
         "Moved {} task(s) → {}",
         plan.blocks.len(),

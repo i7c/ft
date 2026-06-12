@@ -65,42 +65,15 @@ impl BlameCache {
         }
     }
 
-    /// Persist the cache to `<vault_root>/.ft/cache/blame.msgpack`,
-    /// creating the parent directory if absent. Written via a same-dir
-    /// temp file + rename so a crash mid-write leaves the prior cache
-    /// intact rather than truncated.
+    /// Persist the cache to `<vault_root>/.ft/cache/blame.msgpack` via
+    /// [`crate::fs::write_atomic_bytes`] (same-dir tempfile + rename, so
+    /// a crash mid-write leaves the prior cache intact rather than
+    /// truncated).
     pub fn save(&self, vault_root: &Path) -> Result<()> {
-        use std::io::Write;
         let path = vault_root.join(CACHE_REL);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
         let bytes = rmp_serde::to_vec(self)
             .map_err(|e| crate::error::Error::Notes(format!("serialize blame cache: {e}")))?;
-        let parent = path.parent().unwrap_or(Path::new("."));
-        let mut tmp =
-            tempfile::NamedTempFile::new_in(parent).map_err(|e| crate::error::Error::Io {
-                path: path.clone(),
-                source: e,
-            })?;
-        tmp.write_all(&bytes).map_err(|e| crate::error::Error::Io {
-            path: tmp.path().to_path_buf(),
-            source: e,
-        })?;
-        tmp.as_file_mut()
-            .sync_all()
-            .map_err(|e| crate::error::Error::Io {
-                path: tmp.path().to_path_buf(),
-                source: e,
-            })?;
-        tmp.persist(&path).map_err(|e| crate::error::Error::Io {
-            path: path.clone(),
-            source: e.error,
-        })?;
-        Ok(())
+        crate::fs::write_atomic_bytes(&path, &bytes)
     }
 
     /// Return cached blame if an entry exists for `path` and its

@@ -23,7 +23,6 @@ use clap::{Args, Subcommand, ValueEnum};
 use ft_core::graph::delete::{apply_delete, plan_delete};
 use ft_core::graph::preset;
 use ft_core::graph::query::{parse_with, CyclePolicy, Profile, WalkOptions};
-use ft_core::graph::Graph;
 use ft_core::vault::Vault;
 
 use crate::output::graph::{render, Format};
@@ -126,7 +125,7 @@ pub fn run(args: GraphArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 }
 
 fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let src = read_query_source(&args, &vault)?;
 
@@ -140,7 +139,7 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         }
     };
 
-    let graph = Graph::build(&vault, &vault.scan()).context("could not build graph for vault")?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
 
     let opts = WalkOptions {
         max_depth: args.depth,
@@ -198,7 +197,7 @@ pub struct DeleteArgs {
 }
 
 fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let abs = vault.path.join(&args.path);
     if !abs.exists() {

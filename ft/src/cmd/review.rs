@@ -13,9 +13,8 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use chrono::Duration;
 use clap::Args;
-use ft_core::graph::Graph;
 use ft_core::link_review::{compute_link_review, LinkReview, LinkReviewRow, WindowRange};
-use ft_core::vault::{Scan, Vault};
+use ft_core::vault::Scan;
 
 #[derive(Args, Debug)]
 pub struct ReviewArgs {
@@ -40,7 +39,7 @@ pub struct ReviewArgs {
 }
 
 pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!(
             "the vault is not inside a git repository — `ft review` needs git history to find added links"
@@ -48,7 +47,7 @@ pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     })?;
 
     let window = resolve_window(&args)?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
     let cfg = vault.config.config.synth.clone();
     let review = compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
         .context("computing link review")?;

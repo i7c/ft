@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use ft_core::vault::Vault;
 
 use crate::tui;
 
@@ -10,6 +9,6 @@ use crate::tui;
 pub struct TuiArgs;
 
 pub fn run(_args: TuiArgs, vault_flag: Option<PathBuf>) -> Result<()> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     tui::run(vault)
 }

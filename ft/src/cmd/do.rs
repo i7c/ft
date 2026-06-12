@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Args;
 use ft_core::{
     selector::{self, Selector},
@@ -25,7 +25,6 @@ use ft_core::{
         ops::{self, CompleteError, CompleteOptions},
         Task,
     },
-    vault::Vault,
 };
 
 use crate::tui::registry::{self, CommandDef};
@@ -102,7 +101,7 @@ fn handle_tasks_complete_by_id(
     vault_flag: Option<PathBuf>,
     format: &str,
 ) -> Result<ExitCode> {
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
 
     let today = ft_core::dates::today();
 
@@ -130,9 +129,7 @@ fn handle_tasks_complete_by_id(
     )
     .map_err(|e| translate_complete_error(e, &vault.path))?;
 
-    let rel = absolute_path
-        .strip_prefix(&vault.path)
-        .unwrap_or(&absolute_path);
+    let rel = vault.relativize(&absolute_path);
 
     if format == "json" {
         let mut obj = serde_json::json!({

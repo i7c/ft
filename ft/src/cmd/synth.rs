@@ -108,11 +108,11 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         return Err(anyhow!("--in-window requires --since or --range"));
     }
 
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("vault is not inside a git repository — `ft synth` needs git history")
     })?;
-    let graph = Graph::build(&vault, &Scan::default()).context("building note graph")?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
     let target = normalize_md_target(&args.target);
 
     let mut entries: Vec<JournalEntry> = Vec::new();
@@ -172,11 +172,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         .context("planning synth scaffold")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth scaffold")?;
 
-    let rel = written
-        .strip_prefix(&vault.path)
-        .unwrap_or(&written)
-        .display()
-        .to_string();
+    let rel = vault.relativize(&written).display().to_string();
     if plan.create {
         println!("created {} with {} section(s)", rel, plan.sections.len());
     } else {
@@ -379,7 +375,7 @@ fn run_verify(args: VerifyArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     if args.note.is_none() && !args.all {
         return Err(anyhow!("provide a NOTE.md path or pass --all"));
     }
-    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("vault is not inside a git repository — `ft synth verify` needs git history")
     })?;
