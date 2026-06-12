@@ -568,19 +568,52 @@ impl App {
         if idx == self.active || idx >= self.tabs.len() {
             return Ok(());
         }
+        let active_modal_name = self.active_modal_name();
         let mut ctx = TabCtx {
             vault: &self.vault,
             recents: &self.recents,
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
-            active_modal_name: self.active_modal_name(),
+            active_modal_name,
             host_popup_open: false,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
         self.tabs[self.active].on_focus(&mut ctx)?;
         Ok(())
+    }
+
+    /// Run `f` against the tab with the given title if it exists, with
+    /// a freshly-built `TabCtx`. No-op when no such tab is mounted
+    /// (tests can construct an App with a subset of tabs). Returns
+    /// whether a matching tab was found.
+    ///
+    /// The `TabCtx` is built inline (rather than via a method call)
+    /// so the borrow checker can split the read of non-`tabs` fields
+    /// from the mutable borrow of `self.tabs[idx]`. `host_popup_open`
+    /// is always `false` for routed cross-tab actions — only the
+    /// per-event dispatch in `dispatch` knows whether the active
+    /// tab's focused buffer has a popup up.
+    fn with_named_tab<F>(&mut self, title: &str, f: F) -> bool
+    where
+        F: FnOnce(&mut Box<dyn Tab>, &mut TabCtx<'_>),
+    {
+        let Some(idx) = self.tabs.iter().position(|t| t.title() == title) else {
+            return false;
+        };
+        let active_modal_name = self.active_modal_name();
+        let mut ctx = TabCtx {
+            vault: &self.vault,
+            recents: &self.recents,
+            today: self.today,
+            last_refresh: &self.last_refresh,
+            pending_request: &self.pending_request,
+            active_modal_name,
+            host_popup_open: false,
+        };
+        f(&mut self.tabs[idx], &mut ctx);
+        true
     }
 
     fn service_request(
@@ -612,15 +645,15 @@ impl App {
                 Ok(())
             }
             AppRequest::JournalFor { target } => {
+                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for(&target));
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for(&target);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
             }
             AppRequest::JournalForMulti { request } => {
+                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for_multi(&request));
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for_multi(&request);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
@@ -629,25 +662,18 @@ impl App {
                 targets,
                 default_mode,
             } => {
+                self.with_named_tab("Journal", |tab, _| {
+                    tab.queue_journal_add_sources(targets, default_mode)
+                });
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_add_sources(targets, default_mode);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
             }
             AppRequest::JournalCommitSources { sources, window } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    let mut ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].queue_journal_commit_sources(&mut ctx, sources, window);
-                }
+                self.with_named_tab("Journal", |tab, ctx| {
+                    tab.queue_journal_commit_sources(ctx, sources, window)
+                });
                 Ok(())
             }
             AppRequest::OpenModal(modal) => {
@@ -664,30 +690,15 @@ impl App {
                 Ok(())
             }
             AppRequest::GraphJumpToNodes(path) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_jump_to_nodes(path);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
                 Ok(())
             }
             AppRequest::GraphApplyPreset(dsl) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_apply_preset(dsl);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
                 Ok(())
             }
             AppRequest::GraphFocusQueryBar => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_focus_query_bar(&ctx);
-                }
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
                 Ok(())
             }
             AppRequest::GraphCommitRename {
@@ -696,162 +707,69 @@ impl App {
                 source_rel,
                 new_name,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_commit_rename(
-                        &ctx,
-                        note_id,
-                        is_directory,
-                        source_rel,
-                        new_name,
-                    );
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
+                });
                 Ok(())
             }
             AppRequest::GraphConfirmRelated {
                 target_path,
                 selected_titles,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_confirm_related(ctx, target_path, selected_titles)
+                });
                 Ok(())
             }
             AppRequest::GraphQueryBarKey { view_id, key } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_query_bar_key(view_id, key);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
                 Ok(())
             }
             AppRequest::GraphApplyQueryBar { view_id } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_apply_query_bar(view_id);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
                 Ok(())
             }
             AppRequest::GraphMoveConfirmSourceFromTree => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_source_from_tree(ctx)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_target_from_tree(ctx, *carry)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_move_target(ctx, selected)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_execute_multi_move(ctx, selected, dir_path)
+                });
                 Ok(())
             }
             AppRequest::GraphNavigatePeriodic(period) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_navigate_periodic(&ctx, period);
-                }
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_navigate_periodic(ctx, period));
                 Ok(())
             }
             AppRequest::GraphConfirmDelete {
                 target,
                 is_directory,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_confirm_delete(ctx, target, is_directory)
+                });
                 Ok(())
             }
             AppRequest::GraphCreateSubdir { parent, name } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_create_subdir(&ctx, parent, name);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_create_subdir(ctx, parent, name)
+                });
                 Ok(())
             }
         }
@@ -1555,28 +1473,13 @@ impl App {
                     self.push_toast(toast_text, toast_style);
                 }
                 Some(AppRequest::GraphJumpToNodes(path)) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_jump_to_nodes(path);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
                 }
                 Some(AppRequest::GraphApplyPreset(dsl)) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_apply_preset(dsl);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
                 }
                 Some(AppRequest::GraphFocusQueryBar) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_focus_query_bar(&ctx);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
                 }
                 Some(AppRequest::GraphCommitRename {
                     note_id,
@@ -1584,121 +1487,48 @@ impl App {
                     source_rel,
                     new_name,
                 }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_commit_rename(
-                            &ctx,
-                            note_id,
-                            is_directory,
-                            source_rel,
-                            new_name,
-                        );
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
+                    });
                 }
                 Some(AppRequest::GraphConfirmRelated {
                     target_path,
                     selected_titles,
                 }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_confirm_related(ctx, target_path, selected_titles)
+                    });
                 }
                 Some(AppRequest::GraphQueryBarKey { view_id, key }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_query_bar_key(view_id, key);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
                 }
                 Some(AppRequest::GraphApplyQueryBar { view_id }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_apply_query_bar(view_id);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
                 }
                 Some(AppRequest::GraphMoveConfirmSourceFromTree) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_source_from_tree(ctx)
+                    });
                 }
                 Some(AppRequest::GraphMoveConfirmTargetFromTree { carry }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_target_from_tree(ctx, *carry)
+                    });
                 }
                 Some(AppRequest::GraphMoveConfirmMoveTarget { selected }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_move_target(ctx, selected)
+                    });
                 }
                 Some(AppRequest::GraphMoveExecuteMultiMove { selected, dir_path }) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_execute_multi_move(ctx, selected, dir_path)
+                    });
                 }
                 Some(AppRequest::GraphNavigatePeriodic(period)) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_navigate_periodic(&ctx, period);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_navigate_periodic(ctx, period)
+                    });
                 }
                 Some(other) => {
                     *self.pending_request.borrow_mut() = Some(other);
@@ -1724,7 +1554,8 @@ impl App {
     /// to drive the toast / refresh side-effects without spinning up a
     /// real event loop.
     pub fn service_pending_for_test(&mut self) -> Result<()> {
-        if let Some(req) = self.pending_request.borrow_mut().take() {
+        let pending = self.pending_request.borrow_mut().take();
+        if let Some(req) = pending {
             match req {
                 AppRequest::Toast { text, style } => {
                     *self.toast.borrow_mut() = Some(Toast {
@@ -1737,28 +1568,13 @@ impl App {
                     self.open_modal(*modal);
                 }
                 AppRequest::GraphJumpToNodes(path) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_jump_to_nodes(path);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
                 }
                 AppRequest::GraphApplyPreset(dsl) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_apply_preset(dsl);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
                 }
                 AppRequest::GraphFocusQueryBar => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_focus_query_bar(&ctx);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
                 }
                 AppRequest::GraphCommitRename {
                     note_id,
@@ -1766,121 +1582,48 @@ impl App {
                     source_rel,
                     new_name,
                 } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_commit_rename(
-                            &ctx,
-                            note_id,
-                            is_directory,
-                            source_rel,
-                            new_name,
-                        );
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
+                    });
                 }
                 AppRequest::GraphConfirmRelated {
                     target_path,
                     selected_titles,
                 } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_confirm_related(ctx, target_path, selected_titles)
+                    });
                 }
                 AppRequest::GraphQueryBarKey { view_id, key } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_query_bar_key(view_id, key);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
                 }
                 AppRequest::GraphApplyQueryBar { view_id } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        self.tabs[idx].graph_apply_query_bar(view_id);
-                    }
+                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
                 }
                 AppRequest::GraphMoveConfirmSourceFromTree => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_source_from_tree(ctx)
+                    });
                 }
                 AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_target_from_tree(ctx, *carry)
+                    });
                 }
                 AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_confirm_move_target(ctx, selected)
+                    });
                 }
                 AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_move_execute_multi_move(ctx, selected, dir_path)
+                    });
                 }
                 AppRequest::GraphNavigatePeriodic(period) => {
-                    if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                        let ctx = TabCtx {
-                            vault: &self.vault,
-                            recents: &self.recents,
-                            today: self.today,
-                            last_refresh: &self.last_refresh,
-                            pending_request: &self.pending_request,
-                            active_modal_name: self.active_modal_name(),
-                            host_popup_open: false,
-                        };
-                        self.tabs[idx].graph_navigate_periodic(&ctx, period);
-                    }
+                    self.with_named_tab("Graph", |tab, ctx| {
+                        tab.graph_navigate_periodic(ctx, period)
+                    });
                 }
                 // Other variants need terminal state; tests that exercise
                 // them go through the real `service_request` path.
@@ -1904,15 +1647,15 @@ impl App {
         };
         match req {
             AppRequest::JournalFor { target } => {
+                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for(&target));
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for(&target);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
             }
             AppRequest::JournalForMulti { request } => {
+                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for_multi(&request));
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_for_multi(&request);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
@@ -1921,25 +1664,18 @@ impl App {
                 targets,
                 default_mode,
             } => {
+                self.with_named_tab("Journal", |tab, _| {
+                    tab.queue_journal_add_sources(targets, default_mode)
+                });
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.tabs[idx].queue_journal_add_sources(targets, default_mode);
                     self.switch_tab(idx)?;
                 }
                 Ok(())
             }
             AppRequest::JournalCommitSources { sources, window } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    let mut ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].queue_journal_commit_sources(&mut ctx, sources, window);
-                }
+                self.with_named_tab("Journal", |tab, ctx| {
+                    tab.queue_journal_commit_sources(ctx, sources, window)
+                });
                 Ok(())
             }
             AppRequest::Toast { text, style } => {
@@ -1964,30 +1700,15 @@ impl App {
                 Ok(())
             }
             AppRequest::GraphJumpToNodes(path) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_jump_to_nodes(path);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
                 Ok(())
             }
             AppRequest::GraphApplyPreset(dsl) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_apply_preset(dsl);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
                 Ok(())
             }
             AppRequest::GraphFocusQueryBar => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_focus_query_bar(&ctx);
-                }
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
                 Ok(())
             }
             AppRequest::GraphCommitRename {
@@ -1996,162 +1717,69 @@ impl App {
                 source_rel,
                 new_name,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_commit_rename(
-                        &ctx,
-                        note_id,
-                        is_directory,
-                        source_rel,
-                        new_name,
-                    );
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
+                });
                 Ok(())
             }
             AppRequest::GraphConfirmRelated {
                 target_path,
                 selected_titles,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_confirm_related(&ctx, target_path, selected_titles);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_confirm_related(ctx, target_path, selected_titles)
+                });
                 Ok(())
             }
             AppRequest::GraphQueryBarKey { view_id, key } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_query_bar_key(view_id, key);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
                 Ok(())
             }
             AppRequest::GraphApplyQueryBar { view_id } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    self.tabs[idx].graph_apply_query_bar(view_id);
-                }
+                self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
                 Ok(())
             }
             AppRequest::GraphMoveConfirmSourceFromTree => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_source_from_tree(&ctx);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_source_from_tree(ctx)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_target_from_tree(&ctx, *carry);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_target_from_tree(ctx, *carry)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_confirm_move_target(&ctx, selected);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_confirm_move_target(ctx, selected)
+                });
                 Ok(())
             }
             AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_move_execute_multi_move(&ctx, selected, dir_path);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_move_execute_multi_move(ctx, selected, dir_path)
+                });
                 Ok(())
             }
             AppRequest::GraphNavigatePeriodic(period) => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_navigate_periodic(&ctx, period);
-                }
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_navigate_periodic(ctx, period));
                 Ok(())
             }
             AppRequest::GraphConfirmDelete {
                 target,
                 is_directory,
             } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_confirm_delete(&ctx, target, is_directory);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_confirm_delete(ctx, target, is_directory)
+                });
                 Ok(())
             }
             AppRequest::GraphCreateSubdir { parent, name } => {
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Graph") {
-                    let ctx = TabCtx {
-                        vault: &self.vault,
-                        recents: &self.recents,
-                        today: self.today,
-                        last_refresh: &self.last_refresh,
-                        pending_request: &self.pending_request,
-                        active_modal_name: self.active_modal_name(),
-                        host_popup_open: false,
-                    };
-                    self.tabs[idx].graph_create_subdir(&ctx, parent, name);
-                }
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_create_subdir(ctx, parent, name)
+                });
                 Ok(())
             }
             other => {
