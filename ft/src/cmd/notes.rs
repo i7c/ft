@@ -458,8 +458,7 @@ fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Resul
         })
         .collect();
 
-    let (new_source, new_target) = move_sections(&source_content, &picks, &target_content, &plan)
-        .map_err(|e| anyhow!("{e}"))?;
+    let (new_source, new_target) = move_sections(&source_content, &picks, &target_content, &plan)?;
 
     let source_rel = vault.relativize(&source_abs).to_path_buf();
     let target_rel = vault.relativize(&target_abs).to_path_buf();
@@ -486,7 +485,7 @@ fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Resul
         }
     }
 
-    write_pair(&target_abs, &new_target, &source_abs, &new_source).map_err(|e| anyhow!("{e}"))?;
+    write_pair(&target_abs, &new_target, &source_abs, &new_source)?;
 
     println!(
         "Moved {} section(s): {} → {}",
@@ -804,8 +803,7 @@ fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     // 6. Append.
     let (new_content, insert_line) =
-        core_append_template(&file_content, &rendered, section_heading.as_deref())
-            .map_err(|e| anyhow!("{e}"))?;
+        core_append_template(&file_content, &rendered, section_heading.as_deref())?;
 
     // 7. Write atomically.
     write_atomic(&abs_target, &new_content)
@@ -1687,14 +1685,14 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     let new_path = parse_new_name(&args.new, source_rel.as_deref())?;
 
-    let plan = plan_rename(&graph, &vault.path, id, &new_path).map_err(|e| anyhow!("{e}"))?;
+    let plan = plan_rename(&graph, &vault.path, id, &new_path)?;
 
     if args.dry_run {
         print_rename_plan_summary(&plan, source_rel.as_deref(), &new_path);
         return Ok(ExitCode::SUCCESS);
     }
 
-    apply_rename_plan(&vault.path, &plan).map_err(|e| anyhow!("{e}"))?;
+    apply_rename_plan(&vault.path, &plan)?;
 
     let edit_files = plan
         .edits
@@ -1766,15 +1764,14 @@ fn run_mv(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let plan = ft_core::graph::rename::plan_multi_rename(&graph, &vault.path, &moves)
-        .map_err(|e| anyhow!("{e}"))?;
+    let plan = ft_core::graph::rename::plan_multi_rename(&graph, &vault.path, &moves)?;
 
     if args.dry_run {
         print_mv_plan_summary(&plan, total_sources, file_count, dir_count);
         return Ok(ExitCode::SUCCESS);
     }
 
-    ft_core::graph::rename::apply_rename_plan(&vault.path, &plan).map_err(|e| anyhow!("{e}"))?;
+    ft_core::graph::rename::apply_rename_plan(&vault.path, &plan)?;
 
     let edit_files = plan
         .edits

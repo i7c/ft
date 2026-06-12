@@ -549,9 +549,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 /// note. Returns an absolute path. Thin wrapper over `Vault::resolve_target`
 /// so the CLI error type stays anyhow.
 fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
-    vault
-        .resolve_target(today, args.file.as_deref())
-        .map_err(|e| anyhow!("{e}"))
+    Ok(vault.resolve_target(today, args.file.as_deref())?)
 }
 
 fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {
@@ -889,7 +887,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         })
         .collect();
 
-    let plan = ops::plan_move(&sources, &target).map_err(|e| anyhow!("{e}"))?;
+    let plan = ops::plan_move(&sources, &target)?;
 
     if args.dry_run {
         for edit in &plan.edits {
@@ -902,7 +900,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    ops::apply_move_plan(&plan).map_err(|e| anyhow!("{e}"))?;
+    ops::apply_move_plan(&plan)?;
 
     let target_rel = vault.relativize(target.path());
     println!(

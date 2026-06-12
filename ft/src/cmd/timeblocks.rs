@@ -105,7 +105,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let path = resolve_path(&vault, date, args.file.as_deref())?;
     let heading = vault.config.config.timeblocks_heading().to_string();
 
-    let doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+    let doc = Document::read(&path, &heading)?;
     let filtered = filter_by_tags(&doc.blocks, &args.tag)?;
 
     render_list(&filtered, args.format)?;
@@ -171,7 +171,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let opts = AddOptions { force: args.force };
 
     if args.dry_run {
-        let mut doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+        let mut doc = Document::read(&path, &heading)?;
         // Replicate the duplicate check in dry-run so users see the same
         // error without writing.
         if !args.force
@@ -209,8 +209,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
                 date,
                 today_n,
                 now_n,
-            )
-            .map_err(|e| anyhow!("{e}"))?;
+            )?;
         }
     }
 
@@ -220,7 +219,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         fmt_hhmm(block.end),
         block.desc.trim()
     );
-    ops::add_block(&path, &heading, block, opts).map_err(|e| anyhow!("{e}"))?;
+    ops::add_block(&path, &heading, block, opts)?;
     println!("{}\n  {}", vault.relativize(&path).display(), block_summary);
     Ok(ExitCode::SUCCESS)
 }
@@ -277,7 +276,7 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let mutation = build_edit_mutation(&args)?;
 
     if args.dry_run {
-        let mut doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+        let mut doc = Document::read(&path, &heading)?;
         // Use the library's selector + mutation logic by cloning so we
         // can render without writing.
         let idx = match selector.resolve(&doc.blocks) {
@@ -299,7 +298,7 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let doc = ops::edit_block(&path, &heading, &selector, mutation).map_err(|e| anyhow!("{e}"))?;
+    let doc = ops::edit_block(&path, &heading, &selector, mutation)?;
     // Report the line that was edited — selector::resolve may have moved
     // it after re-sort, so we find it by closest match in the new state.
     println!("Edited {}", vault.relativize(&path).display());
@@ -429,7 +428,7 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     // Preview the block we're about to remove so the confirmation prompt
     // and the success line have meaningful content.
-    let doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+    let doc = Document::read(&path, &heading)?;
     let idx = match selector.resolve(&doc.blocks) {
         ops::SelectorResult::Found(i) => i,
         ops::SelectorResult::None => {
@@ -476,7 +475,7 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         }
     }
 
-    ops::delete_block(&path, &heading, &selector).map_err(|e| anyhow!("{e}"))?;
+    ops::delete_block(&path, &heading, &selector)?;
     println!(
         "Deleted from {}\n  {summary}",
         vault.relativize(&path).display()
@@ -555,10 +554,9 @@ fn run_spent(args: SpentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let mut all_blocks: Vec<Timeblock> = Vec::new();
     let mut cur = from;
     while cur <= to {
-        let path = ft_core::periodic::resolve_periodic_path(&vault.path, daily_cfg, cur)
-            .map_err(|e| anyhow!("{e}"))?;
+        let path = ft_core::periodic::resolve_periodic_path(&vault.path, daily_cfg, cur)?;
         if path.exists() {
-            let doc = Document::read(&path, &heading).map_err(|e| anyhow!("{e}"))?;
+            let doc = Document::read(&path, &heading)?;
             all_blocks.extend(doc.blocks);
         }
         cur = cur.succ_opt().ok_or_else(|| anyhow!("date overflow"))?;
