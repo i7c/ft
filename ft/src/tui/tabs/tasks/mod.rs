@@ -57,6 +57,24 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "tasks.expand",
+        description: "Expand the selected task's subtasks",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.collapse",
+        description: "Collapse the selected task's subtasks",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "tasks.reload",
         description: "Reload the task list from the vault",
         scope: CommandScope::Tab("tasks"),
@@ -288,6 +306,7 @@ impl Tab for TasksTab {
                 "Navigation",
                 &[
                     ("↑ / ↓ · j / k", "select prev / next task"),
+                    ("→ / l · ← / h", "expand / collapse subtasks"),
                     ("/", "edit query"),
                     ("R", "reload vault"),
                     ("Enter", "open task in $EDITOR"),

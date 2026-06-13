@@ -45,6 +45,7 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 EdgeKind::Embed(_) => "embed",
                 EdgeKind::Contains => "contains",
                 EdgeKind::HasTask => "has-task",
+                EdgeKind::Subtask => "subtask",
                 EdgeKind::LinksInto => "links-into",
                 EdgeKind::OwnsParagraph => "owns-paragraph",
                 EdgeKind::ParagraphLink => "paragraph-link",
@@ -987,6 +988,62 @@ fn build_with_tasks_creates_task_nodes_and_edges() {
         .filter(|(_, e)| matches!(e, EdgeKind::HasTask))
         .collect();
     assert_eq!(finance_tasks.len(), 1);
+}
+
+/// Subtask edges connect a parent task to each of its indented children,
+/// parent → child, intra-file.
+#[test]
+fn build_creates_subtask_edges_from_parent_pointers() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("house.md")
+        .write_str("- [ ] house\n  - [ ] walls\n  - [ ] pipes\n")
+        .unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+    let parent = Task {
+        description: "house".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 1,
+        ..Default::default()
+    };
+    let walls = Task {
+        description: "walls".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 2,
+        parent: Some(1),
+        ..Default::default()
+    };
+    let pipes = Task {
+        description: "pipes".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 3,
+        parent: Some(1),
+        ..Default::default()
+    };
+    let scan = Scan {
+        tasks: vec![parent, walls, pipes],
+        errors: vec![],
+    };
+    let g = Graph::build(&v, &scan).unwrap();
+
+    // The parent task node has two outgoing Subtask edges.
+    let parent_id = g.task_by_loc(Path::new("house.md"), 1).unwrap();
+    let subtasks: Vec<_> = g
+        .outgoing(parent_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
+        .collect();
+    assert_eq!(subtasks.len(), 2);
+
+    // A leaf has none.
+    let walls_id = g.task_by_loc(Path::new("house.md"), 2).unwrap();
+    assert_eq!(
+        g.outgoing(walls_id)
+            .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
+            .count(),
+        0
+    );
 }
 
 /// Task 7.3: Graph::build with empty scan produces no task nodes.

@@ -195,6 +195,10 @@ pub enum EdgeKind {
     Contains,
     /// A note has a task as a child. Edge from note node to task node.
     HasTask,
+    /// A task has a subtask, established by indentation in the source
+    /// markdown. Edge from the parent task node to the child task node.
+    /// Always intra-file. Unit variant — no textual link to rewrite.
+    Subtask,
     /// A note links to one or more notes contained in a directory.
     /// Derived edge — one per unique (source-note, target-directory) pair
     /// from resolved Link / Embed edges. Unit variant (no LinkEdge data).
@@ -213,6 +217,7 @@ impl EdgeKind {
             EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
             EdgeKind::Contains
             | EdgeKind::HasTask
+            | EdgeKind::Subtask
             | EdgeKind::LinksInto
             | EdgeKind::OwnsParagraph
             | EdgeKind::ParagraphLink => None,
@@ -385,6 +390,9 @@ impl Graph {
 
         // Create HasTask edges from notes to their tasks.
         graph.insert_hastask_edges();
+
+        // Create Subtask edges from parent tasks to their subtasks.
+        graph.insert_subtask_edges(&scan.tasks);
 
         // Create LinksInto edges from notes to directories they link into.
         graph.insert_links_into_edges();
@@ -819,6 +827,31 @@ impl Graph {
                 if matches!(self.g[note_id.0], NodeKind::Note(_)) {
                     self.g.add_edge(note_id.0, task_id.0, EdgeKind::HasTask);
                 }
+            }
+        }
+    }
+
+    /// Create Subtask edges from each parent task to its direct subtasks.
+    /// The parent relationship is the `Task.parent` line pointer resolved at
+    /// scan time; both endpoints live in the same file, so we look the parent
+    /// up by `(source_file, parent_line)` in the task index.
+    fn insert_subtask_edges(&mut self, tasks: &[Task]) {
+        for task in tasks {
+            let Some(parent_line) = task.parent else {
+                continue;
+            };
+            let child = match self
+                .task_index
+                .get(&(task.source_file.clone(), task.source_line))
+            {
+                Some(&id) => id,
+                None => continue,
+            };
+            if let Some(&parent) = self
+                .task_index
+                .get(&(task.source_file.clone(), parent_line))
+            {
+                self.g.add_edge(parent.0, child.0, EdgeKind::Subtask);
             }
         }
     }

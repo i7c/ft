@@ -117,6 +117,73 @@ fn tasks_tab_populated_renders_overdue_and_upcoming() -> Result<()> {
     Ok(())
 }
 
+/// Vault with a nested task tree whose top-level parents pass the default
+/// query (Open + due soon) while the indented subtasks have no due date, so
+/// they only surface when the user expands a parent.
+fn nested_tasks_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let body = "\
+- [ ] Build a house 📅 2026-05-12
+  - [ ] Build the walls
+    - [ ] Lay bricks
+  - [ ] Pipes and plumbing
+- [ ] Buy groceries 📅 2026-05-13
+";
+    std::fs::write(vault_path.join("tasks.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn tasks_tab_subtasks_collapse_and_expand() -> Result<()> {
+    let (_dir, vault) = nested_tasks_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+
+    // Collapsed: the parent shows a ▸ affordance and its subtasks are hidden.
+    let collapsed = render(&mut app, 80, 24);
+    assert!(collapsed.contains('▸'), "parent shows a collapsed marker");
+    assert!(
+        !collapsed.contains("Build the walls"),
+        "subtasks stay hidden while collapsed"
+    );
+    assert_tui_snapshot!("tasks_tab_subtasks_collapsed_80x24", collapsed);
+
+    // Expand the selected parent (cursor starts on the first match).
+    app.dispatch(key('l'))?;
+    let expanded = render(&mut app, 80, 24);
+    assert!(
+        expanded.contains("Build the walls") && expanded.contains("Pipes and plumbing"),
+        "direct subtasks appear on expand"
+    );
+    assert!(
+        !expanded.contains("Lay bricks"),
+        "the grandchild stays hidden until its parent expands"
+    );
+    assert_tui_snapshot!("tasks_tab_subtasks_expanded_80x24", expanded);
+
+    // Step into the first subtask and expand it → the grandchild appears.
+    app.dispatch(key('j'))?;
+    app.dispatch(key('l'))?;
+    let deep = render(&mut app, 80, 24);
+    assert!(
+        deep.contains("Lay bricks"),
+        "grandchild revealed after expanding the middle task"
+    );
+
+    // Move back up to the root and collapse it: the whole subtree disappears.
+    app.dispatch(key('k'))?;
+    app.dispatch(key('h'))?;
+    let recollapsed = render(&mut app, 80, 24);
+    assert!(
+        !recollapsed.contains("Build the walls"),
+        "collapsing the root hides its entire subtree"
+    );
+    Ok(())
+}
+
 /// Vault with a long task description, used to verify the description column
 /// expands when the terminal is wider than the 80x24 minimum.
 fn long_description_vault() -> (TempDir, Vault) {

@@ -613,6 +613,115 @@ fn pathological_deep_subtasks_have_correct_parents() {
     );
 }
 
+/// Collect every description in a `--tree` JSON forest, depth-first.
+fn collect_descriptions(node: &serde_json::Value, out: &mut Vec<String>) {
+    out.push(node["description"].as_str().unwrap_or_default().to_string());
+    if let Some(subs) = node["subtasks"].as_array() {
+        for s in subs {
+            collect_descriptions(s, out);
+        }
+    }
+}
+
+#[test]
+fn tree_json_pulls_full_subtree_for_a_matched_parent() {
+    // Only the top epic matches the filter; every descendant rides along,
+    // recursively, while the sibling epic stays out.
+    let assert = run_list_in(
+        &pathological_vault(),
+        &[
+            "--no-color",
+            "--format",
+            "json",
+            "--tree",
+            "--query",
+            "description includes \"Top-level epic\"",
+        ],
+    )
+    .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let roots = v.as_array().unwrap();
+    assert_eq!(roots.len(), 1, "exactly one matched root");
+    assert!(roots[0]["description"]
+        .as_str()
+        .unwrap()
+        .starts_with("Top-level epic"));
+
+    let mut all = Vec::new();
+    collect_descriptions(&roots[0], &mut all);
+    // Deep descendants are present even though they don't match the filter.
+    assert!(all.iter().any(|d| d == "Stakeholder A"));
+    assert!(all.iter().any(|d| d == "Sent"));
+    assert!(all.iter().any(|d| d.starts_with("Spec doc")));
+    // The sibling epic and its child must not be pulled in.
+    assert!(all.iter().all(|d| !d.starts_with("Sibling epic")));
+    assert!(all.iter().all(|d| d != "Lonely child"));
+}
+
+#[test]
+fn tree_table_nests_and_dedupes_matched_descendants() {
+    // Match both the epic and one deep descendant: the descendant nests once
+    // under its parent rather than also appearing as a second top-level row.
+    let assert = run_list_in(
+        &pathological_vault(),
+        &[
+            "--no-color",
+            "--tree",
+            "--query",
+            "description includes \"epic\" or description includes \"Stakeholder A\"",
+        ],
+    )
+    .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    // The nested-row marker is present, and "Stakeholder A" shows exactly once.
+    assert!(stdout.contains('↳'), "tree rows carry an indent marker");
+    assert_eq!(
+        stdout.matches("Stakeholder A").count(),
+        1,
+        "matched descendant appears once (nested, not duplicated)"
+    );
+}
+
+#[test]
+fn tree_markdown_indents_nested_subtasks() {
+    let assert = run_list_in(
+        &pathological_vault(),
+        &[
+            "--no-color",
+            "--format",
+            "markdown",
+            "--tree",
+            "--query",
+            "description includes \"Top-level epic\"",
+        ],
+    )
+    .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    // Stakeholder A sits three levels under the matched root → 6-space indent.
+    assert!(
+        stdout.contains("      - [ ] Stakeholder A"),
+        "expected 6-space-indented subtask line, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn tree_conflicts_with_group_by() {
+    Command::cargo_bin("ft")
+        .unwrap()
+        .args([
+            "--vault",
+            realistic_vault().to_str().unwrap(),
+            "tasks",
+            "list",
+            "--tree",
+            "--group-by",
+            "priority",
+        ])
+        .assert()
+        .failure();
+}
+
 #[test]
 fn has_due_and_no_due_are_mutually_exclusive() {
     Command::cargo_bin("ft")

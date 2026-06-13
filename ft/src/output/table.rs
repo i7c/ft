@@ -7,7 +7,18 @@ pub struct TableOpts {
 }
 
 pub fn render(tasks: &[&Task], opts: TableOpts) -> String {
-    render_one(tasks, opts)
+    let rows: Vec<TreeRow> = tasks.iter().map(|t| (0usize, *t)).collect();
+    render_one(&rows, opts)
+}
+
+/// One rendered row: its nesting depth (0 = top level) and the task. The
+/// depth indents the description column so subtasks read as a tree.
+pub type TreeRow<'a> = (usize, &'a Task);
+
+/// Render a depth-annotated forest (used by `tasks list --tree`). Identical
+/// to [`render`] except the description column carries an indent per depth.
+pub fn render_tree(rows: &[TreeRow], opts: TableOpts) -> String {
+    render_one(rows, opts)
 }
 
 /// Render multiple labelled groups, separated by section headings.
@@ -18,8 +29,9 @@ pub fn render_grouped(groups: &[(String, Vec<&Task>)], opts: TableOpts) -> Strin
             out.push('\n');
         }
         out.push_str(&format!("## {label} ({})\n", tasks.len()));
+        let rows: Vec<TreeRow> = tasks.iter().map(|t| (0usize, *t)).collect();
         out.push_str(&render_one(
-            tasks,
+            &rows,
             TableOpts {
                 use_color: opts.use_color,
             },
@@ -29,14 +41,14 @@ pub fn render_grouped(groups: &[(String, Vec<&Task>)], opts: TableOpts) -> Strin
     out
 }
 
-fn render_one(tasks: &[&Task], opts: TableOpts) -> String {
+fn render_one(rows: &[TreeRow], opts: TableOpts) -> String {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec!["Status", "Pri", "Due", "Description", "Path", "Tags"]);
 
-    for task in tasks {
+    for &(depth, task) in rows {
         let status_cell = status_cell(task.status, opts.use_color);
         let pri_cell = priority_cell(task.priority, opts.use_color);
         let due_cell = match task.due {
@@ -47,11 +59,16 @@ fn render_one(tasks: &[&Task], opts: TableOpts) -> String {
         path.push(':');
         path.push_str(&task.source_line.to_string());
         let tags = task.tags.join(", ");
+        let desc = if depth > 0 {
+            format!("{}↳ {}", "  ".repeat(depth - 1), task.description)
+        } else {
+            task.description.clone()
+        };
         let mut row: Vec<Cell> = vec![
             status_cell,
             pri_cell,
             due_cell,
-            Cell::new(&task.description),
+            Cell::new(desc),
             Cell::new(path),
             Cell::new(tags),
         ];

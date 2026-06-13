@@ -90,6 +90,28 @@ ft tasks list --format json    # one big array
 `--group-by` (priority, tag, folder, path, due) only affects the
 `table` format — JSON / NDJSON / markdown are flat by design.
 
+### Subtasks (`--tree`)
+
+```sh
+ft tasks list --query 'priority = high' --tree
+ft tasks list overdue --tree --format json     # nested "subtasks" arrays
+```
+
+`--tree` shows every matching task with its subtasks nested underneath.
+Subtasks are pulled in **even when they don't match the filter**, all the
+way down — so `--query 'priority = high' --tree` surfaces a high-priority
+parent's full checklist, not just the high-priority lines. A task that
+matches both on its own and as someone's subtask is shown once, nested
+under its parent. `table` indents with a `↳` marker, `markdown` emits a
+valid nested list, `json` nests a `subtasks` array on each node, and
+`ndjson` streams the expanded set in pre-order. `--tree` is mutually
+exclusive with `--group-by`.
+
+In the TUI, the same relationship is interactive: select a task and press
+`→`/`l` to expand its subtasks one level (`←`/`h` to collapse). Subtasks
+are joined to their parent in the graph by a `subtask` edge (parent →
+child), so graph queries can traverse the hierarchy too.
+
 Colour is on by default when stdout is a TTY. `NO_COLOR=1`,
 `--no-color`, and any redirection turn it off.
 

@@ -157,6 +157,13 @@ pub struct ListArgs {
     #[arg(long, value_enum)]
     pub group_by: Option<GroupBy>,
 
+    /// Show each matching task with its subtasks nested underneath. Subtasks
+    /// are pulled in even when they don't match the filter, recursively to
+    /// any depth. Honored by every output format; `--group-by` is ignored
+    /// in tree mode.
+    #[arg(long, conflicts_with = "group_by")]
+    pub tree: bool,
+
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Table)]
     pub format: Format,
@@ -270,6 +277,36 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     };
+
+    if args.tree {
+        // Expand the matched (sorted, limited) set into a forest: each match
+        // plus its full subtask subtree, pulled in regardless of the filter.
+        let matched_keys: Vec<(PathBuf, usize)> = matches
+            .iter()
+            .map(|t| (t.source_file.clone(), t.source_line))
+            .collect();
+        let forest = ft_core::task::hierarchy::expand_forest(&scan.tasks, &matched_keys);
+        let rows: Vec<(usize, &Task)> = forest
+            .iter()
+            .map(|r| (r.depth, &scan.tasks[r.idx]))
+            .collect();
+        match args.format {
+            Format::Table => {
+                let use_color = !args.no_color
+                    && std::env::var_os("NO_COLOR").is_none()
+                    && is_terminal::IsTerminal::is_terminal(&std::io::stdout());
+                let opts = output::table::TableOpts { use_color };
+                println!("{}", output::table::render_tree(&rows, opts));
+            }
+            Format::Json => output::json::render_tree(&rows)?,
+            Format::Ndjson => {
+                let flat: Vec<&Task> = rows.iter().map(|(_, t)| *t).collect();
+                output::ndjson::render(&flat)?;
+            }
+            Format::Markdown => print!("{}", output::markdown::render_tree(&rows)),
+        }
+        return Ok(exit);
+    }
 
     match args.format {
         Format::Table => {

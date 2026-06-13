@@ -47,6 +47,11 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("j", "tasks.cursor-down")
         .bind("R", "tasks.reload")
         .bind("Enter", "tasks.open-in-editor")
+        // Subtask tree: expand / collapse the selected task.
+        .bind("l", "tasks.expand")
+        .bind("Right", "tasks.expand")
+        .bind("h", "tasks.collapse")
+        .bind("Left", "tasks.collapse")
         // Mutations — special-char bindings (normalization strips SHIFT
         // for non-alpha chars).
         .bind("]", "tasks.due-next-day")
@@ -107,6 +112,34 @@ pub struct SearchView {
     /// (on a successful write). While the quickline is open, all keys
     /// go to its input buffer.
     quickline: Option<Quickline>,
+
+    /// Direct-subtask index map (`parent task idx → child task indices`),
+    /// rebuilt on every reload from `tasks`. Drives lazy tree expansion.
+    children: std::collections::HashMap<usize, Vec<usize>>,
+    /// Keys (`source_file`, `source_line`) of tasks the user has expanded.
+    /// Keyed by identity (not index) so expansion survives a reload.
+    expanded: std::collections::HashSet<(std::path::PathBuf, usize)>,
+    /// Flattened, depth-annotated rows actually rendered: every match plus
+    /// the visible (expanded) subtree beneath it. `selected` indexes this.
+    /// Rebuilt by `rebuild_display` after matches or expansion change.
+    display: Vec<DisplayRow>,
+    /// Number of leading `display` rows belonging to the overdue bucket
+    /// (a top-level overdue match and its expanded subtree). The rest are
+    /// upcoming. Drives the section divider placement.
+    overdue_display_count: usize,
+}
+
+/// One rendered list row: the task plus the tree-state needed to draw it.
+#[derive(Debug, Clone, Copy)]
+struct DisplayRow {
+    /// Index into `SearchView::tasks`.
+    task_idx: usize,
+    /// Nesting depth: 0 for a top-level match, +1 per subtask level.
+    depth: usize,
+    /// Whether this task has any subtasks (shows a ▸/▾ affordance).
+    has_children: bool,
+    /// Whether this task is currently expanded.
+    expanded: bool,
 }
 
 /// "New task" quickline state — a single edit buffer plus a slot for
@@ -424,6 +457,10 @@ impl SearchView {
             edit_state: None,
             popup: None,
             quickline: None,
+            children: std::collections::HashMap::new(),
+            expanded: std::collections::HashSet::new(),
+            display: Vec::new(),
+            overdue_display_count: 0,
         }
     }
 
@@ -452,6 +489,7 @@ impl SearchView {
         // result map back to the cached `tasks` Vec by (path, line).
         self.graph = Graph::build(ctx.vault, &scan).ok();
         self.tasks = scan.tasks;
+        self.children = ft_core::task::hierarchy::child_index_map(&self.tasks);
         self.loaded = true;
         if self.query_text.is_empty() {
             self.query_text = Self::default_query(ctx.today);
@@ -540,26 +578,104 @@ impl SearchView {
             .iter()
             .take_while(|&&i| self.tasks[i].due.map(|d| d < today).unwrap_or(false))
             .count();
+
+        self.rebuild_display();
+    }
+
+    /// Flatten `matches` into `display`, splicing in the visible subtree
+    /// beneath every expanded task. Keeps the overdue/upcoming bucket
+    /// boundary (`overdue_display_count`) in display-row space.
+    fn rebuild_display(&mut self) {
+        let mut rows: Vec<DisplayRow> = Vec::with_capacity(self.matches.len());
+        let split = self.overdue_count.min(self.matches.len());
+        for &m in &self.matches[..split] {
+            emit_display_row(m, 0, &self.children, &self.expanded, &self.tasks, &mut rows);
+        }
+        self.overdue_display_count = rows.len();
+        for &m in &self.matches[split..] {
+            emit_display_row(m, 0, &self.children, &self.expanded, &self.tasks, &mut rows);
+        }
+        self.display = rows;
+        if self.selected >= self.display.len() {
+            self.selected = self.display.len().saturating_sub(1);
+        }
+    }
+
+    /// Task index under the cursor, if any. The single accessor mutation and
+    /// editor paths go through, so they don't care that `selected` indexes
+    /// `display` (which includes spliced-in subtasks), not `matches`.
+    fn selected_task_idx(&self) -> Option<usize> {
+        self.display.get(self.selected).map(|r| r.task_idx)
     }
 
     // --- selection ---------------------------------------------------------
 
     fn select_prev(&mut self) {
-        if self.matches.is_empty() {
+        if self.display.is_empty() {
             return;
         }
         if self.selected == 0 {
-            self.selected = self.matches.len() - 1;
+            self.selected = self.display.len() - 1;
         } else {
             self.selected -= 1;
         }
     }
 
     fn select_next(&mut self) {
-        if self.matches.is_empty() {
+        if self.display.is_empty() {
             return;
         }
-        self.selected = (self.selected + 1) % self.matches.len();
+        self.selected = (self.selected + 1) % self.display.len();
+    }
+
+    /// Expand the selected task one level. If it's a leaf, no-op. If it's
+    /// already expanded, move the cursor onto its first subtask (file-explorer
+    /// `→` idiom).
+    fn expand_selected(&mut self) {
+        let Some(row) = self.display.get(self.selected).copied() else {
+            return;
+        };
+        if !row.has_children {
+            return;
+        }
+        if row.expanded {
+            // Already open — step into the first child (the next display row).
+            if self.selected + 1 < self.display.len() {
+                self.selected += 1;
+            }
+            return;
+        }
+        let key = (
+            self.tasks[row.task_idx].source_file.clone(),
+            self.tasks[row.task_idx].source_line,
+        );
+        self.expanded.insert(key);
+        self.rebuild_display();
+    }
+
+    /// Collapse the selected task. If it's an expanded parent, close it. If
+    /// it's a nested row, move the cursor up to its parent instead (so a
+    /// second `←` then closes that parent).
+    fn collapse_selected(&mut self) {
+        let Some(row) = self.display.get(self.selected).copied() else {
+            return;
+        };
+        if row.has_children && row.expanded {
+            let key = (
+                self.tasks[row.task_idx].source_file.clone(),
+                self.tasks[row.task_idx].source_line,
+            );
+            self.expanded.remove(&key);
+            self.rebuild_display();
+        } else if row.depth > 0 {
+            // Walk up to the nearest shallower row — that's the parent.
+            if let Some(p) = (0..self.selected)
+                .rev()
+                .find(|&i| self.display[i].depth < row.depth)
+            {
+                self.selected = p;
+            }
+        }
     }
 
     // --- query editing -----------------------------------------------------
@@ -751,31 +867,35 @@ impl SearchView {
     }
 
     fn build_lines(&self, today: NaiveDate, desc_width: usize) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line> = Vec::with_capacity(self.matches.len() + 4);
-        let upcoming_start = self.overdue_count;
+        let mut lines: Vec<Line> = Vec::with_capacity(self.display.len() + 4);
+        let split = self.overdue_display_count;
+        // Divider labels count top-level matches, not display rows, so the
+        // numbers stay stable as subtrees are expanded and collapsed.
+        let overdue_n = self.overdue_count;
+        let upcoming_n = self.matches.len().saturating_sub(self.overdue_count);
 
-        if upcoming_start > 0 {
-            lines.push(divider_line(&format!("── overdue ({}) ──", upcoming_start)));
-            for (i, &task_idx) in self.matches[..upcoming_start].iter().enumerate() {
-                let selected = i == self.selected;
+        if split > 0 {
+            lines.push(divider_line(&format!("── overdue ({overdue_n}) ──")));
+            for (i, row) in self.display[..split].iter().enumerate() {
                 lines.push(task_line(
-                    &self.tasks[task_idx],
+                    &self.tasks[row.task_idx],
                     today,
-                    selected,
+                    i == self.selected,
                     desc_width,
+                    row,
                 ));
             }
         }
-        if upcoming_start < self.matches.len() {
-            let upcoming_n = self.matches.len() - upcoming_start;
-            lines.push(divider_line(&format!("── upcoming ({}) ──", upcoming_n)));
-            for (i, &task_idx) in self.matches[upcoming_start..].iter().enumerate() {
-                let selected = (i + upcoming_start) == self.selected;
+        if split < self.display.len() {
+            lines.push(divider_line(&format!("── upcoming ({upcoming_n}) ──")));
+            for (i, row) in self.display[split..].iter().enumerate() {
+                let sel = (i + split) == self.selected;
                 lines.push(task_line(
-                    &self.tasks[task_idx],
+                    &self.tasks[row.task_idx],
                     today,
-                    selected,
+                    sel,
                     desc_width,
+                    row,
                 ));
             }
         }
@@ -785,21 +905,21 @@ impl SearchView {
     /// Compute the row index of `selected` within the rendered line sequence
     /// (which includes section dividers). Returns 0 when nothing is selected.
     fn selected_row(&self) -> u16 {
-        if self.matches.is_empty() {
+        if self.display.is_empty() {
             return 0;
         }
-        let upcoming_start = self.overdue_count;
+        let split = self.overdue_display_count;
         // Each non-empty section adds 1 divider row before its tasks.
         let mut row: usize = 0;
-        if upcoming_start > 0 {
+        if split > 0 {
             row += 1; // overdue divider
         }
-        if self.selected < upcoming_start {
+        if self.selected < split {
             row += self.selected;
         } else {
-            row += upcoming_start; // skip overdue rows
+            row += split; // skip overdue rows
             row += 1; // upcoming divider
-            row += self.selected - upcoming_start;
+            row += self.selected - split;
         }
         u16::try_from(row).unwrap_or(u16::MAX)
     }
@@ -885,6 +1005,14 @@ impl SearchView {
             }
             "tasks.cursor-down" => {
                 self.select_next();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.expand" => {
+                self.expand_selected();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.collapse" => {
+                self.collapse_selected();
                 Ok(CommandOutcome::Handled)
             }
             "tasks.reload" => {
@@ -1019,19 +1147,34 @@ impl SearchView {
         anchor: Option<(std::path::PathBuf, usize)>,
     ) -> Result<()> {
         self.reload(ctx)?;
-        if let Some((path, line)) = anchor {
-            if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
-                let t = &self.tasks[task_idx];
-                t.source_file == path && t.source_line == line
-            }) {
-                self.selected = i;
+        if let Some(key) = anchor {
+            if self.select_display_row(&key) {
                 return Ok(());
             }
         }
-        if !self.matches.is_empty() && self.selected >= self.matches.len() {
-            self.selected = self.matches.len() - 1;
-        }
+        self.clamp_selection();
         Ok(())
+    }
+
+    /// Move the cursor to the display row for `key` (a `(path, line)`),
+    /// returning whether it was found.
+    fn select_display_row(&mut self, key: &(std::path::PathBuf, usize)) -> bool {
+        if let Some(i) = self.display.iter().position(|r| {
+            let t = &self.tasks[r.task_idx];
+            t.source_file == key.0 && t.source_line == key.1
+        }) {
+            self.selected = i;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Keep `selected` within the current display bounds after a rebuild.
+    fn clamp_selection(&mut self) {
+        if !self.display.is_empty() && self.selected >= self.display.len() {
+            self.selected = self.display.len() - 1;
+        }
     }
 
     /// Refresh after a create. Prefer to anchor at the new task's
@@ -1045,30 +1188,19 @@ impl SearchView {
         prior: Option<(std::path::PathBuf, usize)>,
     ) -> Result<()> {
         self.reload(ctx)?;
-        // Try the new task first.
-        if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
-            let t = &self.tasks[task_idx];
-            t.source_file == new.0 && t.source_line == new.1
-        }) {
-            self.selected = i;
+        // Try the new task first, then the prior cursor.
+        if self.select_display_row(&new) {
             return Ok(());
         }
-        // Fall back to the prior selection.
         if let Some(p) = prior {
-            if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
-                let t = &self.tasks[task_idx];
-                t.source_file == p.0 && t.source_line == p.1
-            }) {
-                self.selected = i;
+            if self.select_display_row(&p) {
                 return Ok(());
             }
         }
         // Neither anchor still matches — leave selected at 0 (set by
         // `reload`'s `recompute_matches`), but saturate if the list is
         // empty / shorter than the previous cursor.
-        if !self.matches.is_empty() && self.selected >= self.matches.len() {
-            self.selected = self.matches.len() - 1;
-        }
+        self.clamp_selection();
         Ok(())
     }
 
@@ -1076,7 +1208,7 @@ impl SearchView {
     where
         F: FnOnce(&std::path::Path, &Task, NaiveDate) -> Result<()>,
     {
-        let Some(&task_idx) = self.matches.get(self.selected) else {
+        let Some(task_idx) = self.selected_task_idx() else {
             return Ok(EventOutcome::Consumed);
         };
         let task = &self.tasks[task_idx];
@@ -1159,14 +1291,14 @@ impl SearchView {
     }
 
     fn open_edit_popup(&mut self) {
-        let Some(&task_idx) = self.matches.get(self.selected) else {
+        let Some(task_idx) = self.selected_task_idx() else {
             return;
         };
         self.popup = Some(EditPopup::from_task(&self.tasks[task_idx]));
     }
 
     fn request_editor_open(&self, ctx: &TabCtx) {
-        let Some(&task_idx) = self.matches.get(self.selected) else {
+        let Some(task_idx) = self.selected_task_idx() else {
             return;
         };
         let task = &self.tasks[task_idx];
@@ -1363,9 +1495,8 @@ impl SearchView {
         // Capture prior selection so a create that doesn't pass the filter
         // keeps the cursor where it was.
         let prior = self
-            .matches
-            .get(self.selected)
-            .map(|&i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
+            .selected_task_idx()
+            .map(|i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
 
         match ops::create_task(
             &resolved,
@@ -1503,9 +1634,8 @@ impl SearchView {
         // Capture the prior cursor (if any) so a create that doesn't pass
         // the active filter can fall back to "stay where you were".
         let prior = self
-            .matches
-            .get(self.selected)
-            .map(|&i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
+            .selected_task_idx()
+            .map(|i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
 
         match ops::create_task(
             &target,
@@ -1844,6 +1974,36 @@ fn relative_date(d: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
+/// Append `idx` (at `depth`) to `out`, then recurse into its direct subtasks
+/// when the task is in the `expanded` set. Pre-order, so each task is followed
+/// immediately by its visible subtree.
+fn emit_display_row(
+    idx: usize,
+    depth: usize,
+    children: &std::collections::HashMap<usize, Vec<usize>>,
+    expanded: &std::collections::HashSet<(std::path::PathBuf, usize)>,
+    tasks: &[Task],
+    out: &mut Vec<DisplayRow>,
+) {
+    let kids = children.get(&idx);
+    let has_children = kids.is_some_and(|k| !k.is_empty());
+    let key = (tasks[idx].source_file.clone(), tasks[idx].source_line);
+    let is_expanded = has_children && expanded.contains(&key);
+    out.push(DisplayRow {
+        task_idx: idx,
+        depth,
+        has_children,
+        expanded: is_expanded,
+    });
+    if is_expanded {
+        if let Some(kids) = kids {
+            for &c in kids {
+                emit_display_row(c, depth + 1, children, expanded, tasks, out);
+            }
+        }
+    }
+}
+
 fn divider_line(label: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {label}"),
@@ -1853,7 +2013,13 @@ fn divider_line(label: &str) -> Line<'static> {
     ))
 }
 
-fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -> Line<'static> {
+fn task_line(
+    task: &Task,
+    today: NaiveDate,
+    selected: bool,
+    desc_width: usize,
+    row: &DisplayRow,
+) -> Line<'static> {
     let pri_label = priority_label(task.priority);
     let pri_color = priority_color(task.priority);
     let (status_glyph, status_color) = status_marker(task.status);
@@ -1880,8 +2046,18 @@ fn task_line(task: &Task, today: NaiveDate, selected: bool, desc_width: usize) -
     };
     let status_text = format!("{status_glyph} ");
 
+    // Tree affordance: indent per depth, then a ▾/▸ for expandable rows or a
+    // blank gutter so leaf descriptions still line up under their siblings.
+    let marker = match (row.has_children, row.expanded) {
+        (true, true) => "▾ ",
+        (true, false) => "▸ ",
+        (false, _) if row.depth > 0 => "· ",
+        (false, _) => "",
+    };
+    let tree_prefix = format!("{}{marker}", "  ".repeat(row.depth));
+
     // Description: truncate if too long, pad to fill the column budget.
-    let desc = task.description.replace('\n', " ");
+    let desc = format!("{tree_prefix}{}", task.description.replace('\n', " "));
     let desc_count = desc.chars().count();
     let desc_trimmed = if desc_count > desc_width {
         let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();

@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: expanded
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+┌ query ───────────────────────────────────────────────────────────────────────┐
+│status in {Open, InProgress} and due < 2026-05-18                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────┐
+│ ── upcoming (2) ──                                                           │
+│▶       ▾ Build a house                              📅  in 2d                 │
+│          ▸ Build the walls                                                   │
+│          · Pipes and plumbing                                                │
+│        Buy groceries                                📅  in 3d                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

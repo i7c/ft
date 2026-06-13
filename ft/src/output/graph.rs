@@ -265,6 +265,7 @@ fn edge_kind_label(e: &EdgeKind) -> &'static str {
         EdgeKind::Embed(_) => "embed",
         EdgeKind::Contains => "directory-contains",
         EdgeKind::HasTask => "has-task",
+        EdgeKind::Subtask => "subtask",
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
         EdgeKind::ParagraphLink => "paragraph-link",
