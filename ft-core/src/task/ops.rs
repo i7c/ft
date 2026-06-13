@@ -49,6 +49,11 @@ pub enum Position {
     UnderHeading(String),
     /// Insert at this 1-indexed line, pushing existing content down.
     AtLine(usize),
+    /// Insert as a subtask (indented child) of the task at this 1-indexed
+    /// line. The new line lands at the end of the parent's existing indented
+    /// block and is indented to match the parent's current children — or one
+    /// step (two spaces) deeper if the parent has none yet.
+    Subtask { parent_line: usize },
 }
 
 /// User-provided fields for a new task. `description` should contain only
@@ -127,9 +132,18 @@ pub fn create_task(
     opts: CreateOptions,
 ) -> Result<CreateOutcome, CreateError> {
     let task = build_task(&input);
-    let serialized = EmojiFormat.serialize_line(&task);
-
     let existing = read_or_empty(target_path)?;
+
+    // Subtask placement reads the file to derive the child's indentation and
+    // concrete insertion line, then proceeds as an ordinary `AtLine` splice.
+    let (serialized, position) = match &opts.position {
+        Position::Subtask { parent_line } => {
+            let (indent, line) = subtask_placement(&existing, *parent_line)?;
+            let serialized = format!("{indent}{}", EmojiFormat.serialize_line(&task));
+            (serialized, Position::AtLine(line))
+        }
+        other => (EmojiFormat.serialize_line(&task), other.clone()),
+    };
 
     if !opts.force {
         if let Some(line) = find_duplicate(&existing, &task) {
@@ -140,7 +154,7 @@ pub fn create_task(
         }
     }
 
-    let (new_content, line) = splice(&existing, &serialized, &opts.position)?;
+    let (new_content, line) = splice(&existing, &serialized, &position)?;
 
     write_atomic(target_path, &new_content)?;
     Ok(CreateOutcome { line, serialized })
@@ -212,6 +226,8 @@ fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), 
                 lines.len() - 1
             }
         },
+        // `create_task` resolves `Subtask` to an `AtLine` before splicing.
+        Position::Subtask { .. } => unreachable!("subtask placement resolved before splice"),
     };
 
     Ok((md_lines::join_with_newline(&lines), inserted_at_idx + 1))
@@ -724,6 +740,42 @@ fn read_or_empty_move(path: &Path) -> Result<String, MoveError> {
     })
 }
 
+/// Resolve indentation and insertion line for a new subtask of the task at
+/// `parent_line` (1-indexed). Returns the leading-whitespace string the child
+/// line should carry and the 1-indexed line to splice it at (the end of the
+/// parent's existing indented block). The child matches its siblings' indent
+/// verbatim — tabs included — or sits two spaces past the parent if it has no
+/// children yet.
+fn subtask_placement(content: &str, parent_line: usize) -> Result<(String, usize), CreateError> {
+    use crate::markdown::lines as md_lines;
+    let lines = md_lines::split(content);
+    let idx = parent_line
+        .checked_sub(1)
+        .filter(|&i| i < lines.len())
+        .ok_or(CreateError::LineOutOfRange {
+            line: parent_line,
+            file_lines: lines.len(),
+        })?;
+
+    let parent_indent = leading_ws(&lines[idx]).len();
+    let end = block_end(&lines, idx, parent_indent);
+
+    let indent = if end > idx {
+        // Match the first child's leading whitespace exactly.
+        leading_ws(&lines[idx + 1]).to_string()
+    } else {
+        format!("{}  ", leading_ws(&lines[idx]))
+    };
+
+    // Splice after the block's last line: 0-indexed `end + 1` ⇒ `AtLine(end + 2)`.
+    Ok((indent, end + 2))
+}
+
+/// Leading whitespace (spaces/tabs) prefix of `line`.
+fn leading_ws(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
 /// Find the last line of the block whose head is `start_idx` with indent
 /// `head_indent`. The block extends through every following line whose first
 /// non-whitespace column is greater than `head_indent`. Blank lines never
@@ -882,6 +934,88 @@ mod tests {
         assert_eq!(outcome.line, 2);
         let content = std::fs::read_to_string(&p).unwrap();
         assert_eq!(content, "line1\n- [ ] Buy milk\nline2\nline3\n");
+    }
+
+    fn create_subtask(p: &Path, desc: &str, parent_line: usize) -> CreateOutcome {
+        create_task(
+            p,
+            input(desc),
+            CreateOptions {
+                position: Position::Subtask { parent_line },
+                force: false,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn subtask_into_childless_parent_indents_two_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] parent\n- [ ] other\n").unwrap();
+        let outcome = create_subtask(&p, "child", 1);
+        assert_eq!(outcome.line, 2);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] parent\n  - [ ] child\n- [ ] other\n"
+        );
+    }
+
+    #[test]
+    fn subtask_appends_after_existing_children_matching_indent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] parent\n  - [ ] a\n  - [ ] b\n- [ ] other\n").unwrap();
+        let outcome = create_subtask(&p, "child", 1);
+        assert_eq!(outcome.line, 4);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] parent\n  - [ ] a\n  - [ ] b\n  - [ ] child\n- [ ] other\n"
+        );
+    }
+
+    #[test]
+    fn subtask_matches_four_space_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] parent\n    - [ ] a\n").unwrap();
+        let outcome = create_subtask(&p, "child", 1);
+        assert_eq!(outcome.line, 3);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] parent\n    - [ ] a\n    - [ ] child\n"
+        );
+    }
+
+    #[test]
+    fn subtask_of_a_nested_parent_goes_one_level_deeper() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] top\n  - [ ] parent\n    - [ ] gc\n").unwrap();
+        // Parent is itself a subtask (line 2); its new child matches `gc`.
+        let outcome = create_subtask(&p, "child", 2);
+        assert_eq!(outcome.line, 4);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] top\n  - [ ] parent\n    - [ ] gc\n    - [ ] child\n"
+        );
+    }
+
+    #[test]
+    fn subtask_parent_out_of_range_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] parent\n").unwrap();
+        let err = create_task(
+            &p,
+            input("child"),
+            CreateOptions {
+                position: Position::Subtask { parent_line: 9 },
+                force: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CreateError::LineOutOfRange { .. }));
     }
 
     #[test]

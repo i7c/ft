@@ -217,6 +217,15 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         opens_modal: true,
         is_primary: false,
     },
+    CommandDef {
+        name: "tasks.new-subtask",
+        description: "Create a subtask under the selected task (quickline)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Create / edit",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
 ];
 
 pub struct TasksTab {
@@ -327,6 +336,7 @@ impl Tab for TasksTab {
                 &[
                     ("c", "new task (quickline)"),
                     ("Shift+C", "new task (blank form)"),
+                    ("s", "new subtask of selected"),
                     ("e", "open edit popup"),
                     ("Ctrl+E", "expand quickline → form"),
                     ("Ctrl+S", "submit form"),

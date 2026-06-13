@@ -184,6 +184,70 @@ fn tasks_tab_subtasks_collapse_and_expand() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn create_subtask_nests_under_selected_and_auto_expands() -> Result<()> {
+    let (_dir, vault) = nested_tasks_vault();
+    let task_file = vault.path.join("tasks.md");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+
+    // Cursor starts on "Build a house". `s` opens the subtask quickline.
+    app.dispatch(key('s'))?;
+    for c in "Wiring".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // On disk: indented one level, appended after the parent's existing
+    // subtasks (which sit at two spaces).
+    let content = std::fs::read_to_string(&task_file)?;
+    assert!(
+        content.contains("  - [ ] Pipes and plumbing\n  - [ ] Wiring\n"),
+        "subtask should be written indented at the end of the parent block:\n{content}"
+    );
+
+    // In the UI the parent auto-expands so the new child is visible.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Wiring"),
+        "new subtask should be visible after create:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn create_subtask_survives_expand_to_form() -> Result<()> {
+    // The subtask target must carry through the quickline → full-form
+    // (Ctrl+E) transition, so a form submit still nests under the parent.
+    let (_dir, vault) = nested_tasks_vault();
+    let task_file = vault.path.join("tasks.md");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+
+    app.dispatch(key('s'))?;
+    for c in "Plumbing".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let content = std::fs::read_to_string(&task_file)?;
+    assert!(
+        content.contains("  - [ ] Plumbing"),
+        "form submit in subtask mode must still nest under the parent:\n{content}"
+    );
+    Ok(())
+}
+
 /// Vault with a long task description, used to verify the description column
 /// expands when the terminal is wider than the 80x24 minimum.
 fn long_description_vault() -> (TempDir, Vault) {

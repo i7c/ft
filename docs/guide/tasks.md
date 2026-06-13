@@ -108,9 +108,13 @@ valid nested list, `json` nests a `subtasks` array on each node, and
 exclusive with `--group-by`.
 
 In the TUI, the same relationship is interactive: select a task and press
-`→`/`l` to expand its subtasks one level (`←`/`h` to collapse). Subtasks
-are joined to their parent in the graph by a `subtask` edge (parent →
-child), so graph queries can traverse the hierarchy too.
+`→`/`l` to expand its subtasks one level (`←`/`h` to collapse). Press `s`
+to create a subtask under the selected task — it opens the same quickline
+as `c` (and `Ctrl+E` still expands to the full form); the only difference
+is that the new task is written indented under the selected one, and the
+parent auto-expands so you see it. Subtasks are joined to their parent in
+the graph by a `subtask` edge (parent → child), so graph queries can
+traverse the hierarchy too.
 
 Colour is on by default when stdout is a TTY. `NO_COLOR=1`,
 `--no-color`, and any redirection turn it off.

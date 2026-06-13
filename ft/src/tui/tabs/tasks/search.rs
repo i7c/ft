@@ -67,6 +67,7 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Create / edit
         .bind("c", "tasks.quickline")
         .bind("C", "tasks.new-blank-form")
+        .bind("s", "tasks.new-subtask")
 });
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -127,6 +128,13 @@ pub struct SearchView {
     /// (a top-level overdue match and its expanded subtree). The rest are
     /// upcoming. Drives the section divider placement.
     overdue_display_count: usize,
+
+    /// When a create modal was opened via `tasks.new-subtask`, the
+    /// `(source_file, source_line)` of the task the new entry should nest
+    /// under. The quickline / form are otherwise identical; only the write
+    /// position changes. `None` for ordinary top-level creates. Set fresh by
+    /// every create-open command so it can't go stale.
+    subtask_parent: Option<(std::path::PathBuf, usize)>,
 }
 
 /// One rendered list row: the task plus the tree-state needed to draw it.
@@ -461,6 +469,7 @@ impl SearchView {
             expanded: std::collections::HashSet::new(),
             display: Vec::new(),
             overdue_display_count: 0,
+            subtask_parent: None,
         }
     }
 
@@ -1060,11 +1069,31 @@ impl SearchView {
                 Ok(CommandOutcome::Handled)
             }
             "tasks.quickline" => {
+                self.subtask_parent = None;
                 self.quickline = Some(Quickline::default());
                 Ok(CommandOutcome::Handled)
             }
             "tasks.new-blank-form" => {
+                self.subtask_parent = None;
                 self.popup = Some(EditPopup::new_blank());
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.new-subtask" => {
+                // Same quickline as `c`, but the new task nests under the
+                // selected task. No selection ⇒ nothing to parent to.
+                match self.selected_task_idx() {
+                    Some(i) => {
+                        let t = &self.tasks[i];
+                        self.subtask_parent = Some((t.source_file.clone(), t.source_line));
+                        self.quickline = Some(Quickline::default());
+                    }
+                    None => {
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                            text: "no task selected to add a subtask to".into(),
+                            style: ToastStyle::Error,
+                        });
+                    }
+                }
                 Ok(CommandOutcome::Handled)
             }
             "tasks.open-in-editor" => {
@@ -1464,18 +1493,31 @@ impl SearchView {
                 (path, q.heading_part)
             };
 
-        let resolved = match ctx.vault.resolve_target(ctx.today, target_path.as_deref()) {
-            Ok(p) => p,
-            Err(e) => {
-                self.popup.as_mut().unwrap().error = Some(e.to_string());
-                self.popup.as_mut().unwrap().focus = EditField::Target;
-                return Ok(EventOutcome::Consumed);
+        // In subtask mode the parent's file + indented position win over the
+        // target field (the field is kept for parity but ignored here).
+        let subtask = self.subtask_parent.clone();
+        let (resolved, position) = match &subtask {
+            Some((pfile, pline)) => (
+                ctx.vault.path.join(pfile),
+                ops::Position::Subtask {
+                    parent_line: *pline,
+                },
+            ),
+            None => {
+                let resolved = match ctx.vault.resolve_target(ctx.today, target_path.as_deref()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.popup.as_mut().unwrap().error = Some(e.to_string());
+                        self.popup.as_mut().unwrap().focus = EditField::Target;
+                        return Ok(EventOutcome::Consumed);
+                    }
+                };
+                let position = match &heading {
+                    Some(h) => ops::Position::UnderHeading(h.clone()),
+                    None => ops::Position::Append,
+                };
+                (resolved, position)
             }
-        };
-
-        let position = match &heading {
-            Some(h) => ops::Position::UnderHeading(h.clone()),
-            None => ops::Position::Append,
         };
 
         let input = CreateInput {
@@ -1508,6 +1550,10 @@ impl SearchView {
         ) {
             Ok(outcome) => {
                 self.popup = None;
+                self.subtask_parent = None;
+                if let Some(key) = subtask {
+                    self.expanded.insert(key);
+                }
                 let rel_target = resolved
                     .strip_prefix(&ctx.vault.path)
                     .map(|p| p.to_path_buf())
@@ -1567,6 +1613,7 @@ impl SearchView {
         match (k.code, k.modifiers) {
             (KeyCode::Esc, _) => {
                 self.quickline = None;
+                self.subtask_parent = None;
             }
             (KeyCode::Enter, _) => {
                 return self.submit_quickline(ctx);
@@ -1609,11 +1656,25 @@ impl SearchView {
             return Ok(EventOutcome::Consumed);
         }
 
-        let target = match ctx.vault.resolve_target(ctx.today, parse.target.as_deref()) {
-            Ok(p) => p,
-            Err(e) => {
-                self.quickline.as_mut().unwrap().error = Some(e.to_string());
-                return Ok(EventOutcome::Consumed);
+        // Subtask mode forces the parent's file + an indented position;
+        // otherwise resolve the quickline's own target field.
+        let subtask = self.subtask_parent.clone();
+        let (target, position) = match &subtask {
+            Some((pfile, pline)) => (
+                ctx.vault.path.join(pfile),
+                ops::Position::Subtask {
+                    parent_line: *pline,
+                },
+            ),
+            None => {
+                let t = match ctx.vault.resolve_target(ctx.today, parse.target.as_deref()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.quickline.as_mut().unwrap().error = Some(e.to_string());
+                        return Ok(EventOutcome::Consumed);
+                    }
+                };
+                (t, ops::Position::Append)
             }
         };
 
@@ -1641,12 +1702,18 @@ impl SearchView {
             &target,
             input,
             ops::CreateOptions {
-                position: ops::Position::Append,
+                position,
                 force: false,
             },
         ) {
             Ok(outcome) => {
                 self.quickline = None;
+                self.subtask_parent = None;
+                // Auto-expand the parent so the freshly created subtask is
+                // visible and the cursor can anchor onto it.
+                if let Some(key) = subtask {
+                    self.expanded.insert(key);
+                }
                 let rel_target = target
                     .strip_prefix(&ctx.vault.path)
                     .map(|p| p.to_path_buf())
