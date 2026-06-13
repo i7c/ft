@@ -1336,15 +1336,7 @@ impl Parser {
         position: usize,
     ) -> Result<(), DslError> {
         let allowed: &[&str] = match subject {
-            Subject::Edge => &[
-                "link",
-                "embed",
-                "directory-contains",
-                "has-task",
-                "links-into",
-                "owns-paragraph",
-                "paragraph-link",
-            ],
+            Subject::Edge => EDGE_KIND_VALUES,
             _ => &["Note", "Directory", "Ghost", "Task", "Paragraph"],
         };
         let check = |lit: &Literal| -> Result<(), DslError> {
@@ -2011,6 +2003,21 @@ fn node_kind_str(n: &NodeKind) -> &'static str {
     }
 }
 
+/// Every value accepted by `edge.kind` in the DSL — the canonical strings
+/// [`edge_kind_str`] emits for each [`EdgeKind`] variant. Single source of
+/// truth for parse-time validation; a test keeps it in lockstep with
+/// `edge_kind_str` so a new edge variant can't silently become unqueryable.
+pub(crate) const EDGE_KIND_VALUES: &[&str] = &[
+    "link",
+    "embed",
+    "directory-contains",
+    "has-task",
+    "subtask",
+    "links-into",
+    "owns-paragraph",
+    "paragraph-link",
+];
+
 fn edge_kind_str(e: &EdgeKind) -> &'static str {
     match e {
         EdgeKind::Link(_) => "link",
@@ -2289,6 +2296,44 @@ fn fmt_literal(f: &mut fmt::Formatter<'_>, l: &Literal) -> fmt::Result {
 mod tests {
     use super::*;
 
+    /// Every edge kind the graph can produce must be an accepted `edge.kind`
+    /// value, or that edge becomes silently unqueryable. Guards the two lists
+    /// (`edge_kind_str` ↔ [`EDGE_KIND_VALUES`]) against drift.
+    #[test]
+    fn every_edge_kind_is_a_queryable_value() {
+        fn link() -> crate::graph::LinkEdge {
+            crate::graph::LinkEdge {
+                form: LinkForm::WikiLink,
+                byte_range: 0..0,
+                line: 1,
+                raw_text: String::new(),
+                target_text: String::new(),
+                anchor: None,
+                display: None,
+            }
+        }
+        // Exhaustive by construction: a new EdgeKind variant forces a new
+        // entry here (and then in EDGE_KIND_VALUES to pass).
+        let all = [
+            EdgeKind::Link(link()),
+            EdgeKind::Embed(link()),
+            EdgeKind::Contains,
+            EdgeKind::HasTask,
+            EdgeKind::Subtask,
+            EdgeKind::LinksInto,
+            EdgeKind::OwnsParagraph,
+            EdgeKind::ParagraphLink,
+        ];
+        for e in &all {
+            let name = edge_kind_str(e);
+            assert!(
+                EDGE_KIND_VALUES.contains(&name),
+                "edge kind `{name}` is missing from EDGE_KIND_VALUES"
+            );
+        }
+        assert_eq!(EDGE_KIND_VALUES.len(), all.len(), "no stale extra values");
+    }
+
     // ── Parser tests ─────────────────────────────────────────────────
 
     mod parser {
@@ -2523,6 +2568,13 @@ mod tests {
         fn unknown_kind_value_in_set() {
             let err = parse("node where kind in {Note, Bogus};").unwrap_err();
             assert!(matches!(err, DslError::UnknownKindValue { .. }));
+        }
+
+        #[test]
+        fn expand_over_subtask_edges_parses() {
+            // The subtask edge is a first-class traversable edge kind.
+            parse("node where kind = Task; expand where edge.kind = subtask;").unwrap();
+            parse("node; expand where edge.kind in {subtask, has-task};").unwrap();
         }
 
         #[test]
@@ -3273,6 +3325,8 @@ mod tests {
                 Just(Literal::Ident("link".into())),
                 Just(Literal::Ident("embed".into())),
                 Just(Literal::Ident("directory-contains".into())),
+                Just(Literal::Ident("has-task".into())),
+                Just(Literal::Ident("subtask".into())),
             ]
         }
 

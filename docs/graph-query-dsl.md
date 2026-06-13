@@ -73,7 +73,7 @@ Attribute compatibility:
 
 | Attribute   | Subjects         | Description                                |
 |-------------|------------------|--------------------------------------------|
-| `kind`      | self, from, to, edge | Node kind (`Note`/`Directory`/`Ghost`) or edge kind (`link`/`embed`/`directory-contains`) |
+| `kind`      | self, from, to, edge | Node kind or edge kind — see [Kind values](#kind-values) |
 | `path`      | self, from, to   | Vault-relative path (notes and directories) |
 | `title`     | self, from, to   | Note title (first heading or filename stem) |
 | `form`      | edge             | `wiki` or `md` (link form, link/embed edges only) |
@@ -105,9 +105,14 @@ For `indegree` / `outdegree`, only `=`, `!=`, and `in` are meaningful
 
 | Attribute            | Allowed values                                |
 |----------------------|-----------------------------------------------|
-| `self.kind` / `from.kind` / `to.kind` | `Note`, `Directory`, `Ghost` |
-| `edge.kind`          | `link`, `embed`, `directory-contains`         |
+| `self.kind` / `from.kind` / `to.kind` | `Note`, `Directory`, `Ghost`, `Task`, `Paragraph` |
+| `edge.kind`          | `link`, `embed`, `directory-contains`, `has-task`, `subtask`, `links-into`, `owns-paragraph`, `paragraph-link` |
 | `edge.form`          | `wiki`, `md`                                  |
+
+`has-task` runs note → task; `subtask` runs parent task → child task
+(indentation-derived, always intra-file). Both point from container to
+contained, like `directory-contains`, so the same expand/walk machinery
+follows them.
 
 Unknown values fail at parse time with a hint listing the allowed set.
 
@@ -152,6 +157,21 @@ link edges):
 ```dsl
 node where kind = Note;
 expand where edge.kind in {link, embed};
+```
+
+A task tree (initial set: matching top-level tasks, expand follows
+`subtask` edges down through every nested level):
+
+```dsl
+node where kind = Task and priority = High;
+expand where edge.kind = subtask;
+```
+
+Note → task → subtask in one walk (every note's full task hierarchy):
+
+```dsl
+node where kind = Note;
+expand where edge.kind in {has-task, subtask};
 ```
 
 ## Errors
