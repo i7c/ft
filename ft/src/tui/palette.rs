@@ -29,6 +29,12 @@ pub const DIM: Color = Color::Rgb(100, 85, 70); // warm gray
 /// Status bar background — slightly warmer than the old cool dark.
 pub const STATUS_BG: Color = Color::Rgb(30, 28, 26);
 
+/// Entry-header bar background — a warm dark band drawn full-width
+/// behind each Journal entry's title line so entries read as blocks.
+/// Slightly lighter than [`STATUS_BG`] so the band separates from the
+/// terminal background.
+pub const ENTRY_HEADER_BG: Color = Color::Rgb(48, 42, 36);
+
 /// White (unchanged).
 pub const WHITE: Color = Color::White;
 

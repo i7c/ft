@@ -8908,6 +8908,127 @@ fn journal_tab_multi_target_renders_matched_badge() -> Result<()> {
     Ok(())
 }
 
+/// Two notes with distinct titles so the same-date feed order is
+/// deterministic (tiebreak is title-ascending): `Alpha` mentions only
+/// `[[Foo]]`, `Beta` mentions both. One git commit so both share a date.
+fn journal_blocks_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("Alpha.md"), "Talk about [[Foo]].\n").unwrap();
+    std::fs::write(
+        vault_path.join("Beta.md"),
+        "Mention [[Foo]] and [[Bar]] together.\n",
+    )
+    .unwrap();
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// A vault where many notes each mention `[[Target]]` once, with
+/// distinct titles (`Note01`..`Note15`) so the same-date feed order is
+/// deterministic (title-ascending) and each entry carries a unique body
+/// marker we can assert is on screen.
+fn journal_scroll_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("Target.md"), "# Target\n").unwrap();
+    for n in 1..=15 {
+        std::fs::write(
+            vault_path.join(format!("Note{n:02}.md")),
+            format!("MARKER-{n:02} unique body mentioning [[Target]] here.\n"),
+        )
+        .unwrap();
+    }
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Scrolling invariant: whatever entry the cursor is on, a peek of its
+/// body must be visible — never just the header band stranded on the
+/// bottom row. Steps the cursor through every entry and asserts that
+/// entry's unique body marker is on screen.
+#[test]
+fn journal_tab_selected_entry_body_always_visible() -> Result<()> {
+    let (_dir, vault) = journal_scroll_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.queue_journal_for_tab_test("Target.md");
+    app.switch_to(journal_tab_idx())?;
+    // Order is title-ascending → Note01..Note15, so the entry under the
+    // cursor at step `i` carries `MARKER-{i+1}`.
+    for n in 1..=15 {
+        let frame = render(&mut app, 80, 24);
+        let marker = format!("MARKER-{n:02}");
+        assert!(
+            frame.contains(&marker),
+            "selected entry {n}'s body ({marker}) not visible — header band stranded:\n{frame}"
+        );
+        app.dispatch(key('j'))?; // cursor-down
+    }
+    Ok(())
+}
+
+/// Locks the entry-block layout: full-width header band (padded to the
+/// pane width), the always-on `↳ matched:` badge, and the `●` marker on
+/// the multi-selected entry. Colors aren't captured by the snapshot
+/// backend, so this guards the text/layout half of the visual.
+#[test]
+fn journal_tab_entry_blocks_layout() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = journal_blocks_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![
+            JournalTarget::Ghost("Foo".into()),
+            JournalTarget::Ghost("Bar".into()),
+        ],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    // Multi-select the entry under the cursor so the `●` marker renders.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("journal_entry_blocks_80x24", frame);
+    Ok(())
+}
+
 #[test]
 fn journal_tab_send_to_synth_existing_opens_picker_on_s() -> Result<()> {
     use crate::tui::tab::{JournalTarget, MultiTargetRequest};

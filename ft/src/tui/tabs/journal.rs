@@ -1303,34 +1303,47 @@ fn render_journal(
     let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
         entry_starts.push(lines.len());
-        let header_style = if i == selected {
+        let is_cursor = i == selected;
+        let is_multi = entry_selected.contains(&i);
+        // Cursor wins the loudest treatment; multi-select gets the gold
+        // band; everything else gets the dim full-width separator band.
+        let header_style = if is_cursor {
             Style::default()
-                .fg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                .fg(palette::BLACK)
+                .bg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else if is_multi {
+            Style::default()
+                .fg(palette::BLACK)
+                .bg(palette::SECONDARY)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
                 .fg(palette::PRIMARY)
+                .bg(palette::ENTRY_HEADER_BG)
                 .add_modifier(Modifier::BOLD)
         };
-        let select_marker = if entry_selected.contains(&i) {
-            "[*] "
-        } else {
-            "    "
-        };
+        // A leading glyph keeps multi-select legible even when the
+        // cursor's band overrides the gold background.
+        let marker = if is_multi { "● " } else { "  " };
         lines.push(Line::from(Span::styled(
-            format!("{select_marker}{}  {}", e.date, e.source_title),
+            pad_to_width(
+                &format!("{marker}{}  {}", e.date, e.source_title),
+                wrap_width,
+            ),
             header_style,
         )));
-        if e.matched.len() > 1 {
-            let empty: Vec<String> = Vec::new();
-            let titles = entry_matched_titles.get(i).unwrap_or(&empty);
-            if !titles.is_empty() {
-                let badge = format!("    matched: {}", titles.join(", "));
-                lines.push(Line::from(Span::styled(
-                    badge,
-                    Style::default().fg(palette::DIM),
-                )));
-            }
+        // Always surface which sources each paragraph matched (multi-
+        // source only — in single-source mode the match is the lone
+        // source and the badge would be pure noise).
+        let empty: Vec<String> = Vec::new();
+        let titles = entry_matched_titles.get(i).unwrap_or(&empty);
+        if !titles.is_empty() {
+            let badge = format!("    ↳ matched: {}", titles.join(", "));
+            lines.push(Line::from(Span::styled(
+                badge,
+                Style::default().fg(palette::SECONDARY),
+            )));
         }
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
@@ -1340,13 +1353,28 @@ fn render_journal(
         lines.push(Line::from(""));
     }
 
-    // Scroll so the selected entry's header sits within the viewport.
+    // Scroll so the selected entry shows its header band *and* a peek of
+    // its content — never just the band stranded on the bottom row. We
+    // keep up to `MIN_VISIBLE` lines of the entry on screen, capped to
+    // the entry's own height so short entries don't over-scroll.
+    const MIN_VISIBLE: usize = 4;
     let view_height = inner.height as usize;
-    let selected_start = *entry_starts.get(selected).copied().get_or_insert(0);
+    let total_lines = lines.len();
+    let selected_start = entry_starts.get(selected).copied().unwrap_or(0);
+    let selected_end = entry_starts
+        .get(selected + 1)
+        .copied()
+        .unwrap_or(total_lines);
+    let want = MIN_VISIBLE.min(selected_end.saturating_sub(selected_start));
+    let desired_end = selected_start.saturating_add(want).min(total_lines);
     if selected_start < *scroll_offset {
+        // Header above the viewport — pull it to the top.
         *scroll_offset = selected_start;
-    } else if selected_start >= scroll_offset.saturating_add(view_height) {
-        *scroll_offset = selected_start.saturating_sub(view_height.saturating_sub(2));
+    } else if desired_end > scroll_offset.saturating_add(view_height) {
+        // Wanted context falls below the fold — scroll just enough to
+        // reveal it, but never past the header (so tall entries keep
+        // their title on screen).
+        *scroll_offset = desired_end.saturating_sub(view_height).min(selected_start);
     }
 
     frame.render_widget(
@@ -1550,6 +1578,26 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
         out.push(String::new());
     }
     out
+}
+
+/// Pad `s` with trailing spaces to exactly `width` chars so a styled
+/// span fills the full row width (giving the header band a solid
+/// background). Over-long input is truncated to `width`. A `width` of 0
+/// returns the string unchanged.
+fn pad_to_width(s: &str, width: usize) -> String {
+    if width == 0 {
+        return s.to_string();
+    }
+    let len = s.chars().count();
+    if len < width {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(width - len));
+        out
+    } else if len > width {
+        s.chars().take(width).collect()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Split `s` into chunks of exactly `width` chars (last may be shorter).

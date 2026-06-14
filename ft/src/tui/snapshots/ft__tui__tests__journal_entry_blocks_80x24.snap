@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+┌ Journal — 2 sources (2 entries) ─────────────────────────────────────────────┐
+│Sources (2)                                                                   │
+│Foo (ghost), Bar (ghost)                                                      │
+│● 2026-06-14  Alpha                                                           │
+│    ↳ matched: Foo                                                            │
+│Talk about [[Foo]].                                                           │
+│                                                                              │
+│  2026-06-14  Beta                                                            │
+│    ↳ matched: Foo, Bar                                                       │
+│Mention [[Foo]] and [[Bar]] together.                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: vault  ·  tab: Journal              not yet refreshed      mode: normal
