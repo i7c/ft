@@ -70,7 +70,7 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 ///
 /// For each entry:
 /// 1. The source paragraph text is taken verbatim from `entry.section_text`.
-/// 2. The pinned commit SHA is `repo`'s HEAD. The entry's `source_path`,
+/// 2. The pinned commit SHA is the vault's enclosing-repo HEAD. The entry's `source_path`,
 ///    line range, and body all come from the working-tree scan (= HEAD),
 ///    so HEAD is the only commit where `git show <sha>:<source_path>`
 ///    sliced at `line_start..line_end` is guaranteed to reproduce the
@@ -83,14 +83,18 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 /// responsible for sorting them (journal already sorts by date desc).
 pub fn plan_synth_scaffold(
     vault: &Vault,
-    repo: &Path,
     target: &Path,
     entries: &[JournalEntry],
 ) -> Result<SynthScaffoldPlan> {
+    let repo = git::RepoMap::discover(&vault.path)?;
+
     // A section is pinned to HEAD, so each source file's working-tree
     // content must already match HEAD — otherwise verify would report
     // drift on a freshly created note. Refuse if any source is dirty.
-    let status = git::status(repo)?;
+    // `git status` reports repo-root-relative paths; translate the
+    // entries' vault-relative source paths into the same coordinate
+    // system before intersecting.
+    let status = git::status(repo.root())?;
     let dirty: HashSet<&Path> = status
         .modified
         .iter()
@@ -102,7 +106,7 @@ pub fn plan_synth_scaffold(
     let mut offending: Vec<PathBuf> = entries
         .iter()
         .map(|e| &e.source_path)
-        .filter(|p| dirty.contains(p.as_path()))
+        .filter(|p| dirty.contains(repo.to_repo(p).as_path()))
         .cloned()
         .collect();
     offending.sort();
@@ -111,7 +115,7 @@ pub fn plan_synth_scaffold(
         return Err(Error::SynthDirtySources(offending));
     }
 
-    let head_sha = git::head_hash(repo)?;
+    let head_sha = git::head_hash(repo.root())?;
     let short_sha = head_sha[..SHORT_SHA_LEN.min(head_sha.len())].to_string();
 
     let mut sections = Vec::with_capacity(entries.len());
@@ -186,7 +190,7 @@ mod tests {
 
     /// Build a repo with one note + one commit, return a journal entry
     /// referencing the first paragraph.
-    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, std::path::PathBuf, JournalEntry) {
+    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, JournalEntry) {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
         tmp.child("notes/source.md")
@@ -219,16 +223,15 @@ mod tests {
             date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
             matched: vec![],
         };
-        (tmp, vault, repo, entry)
+        (tmp, vault, entry)
     }
 
     #[test]
     fn plan_does_no_io_writes() {
-        let (tmp, vault, repo, entry) = make_repo_with_entry();
+        let (tmp, vault, entry) = make_repo_with_entry();
         let listing_before = collect_files(tmp.path());
         let _plan = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -258,10 +261,9 @@ mod tests {
 
     #[test]
     fn create_plan_writes_frontmatter_and_sections() {
-        let (tmp, vault, repo, entry) = make_repo_with_entry();
+        let (tmp, vault, entry) = make_repo_with_entry();
         let plan = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -280,7 +282,7 @@ mod tests {
 
     #[test]
     fn append_plan_preserves_existing_content() {
-        let (tmp, vault, repo, entry) = make_repo_with_entry();
+        let (tmp, vault, entry) = make_repo_with_entry();
         // Pre-create a synth note.
         tmp.child("Synthesis/topic.md")
             .write_str("---\nft-synth: true\n---\n\nUser prose already here.\n")
@@ -288,7 +290,6 @@ mod tests {
 
         let plan = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -306,10 +307,9 @@ mod tests {
 
     #[test]
     fn scaffold_hash_matches_entry_text() {
-        let (_tmp, vault, repo, entry) = make_repo_with_entry();
+        let (_tmp, vault, entry) = make_repo_with_entry();
         let plan = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -320,24 +320,23 @@ mod tests {
 
     #[test]
     fn scaffold_pins_to_head() {
-        let (_tmp, vault, repo, entry) = make_repo_with_entry();
+        let (_tmp, vault, entry) = make_repo_with_entry();
         let plan = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
         .unwrap();
         // Pinned to HEAD's short SHA so verify can resolve the current
         // path/line range; blame commits could predate a rename.
-        let head = git::head_hash(&repo).unwrap();
+        let head = git::head_hash(&vault.path).unwrap();
         let sha = &plan.sections[0].commit_sha;
         assert_eq!(sha, &head[..SHORT_SHA_LEN]);
     }
 
     #[test]
     fn scaffold_rejects_dirty_source() {
-        let (tmp, vault, repo, entry) = make_repo_with_entry();
+        let (tmp, vault, entry) = make_repo_with_entry();
         // Uncommitted edit to the source the entry pins → working tree
         // no longer matches HEAD, so the HEAD-pinned section can't be
         // verified. Scaffolding must refuse.
@@ -346,7 +345,6 @@ mod tests {
             .unwrap();
         let err = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -361,7 +359,7 @@ mod tests {
 
     #[test]
     fn scaffold_rejects_untracked_source() {
-        let (tmp, vault, repo, _entry) = make_repo_with_entry();
+        let (tmp, vault, _entry) = make_repo_with_entry();
         tmp.child("notes/new.md")
             .write_str("Fresh untracked paragraph.\n")
             .unwrap();
@@ -376,7 +374,6 @@ mod tests {
         };
         let err = plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )
@@ -386,10 +383,9 @@ mod tests {
 
     #[test]
     fn scaffold_succeeds_when_sources_clean() {
-        let (_tmp, vault, repo, entry) = make_repo_with_entry();
+        let (_tmp, vault, entry) = make_repo_with_entry();
         plan_synth_scaffold(
             &vault,
-            &repo,
             Path::new("Synthesis/topic.md"),
             std::slice::from_ref(&entry),
         )

@@ -121,6 +121,61 @@ pub fn discover_repo(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Translates between vault-relative paths (what `ft` shows users and
+/// stores in synth notes) and repo-root-relative paths — the coordinate
+/// system git speaks in pathspecs, `<rev>:<path>`, and `--porcelain`
+/// output.
+///
+/// When the vault root *is* the repo root the prefix is empty and both
+/// conversions are the identity (the common case). But a vault nested
+/// below the repo root — e.g. the repo keeps the vault under `cerebro/` —
+/// must have the prefix applied, or `git show <sha>:<path>` and the
+/// `git status` dirty-check resolve the wrong path entirely.
+#[derive(Debug, Clone)]
+pub struct RepoMap {
+    root: PathBuf,
+    prefix: PathBuf,
+}
+
+impl RepoMap {
+    /// Discover the git repo enclosing `vault_root` and capture the
+    /// vault's path prefix within it. Err if `vault_root` is not inside a
+    /// git repository.
+    pub fn discover(vault_root: &Path) -> Result<Self> {
+        let root = discover_repo(vault_root).ok_or_else(|| {
+            Error::Git(format!(
+                "{} is not inside a git repository",
+                vault_root.display()
+            ))
+        })?;
+        let prefix = vault_root
+            .strip_prefix(&root)
+            .unwrap_or_else(|_| Path::new(""))
+            .to_path_buf();
+        Ok(Self { root, prefix })
+    }
+
+    /// The git repository root (absolute). Pass this as the `repo`
+    /// argument to the rest of this module.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Vault-relative → repo-root-relative.
+    pub fn to_repo(&self, vault_rel: &Path) -> PathBuf {
+        self.prefix.join(vault_rel)
+    }
+
+    /// Repo-root-relative → vault-relative. `None` if the path lies
+    /// outside the vault subtree (a sibling directory in the same repo).
+    pub fn to_vault(&self, repo_rel: &Path) -> Option<PathBuf> {
+        repo_rel
+            .strip_prefix(&self.prefix)
+            .ok()
+            .map(Path::to_path_buf)
+    }
+}
+
 // ── Status ───────────────────────────────────────────────────────────────
 
 /// Snapshot the working tree via `git status --porcelain=v1
@@ -851,6 +906,45 @@ mod tests {
         // as a separate entry.
         assert_eq!(s.modified, vec![PathBuf::from("new name.md")]);
         assert!(s.untracked.is_empty(), "{s:?}");
+    }
+
+    #[test]
+    fn repomap_identity_when_vault_is_repo_root() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        let map = RepoMap::discover(repo).unwrap();
+        assert_eq!(map.root(), repo);
+        assert_eq!(
+            map.to_repo(Path::new("notes/a.md")),
+            PathBuf::from("notes/a.md")
+        );
+        assert_eq!(
+            map.to_vault(Path::new("notes/a.md")),
+            Some(PathBuf::from("notes/a.md"))
+        );
+    }
+
+    #[test]
+    fn repomap_applies_prefix_for_nested_vault() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        let vault = repo.join("cerebro");
+        fs::create_dir_all(&vault).unwrap();
+        let map = RepoMap::discover(&vault).unwrap();
+        assert_eq!(map.root(), repo);
+        // Vault-relative ↔ repo-relative round-trip through the prefix.
+        assert_eq!(
+            map.to_repo(Path::new("areas/life/Note.md")),
+            PathBuf::from("cerebro/areas/life/Note.md")
+        );
+        assert_eq!(
+            map.to_vault(Path::new("cerebro/areas/life/Note.md")),
+            Some(PathBuf::from("areas/life/Note.md"))
+        );
+        // A sibling outside the vault subtree maps to None.
+        assert_eq!(map.to_vault(Path::new("other/x.md")), None);
     }
 
     #[test]

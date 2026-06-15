@@ -164,6 +164,61 @@ fn verify_single_note_passes_after_scaffold() {
         .success();
 }
 
+/// Regression: when the vault is a subdirectory of the git repo, the
+/// scaffold's HEAD pin and verify's `git show <sha>:<path>` must apply
+/// the vault→repo path prefix. Before the RepoMap fix, verify reported
+/// `source-missing` because it looked up the vault-relative path against
+/// the repo root.
+#[test]
+fn nested_vault_scaffold_verify_roundtrip() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let repo = tmp.path();
+    // Git repo at the top; the vault lives under `brain/`.
+    tmp.child("brain/.obsidian").create_dir_all().unwrap();
+    tmp.child("brain/notes/source.md")
+        .write_str("First paragraph mentions [[Foo]].\nContinues here.\n")
+        .unwrap();
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.name", "T"]);
+    run_git(repo, &["config", "user.email", "t@e.com"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", "init"]);
+
+    let vault = tmp.child("brain");
+    ft().args([
+        "--vault",
+        vault.path().to_str().unwrap(),
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--link",
+        "[[Foo]]",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+
+    // Pinned section refers to the vault-relative `notes/source.md`.
+    let body = std::fs::read_to_string(vault.path().join("Synthesis/topic.md")).unwrap();
+    assert!(
+        body.contains("> [!ft-source] \"notes/source.md\" L"),
+        "got:\n{body}"
+    );
+
+    ft().env("NO_COLOR", "1")
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "synth",
+            "verify",
+            "--all",
+        ])
+        .assert()
+        .success();
+}
+
 #[test]
 fn verify_all_json_reports_drift_after_edit() {
     use assert_fs::prelude::*;

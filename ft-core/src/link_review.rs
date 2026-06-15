@@ -95,15 +95,18 @@ pub struct LinkReview {
 pub fn compute_link_review(
     graph: &Graph,
     vault: &Vault,
-    repo: &Path,
     window: &WindowRange,
     cfg: &SynthCfg,
 ) -> Result<LinkReview> {
-    let (from_sha, to_sha) = resolve_window(repo, window)?;
-    let head_sha = git::head_hash(repo)?;
+    let repo = git::RepoMap::discover(&vault.path)?;
+    let (from_sha, to_sha) = resolve_window(repo.root(), window)?;
+    let head_sha = git::head_hash(repo.root())?;
     let to_is_head = to_sha == head_sha;
 
-    let changed = git::diff_changed_paths(repo, &from_sha, &to_sha)?;
+    // `git diff` reports repo-root-relative paths; the graph, config
+    // prefixes, and the returned `added_lines` map all speak in
+    // vault-relative paths. Translate each diff path at the boundary.
+    let changed = git::diff_changed_paths(repo.root(), &from_sha, &to_sha)?;
 
     // Aggregator: dedup (target_id, paragraph_key) tuples and track
     // contributing source paths per target.
@@ -112,15 +115,19 @@ pub fn compute_link_review(
     let mut added_lines: HashMap<PathBuf, BTreeSet<u32>> = HashMap::new();
 
     for path in changed {
-        if path_excluded(&path, &cfg.exclude_prefixes) {
+        // Skip files that live in the same repo but outside this vault.
+        let Some(vault_path) = repo.to_vault(&path) else {
+            continue;
+        };
+        if path_excluded(&vault_path, &cfg.exclude_prefixes) {
             continue;
         }
         // Only markdown files contribute wikilinks.
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+        if vault_path.extension().and_then(|s| s.to_str()) != Some("md") {
             continue;
         }
 
-        let added = match git::diff_added_lines(repo, &from_sha, &to_sha, &path) {
+        let added = match git::diff_added_lines(repo.root(), &from_sha, &to_sha, &path) {
             Ok(v) => v,
             Err(_) => continue, // file added in a way diff can't render (binary, etc.)
         };
@@ -129,12 +136,12 @@ pub fn compute_link_review(
         }
 
         let set: BTreeSet<u32> = added.iter().copied().collect();
-        added_lines.insert(path.clone(), set.clone());
+        added_lines.insert(vault_path.clone(), set.clone());
 
         // Identify the note's id in the graph (HEAD state). If the
         // file no longer exists at HEAD, skip — we can't map to a
         // current paragraph.
-        let Some(note_id) = graph.note_by_path(&path) else {
+        let Some(note_id) = graph.note_by_path(&vault_path) else {
             continue;
         };
 
@@ -142,9 +149,9 @@ pub fn compute_link_review(
         // state and use them to skip wikilinks that come from quoted
         // material.
         let to_content_for_callouts = if to_is_head {
-            std::fs::read_to_string(vault.path.join(&path)).ok()
+            std::fs::read_to_string(vault.path.join(&vault_path)).ok()
         } else {
-            git::show_file_at(repo, &to_sha, &path).ok()
+            git::show_file_at(repo.root(), &to_sha, &path).ok()
         };
         let callouts_to_skip = to_content_for_callouts
             .as_deref()
@@ -347,7 +354,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
 
         // Expected: [[Foo]] count = 2 (two paragraphs in note-a, only first
         // also mentions [[Bar]]). Wait — the second paragraph also has Foo.
@@ -406,7 +413,7 @@ mod tests {
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         assert_eq!(foo.count, 1, "paragraph-level dedup");
     }
@@ -417,7 +424,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
         // Both counts are 2; alphabetical tiebreak → Bar before Foo.
         assert_eq!(review.rows[0].target, "Bar");
         assert_eq!(review.rows[1].target, "Foo");
@@ -431,7 +438,7 @@ mod tests {
         cfg.exclude_prefixes = vec!["note-a".into()]; // drop note-a contributions
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &cfg).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &cfg).unwrap();
         // note-a contributed Foo (×2) and Bar (×1). Excluding note-a leaves
         // only note-b's Bar.
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
@@ -451,7 +458,7 @@ mod tests {
             from: head.clone(),
             to: head,
         };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
         assert!(review.rows.is_empty());
     }
 
@@ -477,7 +484,7 @@ mod tests {
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
         assert!(!foo.is_ghost, "Foo.md exists → not a ghost");
@@ -531,7 +538,7 @@ mod tests {
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(review.rows.iter().any(|r| r.target == "Bar"));
         assert!(
@@ -588,7 +595,7 @@ mod tests {
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(
             review.rows.iter().any(|r| r.target == "Replacement"),
@@ -657,7 +664,7 @@ Then I add a thought about [[Bar]].
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &repo, &window, &default_cfg()).unwrap();
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(
             review.rows.iter().all(|r| r.target != "Foo"),

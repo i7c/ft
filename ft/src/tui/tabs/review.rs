@@ -173,14 +173,13 @@ impl ReviewTab {
             }
         };
         let cfg = ctx.vault.config.config.synth.clone();
-        let review =
-            match compute_link_review(&graph, ctx.vault, &ctx.vault.path, &self.window, &cfg) {
-                Ok(r) => r,
-                Err(e) => {
-                    self.last_error = Some(format!("compute_link_review failed: {e}"));
-                    return;
-                }
-            };
+        let review = match compute_link_review(&graph, ctx.vault, &self.window, &cfg) {
+            Ok(r) => r,
+            Err(e) => {
+                self.last_error = Some(format!("compute_link_review failed: {e}"));
+                return;
+            }
+        };
         self.apply_review(graph, review);
         self.last_error = None;
         self.loaded_once = true;

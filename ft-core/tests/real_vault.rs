@@ -123,7 +123,7 @@ fn real_vault_link_review_runs() {
     let graph = ft_core::graph::Graph::build(&vault, &scan).expect("build graph");
     let cfg = vault.config.config.synth.clone();
     let window = WindowRange::Since(Duration::days(7));
-    let review = compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
+    let review = compute_link_review(&graph, &vault, &window, &cfg)
         .expect("compute_link_review on real vault");
     // Sanity: rows are sorted by count desc, alphabetical tiebreak.
     for w in review.rows.windows(2) {
@@ -155,7 +155,7 @@ fn real_vault_synth_verify_all_runs() {
     if ft_core::git::discover_repo(&vault.path).is_none() {
         return;
     }
-    let groups = verify_all(&vault, &vault.path).expect("verify_all on real vault");
+    let groups = verify_all(&vault).expect("verify_all on real vault");
     let total_sections: usize = groups.iter().map(|(_, rs)| rs.len()).sum();
     let drifted: usize = groups
         .iter()

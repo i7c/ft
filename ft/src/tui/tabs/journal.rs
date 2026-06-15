@@ -407,9 +407,8 @@ impl JournalTab {
             self.cache = Some(BlameCache::load(&ctx.vault.path).unwrap_or_default());
         }
         let cache = self.cache.as_mut().expect("just initialized");
-        let vault_path = ctx.vault.path.clone();
 
-        let report = match build_journal(&graph, &ids, ctx.vault, &vault_path, cache) {
+        let report = match build_journal(&graph, &ids, ctx.vault, cache) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("build_journal failed: {e}"));
@@ -501,11 +500,10 @@ impl JournalTab {
         };
         let cfg = ctx.vault.config.config.synth.clone();
         let core_window = window.to_core();
-        let review =
-            match compute_link_review(&graph, ctx.vault, &ctx.vault.path, &core_window, &cfg) {
-                Ok(r) => r,
-                Err(_) => return,
-            };
+        let review = match compute_link_review(&graph, ctx.vault, &core_window, &cfg) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
         // Filter `entries` and the parallel `entry_matched_titles`
         // together so they stay aligned.
         let added = &review.added_lines;
@@ -743,7 +741,7 @@ impl JournalTab {
             }
         }
 
-        let plan = match plan_synth_scaffold(ctx.vault, &ctx.vault.path, vault_rel_path, &entries) {
+        let plan = match plan_synth_scaffold(ctx.vault, vault_rel_path, &entries) {
             Ok(p) => p,
             Err(e) => {
                 crate::tui::notes_actions::queue_toast(

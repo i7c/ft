@@ -1345,7 +1345,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
 
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::journal::build_journal(&graph, &targets, &vault, &vault.path, &mut cache)
+    let report = ft_core::journal::build_journal(&graph, &targets, &vault, &mut cache)
         .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
@@ -1370,9 +1370,8 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         let window = resolve_journal_window(&args.since, &args.range)?
             .expect("validated above: in_window implies since/range");
         let cfg = vault.config.config.synth.clone();
-        let review =
-            ft_core::link_review::compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
-                .context("computing in-window filter")?;
+        let review = ft_core::link_review::compute_link_review(&graph, &vault, &window, &cfg)
+            .context("computing in-window filter")?;
         entries.retain(|e| {
             review
                 .added_lines

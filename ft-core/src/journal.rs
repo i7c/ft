@@ -99,12 +99,15 @@ pub fn build_journal(
     graph: &Graph,
     targets: &[NoteId],
     vault: &Vault,
-    repo: &Path,
     cache: &mut BlameCache,
 ) -> Result<JournalReport> {
     if targets.is_empty() {
         return Ok(JournalReport::default());
     }
+
+    // All git lookups run against the repo root with repo-root-relative
+    // paths; node paths are vault-relative, so translate at the boundary.
+    let repo = git::RepoMap::discover(&vault.path)?;
 
     let single_mode = targets.len() == 1;
 
@@ -148,7 +151,7 @@ pub fn build_journal(
     }
 
     // Resolve dates per paragraph, fetching blame lazily on demand.
-    let head = git::head_hash(repo)?;
+    let head = git::head_hash(repo.root())?;
     let mut entries: Vec<JournalEntry> = Vec::new();
     let mut skipped_blame: Vec<PathBuf> = Vec::new();
     let mut skipped_seen: HashSet<PathBuf> = HashSet::new();
@@ -165,7 +168,7 @@ pub fn build_journal(
             // repo / path-relativity bug) record it once per file so
             // callers can surface a warning instead of silently
             // returning an empty feed.
-            match git::blame_file(repo, &p.source_file) {
+            match git::blame_file(repo.root(), &repo.to_repo(&p.source_file)) {
                 Ok(blame) => cache.insert(path_str.clone(), head.clone(), blame),
                 Err(_) => {
                     if skipped_seen.insert(p.source_file.clone()) {
@@ -337,7 +340,7 @@ mod tests {
 
     /// Build a vault under `tmp` with two commits so blame has real
     /// per-line dates. Returns (Vault, Graph, repo_path).
-    fn make_vault_with_history(tmp: &assert_fs::TempDir) -> (Vault, Graph, std::path::PathBuf) {
+    fn make_vault_with_history(tmp: &assert_fs::TempDir) -> (Vault, Graph) {
         use assert_fs::prelude::*;
         use std::process::Command;
 
@@ -379,16 +382,16 @@ mod tests {
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
-        (vault, graph, repo)
+        (vault, graph)
     }
 
     #[test]
     fn journal_includes_target_mentions_and_related_aliases() {
         let tmp = assert_fs::TempDir::new().unwrap();
-        let (vault, graph, repo) = make_vault_with_history(&tmp);
+        let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[target], &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // Daily-A mentions [[Target]]; Daily-B mentions [[Bar]] which
@@ -419,10 +422,10 @@ mod tests {
         // deterministic title-ascending tiebreak should pick Daily-A
         // before Daily-B.
         let tmp = assert_fs::TempDir::new().unwrap();
-        let (vault, graph, repo) = make_vault_with_history(&tmp);
+        let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[target], &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
         assert_eq!(report.entries.len(), 2);
         assert_eq!(
             report.entries[0].date, report.entries[1].date,
@@ -476,7 +479,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be materialized as a Ghost");
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[phantom], &vault, &repo, &mut cache).unwrap();
+        let report = build_journal(&graph, &[phantom], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty(), "blame should succeed");
         let mut titles: Vec<&str> = report
             .entries
@@ -492,10 +495,9 @@ mod tests {
     }
 
     /// Regression test for the subdirectory-vault bug: when the vault
-    /// lives below the git repo root, we still want callers to be able
-    /// to pass the vault path as the `repo` argument and have blame
-    /// succeed against vault-relative paths (`git -C <vault>` resolves
-    /// them inside the enclosing repo).
+    /// lives below the git repo root, `build_journal` discovers the
+    /// enclosing repo and prefixes vault-relative node paths so blame
+    /// resolves against the repo-root-relative path.
     #[test]
     fn journal_works_when_vault_is_repo_subdir() {
         use assert_fs::prelude::*;
@@ -534,10 +536,7 @@ mod tests {
         let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        // Pass vault.path (not the repo root) as the `repo` argument —
-        // git -C still finds the enclosing repo and vault-relative
-        // paths resolve correctly.
-        let report = build_journal(&graph, &[target], &vault, &vault.path, &mut cache).unwrap();
+        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
         assert!(
             report.skipped_blame.is_empty(),
             "expected no blame skips, got {:?}",

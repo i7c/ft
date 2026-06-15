@@ -130,7 +130,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             ));
         }
         let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_journal(&graph, &targets, &vault, &vault.path, &mut cache)
+        let report = build_journal(&graph, &targets, &vault, &mut cache)
             .context("building multi-source journal")?;
         let _ = cache.save(&vault.path);
 
@@ -138,7 +138,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             let window = resolve_window(&args.since, &args.range)?
                 .expect("validated above: in_window implies since/range");
             let cfg = vault.config.config.synth.clone();
-            let review = compute_link_review(&graph, &vault, &vault.path, &window, &cfg)
+            let review = compute_link_review(&graph, &vault, &window, &cfg)
                 .context("computing in-window filter")?;
             report
                 .entries
@@ -168,8 +168,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     // multiple --link targets shouldn't double up in the scaffold.
     entries = dedup_entries(entries);
 
-    let plan = plan_synth_scaffold(&vault, &vault.path, &target, &entries)
-        .context("planning synth scaffold")?;
+    let plan = plan_synth_scaffold(&vault, &target, &entries).context("planning synth scaffold")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth scaffold")?;
 
     let rel = vault.relativize(&written).display().to_string();
@@ -381,11 +380,11 @@ fn run_verify(args: VerifyArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     })?;
 
     let groups: Vec<(PathBuf, Vec<VerificationResult>)> = if let Some(note) = args.note {
-        let results = verify_synth_note(&vault.path, &vault, &note)
+        let results = verify_synth_note(&vault, &note)
             .with_context(|| format!("verifying {}", note.display()))?;
         vec![(note, results)]
     } else {
-        verify_all(&vault, &vault.path).context("walking synth notes")?
+        verify_all(&vault).context("walking synth notes")?
     };
 
     let any_fail = groups

@@ -53,12 +53,9 @@ pub struct VerificationResult {
 /// document order. If the file does not contain any callouts, returns
 /// an empty vector — the caller decides if "no callouts" is OK or an
 /// issue.
-pub fn verify_synth_note(
-    repo: &Path,
-    vault: &Vault,
-    note_path: &Path,
-) -> Result<Vec<VerificationResult>> {
+pub fn verify_synth_note(vault: &Vault, note_path: &Path) -> Result<Vec<VerificationResult>> {
     use crate::error::Error;
+    let repo = git::RepoMap::discover(&vault.path)?;
     let absolute = vault.path.join(note_path);
     let content = std::fs::read_to_string(&absolute).map_err(|e| Error::Io {
         path: absolute,
@@ -67,7 +64,7 @@ pub fn verify_synth_note(
     let callouts = parse_callouts(&content);
     let mut results = Vec::with_capacity(callouts.len());
     for c in &callouts {
-        results.push(verify_one(repo, note_path, c));
+        results.push(verify_one(&repo, note_path, c));
     }
     Ok(results)
 }
@@ -79,7 +76,8 @@ pub fn verify_synth_note(
 /// Files that fail to read are silently skipped (transient I/O races,
 /// permission issues) — production users running this on a vault they
 /// own typically don't encounter that case.
-pub fn verify_all(vault: &Vault, repo: &Path) -> Result<Vec<(PathBuf, Vec<VerificationResult>)>> {
+pub fn verify_all(vault: &Vault) -> Result<Vec<(PathBuf, Vec<VerificationResult>)>> {
+    let repo = git::RepoMap::discover(&vault.path)?;
     let mut out = Vec::new();
     for note_rel in walk_markdown_files(&vault.path) {
         let absolute = vault.path.join(&note_rel);
@@ -93,17 +91,18 @@ pub fn verify_all(vault: &Vault, repo: &Path) -> Result<Vec<(PathBuf, Vec<Verifi
         let callouts = parse_callouts(&content);
         let results: Vec<_> = callouts
             .iter()
-            .map(|c| verify_one(repo, &note_rel, c))
+            .map(|c| verify_one(&repo, &note_rel, c))
             .collect();
         out.push((note_rel, results));
     }
     Ok(out)
 }
 
-/// Inner verifier for one callout.
-fn verify_one(repo: &Path, note_path: &Path, c: &ParsedCallout) -> VerificationResult {
+/// Inner verifier for one callout. `c.source_path` is vault-relative;
+/// `repo` translates it to the repo-root-relative path `git show` needs.
+fn verify_one(repo: &git::RepoMap, note_path: &Path, c: &ParsedCallout) -> VerificationResult {
     // Fetch the source blob.
-    let blob = match git::show_file_at(repo, &c.commit_sha, &c.source_path) {
+    let blob = match git::show_file_at(repo.root(), &c.commit_sha, &repo.to_repo(&c.source_path)) {
         Ok(s) => s,
         Err(e) => {
             return VerificationResult {
@@ -224,7 +223,7 @@ mod tests {
     use chrono::NaiveDate;
     use std::process::Command;
 
-    fn setup_repo_with_synth_note() -> (assert_fs::TempDir, Vault, std::path::PathBuf, PathBuf) {
+    fn setup_repo_with_synth_note() -> (assert_fs::TempDir, Vault, PathBuf) {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
         tmp.child("notes/source.md")
@@ -258,30 +257,30 @@ mod tests {
             matched: vec![],
         };
         let target = PathBuf::from("Synthesis/topic.md");
-        let plan = plan_synth_scaffold(&vault, &repo, &target, std::slice::from_ref(&entry))
-            .expect("plan");
+        let plan =
+            plan_synth_scaffold(&vault, &target, std::slice::from_ref(&entry)).expect("plan");
         apply_synth_scaffold(&vault, &plan).expect("apply");
-        (tmp, vault, repo, target)
+        (tmp, vault, target)
     }
 
     #[test]
     fn verify_ok_after_scaffold() {
-        let (_tmp, vault, repo, target) = setup_repo_with_synth_note();
-        let results = verify_synth_note(&repo, &vault, &target).unwrap();
+        let (_tmp, vault, target) = setup_repo_with_synth_note();
+        let results = verify_synth_note(&vault, &target).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].status, SectionStatus::Ok);
     }
 
     #[test]
     fn verify_drift_when_body_edited() {
-        let (tmp, vault, repo, target) = setup_repo_with_synth_note();
+        let (tmp, vault, target) = setup_repo_with_synth_note();
         // Hand-edit the synth note: corrupt the protected body.
         let abs = vault.path.join(&target);
         let mut content = std::fs::read_to_string(&abs).unwrap();
         content = content.replace("Original paragraph line 1.", "EDITED line 1.");
         std::fs::write(&abs, content).unwrap();
 
-        let results = verify_synth_note(&repo, &vault, &target).unwrap();
+        let results = verify_synth_note(&vault, &target).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].status, SectionStatus::Drifted);
         let _ = tmp;
@@ -289,7 +288,7 @@ mod tests {
 
     #[test]
     fn verify_source_missing_for_unreachable_commit() {
-        let (tmp, vault, repo, target) = setup_repo_with_synth_note();
+        let (tmp, vault, target) = setup_repo_with_synth_note();
         // Replace the pinned SHA with one that doesn't exist.
         let abs = vault.path.join(&target);
         let content = std::fs::read_to_string(&abs).unwrap();
@@ -299,7 +298,7 @@ mod tests {
             .into_owned();
         std::fs::write(&abs, mangled).unwrap();
 
-        let results = verify_synth_note(&repo, &vault, &target).unwrap();
+        let results = verify_synth_note(&vault, &target).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].status, SectionStatus::SourceMissing);
         let _ = tmp;
@@ -307,10 +306,10 @@ mod tests {
 
     #[test]
     fn verify_all_walks_synth_notes() {
-        let (tmp, vault, repo, _target) = setup_repo_with_synth_note();
+        let (tmp, vault, _target) = setup_repo_with_synth_note();
         // Add a non-synth note that should be ignored.
         tmp.child("not-synth.md").write_str("# regular\n").unwrap();
-        let all = verify_all(&vault, &repo).unwrap();
+        let all = verify_all(&vault).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].0, PathBuf::from("Synthesis/topic.md"));
         assert_eq!(all[0].1.len(), 1);
