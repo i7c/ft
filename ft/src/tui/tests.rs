@@ -8926,6 +8926,11 @@ fn journal_blocks_vault() -> (TempDir, Vault) {
         let out = StdCommand::new("git")
             .current_dir(&vault_path)
             .env("GIT_TERMINAL_PROMPT", "0")
+            // Pin the commit date so the journal's blame-derived entry
+            // dates are deterministic — otherwise the snapshot below
+            // renders the real wall-clock day and breaks daily.
+            .env("GIT_AUTHOR_DATE", "2026-05-10T14:32:05")
+            .env("GIT_COMMITTER_DATE", "2026-05-10T14:32:05")
             .args(args)
             .output()
             .expect("git");

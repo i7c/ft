@@ -6,11 +6,11 @@ expression: frame
 ┌ Journal — 2 sources (2 entries) ─────────────────────────────────────────────┐
 │Sources (2)                                                                   │
 │Foo (ghost), Bar (ghost)                                                      │
-│● 2026-06-14  Alpha                                                           │
+│● 2026-05-10  Alpha                                                           │
 │    ↳ matched: Foo                                                            │
 │Talk about [[Foo]].                                                           │
 │                                                                              │
-│  2026-06-14  Beta                                                            │
+│  2026-05-10  Beta                                                            │
 │    ↳ matched: Foo, Bar                                                       │
 │Mention [[Foo]] and [[Bar]] together.                                         │
 │                                                                              │
