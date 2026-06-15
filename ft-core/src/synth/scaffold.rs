@@ -10,9 +10,10 @@
 //! `ft-core` (`task::ops::plan_move`, `graph::rename::plan_rename`,
 //! etc.) so callers can preview/test mutations independently.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::git;
 use crate::journal::JournalEntry;
 use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection, SHORT_SHA_LEN};
@@ -86,6 +87,30 @@ pub fn plan_synth_scaffold(
     target: &Path,
     entries: &[JournalEntry],
 ) -> Result<SynthScaffoldPlan> {
+    // A section is pinned to HEAD, so each source file's working-tree
+    // content must already match HEAD — otherwise verify would report
+    // drift on a freshly created note. Refuse if any source is dirty.
+    let status = git::status(repo)?;
+    let dirty: HashSet<&Path> = status
+        .modified
+        .iter()
+        .chain(&status.deleted)
+        .chain(&status.conflicted)
+        .chain(&status.untracked)
+        .map(PathBuf::as_path)
+        .collect();
+    let mut offending: Vec<PathBuf> = entries
+        .iter()
+        .map(|e| &e.source_path)
+        .filter(|p| dirty.contains(p.as_path()))
+        .cloned()
+        .collect();
+    offending.sort();
+    offending.dedup();
+    if !offending.is_empty() {
+        return Err(Error::SynthDirtySources(offending));
+    }
+
     let head_sha = git::head_hash(repo)?;
     let short_sha = head_sha[..SHORT_SHA_LEN.min(head_sha.len())].to_string();
 
@@ -308,5 +333,66 @@ mod tests {
         let head = git::head_hash(&repo).unwrap();
         let sha = &plan.sections[0].commit_sha;
         assert_eq!(sha, &head[..SHORT_SHA_LEN]);
+    }
+
+    #[test]
+    fn scaffold_rejects_dirty_source() {
+        let (tmp, vault, repo, entry) = make_repo_with_entry();
+        // Uncommitted edit to the source the entry pins → working tree
+        // no longer matches HEAD, so the HEAD-pinned section can't be
+        // verified. Scaffolding must refuse.
+        tmp.child("notes/source.md")
+            .write_str("Edited first paragraph.\nLine two of first.\n\nSecond paragraph.\n")
+            .unwrap();
+        let err = plan_synth_scaffold(
+            &vault,
+            &repo,
+            Path::new("Synthesis/topic.md"),
+            std::slice::from_ref(&entry),
+        )
+        .unwrap_err();
+        match err {
+            Error::SynthDirtySources(paths) => {
+                assert_eq!(paths, vec![PathBuf::from("notes/source.md")]);
+            }
+            other => panic!("expected SynthDirtySources, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scaffold_rejects_untracked_source() {
+        let (tmp, vault, repo, _entry) = make_repo_with_entry();
+        tmp.child("notes/new.md")
+            .write_str("Fresh untracked paragraph.\n")
+            .unwrap();
+        let entry = JournalEntry {
+            source_title: "new".into(),
+            source_path: PathBuf::from("notes/new.md"),
+            line_start: 1,
+            line_end: 1,
+            section_text: "Fresh untracked paragraph.".into(),
+            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
+            matched: vec![],
+        };
+        let err = plan_synth_scaffold(
+            &vault,
+            &repo,
+            Path::new("Synthesis/topic.md"),
+            std::slice::from_ref(&entry),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::SynthDirtySources(_)));
+    }
+
+    #[test]
+    fn scaffold_succeeds_when_sources_clean() {
+        let (_tmp, vault, repo, entry) = make_repo_with_entry();
+        plan_synth_scaffold(
+            &vault,
+            &repo,
+            Path::new("Synthesis/topic.md"),
+            std::slice::from_ref(&entry),
+        )
+        .expect("clean source scaffolds");
     }
 }

@@ -29,6 +29,12 @@ pub enum Error {
 
     #[error("timeblock: {0}")]
     Timeblock(String),
+
+    #[error(
+        "source file(s) have uncommitted changes — commit them before scaffolding:\n{}",
+        .0.iter().map(|p| format!("  {}", p.display())).collect::<Vec<_>>().join("\n")
+    )]
+    SynthDirtySources(Vec<PathBuf>),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

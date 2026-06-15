@@ -124,35 +124,40 @@ pub fn discover_repo(start: &Path) -> Option<PathBuf> {
 // ── Status ───────────────────────────────────────────────────────────────
 
 /// Snapshot the working tree via `git status --porcelain=v1
-/// --untracked-files=normal`. `core.quotePath=false` is set so non-ASCII
-/// paths come through verbatim instead of as `\xNN`-quoted octals.
+/// --untracked-files=normal -z`. The `-z` flag is load-bearing: it emits
+/// NUL-terminated records and disables git's C-style path quoting, so
+/// paths with spaces or non-ASCII bytes (common in vault note titles)
+/// come through verbatim instead of wrapped in `"…"` with escapes.
+/// Honors `.gitignore` automatically — git filters ignored entries.
 pub fn status(repo: &Path) -> Result<WorkingTreeStatus> {
     let output = git(repo)
-        .args([
-            "-c",
-            "core.quotePath=false",
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=normal",
-        ])
+        .args(["status", "--porcelain=v1", "--untracked-files=normal", "-z"])
         .output()
         .map_err(spawn_err)?;
     if !output.status.success() {
-        return Err(cmd_err("status --porcelain=v1", &output.stderr));
+        return Err(cmd_err("status --porcelain=v1 -z", &output.stderr));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
     let mut s = WorkingTreeStatus::default();
-    for line in text.lines() {
-        if line.len() < 3 {
+    // -z records are NUL-terminated. A rename/copy record is followed by
+    // a second NUL-terminated field carrying the original path; we want
+    // the destination (which comes first under -z) and must consume the
+    // original field so it isn't parsed as a fresh record.
+    let mut records = text.split('\0').filter(|r| !r.is_empty());
+    while let Some(record) = records.next() {
+        if record.len() < 3 {
             continue;
         }
-        let (codes, rest) = line.split_at(2);
-        let path = rest.trim_start();
-        let path = rename_destination(path);
+        let (codes, rest) = record.split_at(2);
+        let path = rest.strip_prefix(' ').unwrap_or(rest);
         let bytes = codes.as_bytes();
         let x = bytes[0] as char;
         let y = bytes[1] as char;
+
+        if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            records.next(); // discard the original-path field
+        }
 
         // U in either column, AA, DD → unresolved conflict
         if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
@@ -174,16 +179,6 @@ pub fn status(repo: &Path) -> Result<WorkingTreeStatus> {
         s.modified.push(PathBuf::from(path));
     }
     Ok(s)
-}
-
-/// For rename/copy entries (`R<X> old -> new`), the destination path
-/// is what callers care about.
-fn rename_destination(path: &str) -> &str {
-    if let Some(idx) = path.find(" -> ") {
-        &path[idx + 4..]
-    } else {
-        path
-    }
 }
 
 // ── Upstream ─────────────────────────────────────────────────────────────
@@ -826,6 +821,36 @@ mod tests {
         fs::remove_file(repo.join("f.md")).unwrap();
         let s = status(repo).unwrap();
         assert_eq!(s.deleted, vec![PathBuf::from("f.md")]);
+    }
+
+    #[test]
+    fn status_reports_path_with_spaces_unquoted() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        fs::write(repo.join("Life Strategy.md"), "v1\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "v1"]);
+        fs::write(repo.join("Life Strategy.md"), "v2\n").unwrap();
+        let s = status(repo).unwrap();
+        // Verbatim path, not git's `"Life Strategy.md"` quoted form.
+        assert_eq!(s.modified, vec![PathBuf::from("Life Strategy.md")]);
+    }
+
+    #[test]
+    fn status_rename_reports_destination_only() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        fs::write(repo.join("old name.md"), "x\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "x"]);
+        run_git(repo, &["mv", "old name.md", "new name.md"]);
+        let s = status(repo).unwrap();
+        // Destination captured; the original-path field must not leak in
+        // as a separate entry.
+        assert_eq!(s.modified, vec![PathBuf::from("new name.md")]);
+        assert!(s.untracked.is_empty(), "{s:?}");
     }
 
     #[test]
