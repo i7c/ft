@@ -12,7 +12,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::blame_cache::BlameCache;
 use crate::error::Result;
 use crate::git;
 use crate::journal::JournalEntry;
@@ -70,12 +69,13 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 ///
 /// For each entry:
 /// 1. The source paragraph text is taken verbatim from `entry.section_text`.
-/// 2. The pinned commit SHA is determined via blame at the entry's
-///    `(source_path, line_start)`; the most recent commit touching the
-///    paragraph is used. Blame failures fall back to `repo`'s HEAD SHA
-///    so verification still pins to a real commit (and the body still
-///    needs to match HEAD content, which it does since the entry was
-///    sourced from HEAD).
+/// 2. The pinned commit SHA is `repo`'s HEAD. The entry's `source_path`,
+///    line range, and body all come from the working-tree scan (= HEAD),
+///    so HEAD is the only commit where `git show <sha>:<source_path>`
+///    sliced at `line_start..line_end` is guaranteed to reproduce the
+///    captured body. The blame commit (most recent change to those lines)
+///    can predate a rename or a line-offset shift, which would make
+///    `git show` resolve the wrong path or wrong lines.
 /// 3. The content hash is computed via blake3 over the entry text.
 ///
 /// Sections are emitted in the order of `entries` — the caller is
@@ -87,23 +87,17 @@ pub fn plan_synth_scaffold(
     entries: &[JournalEntry],
 ) -> Result<SynthScaffoldPlan> {
     let head_sha = git::head_hash(repo)?;
-    let mut cache = BlameCache::default();
+    let short_sha = head_sha[..SHORT_SHA_LEN.min(head_sha.len())].to_string();
 
     let mut sections = Vec::with_capacity(entries.len());
     for entry in entries {
-        let path_str = entry.source_path.to_string_lossy().into_owned();
-
-        // Look up the commit SHA covering the paragraph's lines.
-        let commit_sha = pinning_sha(repo, &mut cache, &path_str, entry, &head_sha)
-            .unwrap_or_else(|| head_sha.clone());
-        let short_sha = commit_sha[..SHORT_SHA_LEN.min(commit_sha.len())].to_string();
         let hash = compute_section_hash(&entry.section_text);
 
         sections.push(ProtectedSection {
             source_path: entry.source_path.clone(),
             line_start: entry.line_start,
             line_end: entry.line_end,
-            commit_sha: short_sha,
+            commit_sha: short_sha.clone(),
             content_hash: hash,
             body: entry.section_text.clone(),
         });
@@ -156,30 +150,6 @@ pub fn apply_synth_scaffold(vault: &Vault, plan: &SynthScaffoldPlan) -> Result<P
 
     crate::fs::write_atomic(&absolute, &final_content)?;
     Ok(absolute)
-}
-
-/// Pick the commit SHA to pin a section to. Strategy: take the most
-/// recent commit touching any line in the paragraph (via blame). Any
-/// of those lines maps to a real commit at HEAD time, which is what
-/// verification will compare against.
-fn pinning_sha(
-    repo: &Path,
-    cache: &mut BlameCache,
-    path_str: &str,
-    entry: &JournalEntry,
-    head_sha: &str,
-) -> Option<String> {
-    if cache.get(path_str, head_sha).is_none() {
-        let blame = git::blame_file(repo, &entry.source_path).ok()?;
-        cache.insert(path_str.to_string(), head_sha.to_string(), blame);
-    }
-    let blame = cache.get(path_str, head_sha)?;
-    // Most recent commit (max timestamp) covering any line in the range.
-    blame
-        .iter()
-        .filter(|lb| lb.line >= entry.line_start && lb.line <= entry.line_end)
-        .max_by_key(|lb| lb.timestamp)
-        .map(|lb| lb.commit_hash.clone())
 }
 
 #[cfg(test)]
@@ -324,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_pins_to_blame_commit() {
+    fn scaffold_pins_to_head() {
         let (_tmp, vault, repo, entry) = make_repo_with_entry();
         let plan = plan_synth_scaffold(
             &vault,
@@ -333,9 +303,10 @@ mod tests {
             std::slice::from_ref(&entry),
         )
         .unwrap();
-        // Commit hash should be 7 hex chars (the canonical short form).
+        // Pinned to HEAD's short SHA so verify can resolve the current
+        // path/line range; blame commits could predate a rename.
+        let head = git::head_hash(&repo).unwrap();
         let sha = &plan.sections[0].commit_sha;
-        assert_eq!(sha.len(), SHORT_SHA_LEN);
-        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(sha, &head[..SHORT_SHA_LEN]);
     }
 }
