@@ -446,8 +446,7 @@ pub enum EventOutcome {
 ///
 /// `today` is the date used to resolve DSL keywords (`today` / `tomorrow`)
 /// and to bucket overdue vs upcoming tasks; it is fixed for the lifetime of
-/// the App so a long-running session has stable bucketing. The clock for
-/// the live sidebar display is separate (see `tabs::tasks::ClockFn`).
+/// the App so a long-running session has stable bucketing.
 ///
 /// `last_refresh` is wrapped in a `Cell` so views can update it through
 /// the shared `&TabCtx` they receive in `render` and `handle_event` —

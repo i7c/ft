@@ -244,22 +244,12 @@ impl TasksTab {
         }
     }
 
-    pub fn with_clock(_clock: crate::tui::tabs::tasks::ClockFn) -> Self {
-        // ClockFn kept for API compatibility; the sidebar (which used it)
-        // is removed, but tests still call this constructor.
-        Self::new()
-    }
-
     pub fn with_keymap_overlay(self, _overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
         // Keymap overlay kept for API compatibility; the sidebar keymap
         // (which used it) is removed.
         self
     }
 }
-
-/// Re-exported for test compatibility. The sidebar (which used the
-/// live clock) is gone, but existing test code still references this type.
-pub type ClockFn = fn() -> chrono::DateTime<chrono::Local>;
 
 impl Tab for TasksTab {
     fn title(&self) -> &str {

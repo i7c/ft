@@ -17,7 +17,7 @@ use ft_core::vault::Vault;
 use ratatui::Frame;
 
 #[cfg(test)]
-use crate::tui::tabs::tasks::ClockFn;
+use crate::tui::tabs::timeblocks::ClockFn;
 use ft_core::config::EditorStrategy;
 
 use crate::tui::{
@@ -1328,10 +1328,8 @@ impl App {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
-            Box::new(TasksTab::with_clock(clock)),
+            Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
-            // TimeblocksTab shares the same ClockFn type alias as
-            // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
             Box::new(JournalTab::new()),
             Box::new(ReviewTab::new()),
@@ -1366,10 +1364,8 @@ impl App {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
-            Box::new(TasksTab::with_clock(clock)),
+            Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
-            // TimeblocksTab shares the same ClockFn type alias as
-            // TasksTab so the same fixture-clock can drive both panes.
             Box::new(TimeblocksTab::with_clock(clock)),
             Box::new(JournalTab::new()),
             Box::new(ReviewTab::new()),
