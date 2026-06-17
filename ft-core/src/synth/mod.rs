@@ -19,5 +19,6 @@
 //! arbitrary markdown freely.
 
 pub mod callout;
+pub mod reslice;
 pub mod scaffold;
 pub mod verify;

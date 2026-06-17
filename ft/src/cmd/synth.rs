@@ -29,6 +29,7 @@ use ft_core::blame_cache::{paragraph_date, BlameCache};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::journal::{build_journal, JournalEntry};
 use ft_core::link_review::{compute_link_review, WindowRange};
+use ft_core::synth::reslice::{apply_reslice, plan_reslice, NewRange};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 use ft_core::synth::verify::{verify_all, verify_synth_note, SectionStatus, VerificationResult};
 use ft_core::vault::{Scan, Vault};
@@ -45,6 +46,9 @@ pub enum SynthCommand {
     /// it with `ft-synth: true` frontmatter if needed). Default action.
     #[command(name = "scaffold")]
     Scaffold(ScaffoldArgs),
+    /// Grow or shrink a protected section's line range, re-pinned at its
+    /// existing commit.
+    Reslice(ResliceArgs),
     /// Verify on-disk synth notes against their pinned sources.
     Verify(VerifyArgs),
 }
@@ -52,6 +56,7 @@ pub enum SynthCommand {
 pub fn run(args: SynthArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         SynthCommand::Scaffold(a) => run_scaffold(a, vault_flag),
+        SynthCommand::Reslice(a) => run_reslice(a, vault_flag),
         SynthCommand::Verify(a) => run_verify(a, vault_flag),
     }
 }
@@ -347,6 +352,104 @@ fn open_editor(path: &Path) -> Result<()> {
         return Err(anyhow!("editor exited with non-zero status"));
     }
     Ok(())
+}
+
+// ── reslice ────────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct ResliceArgs {
+    /// Synth note holding the section (vault-relative path).
+    #[arg(value_name = "NOTE.md")]
+    pub note: PathBuf,
+
+    /// Header line of the `[!ft-source]` section to reslice (the line
+    /// number `ft synth verify` prints). Optional when the note has a
+    /// single section.
+    #[arg(long, value_name = "LINE")]
+    pub at: Option<u32>,
+
+    /// Absolute new range `A-B` (1-indexed inclusive). Mutually
+    /// exclusive with `--up` / `--down`.
+    #[arg(long, value_name = "A-B", conflicts_with_all = ["up", "down"])]
+    pub lines: Option<String>,
+
+    /// Lines of context to add above the start (negative shrinks).
+    #[arg(long, value_name = "N", allow_hyphen_values = true)]
+    pub up: Option<i32>,
+
+    /// Lines of context to add below the end (negative shrinks).
+    #[arg(long, value_name = "N", allow_hyphen_values = true)]
+    pub down: Option<i32>,
+}
+
+fn run_reslice(args: ResliceArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let range = parse_reslice_range(&args)?;
+
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!("vault is not inside a git repository — `ft synth reslice` needs git history")
+    })?;
+
+    let note = normalize_md_target(&args.note);
+    let plan = plan_reslice(&vault, &note, args.at, range).context("planning reslice")?;
+    let written = apply_reslice(&vault, &plan).context("writing reslice")?;
+
+    let rel = vault.relativize(&written).display().to_string();
+    let n = &plan.new;
+    println!(
+        "resliced {} → {} L{}-{} @{}",
+        rel,
+        n.source_path.display(),
+        n.line_start,
+        n.line_end,
+        n.commit_sha
+    );
+    if plan.healed_drift {
+        println!("note: section had drifted; body reset to the pinned source");
+    }
+
+    // Re-verify the touched section so the user sees it landed `ok`.
+    if let Ok(results) = verify_synth_note(&vault, &note) {
+        if let Some(r) = results.iter().find(|r| r.line_start == n.line_start) {
+            let tag = match r.status {
+                SectionStatus::Ok => "ok",
+                SectionStatus::Drifted => "drifted",
+                SectionStatus::SourceMissing => "source-missing",
+                SectionStatus::Malformed => "malformed",
+            };
+            println!("verify: {tag}");
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Turn the `--lines` / `--up` / `--down` flags into a [`NewRange`],
+/// rejecting the empty case.
+fn parse_reslice_range(args: &ResliceArgs) -> Result<NewRange> {
+    if let Some(spec) = &args.lines {
+        let (a, b) = spec
+            .split_once('-')
+            .ok_or_else(|| anyhow!("invalid --lines `{spec}` (expected `A-B`)"))?;
+        let start: u32 = a
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("invalid --lines `{spec}` (A must be a positive integer)"))?;
+        let end: u32 = b
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("invalid --lines `{spec}` (B must be a positive integer)"))?;
+        return Ok(NewRange::Absolute { start, end });
+    }
+    if args.up.is_none() && args.down.is_none() {
+        return Err(anyhow!(
+            "provide --lines A-B or at least one of --up / --down"
+        ));
+    }
+    Ok(NewRange::Delta {
+        up: args.up.unwrap_or(0),
+        down: args.down.unwrap_or(0),
+    })
 }
 
 // ── verify ───────────────────────────────────────────────────────────────

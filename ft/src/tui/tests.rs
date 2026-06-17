@@ -9363,3 +9363,156 @@ fn graph_ctrl_j_appends_cursor_row_to_journal_sources() -> Result<()> {
     let _ = app.active_modal_name();
     Ok(())
 }
+
+// ── Notes tab · synth reslice flow ───────────────────────────────────────
+
+/// Git-backed vault with a source note and a synth note holding one
+/// protected section over lines 2-3 of the source (pinned to HEAD via the
+/// core scaffold planner). Needed because the reslice flow reads source
+/// blobs out of git.
+fn reslice_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join("notes")).unwrap();
+    std::fs::write(
+        vault_path.join("notes/source.md"),
+        "alpha\nbravo\ncharlie\ndelta\necho\n",
+    )
+    .unwrap();
+
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "c1"]);
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let entry = ft_core::journal::JournalEntry {
+        source_title: "source".into(),
+        source_path: std::path::PathBuf::from("notes/source.md"),
+        line_start: 2,
+        line_end: 3,
+        section_text: "bravo\ncharlie".into(),
+        date: chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+        matched: vec![],
+    };
+    let target = std::path::PathBuf::from("Synth/topic.md");
+    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
+        &vault,
+        &target,
+        std::slice::from_ref(&entry),
+    )
+    .unwrap();
+    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan).unwrap();
+    (dir, vault)
+}
+
+/// Drive the Notes tab into the reslice section-list step for the synth
+/// note `Synth/topic.md`.
+fn drive_to_reslice_sections(vault: Vault) -> Result<App> {
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('r'))?;
+    for c in "topic".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(app)
+}
+
+#[test]
+fn notes_reslice_picker_opens_on_r() -> Result<()> {
+    let (_dir, vault) = reslice_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('r'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("1/3 pick synth note"),
+        "reslice note picker should open:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_reslice_section_list_renders() -> Result<()> {
+    let (_dir, vault) = reslice_vault();
+    let mut app = drive_to_reslice_sections(vault)?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2/3 pick section"),
+        "should land on section list:\n{frame}"
+    );
+    assert!(
+        frame.contains("notes/source.md L2-3"),
+        "the section's source + range should be listed:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_reslice_edit_grows_range_in_preview() -> Result<()> {
+    let (_dir, vault) = reslice_vault();
+    let mut app = drive_to_reslice_sections(vault)?;
+    // Enter the boundary editor, then grow the (default) bottom edge down.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("3/3"),
+        "should be on the boundary editor:\n{frame}"
+    );
+    assert!(
+        frame.contains("L2-4") && frame.contains("was L2-3"),
+        "bottom edge should have grown to L2-4:\n{frame}"
+    );
+    assert!(
+        frame.contains("delta"),
+        "preview should now include the new line:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_reslice_edit_enter_commits_and_writes() -> Result<()> {
+    let (_dir, vault) = reslice_vault();
+    let vault_path = vault.path.clone();
+    let mut app = drive_to_reslice_sections(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let body = std::fs::read_to_string(vault_path.join("Synth/topic.md")).unwrap();
+    assert!(
+        body.contains("> [!ft-source] \"notes/source.md\" L2-4 @"),
+        "committed note should carry the widened range:\n{body}"
+    );
+    assert!(
+        body.contains("> delta"),
+        "the new line should be in the protected body:\n{body}"
+    );
+    Ok(())
+}

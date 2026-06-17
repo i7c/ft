@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use ft_core::markdown::Heading;
+use ft_core::synth::verify::SectionStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -15,6 +16,7 @@ use ratatui::{
 
 use crate::tui::notes_actions::append::AppendState;
 use crate::tui::notes_actions::create::CreateState;
+use crate::tui::notes_actions::reslice::{Edge, EditBoundary, ResliceState, SectionRow};
 use crate::tui::notes_actions::section_move::{
     is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, RenameBuffer,
     SectionMoveState,
@@ -28,6 +30,7 @@ use crate::tui::tabs::notes::NotesState;
 const IDLE_KEYS: &[(&str, &str)] = &[
     ("o", "open file / heading"),
     ("m", "move section(s) to another file"),
+    ("r", "reslice synth section"),
     ("c", "create note (blank)"),
     ("C", "create note from template"),
     ("t", "open today's daily note"),
@@ -111,6 +114,17 @@ const MOVE_STEP_4_KEYS: &[(&str, &str)] = &[
 /// fire under the buffer.
 const MOVE_STEP_4_RENAME_KEYS: &[(&str, &str)] = &[("Enter", "commit rename"), ("Esc", "discard")];
 
+/// Footer keymaps for the reslice flow.
+const RESLICE_NOTE_KEYS: &[(&str, &str)] = &[("Enter", "pick note"), ("Esc", "cancel")];
+const RESLICE_SECTION_KEYS: &[(&str, &str)] =
+    &[("↑/↓", "focus"), ("Enter", "edit range"), ("Esc", "back")];
+const RESLICE_EDIT_KEYS: &[(&str, &str)] = &[
+    ("Tab", "switch edge"),
+    ("↑/↓", "move edge"),
+    ("Enter", "commit"),
+    ("Esc", "back"),
+];
+
 /// Footer keymap for the create-flow template picker.
 const CREATE_TEMPLATE_KEYS: &[(&str, &str)] = &[("Enter", "use template"), ("Esc", "cancel")];
 /// Footer keymap for the create-flow folder picker.
@@ -148,6 +162,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut N
             );
         }
         NotesState::MoveSection(ms) => render_move_overlay(frame, area, ms),
+        NotesState::Reslicing(rs) => render_reslice_overlay(frame, area, rs),
         NotesState::Creating(cs) => render_create_overlay(frame, area, cs),
         NotesState::Appending(as_) => render_append_overlay(frame, area, as_),
         NotesState::CapturePicking { picker } => render_picker_popup(
@@ -1281,6 +1296,150 @@ pub(crate) fn render_picker_popup<S: crate::tui::widgets::PickerSource>(
         Paragraph::new(footer_lines).alignment(Alignment::Center),
         chunks[1],
     );
+}
+
+pub(crate) fn render_reslice_overlay(frame: &mut Frame, area: Rect, rs: &mut ResliceState) {
+    match rs {
+        ResliceState::PickingNote { picker, error } => render_picker_popup(
+            frame,
+            area,
+            " reslice · 1/3 pick synth note ",
+            picker,
+            RESLICE_NOTE_KEYS,
+            error.as_deref(),
+        ),
+        ResliceState::PickingSection {
+            note_rel,
+            sections,
+            focus,
+        } => render_reslice_sections(
+            frame,
+            area,
+            &note_rel.display().to_string(),
+            sections,
+            *focus,
+        ),
+        ResliceState::Editing(eb) => render_reslice_edit(frame, area, eb),
+    }
+}
+
+fn render_reslice_sections(
+    frame: &mut Frame,
+    area: Rect,
+    note_label: &str,
+    sections: &[SectionRow],
+    focus: usize,
+) {
+    let popup = centered_rect(70, 70, area);
+    frame.render_widget(Clear, popup);
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" reslice · 2/3 pick section · {note_label} "))
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+
+    let body_area = chunks[0];
+    let visible = body_area.height as usize;
+    let total = sections.len();
+    let scroll = compute_scroll(focus, visible, total);
+    let end = (scroll + visible).min(total);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(scroll));
+    for (i, s) in sections.iter().enumerate().take(end).skip(scroll) {
+        let cursor = if i == focus { "▶ " } else { "  " };
+        let row_style = if i == focus {
+            Style::default()
+                .bg(Color::Rgb(50, 38, 30))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let (tag, tag_color) = status_tag(&s.status);
+        lines.push(Line::from(vec![
+            Span::styled(cursor, row_style),
+            Span::styled(format!("{tag:>6} "), row_style.fg(tag_color)),
+            Span::styled(
+                format!(
+                    "{} L{}-{}",
+                    s.source_path.display(),
+                    s.line_start,
+                    s.line_end
+                ),
+                row_style.fg(palette::WHITE),
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), body_area);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), keymap_line(RESLICE_SECTION_KEYS)])
+            .alignment(Alignment::Center),
+        chunks[1],
+    );
+}
+
+fn render_reslice_edit(frame: &mut Frame, area: Rect, eb: &EditBoundary) {
+    let popup = centered_rect(72, 72, area);
+    frame.render_widget(Clear, popup);
+    let edge = match eb.active {
+        Edge::Top => "top",
+        Edge::Bottom => "bottom",
+    };
+    let title = format!(
+        " reslice · 3/3 · {} · L{}-{} (was L{}-{}) · edge: {} ",
+        eb.source_path.display(),
+        eb.start,
+        eb.end,
+        eb.orig_start,
+        eb.orig_end,
+        edge
+    );
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+
+    let lines: Vec<Line> = eb
+        .preview()
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let lineno = eb.start as usize + i;
+            Line::from(vec![
+                Span::styled(format!("{lineno:>5} │ "), Style::default().fg(palette::DIM)),
+                Span::styled(l.clone(), Style::default().fg(palette::WHITE)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), keymap_line(RESLICE_EDIT_KEYS)])
+            .alignment(Alignment::Center),
+        chunks[1],
+    );
+}
+
+fn status_tag(status: &SectionStatus) -> (&'static str, Color) {
+    match status {
+        SectionStatus::Ok => ("ok", palette::SECONDARY),
+        SectionStatus::Drifted => ("drift", palette::ERROR),
+        SectionStatus::SourceMissing => ("src?", palette::ERROR),
+        SectionStatus::Malformed => ("bad", palette::ERROR),
+    }
 }
 
 fn render_multiselect_popup(

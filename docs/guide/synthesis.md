@@ -223,6 +223,54 @@ with the right frontmatter and the scaffolded excerpts, then
 If you have entries selected with `Space`, only those go into the
 scaffold. With no selection, the whole displayed feed is sent.
 
+## Editing a protected section
+
+Sometimes the captured excerpt is one line short, or one line too long.
+`ft synth reslice` grows or shrinks a section's range **without changing
+the commit it's pinned to** — important, because by the time you revisit
+a note that commit is usually no longer `HEAD`. The body and content-hash
+are recomputed from the source blob at the pinned commit, so the section
+keeps verifying `ok`.
+
+```sh
+# Add one line of context below the excerpt:
+ft synth reslice Synthesis/eigen-and-memo.md --down 1
+
+# Two more lines above, one fewer below:
+ft synth reslice Synthesis/eigen-and-memo.md --up 2 --down -1
+
+# Or set the range outright:
+ft synth reslice Synthesis/eigen-and-memo.md --lines 40-46
+```
+
+`--up`/`--down` adjust the top and bottom edges (negatives shrink);
+`--lines A-B` replaces the range. When a note holds more than one section,
+pass `--at <line>` with the header line `ft synth verify` prints to pick
+which one.
+
+Because the new body always comes from the committed blob, reslicing also
+**heals drift**: if you'd hand-edited inside the callout, the canonical
+slice overwrites the edit and the command tells you it did so. A
+zero-change reslice (`--down 0`) is a quick way to re-pin a drifted
+section back to its source.
+
+### From the TUI
+
+In the Notes tab, press `r`:
+
+| Key | Action |
+|-|-|
+| (picker) | fuzzy-pick the synth note |
+| `j` / `k` (`↑`/`↓`) | choose which `[!ft-source]` section |
+| `Tab` | switch the active edge (top / bottom) |
+| `↑` / `↓` | move the active boundary up / down — the preview re-slices live |
+| `Enter` | commit the reslice |
+| `Esc` | back a step |
+
+The boundary editor previews the source lines straight from the pinned
+commit, so you see exactly what the resliced excerpt will contain before
+you commit.
+
 ## Verifying
 
 `ft synth verify` checks every protected section in a synth note (or

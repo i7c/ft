@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 2911
+assertion_line: 3146
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
@@ -10,13 +10,14 @@ expression: frame
 │         │  q / Ctrl+c  Quit the TUI                                │         │
 │  o     o│  ?           Open the keymap help overlay                │         │
 │  m     m│  g           Enter the git-sync leader (then `s` to sync)│         │
-│  c     c│  Tab         Switch to the next tab                      │         │
-│  C     c│  BackTab     Switch to the previous tab                  │         │
-│  t     o│  1..9        Switch to the tab at the given 0-based index│         │
-│  p     p│                                                          │         │
-│  ?     s│  Notes                                                   │         │
-│  Esc   c│  o           Open the fuzzy file / heading picker to open│         │
-│         │  m           Enter the move-section flow                 │         │
+│  r     r│  Tab         Switch to the next tab                      │         │
+│  c     c│  BackTab     Switch to the previous tab                  │         │
+│  C     c│  1..9        Switch to the tab at the given 0-based index│         │
+│  t     o│                                                          │         │
+│  p     p│  Notes                                                   │         │
+│  ?     s│  o           Open the fuzzy file / heading picker to open│         │
+│  Esc   c│  m           Enter the move-section flow                 │         │
+│         │  r           Reslice a synth note's protected section (gr│         │
 │         │  c           Create a new note (blank)                   │         │
 │         │  a           Append a template to a note                 │         │
 │         │  Shift+q     Quick capture (run a preset)                │         │
@@ -24,6 +25,5 @@ expression: frame
 │         │                                                          │         │
 │         │  Periodic notes                                          │         │
 │         │  t           Open today's daily note                     │         │
-│         │  p           Enter the periodic-note leader (then d/w/m/q│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Notes           not yet refreshed        mode: help

@@ -272,3 +272,116 @@ fn verify_requires_note_or_all() {
         .assert()
         .failure();
 }
+
+// ── reslice ──────────────────────────────────────────────────────────────
+
+/// Scaffold a single-section synth note (sourcing `[[Foo]]`, which the
+/// fixture mentions only in the first paragraph at L1-2 when we keep just
+/// that one via `--from`). Returns the temp vault.
+fn scaffold_single_section(tmp: &assert_fs::TempDir) {
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--from",
+        "notes/source.md:1",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+}
+
+#[test]
+fn reslice_extends_range_and_verifies() {
+    use assert_fs::prelude::*;
+    let tmp = make_source_vault();
+    scaffold_single_section(&tmp);
+    // Add an unrelated commit so HEAD is no longer the pinned commit.
+    tmp.child("other.md").write_str("unrelated\n").unwrap();
+    run_git(tmp.path(), &["add", "."]);
+    run_git(tmp.path(), &["commit", "-m", "c2"]);
+
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "reslice",
+        "Synthesis/topic.md",
+        "--down",
+        "1",
+    ])
+    .assert()
+    .success()
+    .stdout(predicates::str::contains("L1-3"));
+
+    let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L1-3 @"));
+
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "verify",
+        "Synthesis/topic.md",
+    ])
+    .assert()
+    .success();
+}
+
+#[test]
+fn reslice_absolute_lines() {
+    use assert_fs::prelude::*;
+    let tmp = make_source_vault();
+    scaffold_single_section(&tmp);
+
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "reslice",
+        "Synthesis/topic.md",
+        "--lines",
+        "4-4",
+    ])
+    .assert()
+    .success();
+
+    let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L4-4 @"));
+    assert!(body.contains("> Second paragraph mentions [[Foo]] again."));
+}
+
+#[test]
+fn reslice_ambiguous_without_at_errors() {
+    let tmp = make_source_vault();
+    // Two sections via two --from picks.
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--from",
+        "notes/source.md:1",
+        "--from",
+        "notes/source.md:4",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "reslice",
+        "Synthesis/topic.md",
+        "--down",
+        "1",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("--at"));
+}

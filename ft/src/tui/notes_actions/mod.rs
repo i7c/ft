@@ -13,6 +13,7 @@ pub mod append;
 pub mod capture;
 pub mod create;
 pub mod periodic;
+pub mod reslice;
 pub mod section_move;
 
 use crate::tui::tab::{AppRequest, TabCtx, ToastStyle};

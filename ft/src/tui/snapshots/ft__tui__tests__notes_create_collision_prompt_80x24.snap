@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 4290
+assertion_line: 4525
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
@@ -10,13 +10,13 @@ expression: frame
 │                                                                              │
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
+│  r     reslice synth section                                                 │
 │  c     create note (blank)                                                   │
-│  C     create note from template                                             │
-│  t     open to┌ create · collision ──────────────────────────┐               │
-│  p     periodi│   target already exists: inbox/existing.md   │               │
-│  ?     show th│                                              │               │
-│  Esc   close o│  [O]verwrite     [U]se existing     [C]ancel │               │
-│               │                                              │               │
+│  C     create ┌ create · collision ──────────────────────────┐               │
+│  t     open to│   target already exists: inbox/existing.md   │               │
+│  p     periodi│                                              │               │
+│  ?     show th│  [O]verwrite     [U]se existing     [C]ancel │               │
+│  Esc   close o│                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │
 │                                                                              │

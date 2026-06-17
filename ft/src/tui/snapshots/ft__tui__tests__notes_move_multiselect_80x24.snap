@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 3111
+assertion_line: 3346
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
@@ -10,13 +10,13 @@ expression: frame
 │           ┌ move · 2/4 select · project.md ──────────────────────┐           │
 │  o     ope│  □ H1  Project                                       │           │
 │  m     mov│▶ ■   H2  Background                                  │           │
-│  c     cre│  ▣     H3  Details                                   │           │
-│  C     cre│  □   H2  Tasks                                       │           │
+│  r     res│  ▣     H3  Details                                   │           │
+│  c     cre│  □   H2  Tasks                                       │           │
+│  C     cre│                                                      │           │
 │  t     ope│                                                      │           │
 │  p     per│                                                      │           │
 │  ?     sho│                                                      │           │
 │  Esc   clo│                                                      │           │
-│           │                                                      │           │
 │           │                                                      │           │
 │           │                                                      │           │
 │           │                                                      │           │

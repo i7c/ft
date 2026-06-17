@@ -1,6 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 4224
+assertion_line: 4459
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
@@ -10,13 +10,13 @@ expression: frame
 │                                                                              │
 │  o     open file / heading                                                   │
 │  m     move section(s) to another file                                       │
+│  r     reslice synth section                                                 │
 │  c     create note (blank)                                                   │
-│  C     create note from template                                             │
-│  t     open to┌ create · 2/2 filename · . ───────────────────┐               │
-│  p     periodi│▏ filename: scrat█                            │               │
-│  ?     show th│                                              │               │
-│  Esc   close o│ Enter commit   Esc back   Ctrl+W delete word │               │
-│               │                                              │               │
+│  C     create ┌ create · 2/2 filename · . ───────────────────┐               │
+│  t     open to│▏ filename: scrat█                            │               │
+│  p     periodi│                                              │               │
+│  ?     show th│ Enter commit   Esc back   Ctrl+W delete word │               │
+│  Esc   close o│                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │
 │                                                                              │

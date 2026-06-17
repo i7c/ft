@@ -35,6 +35,26 @@ pub enum Error {
         .0.iter().map(|p| format!("  {}", p.display())).collect::<Vec<_>>().join("\n")
     )]
     SynthDirtySources(Vec<PathBuf>),
+
+    #[error("no [!ft-source] section at line {header_line} in {}", .note.display())]
+    ResliceSectionNotFound { note: PathBuf, header_line: u32 },
+
+    #[error(
+        "note has {} [!ft-source] sections — pass --at <header-line> to pick one (headers at lines: {})",
+        .header_lines.len(),
+        .header_lines.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    ResliceAmbiguous { header_lines: Vec<u32> },
+
+    #[error("requested range L{start}-{end} is outside the source ({file_lines} line(s) at the pinned commit)")]
+    ResliceOutOfBounds {
+        start: u32,
+        end: u32,
+        file_lines: u32,
+    },
+
+    #[error("cannot resolve pinned source for reslice: {0}")]
+    ResliceSourceMissing(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

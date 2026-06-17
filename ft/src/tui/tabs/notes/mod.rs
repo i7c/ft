@@ -26,6 +26,7 @@ use crate::tui::{
         capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
         create::{self, begin_folder_picking, begin_template_picking, CreateState, CreateStep},
         periodic::run_periodic_open,
+        reslice::{self, ResliceState, ResliceStep},
         section_move::{self, MoveStep, SectionMoveState},
     },
     tab::{AppRequest, EventOutcome, Tab, TabCtx},
@@ -51,6 +52,15 @@ pub(crate) static NOTES_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "notes.move-section",
         description: "Enter the move-section flow",
+        scope: CommandScope::Tab("notes"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "notes.reslice",
+        description: "Reslice a synth note's protected section (grow/shrink its range)",
         scope: CommandScope::Tab("notes"),
         group: "Notes",
         args_schema: &[],
@@ -119,6 +129,7 @@ pub(crate) static NOTES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         .bind("o", "notes.open-picker")
         .bind("m", "notes.move-section")
+        .bind("r", "notes.reslice")
         .bind("c", "notes.create-blank")
         .bind("a", "notes.append")
         .bind("Q", "notes.quick-capture")
@@ -144,6 +155,8 @@ pub enum NotesState {
     },
     /// Section-move flow (sessions 4 + 5). See [`SectionMoveState`].
     MoveSection(SectionMoveState),
+    /// Synth-section reslice flow. See [`ResliceState`].
+    Reslicing(ResliceState),
     /// Create-flow (plan 009 session 4). See [`CreateState`].
     Creating(CreateState),
     /// Append-with-template flow. See [`AppendState`].
@@ -211,6 +224,10 @@ impl NotesTab {
             }
             "notes.move-section" => {
                 self.state = NotesState::MoveSection(section_move::begin_with_picker(ctx));
+                EventOutcome::Consumed
+            }
+            "notes.reslice" => {
+                self.state = NotesState::Reslicing(reslice::begin_with_picker(ctx));
                 EventOutcome::Consumed
             }
             "notes.create-blank" => {
@@ -390,6 +407,24 @@ impl NotesTab {
             }
         }
     }
+
+    fn handle_reslice_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let NotesState::Reslicing(rs) = &mut self.state else {
+            return EventOutcome::NotHandled;
+        };
+        match reslice::handle_key(rs, k, ctx) {
+            ResliceStep::Stay => EventOutcome::Consumed,
+            ResliceStep::NotHandled => EventOutcome::NotHandled,
+            ResliceStep::Transition(next) => {
+                self.state = NotesState::Reslicing(*next);
+                EventOutcome::Consumed
+            }
+            ResliceStep::Finished => {
+                self.state = NotesState::Idle;
+                EventOutcome::Consumed
+            }
+        }
+    }
 }
 
 impl Tab for NotesTab {
@@ -425,6 +460,7 @@ impl Tab for NotesTab {
             NotesState::Idle => self.handle_idle_key(k, ctx),
             NotesState::OpenPicking { .. } => self.handle_open_picker_key(k, ctx),
             NotesState::MoveSection(_) => self.handle_move_key(k, ctx),
+            NotesState::Reslicing(_) => self.handle_reslice_key(k, ctx),
             NotesState::Creating(_) => self.handle_create_key(k, ctx),
             NotesState::Appending(_) => self.handle_append_key(k, ctx),
             NotesState::CapturePicking { .. } => self.handle_capture_picker_key(k, ctx),
@@ -445,6 +481,7 @@ impl Tab for NotesTab {
                 &[
                     ("o", "open file / heading picker"),
                     ("m", "move section(s) to another file"),
+                    ("r", "reslice a synth note's protected section"),
                     ("c", "create note (blank)"),
                     ("Shift+C", "create note from template"),
                     ("a", "append template to a note"),
@@ -466,6 +503,15 @@ impl Tab for NotesTab {
                     ("Esc", "back / cancel"),
                     ("Ctrl+W / Ctrl+⌫", "delete previous word"),
                     ("Ctrl+N", "create new target (target picker)"),
+                ],
+            ),
+            HelpSection::new(
+                "Reslice flow — edit boundary",
+                &[
+                    ("Tab", "switch active edge (top / bottom)"),
+                    ("↑ / ↓", "move the active boundary up / down"),
+                    ("Enter", "commit reslice"),
+                    ("Esc", "back to section list"),
                 ],
             ),
             HelpSection::new(
