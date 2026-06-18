@@ -30,5 +30,6 @@ Fenced code block:
 [notalink](alpha.md)
 ```
 Indented code block:
+
     [[alpha]]
     [notalink](alpha.md)

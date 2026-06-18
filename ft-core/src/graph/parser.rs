@@ -525,10 +525,14 @@ after [[D]]
 
     #[test]
     fn skips_links_inside_indented_code_block() {
-        let s = "before [[A]]\n    [[B]]\nafter [[C]]\n";
+        // A genuine indented code block begins at a block boundary (after a
+        // blank line), so `[[B]]` is skipped. The mid-paragraph `[[B2]]`
+        // continuation is NOT a code block per CommonMark — an indented
+        // block can't interrupt a paragraph — so it stays a link.
+        let s = "before [[A]]\n\n    [[B]]\n\nafter [[C]]\n    [[B2]]\n";
         let links = extract(s);
         let targets: Vec<_> = links.iter().map(|l| l.target_text.as_str()).collect();
-        assert_eq!(targets, vec!["A", "C"]);
+        assert_eq!(targets, vec!["A", "C", "B2"]);
     }
 
     #[test]

@@ -419,6 +419,60 @@ mod tests {
     }
 
     #[test]
+    fn nested_list_mentions_count_as_one_block() {
+        // Regression: a heading + list with a nested (indented) item is a
+        // single paragraph, so the two [[Foo]] mentions — one in the
+        // heading, one in a top-level bullet, with indented bullets
+        // between — must count as ONE block. Before the paragraph fix the
+        // indented bullets were read as an indented code block, splitting
+        // the run into two paragraphs and double-counting Foo.
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        let repo = tmp.path().to_path_buf();
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(&repo)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        tmp.child("baseline.md").write_str("baseline\n").unwrap();
+        run_git(&["init", "-b", "main"]);
+        run_git(&["config", "user.name", "T"]);
+        run_git(&["config", "user.email", "t@e.com"]);
+        run_git(&["config", "commit.gpgsign", "false"]);
+        run_git(&["add", "."]);
+        run_git(&["commit", "-m", "c1"]);
+        let c1 = String::from_utf8_lossy(
+            &Command::new("git")
+                .current_dir(&repo)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        // Tab-indented nested items (Obsidian default).
+        tmp.child("note.md")
+            .write_str("# [[Foo]]\n- A\n\t- B\n\t- C\n- [[Foo]]\n\t- Bar\n\nXYZ\n")
+            .unwrap();
+        run_git(&["add", "."]);
+        run_git(&["commit", "-m", "c2"]);
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let head = git::head_hash(&repo).unwrap();
+        let window = WindowRange::Range { from: c1, to: head };
+        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
+        assert_eq!(foo.count, 1, "both [[Foo]] mentions are in one block");
+    }
+
+    #[test]
     fn sort_by_count_desc_then_target_asc() {
         let tmp = assert_fs::TempDir::new().unwrap();
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);

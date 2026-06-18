@@ -249,11 +249,23 @@ pub(crate) struct LineSkipState {
     /// Number of fence chars the opener used. The closer needs to match
     /// or exceed this count (per CommonMark).
     fence_len: usize,
+    /// Was the previous line blank (or the document start)? An indented
+    /// code block can only *begin* at such a block boundary — per
+    /// CommonMark it cannot interrupt a paragraph or a list item's
+    /// content. Initialised `true` so a code block at the very top of a
+    /// file is still recognised.
+    prev_blank: bool,
+    /// Are we inside an indented code block? Set when one begins at a
+    /// block boundary; cleared by a non-blank, non-indented line.
+    in_indent_code: bool,
 }
 
 impl LineSkipState {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            prev_blank: true,
+            ..Self::default()
+        }
     }
 
     /// Advance one line. Returns `true` when this line is structural
@@ -262,6 +274,13 @@ impl LineSkipState {
     /// should be skipped by the consumer; `false` when this line
     /// carries content the consumer should examine.
     pub(crate) fn skip_line(&mut self, line: &str) -> bool {
+        let is_blank = line.trim().is_empty();
+        let result = self.classify(line, is_blank);
+        self.prev_blank = is_blank;
+        result
+    }
+
+    fn classify(&mut self, line: &str, is_blank: bool) -> bool {
         // Frontmatter handling: only relevant on line 1 and during the
         // block. CommonMark doesn't define frontmatter; we follow the
         // Obsidian / Jekyll convention of a `---` block at the very top.
@@ -299,12 +318,21 @@ impl LineSkipState {
             return true;
         }
 
-        // Indented code block: 4+ leading spaces (or a tab) and we're
-        // not inside a list context. Without a full block parser we
-        // approximate by skipping any 4-space-indented line. False
-        // positives on deeply-nested list items are accepted in v1;
-        // they would never start with `#` to begin with.
-        if starts_with_indent(line, 4) {
+        // Indented code block: 4+ leading spaces (or a tab). Per
+        // CommonMark such a block cannot *interrupt* a paragraph or a
+        // list item's content — it only begins at a block boundary
+        // (after a blank line or at the document start). So an indented
+        // line that continues preceding content (e.g. a nested list
+        // item) is treated as content, not code. Once a block has begun,
+        // it continues through blank and further-indented lines until a
+        // non-blank, non-indented line ends it.
+        if self.in_indent_code {
+            if is_blank || starts_with_indent(line, 4) {
+                return true;
+            }
+            self.in_indent_code = false;
+        } else if self.prev_blank && !is_blank && starts_with_indent(line, 4) {
+            self.in_indent_code = true;
             return true;
         }
 
@@ -609,6 +637,48 @@ title: not frontmatter
         assert_eq!(
             extract_paragraphs(body),
             vec![p(1, 1, "## Just a heading"), p(3, 3, "next")]
+        );
+    }
+
+    #[test]
+    fn paragraphs_nested_list_stays_one_block() {
+        // Regression: indented nested list items (4-space / tab — the
+        // Obsidian default) must NOT be mistaken for an indented code
+        // block. An indented code block can only begin at a block
+        // boundary, not interrupt the list/paragraph started by `# Foo`.
+        // The whole heading-through-`Bar` run is one paragraph; before
+        // the fix it split into [1-2] and [5-5] with the indented lines
+        // dropped, so `[[Foo]]`'s two mentions landed in two blocks.
+        for indent in ["    ", "\t"] {
+            let body = format!(
+                "# [[Foo]]\n- A\n{i}- B\n{i}- C\n- [[Foo]]\n{i}- Bar\n\nXYZ\n",
+                i = indent
+            );
+            let ps = extract_paragraphs(&body);
+            assert_eq!(
+                ps.len(),
+                2,
+                "indent {indent:?} should yield 2 paragraphs, got {ps:#?}"
+            );
+            assert_eq!((ps[0].line_start, ps[0].line_end), (1, 6));
+            assert!(
+                ps[0].text.matches("[[Foo]]").count() == 2,
+                "both [[Foo]] mentions belong to one block: {:?}",
+                ps[0].text
+            );
+            assert_eq!(ps[1], p(8, 8, "XYZ"));
+        }
+    }
+
+    #[test]
+    fn paragraphs_real_indented_code_block_after_blank_still_skipped() {
+        // The fix must not regress genuine indented code blocks, which
+        // begin at a block boundary (after a blank line) and span their
+        // indented + blank lines.
+        let body = "intro\n\n    code one\n    code two\n\nafter\n";
+        assert_eq!(
+            extract_paragraphs(body),
+            vec![p(1, 1, "intro"), p(6, 6, "after")]
         );
     }
 
