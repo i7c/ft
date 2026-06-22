@@ -30,7 +30,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::tui::{palette, widgets::EditBuffer};
+use crate::tui::{
+    palette,
+    widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput},
+};
 
 // ── public surface ───────────────────────────────────────────────────────
 
@@ -230,35 +233,28 @@ impl<S: PickerSource> FuzzyPicker<S> {
     }
 
     fn render_input(&self, frame: &mut Frame, area: Rect) {
-        let chars: Vec<char> = self.input.text.chars().collect();
-        let cursor = self.input.cursor.min(chars.len());
-        let line = if chars.is_empty() {
-            Line::from(Span::styled(
-                "type to search…",
-                Style::default()
-                    .fg(palette::DIM)
-                    .add_modifier(Modifier::ITALIC),
-            ))
-        } else {
-            let mut iter = chars.iter().copied();
-            let left: String = iter.by_ref().take(cursor).collect();
-            let right: String = iter.collect();
-            Line::from(vec![
-                Span::styled(left, Style::default().fg(palette::WHITE)),
-                Span::styled(
-                    "│",
-                    Style::default()
-                        .fg(palette::SECONDARY)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(right, Style::default().fg(palette::WHITE)),
-            ])
-        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::SECONDARY))
             .title(" find ");
-        frame.render_widget(Paragraph::new(line).block(block), area);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let caret = Style::default()
+            .fg(palette::SECONDARY)
+            .add_modifier(Modifier::BOLD);
+        render_inline_input(
+            frame,
+            inner,
+            InlineInput::new(&self.input, CursorMode::Bar(caret))
+                .text_style(Style::default().fg(palette::WHITE))
+                .placeholder(Span::styled(
+                    "type to search…",
+                    Style::default()
+                        .fg(palette::DIM)
+                        .add_modifier(Modifier::ITALIC),
+                )),
+        );
     }
 
     fn render_list(&self, frame: &mut Frame, area: Rect) {

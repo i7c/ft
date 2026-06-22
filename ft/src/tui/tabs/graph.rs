@@ -61,8 +61,8 @@ use crate::tui::{
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
     widgets::{
-        render_scroll_list, EditBuffer, FuzzyPicker, PickerOutcome, ScrollListOpts,
-        VaultFilePickerSource,
+        render_inline_input, render_scroll_list, CursorMode, EditBuffer, FuzzyPicker, InlineInput,
+        PickerOutcome, ScrollListOpts, VaultFilePickerSource,
     },
 };
 
@@ -3541,36 +3541,27 @@ impl Tab for GraphTab {
 
         // Extract view info before mutable borrow for tree rendering.
         let query_snippet = self.views[self.active].query_snippet();
-        let query_text = self.views[self.active].query_buf.text.clone();
-        // EditBuffer.cursor is a char count; for the single-line input
-        // bar that matches the visual column for ASCII queries. Multi-
-        // byte chars still render correctly because every column step
-        // is one terminal cell wide for the queries we render here.
-        let input_cursor = self.views[self.active].query_buf.cursor;
 
         // ── Input bar ────────────────────────────────────────────────
+        // The bar scrolls horizontally so a long query keeps the caret in
+        // view. The hardware cursor is only positioned while editing.
         let prompt_style = if input_mode {
             Style::default().fg(palette::PRIMARY)
         } else {
             Style::default().fg(palette::DIM)
         };
-        let input_text = format!("> {}", query_text);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(input_text, prompt_style))),
+        let cursor_mode = if input_mode {
+            CursorMode::Hardware
+        } else {
+            CursorMode::None
+        };
+        render_inline_input(
+            frame,
             input_area,
+            InlineInput::new(&self.views[self.active].query_buf, cursor_mode)
+                .prefix(Span::styled("> ", prompt_style))
+                .text_style(prompt_style),
         );
-
-        if input_mode {
-            // 2 = width of the "> " prompt.
-            let x = input_area
-                .x
-                .saturating_add(2)
-                .saturating_add(input_cursor as u16);
-            frame.set_cursor_position((
-                x.min(input_area.x + input_area.width.saturating_sub(1)),
-                input_area.y,
-            ));
-        }
 
         // ── View tab strip ───────────────────────────────────────────
         let mut spans: Vec<Span> = Vec::with_capacity(self.views.len() * 2);

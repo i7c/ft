@@ -12,8 +12,6 @@
 //! offset (via [`horizontal_scroll`]) so the caret is always visible,
 //! renders the visible slice, and draws the cursor.
 
-#![allow(dead_code)] // wired up in the Problem-B migration commit
-
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -50,14 +48,19 @@ pub enum CursorMode {
     /// `get_cursor_position` (the graph query bar) or where the field
     /// shares a row with other widgets (timeblocks form).
     Hardware,
+    /// No caret at all — a read-only view of the buffer (e.g. an
+    /// unfocused query bar). The text still scrolls to keep the cursor
+    /// position visible.
+    None,
 }
 
 /// A single-line input to render.
 pub struct InlineInput<'a> {
     pub buf: &'a EditBuffer,
-    /// Static prompt drawn left of the text (e.g. `"> "`, `"filename: "`).
-    /// Its width is subtracted from the field before scrolling.
-    pub prefix: Option<Span<'a>>,
+    /// Static prompt spans drawn left of the text (e.g. `"> "`, or a
+    /// styled marker plus a `"filename: "` label). Their combined width
+    /// is reserved before the text scrolls.
+    pub prefix: Vec<Span<'a>>,
     /// Dim text shown when the buffer is empty.
     pub placeholder: Option<Span<'a>>,
     /// Style for the text glyphs.
@@ -70,15 +73,16 @@ impl<'a> InlineInput<'a> {
     pub fn new(buf: &'a EditBuffer, cursor: CursorMode) -> Self {
         Self {
             buf,
-            prefix: None,
+            prefix: Vec::new(),
             placeholder: None,
             text_style: Style::default(),
             cursor,
         }
     }
 
+    /// Append one prompt span. Call repeatedly for a multi-span prompt.
     pub fn prefix(mut self, span: Span<'a>) -> Self {
-        self.prefix = Some(span);
+        self.prefix.push(span);
         self
     }
 
@@ -99,41 +103,44 @@ pub fn render_inline_input(frame: &mut Frame, area: Rect, input: InlineInput<'_>
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let prefix_width = input.prefix.as_ref().map(|s| s.width() as u16).unwrap_or(0);
+    let prefix_width: u16 = input.prefix.iter().map(|s| s.width() as u16).sum();
     let field_width = area.width.saturating_sub(prefix_width) as usize;
 
-    let mut spans: Vec<Span> = Vec::new();
-    if let Some(p) = input.prefix.clone() {
-        spans.push(p);
-    }
+    let mut spans: Vec<Span> = input.prefix.clone();
 
     let chars: Vec<char> = input.buf.text.chars().collect();
 
-    // Empty buffer: show the placeholder (if any) and put the caret at
-    // the start of the field.
+    // Empty buffer: a placeholder (if any) stands in for the text and
+    // suppresses the caret; otherwise draw the caret at the field start.
     if chars.is_empty() {
-        push_empty_caret(&mut spans, &input);
         if let Some(ph) = input.placeholder.clone() {
-            // Bar/Block already drew one caret cell; the placeholder
-            // follows it. Hardware drew nothing, so the placeholder
-            // starts at the field origin.
             spans.push(ph);
+        } else {
+            push_empty_caret(&mut spans, &input);
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        if let CursorMode::Hardware = input.cursor {
-            frame.set_cursor_position((area.x + prefix_width, area.y));
+        if input.placeholder.is_none() {
+            if let CursorMode::Hardware = input.cursor {
+                frame.set_cursor_position((area.x + prefix_width, area.y));
+            }
         }
         return;
     }
 
     let cursor = input.buf.cursor.min(chars.len());
-    // A `Bar` caret occupies its own cell, so it eats one column of the
-    // visible field; `Block`/`Hardware` overlay an existing cell.
+    // `Bar` and the end-of-text `Block` caret each occupy their own cell,
+    // so they eat one column of the visible field; `Hardware`/`None`
+    // overlay an existing cell.
     let visible_width = match input.cursor {
-        CursorMode::Bar(_) => field_width.saturating_sub(1).max(1),
+        CursorMode::Bar(_) | CursorMode::Block(_) => field_width.saturating_sub(1).max(1),
         _ => field_width.max(1),
     };
-    let scroll = horizontal_scroll(cursor, chars.len(), visible_width);
+    // A read-only field (`None`) shows from the start; a focused field
+    // scrolls to keep the caret in view.
+    let scroll = match input.cursor {
+        CursorMode::None => 0,
+        _ => horizontal_scroll(cursor, chars.len(), visible_width),
+    };
     let visible_end = (scroll + visible_width).min(chars.len());
     let visible: Vec<char> = chars[scroll..visible_end].to_vec();
     let caret_in_visible = cursor.saturating_sub(scroll);
@@ -149,16 +156,15 @@ pub fn render_inline_input(frame: &mut Frame, area: Rect, input: InlineInput<'_>
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
         }
         CursorMode::Block(style) => {
+            // A solid `█` glyph marks the caret: at end-of-text it sits
+            // past the last char; mid-text it covers the char there.
             let split = caret_in_visible.min(visible.len());
             let left: String = visible[..split].iter().collect();
             spans.push(Span::styled(left, input.text_style));
+            spans.push(Span::styled("█", style));
             if split < visible.len() {
-                spans.push(Span::styled(visible[split].to_string(), style));
                 let right: String = visible[split + 1..].iter().collect();
                 spans.push(Span::styled(right, input.text_style));
-            } else {
-                // Caret past the last visible char — block over a space.
-                spans.push(Span::styled(" ", style));
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
         }
@@ -169,6 +175,11 @@ pub fn render_inline_input(frame: &mut Frame, area: Rect, input: InlineInput<'_>
             let col = area.x + prefix_width + caret_in_visible as u16;
             frame.set_cursor_position((col.min(area.x + area.width.saturating_sub(1)), area.y));
         }
+        CursorMode::None => {
+            let text: String = visible.iter().collect();
+            spans.push(Span::styled(text, input.text_style));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        }
     }
 }
 
@@ -176,8 +187,8 @@ pub fn render_inline_input(frame: &mut Frame, area: Rect, input: InlineInput<'_>
 fn push_empty_caret(spans: &mut Vec<Span>, input: &InlineInput<'_>) {
     match input.cursor {
         CursorMode::Bar(style) => spans.push(Span::styled("│", style)),
-        CursorMode::Block(style) => spans.push(Span::styled(" ", style)),
-        CursorMode::Hardware => {}
+        CursorMode::Block(style) => spans.push(Span::styled("█", style)),
+        CursorMode::Hardware | CursorMode::None => {}
     }
 }
 

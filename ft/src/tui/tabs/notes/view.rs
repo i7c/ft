@@ -24,7 +24,9 @@ use crate::tui::notes_actions::section_move::{
 use crate::tui::palette;
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::NotesState;
-use crate::tui::widgets::{render_scroll_list, ScrollListOpts};
+use crate::tui::widgets::{
+    render_inline_input, render_scroll_list, CursorMode, EditBuffer, InlineInput, ScrollListOpts,
+};
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
 /// the `?` help overlay so users see one canonical list.
@@ -177,6 +179,29 @@ pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut N
         NotesState::CaptureVarPrompt(vs) => render_capture_var_prompt(frame, area, vs),
         NotesState::PeriodicLeader => render_periodic_leader(frame, area),
     }
+}
+
+/// Render a single-line prompt input: a `▏ ` marker, the caller's
+/// `label` prompt, then the buffer with a block caret. Scrolls
+/// horizontally so a long value keeps the caret in view.
+fn render_prompt_input(frame: &mut Frame, area: Rect, label: Span<'_>, buf: &EditBuffer) {
+    let marker = Span::styled(
+        "▏ ",
+        Style::default()
+            .fg(palette::SECONDARY)
+            .add_modifier(Modifier::BOLD),
+    );
+    let caret = Style::default()
+        .fg(palette::WHITE)
+        .add_modifier(Modifier::SLOW_BLINK);
+    render_inline_input(
+        frame,
+        area,
+        InlineInput::new(buf, CursorMode::Block(caret))
+            .prefix(marker)
+            .prefix(label)
+            .text_style(Style::default().fg(palette::WHITE)),
+    );
 }
 
 pub(crate) fn render_periodic_leader(frame: &mut Frame, area: Rect) {
@@ -355,23 +380,12 @@ fn render_append_var_prompt(
         ])
         .split(inner);
 
-    let prompt = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[1],
         Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
-        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(prompt).alignment(Alignment::Left), chunks[1]);
+        buf,
+    );
 
     let footer = keymap_line(&[
         ("Enter", "confirm"),
@@ -433,23 +447,12 @@ pub(crate) fn render_capture_var_prompt(
         ])
         .split(inner);
 
-    let prompt = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[1],
         Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
-        Span::styled(vs.buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(prompt).alignment(Alignment::Left), chunks[1]);
+        &vs.buf,
+    );
 
     let footer = keymap_line(&[
         ("Enter", "confirm"),
@@ -545,23 +548,12 @@ fn render_filename_prompt(
         ])
         .split(inner);
 
-    let input = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[0],
         Span::styled("filename: ", Style::default().fg(palette::DIM)),
-        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(input), chunks[0]);
+        buf,
+    );
 
     let mut footer_lines: Vec<Line> = Vec::with_capacity(2);
     if let Some(msg) = error {
@@ -626,23 +618,12 @@ fn render_var_prompt(
         ])
         .split(inner);
 
-    let prompt = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[0],
         Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
-        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(prompt), chunks[0]);
+        buf,
+    );
 
     let so_far_label: String = if vars_so_far.is_empty() {
         String::new()
@@ -923,23 +904,12 @@ fn render_new_target_filename_prompt(
         ])
         .split(inner);
 
-    let input = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[0],
         Span::styled("filename: ", Style::default().fg(palette::DIM)),
-        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(input), chunks[0]);
+        buf,
+    );
 
     let mut footer_lines: Vec<Line> = Vec::with_capacity(2);
     if let Some(msg) = error {
@@ -1001,23 +971,12 @@ fn render_new_target_var_prompt(
         ])
         .split(inner);
 
-    let prompt = Line::from(vec![
-        Span::styled(
-            "▏ ",
-            Style::default()
-                .fg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+    render_prompt_input(
+        frame,
+        chunks[0],
         Span::styled(format!("{key_name} = "), Style::default().fg(palette::DIM)),
-        Span::styled(buf.text.clone(), Style::default().fg(palette::WHITE)),
-        Span::styled(
-            "█",
-            Style::default()
-                .fg(palette::WHITE)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(prompt), chunks[0]);
+        buf,
+    );
 
     let so_far_label: String = if vars_so_far.is_empty() {
         String::new()
@@ -1161,23 +1120,12 @@ fn render_compose_popup(
     frame.render_widget(Paragraph::new(lines), body_area);
 
     if let Some(rb) = editing {
-        let edit_line = Line::from(vec![
-            Span::styled(
-                "▏ ",
-                Style::default()
-                    .fg(palette::SECONDARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        render_prompt_input(
+            frame,
+            chunks[1],
             Span::styled("rename → ", Style::default().fg(palette::SECONDARY)),
-            Span::styled(rb.buf.text.clone(), Style::default().fg(palette::WHITE)),
-            Span::styled(
-                "█",
-                Style::default()
-                    .fg(palette::WHITE)
-                    .add_modifier(Modifier::SLOW_BLINK),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(edit_line), chunks[1]);
+            &rb.buf,
+        );
     }
 
     let keys = if editing.is_some() {

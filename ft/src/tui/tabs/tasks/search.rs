@@ -29,7 +29,10 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{quickline::parse_quickline, view::View},
-    widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
+    widgets::{
+        horizontal_scroll, render_inline_input, CursorMode, EditBuffer, FuzzyPicker, InlineInput,
+        PickerOutcome, VaultFilePickerSource,
+    },
 };
 
 /// Idle-state keymap for the SearchView (the only view under TasksTab
@@ -720,48 +723,34 @@ impl SearchView {
             Style::default().fg(palette::DIM)
         };
 
-        // Inner content width inside borders. We scroll horizontally so the
-        // edit cursor stays visible — long queries would otherwise drop the
-        // caret off the right edge.
-        let inner_width = area.width.saturating_sub(2) as usize;
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        let line: Line = if let Some(buf) = &self.edit_state {
-            let chars: Vec<char> = buf.text.chars().collect();
-            let cursor = buf.cursor.min(chars.len());
-            let scroll = horizontal_scroll(cursor, chars.len(), inner_width);
-
-            let visible_end = (scroll + inner_width.saturating_sub(1)).min(chars.len());
-            let visible: String = chars[scroll..visible_end].iter().collect();
-            let visible_cursor = cursor.saturating_sub(scroll);
-            let split = visible_cursor.min(visible.chars().count());
-            let mut iter = visible.chars();
-            let left: String = iter.by_ref().take(split).collect();
-            let right: String = iter.collect();
-            Line::from(vec![
-                Span::raw(left),
-                Span::styled(
-                    "│",
-                    Style::default()
-                        .fg(palette::PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(right),
-            ])
+        // While editing, scroll horizontally so the caret stays visible —
+        // long queries would otherwise drop it off the right edge.
+        if let Some(buf) = &self.edit_state {
+            let caret = Style::default()
+                .fg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD);
+            render_inline_input(frame, inner, InlineInput::new(buf, CursorMode::Bar(caret)));
         } else {
             let display = if self.query_text.is_empty() {
                 "(no filter — press / to edit)".to_string()
             } else {
                 self.query_text.clone()
             };
-            Line::from(Span::styled(display, Style::default().fg(palette::WHITE)))
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
-        let para = Paragraph::new(line).block(block);
-        frame.render_widget(para, area);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    display,
+                    Style::default().fg(palette::WHITE),
+                ))),
+                inner,
+            );
+        }
     }
 
     /// Render the new-task quickline panel. The caller picks a 4-row
@@ -2000,21 +1989,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-/// Pick a horizontal scroll offset (in chars) so `cursor` is visible within
-/// `width` cols of viewport. Reserves one column for the caret itself.
-fn horizontal_scroll(cursor: usize, total: usize, width: usize) -> usize {
-    if width == 0 {
-        return 0;
-    }
-    if cursor < width {
-        return 0;
-    }
-    let max_scroll = total.saturating_sub(width.saturating_sub(1));
-    cursor
-        .saturating_sub(width.saturating_sub(1))
-        .min(max_scroll)
 }
 
 // --- row formatting ----------------------------------------------------------

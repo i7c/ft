@@ -10,7 +10,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::{palette, tab::TabCtx};
+use crate::tui::{
+    palette,
+    tab::TabCtx,
+    widgets::{render_inline_input, CursorMode, InlineInput},
+};
 use ratatui::widgets::Clear;
 
 use super::{FormField, Mode, Pane, TimeblocksTab, ViewMode, SIDEBAR_WIDTH};
@@ -65,20 +69,17 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, ctx
 fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     // ASCII-only prefixes so `chars().count()` matches the rendered
     // cell count (see the form-modal fix for the same reason).
-    let (prefix, text, cursor) = match &tab.mode {
-        Mode::Quickline(buf) => (" + ", buf.text.as_str(), buf.cursor),
-        Mode::EditDesc { buf, .. } => (" edit desc > ", buf.text.as_str(), buf.cursor),
+    let (prefix, buf) = match &tab.mode {
+        Mode::Quickline(buf) => (" + ", buf),
+        Mode::EditDesc { buf, .. } => (" edit desc > ", buf),
         _ => return,
     };
-    let line = Line::from(vec![
-        Span::styled(prefix, Style::default().fg(palette::PRIMARY)),
-        Span::raw(text),
-    ]);
-    let para = Paragraph::new(line);
-    frame.render_widget(para, area);
-    let col = area.x + (prefix.chars().count() as u16) + (cursor as u16);
-    let col = col.min(area.x + area.width.saturating_sub(1));
-    frame.set_cursor_position((col, area.y));
+    render_inline_input(
+        frame,
+        area,
+        InlineInput::new(buf, CursorMode::Hardware)
+            .prefix(Span::styled(prefix, Style::default().fg(palette::PRIMARY))),
+    );
 }
 
 fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
@@ -114,32 +115,38 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
 
     // ASCII prefix so cursor positioning matches what the terminal
     // actually renders (the previous `▸` glyph was 2 cells wide in some
-    // fonts, throwing the cursor offset off by one cell).
-    let prefix_for = |label: &str, focused: bool| -> String {
-        let marker = if focused { '>' } else { ' ' };
-        format!("{marker} {label:<6}")
-    };
-    let row = |label: &str, buf_text: &str, focused: bool| -> Paragraph<'_> {
-        let style = if focused {
-            Style::default()
-                .fg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette::WHITE)
+    // fonts, throwing the cursor offset off by one cell). The focused row
+    // owns the hardware cursor and scrolls horizontally for long values.
+    let mut row =
+        |label: &str, buf: &crate::tui::widgets::EditBuffer, focused: bool, area: Rect| {
+            let marker = if focused { '>' } else { ' ' };
+            let (style, cursor) = if focused {
+                (
+                    Style::default()
+                        .fg(palette::PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                    CursorMode::Hardware,
+                )
+            } else {
+                (Style::default().fg(palette::WHITE), CursorMode::None)
+            };
+            render_inline_input(
+                frame,
+                area,
+                InlineInput::new(buf, cursor)
+                    .prefix(Span::styled(format!("{marker} {label:<6}"), style))
+                    .text_style(style),
+            );
         };
-        Paragraph::new(Line::from(vec![
-            Span::styled(prefix_for(label, focused), style),
-            Span::raw(buf_text.to_string()),
-        ]))
-    };
 
-    let start_row = row("start", &state.start.text, state.focus == FormField::Start);
-    let end_row = row("end", &state.end.text, state.focus == FormField::End);
-    let desc_row = row("desc", &state.desc.text, state.focus == FormField::Desc);
-
-    frame.render_widget(start_row, rows[0]);
-    frame.render_widget(end_row, rows[1]);
-    frame.render_widget(desc_row, rows[2]);
+    row(
+        "start",
+        &state.start,
+        state.focus == FormField::Start,
+        rows[0],
+    );
+    row("end", &state.end, state.focus == FormField::End, rows[1]);
+    row("desc", &state.desc, state.focus == FormField::Desc, rows[2]);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Tab / ↑↓ to cycle  ·  Enter on desc to commit  ·  Esc to cancel",
@@ -147,18 +154,6 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         )),
         rows[4],
     );
-
-    // Cursor offset = the focused row's actual prefix width. ASCII-only
-    // so `chars().count()` equals the rendered cell count.
-    let (buf_cursor, row_idx, label) = match state.focus {
-        FormField::Start => (state.start.cursor, 0, "start"),
-        FormField::End => (state.end.cursor, 1, "end"),
-        FormField::Desc => (state.desc.cursor, 2, "desc"),
-    };
-    let prefix_width = prefix_for(label, true).chars().count() as u16;
-    let col = rows[row_idx].x + prefix_width + buf_cursor as u16;
-    let col = col.min(rows[row_idx].x + rows[row_idx].width.saturating_sub(1));
-    frame.set_cursor_position((col, rows[row_idx].y));
 }
 
 fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
@@ -440,13 +435,11 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         rows[1],
     );
 
-    let prefix = "> ";
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(palette::PRIMARY)),
-            Span::raw(buf.text.clone()),
-        ])),
+    render_inline_input(
+        frame,
         rows[3],
+        InlineInput::new(buf, CursorMode::Hardware)
+            .prefix(Span::styled("> ", Style::default().fg(palette::PRIMARY))),
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
@@ -455,10 +448,6 @@ fn render_tag_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         )),
         rows[4],
     );
-
-    let col = rows[3].x + (prefix.chars().count() as u16) + buf.cursor as u16;
-    let col = col.min(rows[3].x + rows[3].width.saturating_sub(1));
-    frame.set_cursor_position((col, rows[3].y));
 }
 
 /// Friendly pane title for `date` relative to `today`. Always includes

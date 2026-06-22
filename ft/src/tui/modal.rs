@@ -63,7 +63,7 @@ use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
     render_periodic_leader,
 };
-use crate::tui::widgets::EditBuffer;
+use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
 use crate::tui::widgets::{
     FuzzyPicker, JournalSourceHit, JournalSourcePickerSource, PickerOutcome,
 };
@@ -705,70 +705,19 @@ fn render_create_subdir(frame: &mut Frame, area: Rect, state: &CreateSubdirState
     frame.render_widget(block, popup_area);
 
     // Input field
-    let input_style = Style::default().fg(Color::White);
-    let cursor_pos = (state.buf.cursor as u16).min(inner.width.saturating_sub(3));
-    let visible_start = if cursor_pos >= inner.width.saturating_sub(2) {
-        cursor_pos - inner.width.saturating_sub(3)
-    } else {
-        0
-    };
-    let visible: String = state
-        .buf
-        .text
-        .chars()
-        .skip(visible_start as usize)
-        .take(inner.width.saturating_sub(2) as usize)
-        .collect();
-    let input_line = if state.buf.text.is_empty() {
-        Line::from(Span::styled(
-            " ".repeat(inner.width.saturating_sub(2) as usize),
-            input_style,
-        ))
-    } else {
-        Line::from(Span::styled(visible, input_style))
-    };
     let input_area = Rect {
         x: inner.x + 1,
         y: inner.y + 1,
         width: inner.width.saturating_sub(2),
         height: 1,
     };
-    frame.render_widget(Paragraph::new(input_line), input_area);
-
-    // Cursor
-    let cursor_x = inner.x + 1 + cursor_pos.saturating_sub(visible_start as u16);
-    let cursor_style = if state.buf.cursor < state.buf.text.len() {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().bg(Color::White)
-    };
-    if let Some(ch) = state.buf.text.chars().nth(state.buf.cursor) {
-        let cursor_span = Span::styled(ch.to_string(), cursor_style);
-        frame.render_widget(
-            Paragraph::new(Line::from(cursor_span)),
-            Rect {
-                x: cursor_x,
-                y: inner.y + 1,
-                width: 1,
-                height: 1,
-            },
-        );
-    } else {
-        // End of text — show block cursor.
-        let cursor_span = Span::styled(" ", cursor_style);
-        frame.render_widget(
-            Paragraph::new(Line::from(cursor_span)),
-            Rect {
-                x: cursor_x,
-                y: inner.y + 1,
-                width: 1,
-                height: 1,
-            },
-        );
-    }
+    let cursor_style = Style::default().fg(Color::White);
+    render_inline_input(
+        frame,
+        input_area,
+        InlineInput::new(&state.buf, CursorMode::Block(cursor_style))
+            .text_style(Style::default().fg(Color::White)),
+    );
 
     // Error text
     if let Some(err) = &state.error {

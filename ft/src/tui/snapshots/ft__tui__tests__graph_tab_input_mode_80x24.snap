@@ -1,10 +1,10 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 6040
+assertion_line: 6526
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
-> node where path = ""; expand where edge.kind in {directory-contains, link, emb
+> where path = ""; expand where edge.kind in {directory-contains, link, embed}; 
  1: node where path = "…                                                        
 ┌ node where path = "… ────────────────────────────────────────────────────────┐
 │▶   D /                                                                       │
