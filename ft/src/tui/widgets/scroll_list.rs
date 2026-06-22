@@ -19,8 +19,6 @@
 //! the reslice preview). The list still scrolls the selection into view
 //! because [`List`] recomputes the offset from `selected` every frame.
 
-#![allow(dead_code)] // wired up in the Problem-A migration commit
-
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{

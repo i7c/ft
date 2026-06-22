@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, ListItem, Paragraph},
     Frame,
 };
 
@@ -24,6 +24,7 @@ use crate::tui::notes_actions::section_move::{
 use crate::tui::palette;
 use crate::tui::tab::TabCtx;
 use crate::tui::tabs::notes::NotesState;
+use crate::tui::widgets::{render_scroll_list, ScrollListOpts};
 
 /// Idle-panel keymap. Each row is `(keys, description)`. Kept identical to
 /// the `?` help overlay so users see one canonical list.
@@ -1346,37 +1347,38 @@ fn render_reslice_sections(
         .split(inner);
 
     let body_area = chunks[0];
-    let visible = body_area.height as usize;
-    let total = sections.len();
-    let scroll = compute_scroll(focus, visible, total);
-    let end = (scroll + visible).min(total);
-
-    let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(scroll));
-    for (i, s) in sections.iter().enumerate().take(end).skip(scroll) {
-        let cursor = if i == focus { "▶ " } else { "  " };
-        let row_style = if i == focus {
-            Style::default()
-                .bg(Color::Rgb(50, 38, 30))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        let (tag, tag_color) = status_tag(&s.status);
-        lines.push(Line::from(vec![
-            Span::styled(cursor, row_style),
-            Span::styled(format!("{tag:>6} "), row_style.fg(tag_color)),
-            Span::styled(
-                format!(
-                    "{} L{}-{}",
-                    s.source_path.display(),
-                    s.line_start,
-                    s.line_end
+    let items: Vec<ListItem> = sections
+        .iter()
+        .map(|s| {
+            let (tag, tag_color) = status_tag(&s.status);
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{tag:>6} "), Style::default().fg(tag_color)),
+                Span::styled(
+                    format!(
+                        "{} L{}-{}",
+                        s.source_path.display(),
+                        s.line_start,
+                        s.line_end
+                    ),
+                    Style::default().fg(palette::WHITE),
                 ),
-                row_style.fg(palette::WHITE),
-            ),
-        ]));
-    }
-    frame.render_widget(Paragraph::new(lines), body_area);
+            ]))
+        })
+        .collect();
+    let selected = (!sections.is_empty()).then_some(focus);
+    render_scroll_list(
+        frame,
+        body_area,
+        items,
+        selected,
+        ScrollListOpts {
+            highlight_symbol: "▶ ",
+            highlight_style: Style::default()
+                .bg(Color::Rgb(50, 38, 30))
+                .add_modifier(Modifier::BOLD),
+            scrollbar: true,
+        },
+    );
     frame.render_widget(
         Paragraph::new(vec![Line::from(""), keymap_line(RESLICE_SECTION_KEYS)])
             .alignment(Alignment::Center),
@@ -1413,19 +1415,37 @@ fn render_reslice_edit(frame: &mut Frame, area: Rect, eb: &EditBoundary) {
         .constraints([Constraint::Min(1), Constraint::Length(2)])
         .split(inner);
 
-    let lines: Vec<Line> = eb
-        .preview()
+    let preview = eb.preview();
+    let items: Vec<ListItem> = preview
         .iter()
         .enumerate()
         .map(|(i, l)| {
             let lineno = eb.start as usize + i;
-            Line::from(vec![
+            ListItem::new(Line::from(vec![
                 Span::styled(format!("{lineno:>5} │ "), Style::default().fg(palette::DIM)),
                 Span::styled(l.clone(), Style::default().fg(palette::WHITE)),
-            ])
+            ]))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), chunks[0]);
+    // Keep the boundary line the user is moving in view: the top edge is
+    // the first preview row, the bottom edge the last.
+    let active_row = match eb.active {
+        Edge::Top => 0,
+        Edge::Bottom => preview.len().saturating_sub(1),
+    };
+    render_scroll_list(
+        frame,
+        chunks[0],
+        items,
+        (!preview.is_empty()).then_some(active_row),
+        ScrollListOpts {
+            highlight_symbol: "",
+            highlight_style: Style::default()
+                .fg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+            scrollbar: true,
+        },
+    );
     frame.render_widget(
         Paragraph::new(vec![Line::from(""), keymap_line(RESLICE_EDIT_KEYS)])
             .alignment(Alignment::Center),

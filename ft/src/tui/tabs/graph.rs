@@ -60,7 +60,10 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
-    widgets::{EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
+    widgets::{
+        render_scroll_list, EditBuffer, FuzzyPicker, PickerOutcome, ScrollListOpts,
+        VaultFilePickerSource,
+    },
 };
 
 // ── Preset picker source ──────────────────────────────────────────────
@@ -1153,7 +1156,6 @@ pub struct RelatedModal {
     /// are good enough for this short-lived UI state).
     checked: HashSet<String>,
     cursor: usize,
-    scroll_offset: usize,
 }
 
 impl RelatedModal {
@@ -1834,7 +1836,6 @@ impl GraphTab {
             candidates,
             checked: HashSet::new(),
             cursor: 0,
-            scroll_offset: 0,
         })
     }
 
@@ -4051,8 +4052,14 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let [header_area, list_area, footer_area] = Layout::vertical([
+    // The `already`-in-Related rows are non-interactive, so they live in
+    // a fixed header band above the scrolling candidate list (capped so a
+    // long `already` list can't starve the candidates of rows). Only the
+    // candidates scroll, with the cursor kept in view.
+    let already_rows = (modal.already.len() as u16).min(inner.height / 3);
+    let [summary_area, already_area, list_area, footer_area] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(already_rows),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
@@ -4072,40 +4079,57 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
             header_text,
             Style::default().fg(palette::DIM),
         ))),
-        header_area,
+        summary_area,
     );
 
-    let mut lines: Vec<Line> = Vec::new();
-    for s in &modal.already {
-        lines.push(Line::from(vec![
-            Span::styled("  ✓  ", Style::default().fg(palette::SUCCESS)),
-            Span::styled(
-                format!("[[{}]]", s.title),
-                Style::default().fg(palette::DIM),
-            ),
-            Span::styled(
-                format!("  ({})", s.score),
-                Style::default().fg(palette::DIM),
-            ),
-        ]));
+    if already_rows > 0 {
+        let already_lines: Vec<Line> = modal
+            .already
+            .iter()
+            .map(|s| {
+                Line::from(vec![
+                    Span::styled("  ✓  ", Style::default().fg(palette::SUCCESS)),
+                    Span::styled(
+                        format!("[[{}]]", s.title),
+                        Style::default().fg(palette::DIM),
+                    ),
+                    Span::styled(
+                        format!("  ({})", s.score),
+                        Style::default().fg(palette::DIM),
+                    ),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(already_lines), already_area);
     }
-    for (i, s) in modal.candidates.iter().enumerate() {
-        let checked = modal.checked.contains(&s.title);
-        let marker = if checked { "[x]" } else { "[ ]" };
-        let cursor = if i == modal.cursor { "▶ " } else { "  " };
-        let mut style = Style::default();
-        if i == modal.cursor {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        lines.push(Line::from(vec![
-            Span::styled(format!("{cursor}{marker} "), style),
-            Span::styled(format!("[[{}]]", s.title), style),
-            Span::styled(format!("  ({})", s.score), style.fg(palette::DIM)),
-        ]));
-    }
-    frame.render_widget(
-        Paragraph::new(lines).scroll((modal.scroll_offset as u16, 0)),
+
+    let items: Vec<ListItem> = modal
+        .candidates
+        .iter()
+        .map(|s| {
+            let checked = modal.checked.contains(&s.title);
+            let marker = if checked { "[x]" } else { "[ ]" };
+            ListItem::new(Line::from(vec![
+                Span::raw(format!("{marker} ")),
+                Span::raw(format!("[[{}]]", s.title)),
+                Span::styled(
+                    format!("  ({})", s.score),
+                    Style::default().fg(palette::DIM),
+                ),
+            ]))
+        })
+        .collect();
+    let selected = (!modal.candidates.is_empty()).then_some(modal.cursor);
+    render_scroll_list(
+        frame,
         list_area,
+        items,
+        selected,
+        ScrollListOpts {
+            highlight_symbol: "▶ ",
+            highlight_style: Style::default().add_modifier(Modifier::REVERSED),
+            scrollbar: true,
+        },
     );
 
     frame.render_widget(
