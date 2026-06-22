@@ -27,12 +27,15 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::{
     palette,
-    widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput},
+    widgets::{
+        render_inline_input, render_scroll_list, CursorMode, EditBuffer, InlineInput,
+        ScrollListOpts,
+    },
 };
 
 // ── public surface ───────────────────────────────────────────────────────
@@ -91,7 +94,6 @@ pub struct FuzzyPicker<S: PickerSource> {
     input: EditBuffer,
     items: Vec<PickerItem<S::Item>>,
     selected: usize,
-    scroll: u16,
     /// Cache key for the last source query so we don't re-run on every
     /// non-input keystroke.
     last_query: Option<String>,
@@ -106,7 +108,6 @@ impl<S: PickerSource> FuzzyPicker<S> {
             input: EditBuffer::default(),
             items: Vec::new(),
             selected: 0,
-            scroll: 0,
             last_query: None,
             limit: 50,
         };
@@ -195,7 +196,6 @@ impl<S: PickerSource> FuzzyPicker<S> {
             self.source.query(&current, self.limit)
         };
         self.selected = 0;
-        self.scroll = 0;
         self.last_query = Some(current);
     }
 
@@ -228,7 +228,6 @@ impl<S: PickerSource> FuzzyPicker<S> {
             .split(area);
 
         self.render_input(frame, chunks[0]);
-        self.adjust_scroll(chunks[1].height);
         self.render_list(frame, chunks[1]);
     }
 
@@ -292,78 +291,65 @@ impl<S: PickerSource> FuzzyPicker<S> {
             return;
         }
 
-        let visible_rows = inner.height as usize;
-        let start = self.scroll as usize;
-        let end = (start + visible_rows).min(self.items.len());
-        let label_width = inner.width.saturating_sub(2) as usize; // cursor (2)
-
-        let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(start));
-        for i in start..end {
-            let item = &self.items[i];
-            lines.push(render_row(item, i == self.selected, label_width));
-        }
-        let para = Paragraph::new(lines);
-        frame.render_widget(para, inner);
-    }
-
-    fn adjust_scroll(&mut self, list_height: u16) {
-        let visible = list_height.saturating_sub(2).max(1); // minus the borders
-        let selected = self.selected as u16;
-        if selected < self.scroll {
-            self.scroll = selected;
-        } else if selected >= self.scroll + visible {
-            self.scroll = selected + 1 - visible;
-        }
+        // `render_scroll_list` reserves a 2-col gutter for the `▶ `
+        // highlight symbol, so the label budget shrinks by that much.
+        let label_width = inner.width.saturating_sub(2) as usize;
+        let items: Vec<ListItem> = self
+            .items
+            .iter()
+            .map(|item| ListItem::new(render_row(item, label_width)))
+            .collect();
+        render_scroll_list(
+            frame,
+            inner,
+            items,
+            Some(self.selected),
+            ScrollListOpts {
+                highlight_symbol: "▶ ",
+                highlight_style: Style::default()
+                    .bg(Color::Rgb(50, 38, 30))
+                    .add_modifier(Modifier::BOLD),
+                scrollbar: true,
+            },
+        );
     }
 }
 
-/// Render one row with cursor + highlighted match chars + plain rest.
-fn render_row<T>(item: &PickerItem<T>, selected: bool, label_width: usize) -> Line<'static> {
-    let cursor = if selected { "▶ " } else { "  " };
-    let row_style = if selected {
-        Style::default()
-            .bg(Color::Rgb(50, 38, 30))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
+/// Render one row: highlighted match chars + plain rest. The selection
+/// cursor and row highlight are applied by `render_scroll_list`.
+fn render_row<T>(item: &PickerItem<T>, label_width: usize) -> Line<'static> {
     let label: String = item.label.chars().take(label_width).collect();
     // Map each char position to either highlighted or plain — emit spans
     // greedily by walking runs of like-kind positions.
     let highlight_set: std::collections::HashSet<u32> =
         item.match_indices.iter().copied().collect();
     let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled(cursor.to_string(), row_style));
     let mut run = String::new();
     let mut run_highlight = false;
     for (i, c) in label.chars().enumerate() {
         let hi = highlight_set.contains(&(i as u32));
         if hi != run_highlight && !run.is_empty() {
-            spans.push(make_span(
-                std::mem::take(&mut run),
-                run_highlight,
-                row_style,
-            ));
+            spans.push(make_span(std::mem::take(&mut run), run_highlight));
         }
         run.push(c);
         run_highlight = hi;
     }
     if !run.is_empty() {
-        spans.push(make_span(run, run_highlight, row_style));
+        spans.push(make_span(run, run_highlight));
     }
     Line::from(spans)
 }
 
-fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
+fn make_span(text: String, highlight: bool) -> Span<'static> {
     if highlight {
         Span::styled(
             text,
-            row_style
+            Style::default()
                 .fg(palette::SECONDARY)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )
     } else {
-        Span::styled(text, row_style.fg(palette::WHITE))
+        Span::styled(text, Style::default().fg(palette::WHITE))
     }
 }
 
