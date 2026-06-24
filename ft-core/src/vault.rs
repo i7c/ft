@@ -590,7 +590,13 @@ mod tests {
         let now = date.and_hms_opt(8, 0, 0).unwrap();
         let path = vault.ensure_target(date, None, date, now).unwrap();
 
-        assert_eq!(path, dir.path().join("journal/2026-05-09.md"));
+        assert_eq!(
+            path,
+            dir.path()
+                .canonicalize()
+                .unwrap()
+                .join("journal/2026-05-09.md")
+        );
         let body = std::fs::read_to_string(&path).unwrap();
         assert_eq!(body, "# 2026-05-09\n\n## Tasks\n");
     }
@@ -633,7 +639,7 @@ mod tests {
             .ensure_target(date, Some(explicit), date, now)
             .unwrap();
 
-        assert_eq!(path, dir.path().join("Inbox.md"));
+        assert_eq!(path, dir.path().canonicalize().unwrap().join("Inbox.md"));
         // Explicit paths are resolved but never created/templated here.
         assert!(!path.exists());
     }
