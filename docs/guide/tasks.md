@@ -125,6 +125,12 @@ Colour is on by default when stdout is a TTY. `NO_COLOR=1`,
 order: `--file PATH` → today's daily note → `default_task_location` →
 error.
 
+When the target is the daily note and it doesn't exist yet, it's created
+from your `[periodic_notes.daily].template` first — the same file
+`ft notes today` would produce — so the first task of the day doesn't
+leave behind a bare, template-less note. (Explicit `--file` paths are
+written as-is and not auto-templated.)
+
 ```sh
 # Drop into today's daily note
 ft tasks create "Call dentist" --due tomorrow --priority high
@@ -145,13 +151,35 @@ phrases (`next monday`, `in 2 weeks`). Anywhere `today` resolves,
 `FT_TODAY=YYYY-MM-DD` overrides it — useful for tests and
 reproducible scripts.
 
+### Where in the file a task lands
+
+When you don't pass an explicit position flag, `ft` resolves a target
+*section* in this order:
+
+1. The target note's `ft-tasks-section:` frontmatter, e.g.
+
+   ```yaml
+   ---
+   ft-tasks-section: Tasks
+   ---
+   ```
+
+   Put this in your daily-note template and every daily note will collect
+   new tasks under its `## Tasks` heading. Any fixed-path note can set its
+   own.
+2. The global `[tasks] default_section` config key (see the config guide).
+3. Otherwise, plain append at file end.
+
+A resolved section behaves like `--under-heading`: the heading is created
+at file end if the note doesn't have it yet.
+
 Other useful flags:
 
 - `--under-heading "<text>"` — append at the end of that section,
-  creating the heading if missing.
+  creating the heading if missing. Overrides the resolution above.
 - `--at-line N` — insert at a specific 1-indexed line.
-- `--append` — append at file end (the implicit default for daily
-  notes; explicit for clarity).
+- `--append` — force appending at file end, overriding any configured
+  default section.
 - `--edit` — after writing, open `$EDITOR` on the new task line.
 - `--force` — insert even when an exact-duplicate task already exists
   (same description + dates).

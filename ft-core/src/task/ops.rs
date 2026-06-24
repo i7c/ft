@@ -56,6 +56,25 @@ pub enum Position {
     Subtask { parent_line: usize },
 }
 
+/// Pick the [`Position`] for a new task when the caller has no explicit
+/// position to apply. Precedence: the target note's `ft-tasks-section`
+/// frontmatter, then `config_default_section`, else [`Position::Append`].
+///
+/// `target_path` is read to inspect frontmatter; a read error (e.g. the
+/// daily note doesn't exist yet) is treated as "no frontmatter" so the
+/// config default still applies. A resolved section becomes
+/// [`Position::UnderHeading`], which creates the heading at file end if the
+/// note lacks it.
+pub fn auto_position(target_path: &Path, config_default_section: Option<&str>) -> Position {
+    let from_frontmatter = std::fs::read_to_string(target_path)
+        .ok()
+        .and_then(|content| crate::notes::append::frontmatter_tasks_section(&content));
+    match from_frontmatter.or_else(|| config_default_section.map(str::to_string)) {
+        Some(section) => Position::UnderHeading(section),
+        None => Position::Append,
+    }
+}
+
 /// User-provided fields for a new task. `description` should contain only
 /// the user's free text — `tags` are appended automatically.
 #[derive(Debug, Clone, Default)]
@@ -896,6 +915,68 @@ mod tests {
         assert_eq!(outcome.line, 1);
         let content = std::fs::read_to_string(&p).unwrap();
         assert_eq!(content, "- [ ] Buy milk 📅 2026-05-10\n");
+    }
+
+    #[test]
+    fn auto_position_frontmatter_wins_over_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("note.md");
+        std::fs::write(&p, "---\nft-tasks-section: Inbox\n---\n# Note\n").unwrap();
+        match auto_position(&p, Some("Tasks")) {
+            Position::UnderHeading(h) => assert_eq!(h, "Inbox"),
+            other => panic!("expected UnderHeading(Inbox), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_position_falls_back_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("note.md");
+        std::fs::write(&p, "# Note\n").unwrap();
+        match auto_position(&p, Some("Tasks")) {
+            Position::UnderHeading(h) => assert_eq!(h, "Tasks"),
+            other => panic!("expected UnderHeading(Tasks), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_position_missing_file_uses_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("does-not-exist.md");
+        match auto_position(&p, Some("Tasks")) {
+            Position::UnderHeading(h) => assert_eq!(h, "Tasks"),
+            other => panic!("expected UnderHeading(Tasks), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_position_no_section_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("note.md");
+        std::fs::write(&p, "# Note\n").unwrap();
+        assert!(matches!(auto_position(&p, None), Position::Append));
+    }
+
+    #[test]
+    fn auto_position_creates_missing_heading_on_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("daily.md");
+        std::fs::write(&p, "# 2026-06-24\n\nNotes.\n").unwrap();
+        let position = auto_position(&p, Some("Tasks"));
+        create_task(
+            &p,
+            input("Buy milk"),
+            CreateOptions {
+                position,
+                force: false,
+            },
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            content,
+            "# 2026-06-24\n\nNotes.\n\n## Tasks\n- [ ] Buy milk\n"
+        );
     }
 
     #[test]

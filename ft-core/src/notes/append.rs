@@ -45,14 +45,29 @@ pub fn append_template(
 /// Read the `ft-append-section` value from YAML frontmatter.
 ///
 /// Returns `None` when there is no frontmatter block or the key is absent.
-/// This is a lightweight string-level extraction — we don't pull in a
-/// full YAML parser for a single key. The frontmatter block is defined as
-/// the leading `---\n...\n---` region.
 pub fn frontmatter_append_section(content: &str) -> Option<String> {
+    frontmatter_value(content, "ft-append-section")
+}
+
+/// Read the `ft-tasks-section` value from YAML frontmatter — the heading new
+/// tasks land under in this note when no explicit position is given.
+///
+/// Returns `None` when there is no frontmatter block or the key is absent.
+pub fn frontmatter_tasks_section(content: &str) -> Option<String> {
+    frontmatter_value(content, "ft-tasks-section")
+}
+
+/// Read a single scalar `key:` value from YAML frontmatter.
+///
+/// This is a lightweight string-level extraction — we don't pull in a full
+/// YAML parser for one key. The frontmatter block is the leading
+/// `---\n...\n---` region. Optional surrounding quotes are stripped.
+fn frontmatter_value(content: &str, key: &str) -> Option<String> {
     let fm = extract_frontmatter_block(content)?;
+    let prefix = format!("{key}:");
     for line in fm.lines() {
         let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix("ft-append-section:") {
+        if let Some(val) = trimmed.strip_prefix(&prefix) {
             let val = val.trim();
             // Strip optional surrounding quotes.
             let val = val.strip_prefix('"').unwrap_or(val);
@@ -345,5 +360,36 @@ mod tests {
             frontmatter_append_section(content),
             Some("Multi-word Section".to_string())
         );
+    }
+
+    // ── frontmatter_tasks_section ──────────────────────────────────────
+
+    #[test]
+    fn frontmatter_tasks_section_extracts() {
+        let content = "---\nft-tasks-section: Tasks\n---\n# Title\n";
+        assert_eq!(
+            frontmatter_tasks_section(content),
+            Some("Tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn frontmatter_tasks_section_quoted() {
+        let content = "---\nft-tasks-section: \"My Tasks\"\n---\n# Title\n";
+        assert_eq!(
+            frontmatter_tasks_section(content),
+            Some("My Tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn frontmatter_tasks_section_absent() {
+        let content = "---\nft-append-section: Log\n---\n# Title\n";
+        assert_eq!(frontmatter_tasks_section(content), None);
+    }
+
+    #[test]
+    fn frontmatter_tasks_section_no_block() {
+        assert_eq!(frontmatter_tasks_section("# Just a heading\n"), None);
     }
 }

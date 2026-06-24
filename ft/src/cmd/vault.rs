@@ -31,6 +31,10 @@ pub fn run(_args: VaultArgs, vault_flag: Option<PathBuf>) -> Result<()> {
         "default_task_location",
         cfg.default_task_location.as_deref(),
     );
+    print_opt(
+        "tasks.default_section",
+        cfg.tasks.default_section.as_deref(),
+    );
     println!("  periodic_notes:");
     for (label, p) in [
         ("daily", &cfg.periodic_notes.daily),

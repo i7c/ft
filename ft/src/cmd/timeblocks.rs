@@ -192,26 +192,18 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // If the resolved path is the configured daily note AND it doesn't
-    // exist yet, render the daily template first so the file matches
-    // what `ft notes today` would produce. Without this, `ft timeblocks
-    // add --date tomorrow` against a brand-new day would leave a bare
-    // `## Time Blocks`-only file, breaking the user's daily layout.
-    // Skipped when `--file` was passed (the user picked an explicit
-    // path, not a daily note) or when the file already exists.
-    if args.file.is_none() && !path.exists() {
-        if let Some(daily_cfg) = vault.config.config.periodic_notes.daily.as_ref() {
-            let (today_n, now_n) = dates::now_pair();
-            ft_core::periodic::create_or_get_periodic_path(
-                &vault.path,
-                &vault.templates_dir(),
-                daily_cfg,
-                date,
-                today_n,
-                now_n,
-            )?;
-        }
-    }
+    // Ensure the target exists before writing: a missing default daily note
+    // is rendered from its template so the file matches what `ft notes today`
+    // would produce, rather than a bare `## Time Blocks`-only file. Explicit
+    // `--file` paths are left to `add_block` to create.
+    let (today_n, now_n) = dates::now_pair();
+    let path = vault
+        .ensure_target(date, args.file.as_deref(), today_n, now_n)
+        .map_err(|e| {
+            anyhow!(
+                "{e}\nhint: add `[periodic_notes.daily]` to your config or pass `--file <PATH>`"
+            )
+        })?;
 
     let block_summary = format!(
         "+ {} - {} {}",

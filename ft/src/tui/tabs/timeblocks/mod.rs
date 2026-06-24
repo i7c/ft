@@ -948,24 +948,17 @@ impl TimeblocksTab {
                 self.tomorrow.path.clone(),
             ),
         };
-        if present {
+        if present || path.is_none() {
             return Ok(());
         }
-        let Some(_path) = path else { return Ok(()) };
-        let Some(daily_cfg) = ctx.vault.config.config.periodic_notes.daily.as_ref() else {
+        if ctx.vault.config.config.periodic_notes.daily.is_none() {
             return Ok(());
-        };
+        }
         let (today_n, now_n) = today_now_for_template(ctx, self.clock);
-        ft_core::periodic::create_or_get_periodic_path(
-            &ctx.vault.path,
-            &ctx.vault.templates_dir(),
-            daily_cfg,
-            date,
-            today_n,
-            now_n,
-        )
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        ctx.vault
+            .ensure_target(date, None, today_n, now_n)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     // ── edit description (`e`) ─────────────────────────────────────────

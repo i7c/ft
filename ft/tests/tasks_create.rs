@@ -38,8 +38,10 @@ fn create_simple_task_in_daily_note() {
     let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
     run(dir.path(), &["Buy milk", "--due", "tomorrow"]).success();
 
+    // The daily note didn't exist, so it's created from the daily stub
+    // (`# <date>`) first — matching what `ft notes today` would produce.
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "- [ ] Buy milk 📅 2026-05-10\n");
+    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk 📅 2026-05-10\n");
 }
 
 #[test]
@@ -59,7 +61,7 @@ fn create_with_priority_and_tags() {
     )
     .success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "- [ ] Read book #work #books ⏫\n");
+    assert_eq!(content, "# 2026-05-09\n\n- [ ] Read book #work #books ⏫\n");
 }
 
 #[test]
@@ -229,7 +231,7 @@ format = "%Y-%m-%d"
 
     run(dir.path(), &["Buy milk", "--due", "tomorrow"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026/2026-05-09.md")).unwrap();
-    assert_eq!(content, "- [ ] Buy milk 📅 2026-05-10\n");
+    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk 📅 2026-05-10\n");
 }
 
 #[test]
@@ -268,7 +270,7 @@ fn description_collected_from_multiple_args() {
     let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
     run(dir.path(), &["Buy", "milk", "and", "bread"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "- [ ] Buy milk and bread\n");
+    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk and bread\n");
 }
 
 #[test]
@@ -296,4 +298,100 @@ fn recurrence_id_and_depends_on() {
     assert!(content.contains("📅 2026-05-18"));
     assert!(content.contains("🆔 tax42"));
     assert!(content.contains("⛔ abc,def"));
+}
+
+/// Like [`vault_with_daily`] but also sets `[tasks] default_section`.
+fn vault_with_daily_and_section(folder: &str, section: &str) -> assert_fs::TempDir {
+    let dir = assert_fs::TempDir::new().unwrap();
+    dir.child(".obsidian").create_dir_all().unwrap();
+    dir.child(".ft/config.toml")
+        .write_str(&format!(
+            "[periodic_notes.daily]\npath = \"{folder}\"\nformat = \"%Y-%m-%d\"\n\n[tasks]\ndefault_section = \"{section}\"\n"
+        ))
+        .unwrap();
+    dir
+}
+
+#[test]
+fn default_section_lands_task_under_heading() {
+    let dir = vault_with_daily_and_section("journal", "Tasks");
+    dir.child("journal/2026-05-09.md")
+        .write_str("# 2026-05-09\n\nNotes.\n")
+        .unwrap();
+    run(dir.path(), &["Buy milk"]).success();
+    let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\nNotes.\n\n## Tasks\n- [ ] Buy milk\n"
+    );
+}
+
+#[test]
+fn frontmatter_section_overrides_config_default() {
+    let dir = vault_with_daily_and_section("journal", "Tasks");
+    let f = dir.child("notes.md");
+    f.write_str("---\nft-tasks-section: Inbox\n---\n# Notes\n\n## Inbox\n")
+        .unwrap();
+    run(dir.path(), &["Ping bob", "--file", "notes.md"]).success();
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(content.contains("## Inbox\n- [ ] Ping bob"));
+    assert!(!content.contains("## Tasks"));
+}
+
+#[test]
+fn append_flag_overrides_default_section() {
+    let dir = vault_with_daily_and_section("journal", "Tasks");
+    dir.child("journal/2026-05-09.md")
+        .write_str("# 2026-05-09\n\nNotes.\n")
+        .unwrap();
+    run(dir.path(), &["Raw append", "--append"]).success();
+    let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
+    assert_eq!(content, "# 2026-05-09\n\nNotes.\n- [ ] Raw append\n");
+}
+
+#[test]
+fn under_heading_overrides_default_section() {
+    let dir = vault_with_daily_and_section("journal", "Tasks");
+    let f = dir.child("notes.md");
+    f.write_str("# Notes\n\n## Later\n").unwrap();
+    run(
+        dir.path(),
+        &[
+            "Pick this",
+            "--file",
+            "notes.md",
+            "--under-heading",
+            "Later",
+        ],
+    )
+    .success();
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(content.contains("## Later\n- [ ] Pick this"));
+    assert!(!content.contains("## Tasks"));
+}
+
+#[test]
+fn missing_daily_note_is_created_from_template() {
+    // A configured daily template is rendered when the note doesn't exist
+    // yet, and the new task lands under the template's section (frontmatter
+    // wins over config default). Proves ensure_target composes with the
+    // section resolution.
+    let dir = assert_fs::TempDir::new().unwrap();
+    dir.child(".obsidian").create_dir_all().unwrap();
+    dir.child(".ft/config.toml")
+        .write_str(
+            "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\ntemplate = \"daily\"\n\n[notes]\ntemplates_dir = \"templates-ft\"\n",
+        )
+        .unwrap();
+    dir.child("templates-ft/daily.md")
+        .write_str("---\nft-tasks-section: Tasks\n---\n# {{ title }}\n\n## Tasks\n\n## Log\n")
+        .unwrap();
+
+    run(dir.path(), &["Buy milk"]).success();
+
+    let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
+    assert_eq!(
+        content,
+        "---\nft-tasks-section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk\n\n## Log\n"
+    );
 }

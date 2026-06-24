@@ -82,7 +82,11 @@ Mutation primitives. Each one reads a file, computes the new content,
 and writes via `crate::fs::write_atomic`:
 
 - `create_task(path, input, opts)` — insert a new task at append /
-  under-heading / at-line position; refuses duplicates unless `--force`
+  under-heading / at-line position; refuses duplicates unless `--force`.
+  When no explicit position is given, `auto_position(path, default)`
+  resolves the target section: the note's `ft-tasks-section` frontmatter
+  wins, then `[tasks] default_section` from config, else plain append.
+  The CLI `--append` flag forces append, overriding any default section.
 - `complete_task(path, line, opts)` — mark a task done; if recurring,
   insert the next instance above the now-completed line
 - `plan_move(sources, target)` — pure: produce a `MovePlan` of per-file
@@ -127,12 +131,18 @@ Tag grammar: max 3 levels, each `[A-Za-z0-9_-]+`. The inline parser
 don't surface as tags, so legacy blockary notes still read. The
 strict variant is for `--add-tag X` / `--tag X` CLI flags.
 
-Daily-note resolution piggybacks on `periodic_notes::resolve_periodic_path`.
-When a write targets a daily note whose file is missing on disk, both
-the CLI's `add` and the TUI's `c` / `a` chords run
-`create_or_get_periodic_path` first so the configured
-`[periodic_notes.daily].template` is rendered before the section gets
-spliced in.
+Daily-note resolution has two seams. `Vault::resolve_target` resolves
+only (no I/O) and is for read-only/display sites that must never create
+files. `Vault::ensure_target` is the **write-path chokepoint**: it
+resolves and, when the default daily note is missing, renders its
+`[periodic_notes.daily].template` via `create_or_get_periodic_path`
+before returning — so a brand-new day's note matches `ft notes today`
+instead of a bare file. Every creator goes through it (`ft tasks create`,
+the TUI task popup/quickline, `ft timeblocks add`, the timeblocks tab's
+add path); explicit `--file` paths are resolved but never auto-templated.
+This composes with task-section resolution: the template renders the note
+(with its `## Tasks` heading + `ft-tasks-section` frontmatter) first, then
+`ops::auto_position` reads that file to place the task.
 
 ### Graph query DSL (`graph::query`)
 

@@ -1493,17 +1493,25 @@ impl SearchView {
                 },
             ),
             None => {
-                let resolved = match ctx.vault.resolve_target(ctx.today, target_path.as_deref()) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        self.popup.as_mut().unwrap().error = Some(e.to_string());
-                        self.popup.as_mut().unwrap().focus = EditField::Target;
-                        return Ok(EventOutcome::Consumed);
-                    }
-                };
+                let (today_n, now_n) = ft_core::dates::now_pair();
+                let resolved =
+                    match ctx
+                        .vault
+                        .ensure_target(ctx.today, target_path.as_deref(), today_n, now_n)
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            self.popup.as_mut().unwrap().error = Some(e.to_string());
+                            self.popup.as_mut().unwrap().focus = EditField::Target;
+                            return Ok(EventOutcome::Consumed);
+                        }
+                    };
                 let position = match &heading {
                     Some(h) => ops::Position::UnderHeading(h.clone()),
-                    None => ops::Position::Append,
+                    None => ops::auto_position(
+                        &resolved,
+                        ctx.vault.config.config.tasks.default_section.as_deref(),
+                    ),
                 };
                 (resolved, position)
             }
@@ -1656,14 +1664,24 @@ impl SearchView {
                 },
             ),
             None => {
-                let t = match ctx.vault.resolve_target(ctx.today, parse.target.as_deref()) {
+                let (today_n, now_n) = ft_core::dates::now_pair();
+                let t = match ctx.vault.ensure_target(
+                    ctx.today,
+                    parse.target.as_deref(),
+                    today_n,
+                    now_n,
+                ) {
                     Ok(p) => p,
                     Err(e) => {
                         self.quickline.as_mut().unwrap().error = Some(e.to_string());
                         return Ok(EventOutcome::Consumed);
                     }
                 };
-                (t, ops::Position::Append)
+                let position = ops::auto_position(
+                    &t,
+                    ctx.vault.config.config.tasks.default_section.as_deref(),
+                );
+                (t, position)
             }
         };
 

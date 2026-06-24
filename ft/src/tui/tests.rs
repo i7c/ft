@@ -2372,6 +2372,67 @@ fn quickline_enter_writes_to_daily_note() -> Result<()> {
 }
 
 #[test]
+fn quickline_honors_default_section_and_frontmatter() -> Result<()> {
+    // Vault with a configured `[tasks] default_section`. A quickline write
+    // into the daily note lands under that heading; a write into a note
+    // whose frontmatter pins `ft-tasks-section` uses that instead.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.daily]\npath = \"Daily\"\nformat = \"%Y-%m-%d\"\n\n[tasks]\ndefault_section = \"Tasks\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("Inbox.md"),
+        "---\nft-tasks-section: Captured\n---\n# Inbox\n\n## Captured\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+
+    // Daily note → config default section.
+    app.dispatch(key('c'))?;
+    for c in "buy milk".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
+    let body = std::fs::read_to_string(&daily).unwrap();
+    assert!(
+        body.contains("## Tasks\n- [ ] buy milk"),
+        "task should land under the configured default section:\n{body}"
+    );
+
+    // in:Inbox.md → frontmatter section wins over config default.
+    app.dispatch(key('c'))?;
+    for c in "call dentist in:Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    let body = std::fs::read_to_string(&inbox).unwrap();
+    assert!(
+        body.contains("## Captured\n- [ ] call dentist"),
+        "task should land under the frontmatter section:\n{body}"
+    );
+    assert!(
+        !body.contains("## Tasks"),
+        "config default shouldn't apply:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
 fn quickline_in_path_overrides_target() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);

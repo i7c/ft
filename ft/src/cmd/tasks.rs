@@ -534,7 +534,8 @@ pub struct CreateArgs {
     #[arg(long, value_name = "N", conflicts_with_all = ["under_heading", "append"])]
     pub at_line: Option<usize>,
 
-    /// Append at file end (the default for daily notes; explicit for clarity).
+    /// Force appending at file end, overriding any configured default
+    /// section (`ft-tasks-section` frontmatter or `[tasks] default_section`).
     #[arg(long, conflicts_with_all = ["under_heading", "at_line"])]
     pub append: bool,
 
@@ -588,8 +589,11 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         Position::UnderHeading(h)
     } else if let Some(n) = args.at_line {
         Position::AtLine(n)
-    } else {
+    } else if args.append {
         Position::Append
+    } else {
+        let default_section = vault.config.config.tasks.default_section.as_deref();
+        ops::auto_position(&target, default_section)
     };
 
     let outcome = ops::create_task(
@@ -628,10 +632,12 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 }
 
 /// Resolve `--file` against the vault root, or fall back to today's daily
-/// note. Returns an absolute path. Thin wrapper over `Vault::resolve_target`
-/// so the CLI error type stays anyhow.
+/// note, rendering the daily template when that note doesn't exist yet.
+/// Returns an absolute path. Thin wrapper over `Vault::ensure_target` so the
+/// CLI error type stays anyhow.
 fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
-    Ok(vault.resolve_target(today, args.file.as_deref())?)
+    let (today_n, now_n) = dates::now_pair();
+    Ok(vault.ensure_target(today, args.file.as_deref(), today_n, now_n)?)
 }
 
 fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {

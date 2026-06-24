@@ -247,6 +247,54 @@ impl Vault {
             })?;
         crate::periodic::resolve_periodic_path(&self.path, daily, today)
     }
+
+    /// Resolve a write target like [`Self::resolve_target`], but when it is
+    /// the default daily note (no `file_override`) and the file does not yet
+    /// exist, render the configured daily template first — so a brand-new
+    /// day's note matches what `ft notes today` would produce rather than a
+    /// bare file holding only the caller's content.
+    ///
+    /// Explicit `file_override` paths are resolved but never auto-templated:
+    /// the caller picked a path, not a periodic note. Use this at every
+    /// *write* site (task create, timeblock add); leave [`Self::resolve_target`]
+    /// for read-only/display sites that must not create files.
+    ///
+    /// `date` is the note's date (e.g. tomorrow for a timeblocks pane);
+    /// `today`/`now` are the template-rendering context. They are accepted
+    /// explicitly so callers with an injected clock (the TUI) and the CLI
+    /// (`dates::now_pair()`) agree on "now".
+    pub fn ensure_target(
+        &self,
+        date: chrono::NaiveDate,
+        file_override: Option<&Path>,
+        today: chrono::NaiveDate,
+        now: chrono::NaiveDateTime,
+    ) -> Result<PathBuf> {
+        if file_override.is_some() {
+            return self.resolve_target(date, file_override);
+        }
+        let daily = self
+            .config
+            .config
+            .periodic_notes
+            .daily
+            .as_ref()
+            .ok_or_else(|| {
+                Error::Periodic(
+                    "no `[periodic_notes.daily]` configured — add it to your config or pass `--file <PATH>`"
+                        .to_string(),
+                )
+            })?;
+        let (path, _created) = crate::periodic::create_or_get_periodic_path(
+            &self.path,
+            &self.templates_dir(),
+            daily,
+            date,
+            today,
+            now,
+        )?;
+        Ok(path)
+    }
 }
 
 fn parse_file(vault_root: &Path, path: &Path) -> (Vec<Task>, Option<ScanError>) {
@@ -384,6 +432,7 @@ mod tests {
     use super::*;
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
+    use chrono::NaiveDate;
 
     fn make_obsidian_dir(dir: &TempDir) {
         dir.child(".obsidian").create_dir_all().unwrap();
@@ -521,6 +570,72 @@ mod tests {
         let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
         assert!(descs.contains(&"public task".to_string()));
         assert!(!descs.contains(&"private task".to_string()));
+    }
+
+    #[test]
+    fn ensure_target_renders_daily_template_when_missing() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        dir.child(".ft/config.toml")
+            .write_str(
+                "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\ntemplate = \"daily\"\n\n[notes]\ntemplates_dir = \"templates-ft\"\n",
+            )
+            .unwrap();
+        dir.child("templates-ft/daily.md")
+            .write_str("# {{ title }}\n\n## Tasks\n")
+            .unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
+        let now = date.and_hms_opt(8, 0, 0).unwrap();
+        let path = vault.ensure_target(date, None, date, now).unwrap();
+
+        assert_eq!(path, dir.path().join("journal/2026-05-09.md"));
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(body, "# 2026-05-09\n\n## Tasks\n");
+    }
+
+    #[test]
+    fn ensure_target_leaves_existing_daily_note_untouched() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        dir.child(".ft/config.toml")
+            .write_str("[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\n")
+            .unwrap();
+        dir.child("journal/2026-05-09.md")
+            .write_str("existing body\n")
+            .unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
+        let now = date.and_hms_opt(8, 0, 0).unwrap();
+        vault.ensure_target(date, None, date, now).unwrap();
+
+        let body = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
+        assert_eq!(body, "existing body\n");
+    }
+
+    #[test]
+    fn ensure_target_does_not_template_explicit_file() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        dir.child(".ft/config.toml")
+            .write_str(
+                "[periodic_notes.daily]\npath = \"journal\"\nformat = \"%Y-%m-%d\"\ntemplate = \"daily\"\n",
+            )
+            .unwrap();
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
+        let now = date.and_hms_opt(8, 0, 0).unwrap();
+        let explicit = Path::new("Inbox.md");
+        let path = vault
+            .ensure_target(date, Some(explicit), date, now)
+            .unwrap();
+
+        assert_eq!(path, dir.path().join("Inbox.md"));
+        // Explicit paths are resolved but never created/templated here.
+        assert!(!path.exists());
     }
 
     #[test]

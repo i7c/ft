@@ -70,6 +70,11 @@ default_task_location = "Inbox.md"
 [notes]
 templates_dir = "templates-ft"
 
+[tasks]
+# Heading new tasks land under when the target note has no
+# `ft-tasks-section` frontmatter and you don't pass --under-heading/--append.
+default_section = "Tasks"
+
 [periodic_notes.daily]
 path = "journal/%Y"
 format = "%Y-%m-%d"

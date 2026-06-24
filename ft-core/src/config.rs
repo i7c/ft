@@ -62,6 +62,9 @@ pub struct Config {
     /// synth notes). See [`Synth`].
     #[serde(default)]
     pub synth: Synth,
+    /// Task-creation settings. See [`Tasks`].
+    #[serde(default)]
+    pub tasks: Tasks,
 }
 
 impl Config {
@@ -170,6 +173,17 @@ pub enum CaptureAction {
 pub struct Git {
     #[serde(default)]
     pub pull_strategy: PullStrategy,
+}
+
+/// Task-creation settings. Governs where a new task lands within its
+/// target file when the caller gives no explicit position.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tasks {
+    /// Heading new tasks land under when the target note has no
+    /// `ft-tasks-section` frontmatter and no explicit position is given.
+    /// When unset, new tasks append at file end (the historical default).
+    pub default_section: Option<String>,
 }
 
 /// Settings for `ft notes create` and the TUI create flows.
