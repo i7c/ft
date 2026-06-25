@@ -207,6 +207,29 @@ pub fn fmt_date(d: Option<NaiveDate>) -> String {
         .unwrap_or_default()
 }
 
+/// Compact relative date label (mirrors the Tasks tab's row formatting).
+/// Used by the Graph tab's task `leaf_display` for display parity
+/// (graph-task-interaction §D6).
+pub fn relative_date(d: NaiveDate, today: NaiveDate) -> String {
+    let diff = (d - today).num_days();
+    match diff {
+        0 => "today".into(),
+        1 => "tomorrow".into(),
+        -1 => "yesterday".into(),
+        n if (-6..=-2).contains(&n) => format!("{}d ago", -n),
+        n if (2..=6).contains(&n) => format!("in {}d", n),
+        n if (-13..=-7).contains(&n) => "1w ago".into(),
+        n if (7..=13).contains(&n) => "in 1w".into(),
+        n if (-20..=-14).contains(&n) => "2w ago".into(),
+        n if (14..=20).contains(&n) => "in 2w".into(),
+        n if (-27..=-21).contains(&n) => "3w ago".into(),
+        n if (21..=27).contains(&n) => "in 3w".into(),
+        n if (-30..=-28).contains(&n) => "4w ago".into(),
+        n if (28..=30).contains(&n) => "in 4w".into(),
+        _ => d.format("%Y-%m-%d").to_string(),
+    }
+}
+
 pub fn priority_text(p: Option<Priority>) -> &'static str {
     match p {
         None => "",

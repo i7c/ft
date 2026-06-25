@@ -29,7 +29,7 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{
-        edit_popup::{EditField, EditPopup, PopupFields, PopupMode},
+        edit_popup::{relative_date, EditField, EditPopup, PopupFields, PopupMode},
         quickline::parse_quickline,
         view::View,
     },
@@ -1839,26 +1839,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 /// Format a date relative to `today`. Near-term dates get human-readable
 /// labels; dates further out fall back to ISO for precision.
-fn relative_date(d: NaiveDate, today: NaiveDate) -> String {
-    let diff = (d - today).num_days();
-    match diff {
-        0 => "today".into(),
-        1 => "tomorrow".into(),
-        -1 => "yesterday".into(),
-        n if (-6..=-2).contains(&n) => format!("{}d ago", -n),
-        n if (2..=6).contains(&n) => format!("in {}d", n),
-        n if (-13..=-7).contains(&n) => "1w ago".into(),
-        n if (7..=13).contains(&n) => "in 1w".into(),
-        n if (-20..=-14).contains(&n) => "2w ago".into(),
-        n if (14..=20).contains(&n) => "in 2w".into(),
-        n if (-27..=-21).contains(&n) => "3w ago".into(),
-        n if (21..=27).contains(&n) => "in 3w".into(),
-        n if (-30..=-28).contains(&n) => "4w ago".into(),
-        n if (28..=30).contains(&n) => "in 4w".into(),
-        _ => d.format("%Y-%m-%d").to_string(),
-    }
-}
-
 fn divider_line(label: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {label}"),

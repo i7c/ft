@@ -163,13 +163,13 @@ struct Candidate {
 /// and prepends a single `/` when the ancestor chain starts at the root,
 /// so `[root, Areas, operations]` renders `/Areas/operations` (not
 /// `//Areas//operations/`).
-fn format_breadcrumb(graph: &Graph, path: &[NoteId]) -> String {
+fn format_breadcrumb(graph: &Graph, path: &[NoteId], today: chrono::NaiveDate) -> String {
     if path.len() <= 1 {
         return String::new();
     }
     let mut parts: Vec<String> = Vec::with_capacity(path.len() - 1);
     for &aid in &path[..path.len() - 1] {
-        let (s, _) = leaf_display(graph, aid);
+        let (s, _) = leaf_display(graph, aid, today);
         parts.push(s.trim_end_matches('/').to_string());
     }
     let rooted = parts.first().map(|s| s.is_empty()).unwrap_or(false);
@@ -185,7 +185,11 @@ fn format_breadcrumb(graph: &Graph, path: &[NoteId]) -> String {
 /// node is emitted at most once, at its shortest distance from a root;
 /// ties resolved by BFS visit order (which itself depends on `query`'s
 /// root ordering and the sorted child order in `query.expand`).
-fn collect_search_candidates(graph: &Graph, query: &GraphQuery) -> Vec<Candidate> {
+fn collect_search_candidates(
+    graph: &Graph,
+    query: &GraphQuery,
+    today: chrono::NaiveDate,
+) -> Vec<Candidate> {
     use std::collections::VecDeque;
 
     let roots = query.select(graph);
@@ -199,8 +203,8 @@ fn collect_search_candidates(graph: &Graph, query: &GraphQuery) -> Vec<Candidate
 
     let mut out: Vec<Candidate> = Vec::new();
     while let Some((id, path)) = queue.pop_front() {
-        let (leaf, kind_char) = leaf_display(graph, id);
-        let breadcrumb = format_breadcrumb(graph, &path);
+        let (leaf, kind_char) = leaf_display(graph, id, today);
+        let breadcrumb = format_breadcrumb(graph, &path, today);
         out.push(Candidate {
             path: path.clone(),
             leaf,
@@ -227,9 +231,9 @@ pub struct GraphSearchPickerSource {
 }
 
 impl GraphSearchPickerSource {
-    fn new(graph: &Graph, query: &GraphQuery) -> Self {
+    fn new(graph: &Graph, query: &GraphQuery, today: chrono::NaiveDate) -> Self {
         Self {
-            candidates: collect_search_candidates(graph, query),
+            candidates: collect_search_candidates(graph, query, today),
             matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
             buf: Vec::new(),
         }
@@ -2372,7 +2376,7 @@ impl GraphTab {
         let graph = self.graph.as_ref();
         let v = &mut self.views[self.active];
         v.set_query_text(dsl);
-        v.apply_query(graph);
+        v.apply_query(graph, ft_core::dates::today());
     }
 
     /// Land the cursor on the node at the end of `path`, auto-expanding
@@ -2393,7 +2397,7 @@ impl GraphTab {
             v.add_expansion_path(key_path[..key_path.len() - 1].to_vec());
         }
         v.selected_path = Some(key_path);
-        v.restore_expansion(graph);
+        v.restore_expansion(graph, ft_core::dates::today());
         // Approximate visible-rows budget; render's scroll_to_selection
         // corrects against the real area on the next draw.
         v.scroll_to_selection(20);
@@ -2558,7 +2562,7 @@ impl GraphTab {
 
         let v = &mut self.views[self.active];
         v.set_query_text(new_query);
-        v.apply_query(Some(graph));
+        v.apply_query(Some(graph), ft_core::dates::today());
     }
 
     /// Close the active view. If it's the last view, replace it with a
@@ -2606,7 +2610,7 @@ impl GraphTab {
         };
         for v in self.views.iter_mut() {
             v.multi_selected.retain(|k| g.id_for_key(k).is_some());
-            v.restore_expansion(g);
+            v.restore_expansion(g, ft_core::dates::today());
         }
     }
 
@@ -2692,7 +2696,7 @@ impl Tab for GraphTab {
                     .unwrap_or_else(|| BUILTIN_DEFAULT_QUERY.to_string());
                 v0.set_query_text(seed);
                 let graph = self.graph.as_ref();
-                v0.apply_query(graph);
+                v0.apply_query(graph, ft_core::dates::today());
             } else {
                 // Re-derive every view's tree against the freshly-built
                 // graph so trees materialize on first focus.
@@ -2754,7 +2758,7 @@ impl Tab for GraphTab {
         }
         self.active = view_id;
         let graph = self.graph.as_ref();
-        self.views[self.active].apply_query(graph);
+        self.views[self.active].apply_query(graph, ft_core::dates::today());
     }
 
     fn graph_commit_rename(
@@ -3035,7 +3039,7 @@ impl Tab for GraphTab {
             "graph.search" => {
                 if let (Some(g), Some(q)) = (self.graph.as_ref(), self.active_view().query.as_ref())
                 {
-                    let src = GraphSearchPickerSource::new(g, q);
+                    let src = GraphSearchPickerSource::new(g, q, ctx.today);
                     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
                         ActiveModal::Search(SearchPickerModal::new(src)),
                     )));
@@ -3074,7 +3078,7 @@ impl Tab for GraphTab {
                         .get(v.selected)
                         .map(|r| r.expanded)
                         .unwrap_or(false);
-                    v.tree.expand_at(v.selected, g, q);
+                    v.tree.expand_at(v.selected, g, q, ctx.today);
                     if was_expanded {
                         v.forget_expansion_subtree(&path);
                     } else if v.tree.rows().get(v.selected).is_some_and(|r| r.expanded) {
@@ -3827,7 +3831,7 @@ impl ExpandedView {
     /// Parse the editable query text, swap in the parsed query, and
     /// rebuild the tree against the current graph. Clears expansion
     /// state — a new query starts fresh.
-    fn apply_query(&mut self, graph: Option<&Graph>) {
+    fn apply_query(&mut self, graph: Option<&Graph>, today: chrono::NaiveDate) {
         self.parse_error = None;
         if self.query_buf.text.trim().is_empty() {
             self.query = None;
@@ -3848,7 +3852,7 @@ impl ExpandedView {
                 if let Some(g) = graph {
                     let q = self.query.as_ref().unwrap();
                     let roots = q.select(g);
-                    self.tree.build_from(&roots, g, q);
+                    self.tree.build_from(&roots, g, q, today);
                     self.refresh_selected_path(g);
                 }
             }
@@ -3862,7 +3866,7 @@ impl ExpandedView {
     /// row 0). `scroll_offset` is preserved — the next render's
     /// `scroll_to_selection(visible)` only moves the view if the new
     /// `selected` actually ended up off-screen.
-    fn restore_expansion(&mut self, graph: &Graph) {
+    fn restore_expansion(&mut self, graph: &Graph, today: chrono::NaiveDate) {
         if self.query.is_none() {
             // No parsed query (empty text, or a parse error): nothing
             // to materialize.
@@ -3876,7 +3880,7 @@ impl ExpandedView {
         // alongside; query is a cheap-ish AST tree.
         let query = self.query.clone().unwrap();
         let roots = query.select(graph);
-        self.tree.build_from(&roots, graph, &query);
+        self.tree.build_from(&roots, graph, &query, today);
 
         // Replay expansions shortest-path-first so parents are expanded
         // before their children.
@@ -3888,7 +3892,7 @@ impl ExpandedView {
         for path in sorted {
             if let Some(idx) = self.find_row_for_path(&path, graph) {
                 let already = self.tree.rows()[idx].expanded;
-                if already || self.tree.expand_at(idx, graph, &query) {
+                if already || self.tree.expand_at(idx, graph, &query, today) {
                     restored.insert(path);
                 }
             }
@@ -4194,15 +4198,27 @@ pub struct TreeState {
 }
 
 impl TreeState {
-    pub fn build_from(&mut self, roots: &[NoteId], graph: &Graph, query: &GraphQuery) {
+    pub fn build_from(
+        &mut self,
+        roots: &[NoteId],
+        graph: &Graph,
+        query: &GraphQuery,
+        today: chrono::NaiveDate,
+    ) {
         self.rows.clear();
         self.expansion_cache.clear();
         for id in roots {
-            self.rows.push(Self::make_row(*id, 0, graph, query));
+            self.rows.push(Self::make_row(*id, 0, graph, query, today));
         }
     }
 
-    pub fn expand_at(&mut self, index: usize, graph: &Graph, query: &GraphQuery) -> bool {
+    pub fn expand_at(
+        &mut self,
+        index: usize,
+        graph: &Graph,
+        query: &GraphQuery,
+        today: chrono::NaiveDate,
+    ) -> bool {
         if index >= self.rows.len() {
             return false;
         }
@@ -4236,7 +4252,7 @@ impl TreeState {
         for child_id in child_ids.iter().rev() {
             self.rows.insert(
                 insert_pos,
-                Self::make_row(*child_id, child_depth, graph, query),
+                Self::make_row(*child_id, child_depth, graph, query, today),
             );
         }
 
@@ -4294,8 +4310,14 @@ impl TreeState {
         self.rows.len()
     }
 
-    fn make_row(id: NoteId, depth: usize, graph: &Graph, query: &GraphQuery) -> TreeRow {
-        let (display, kind_char) = leaf_display(graph, id);
+    fn make_row(
+        id: NoteId,
+        depth: usize,
+        graph: &Graph,
+        query: &GraphQuery,
+        today: chrono::NaiveDate,
+    ) -> TreeRow {
+        let (display, kind_char) = leaf_display(graph, id, today);
         // Compute expandability up-front by asking the policy how many
         // children this node has. None = no expand block at all (still
         // not expandable). Some(empty) = policy says zero children.
@@ -4331,6 +4353,12 @@ fn empty_tree_allows(name: &str) -> bool {
     )
 }
 
+/// Parse a `TaskData` date string (YYYY-MM-DD) into a `NaiveDate`.
+/// Used by [`leaf_display`] to render relative due/scheduled labels.
+fn parse_task_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
 /// Foreground color for a node kind, used to visually differentiate types
 /// in the tree view. Palette inspired by the Monokai theme.
 fn node_kind_color(kind: &NodeKind) -> Color {
@@ -4347,7 +4375,8 @@ fn node_kind_color(kind: &NodeKind) -> Color {
 /// `TreeState::make_row` (tree rendering) and `collect_search_candidates`
 /// (jump-to-node picker), so search labels always match what's visible in
 /// the tree.
-fn leaf_display(graph: &Graph, id: NoteId) -> (String, char) {
+fn leaf_display(graph: &Graph, id: NoteId, today: chrono::NaiveDate) -> (String, char) {
+    use crate::tui::tabs::tasks::edit_popup::relative_date;
     match graph.node(id) {
         NodeKind::Note(n) => (
             n.path
@@ -4372,7 +4401,27 @@ fn leaf_display(graph: &Graph, id: NoteId) -> (String, char) {
                 "Cancelled" => "[-]",
                 _ => "[ ]",
             };
-            (format!("{marker} {}", t.description), 'T')
+            let mut s = format!("{marker} {}", t.description);
+            if let Some(due) = t.due.as_deref().and_then(parse_task_date) {
+                s.push_str(&format!("  📅 {}", relative_date(due, today)));
+            }
+            if let Some(sched) = t.scheduled.as_deref().and_then(parse_task_date) {
+                s.push_str(&format!("  ⏳ {}", relative_date(sched, today)));
+            }
+            if let Some(p) = t.priority.as_deref() {
+                let mark = match p {
+                    "Highest" => "⏫",
+                    "High" => "⏫",
+                    "Medium" => "🔼",
+                    "Low" => "🔽",
+                    "Lowest" => "🔽",
+                    _ => "",
+                };
+                if !mark.is_empty() {
+                    s.push_str(&format!("  {mark}"));
+                }
+            }
+            (s, 'T')
         }
         NodeKind::Paragraph(p) => {
             let snippet: String = p.text.chars().take(60).collect();
@@ -4413,6 +4462,13 @@ mod tree_tests {
 
     use super::*;
 
+    /// Pinned "today" for graph-tab tests, so task relative-date labels in
+    /// snapshots don't drift with the wall clock. Matches `fixed_clock`.
+    const FT_TEST_TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(2026, 5, 12) {
+        Some(d) => d,
+        None => panic!("invalid test date"),
+    };
+
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
@@ -4433,7 +4489,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 1);
         assert_eq!(state.rows[0].depth, 0);
         assert_eq!(state.rows[0].kind_char, 'D');
@@ -4446,10 +4502,10 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 1);
 
-        let changed = state.expand_at(0, &g, &q);
+        let changed = state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert!(changed);
         assert_eq!(state.rows.len(), 4);
         assert!(state.rows[0].expanded);
@@ -4466,8 +4522,8 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
-        state.expand_at(0, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 4);
 
         state.collapse_at(0);
@@ -4482,13 +4538,13 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
 
-        state.expand_at(0, &g, &q);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 4);
         assert!(state.rows[0].expanded);
 
-        let changed = state.expand_at(0, &g, &q);
+        let changed = state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert!(changed);
         assert_eq!(state.rows.len(), 1);
         assert!(!state.rows[0].expanded);
@@ -4501,9 +4557,9 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
 
-        state.expand_at(0, &g, &q);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 4);
 
         let areas_idx = state
@@ -4512,7 +4568,7 @@ mod tree_tests {
             .position(|r| r.kind_char == 'D' && r.display == "Areas/")
             .unwrap();
 
-        state.expand_at(areas_idx, &g, &q);
+        state.expand_at(areas_idx, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 6);
 
         let ops = state
@@ -4530,9 +4586,9 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
 
-        let changed = state.expand_at(0, &g, &q);
+        let changed = state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert!(!changed);
         assert!(!state.rows[0].expandable);
     }
@@ -4549,7 +4605,7 @@ mod tree_tests {
             .collect();
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 3);
 
         assert_eq!(state.move_selection_up(0), 2);
@@ -4572,12 +4628,12 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
 
-        state.expand_at(0, &g, &q);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
         let first_len = state.rows.len();
         state.collapse_at(0);
-        state.expand_at(0, &g, &q);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), first_len);
         assert!(state.expansion_cache.contains_key(&state.rows[0].note_id));
     }
@@ -4602,12 +4658,12 @@ mod tree_tests {
         let root_id = g.node_by_path(std::path::Path::new("")).unwrap();
 
         let mut state = TreeState::default();
-        state.build_from(&[root_id], &g, &q);
+        state.build_from(&[root_id], &g, &q, FT_TEST_TODAY);
 
         // Pre-computed: not expandable, so attempting expand is a
         // no-op and `expanded` stays false (nothing was opened).
         assert!(!state.rows[0].expandable);
-        let changed = state.expand_at(0, &g, &q);
+        let changed = state.expand_at(0, &g, &q, FT_TEST_TODAY);
         assert!(!changed);
         assert!(!state.rows[0].expanded);
         assert_eq!(state.rows.len(), 1);
@@ -4620,7 +4676,7 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
         assert_eq!(state.rows.len(), 1);
         // Root directory has 3 immediate children under the policy →
         // expandable from the start.
@@ -4637,8 +4693,8 @@ mod tree_tests {
         let roots = q.select(&g);
 
         let mut state = TreeState::default();
-        state.build_from(&roots, &g, &q);
-        state.expand_at(0, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
+        state.expand_at(0, &g, &q, FT_TEST_TODAY);
 
         for row in state.rows().iter().filter(|r| r.kind_char == 'N') {
             assert!(
@@ -4685,7 +4741,7 @@ mod tree_tests {
         let q = parse_query("node where kind = Task;").unwrap();
         let mut state = TreeState::default();
         let roots = q.select(&g);
-        state.build_from(&roots, &g, &q);
+        state.build_from(&roots, &g, &q, FT_TEST_TODAY);
 
         assert_eq!(state.rows.len(), 2);
         assert_eq!(state.rows[0].kind_char, 'T');
@@ -4705,6 +4761,13 @@ mod view_tests {
 
     use super::*;
 
+    /// Pinned "today" for graph-tab tests, so task relative-date labels in
+    /// snapshots don't drift with the wall clock. Matches `fixed_clock`.
+    const FT_TEST_TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(2026, 5, 12) {
+        Some(d) => d,
+        None => panic!("invalid test date"),
+    };
+
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
@@ -4721,7 +4784,7 @@ mod view_tests {
             query_buf: EditBuffer::from(dirs_query_text()),
             ..Default::default()
         };
-        v.apply_query(Some(&g));
+        v.apply_query(Some(&g), FT_TEST_TODAY);
         (g, v)
     }
 
@@ -4774,7 +4837,8 @@ mod view_tests {
         let (g, mut v) = view_with_query();
         // Expand root then Areas/.
         let root_key = g.stable_key(v.tree.rows()[0].note_id);
-        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(0, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         v.add_expansion_path(vec![root_key.clone()]);
         let areas_idx = v
             .tree
@@ -4783,13 +4847,14 @@ mod view_tests {
             .position(|r| r.display == "Areas/")
             .unwrap();
         let areas_key = g.stable_key(v.tree.rows()[areas_idx].note_id);
-        v.tree.expand_at(areas_idx, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(areas_idx, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         v.add_expansion_path(vec![root_key, areas_key]);
         let expected_len = v.tree.len();
 
         // Now drop and re-derive from spec.
         v.tree = TreeState::default();
-        v.restore_expansion(&g);
+        v.restore_expansion(&g, FT_TEST_TODAY);
 
         assert_eq!(v.tree.len(), expected_len);
         assert!(v.tree.rows()[0].expanded);
@@ -4806,7 +4871,8 @@ mod view_tests {
     fn restore_expansion_truncates_at_missing_node() {
         let (g, mut v) = view_with_query();
         let root_key = g.stable_key(v.tree.rows()[0].note_id);
-        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(0, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         v.add_expansion_path(vec![root_key.clone()]);
         // Inject a fictitious deeper path whose intermediate key
         // doesn't appear as a child of root in the visible tree —
@@ -4817,7 +4883,7 @@ mod view_tests {
         v.expanded_paths
             .insert(vec![root_key, stale.clone(), dir_key("Areas/operations")]);
         v.tree = TreeState::default();
-        v.restore_expansion(&g);
+        v.restore_expansion(&g, FT_TEST_TODAY);
         // The valid path expanded the root.
         assert!(v.tree.rows()[0].expanded);
         // Verify expanded_paths retained only paths whose keys resolve.
@@ -4836,7 +4902,8 @@ mod view_tests {
     fn restore_expansion_preserves_selection_when_present() {
         let (g, mut v) = view_with_query();
         // Expand root, then select Areas/.
-        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(0, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         let root_key = g.stable_key(v.tree.rows()[0].note_id);
         v.add_expansion_path(vec![root_key]);
         let areas_idx = v
@@ -4850,7 +4917,7 @@ mod view_tests {
 
         // Drop derived state and restore.
         v.tree = TreeState::default();
-        v.restore_expansion(&g);
+        v.restore_expansion(&g, FT_TEST_TODAY);
 
         let restored_idx = v
             .tree
@@ -4864,7 +4931,8 @@ mod view_tests {
     #[test]
     fn restore_expansion_falls_back_to_ancestor_when_selection_gone() {
         let (g, mut v) = view_with_query();
-        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(0, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         let root_key = g.stable_key(v.tree.rows()[0].note_id);
         v.add_expansion_path(vec![root_key.clone()]);
         // selected_path = [root, areas, ops]. Restoration only expands
@@ -4877,7 +4945,7 @@ mod view_tests {
             dir_key("Areas/operations"),
         ]);
         v.tree = TreeState::default();
-        v.restore_expansion(&g);
+        v.restore_expansion(&g, FT_TEST_TODAY);
 
         let areas_idx = v
             .tree
@@ -4893,7 +4961,7 @@ mod view_tests {
         let (g, mut v) = view_with_query();
         v.selected = 5; // out of bounds for the no-expansion tree
         v.tree = TreeState::default();
-        v.restore_expansion(&g);
+        v.restore_expansion(&g, FT_TEST_TODAY);
         assert_eq!(v.selected, 0);
     }
 
@@ -4907,7 +4975,8 @@ mod view_tests {
         let (g, mut v) = view_with_query();
         // Expand root and Areas/.
         let root_key = g.stable_key(v.tree.rows()[0].note_id);
-        v.tree.expand_at(0, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(0, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         v.add_expansion_path(vec![root_key.clone()]);
         let areas_idx = v
             .tree
@@ -4916,7 +4985,8 @@ mod view_tests {
             .position(|r| r.display == "Areas/")
             .unwrap();
         let areas_key = g.stable_key(v.tree.rows()[areas_idx].note_id);
-        v.tree.expand_at(areas_idx, &g, v.query.as_ref().unwrap());
+        v.tree
+            .expand_at(areas_idx, &g, v.query.as_ref().unwrap(), FT_TEST_TODAY);
         v.add_expansion_path(vec![root_key, areas_key]);
         v.selected = areas_idx;
         v.refresh_selected_path(&g);
@@ -4928,7 +4998,7 @@ mod view_tests {
         drop(g);
         let g2 = dirs_graph();
         v.tree = TreeState::default();
-        v.restore_expansion(&g2);
+        v.restore_expansion(&g2, FT_TEST_TODAY);
 
         // Both expansions land in the rebuilt tree.
         assert_eq!(v.tree.len(), expanded_count_before);
@@ -5131,7 +5201,7 @@ mod view_tests {
             query_buf: EditBuffer::from(query_text),
             ..Default::default()
         };
-        v.apply_query(Some(&graph));
+        v.apply_query(Some(&graph), FT_TEST_TODAY);
         // Find and select the row matching select_path.
         let target = graph
             .node_by_path(Path::new(select_path))
@@ -5202,7 +5272,7 @@ mod view_tests {
             query_buf: EditBuffer::from("node where kind = Ghost;"),
             ..Default::default()
         };
-        v.apply_query(Some(&graph));
+        v.apply_query(Some(&graph), FT_TEST_TODAY);
         v.selected = 0;
         let mut tab = GraphTab::new();
         tab.graph = Some(graph);
@@ -5233,7 +5303,7 @@ mod view_tests {
             query_buf: EditBuffer::from("node where kind = Task;"),
             ..Default::default()
         };
-        v.apply_query(Some(&graph));
+        v.apply_query(Some(&graph), FT_TEST_TODAY);
         v.selected = 0;
         let mut tab = GraphTab::new();
         tab.graph = Some(graph);
@@ -5284,6 +5354,13 @@ mod search_tests {
     use super::*;
     use crate::tui::widgets::PickerSource;
 
+    /// Pinned "today" for graph-tab tests, so task relative-date labels in
+    /// snapshots don't drift with the wall clock. Matches `fixed_clock`.
+    const FT_TEST_TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(2026, 5, 12) {
+        Some(d) => d,
+        None => panic!("invalid test date"),
+    };
+
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
@@ -5302,7 +5379,7 @@ mod search_tests {
     fn collect_finds_root_and_deeper_with_shortest_paths() {
         let g = dirs_graph();
         let q = dirs_query();
-        let candidates = collect_search_candidates(&g, &q);
+        let candidates = collect_search_candidates(&g, &q, FT_TEST_TODAY);
 
         let root_id = g.node_by_path(std::path::Path::new("")).unwrap();
         let root = candidates
@@ -5351,7 +5428,7 @@ mod search_tests {
         )
         .unwrap();
 
-        let candidates = collect_search_candidates(&g, &q);
+        let candidates = collect_search_candidates(&g, &q, FT_TEST_TODAY);
         // a (depth 0) and b (depth 1); BFS must terminate.
         assert_eq!(candidates.len(), 2);
         let depths: Vec<usize> = candidates.iter().map(|c| c.path.len()).collect();
@@ -5365,7 +5442,7 @@ mod search_tests {
         let g = dirs_graph();
         // Two roots, no expand block.
         let q = parse_query("node where kind = Note;").unwrap();
-        let candidates = collect_search_candidates(&g, &q);
+        let candidates = collect_search_candidates(&g, &q, FT_TEST_TODAY);
         assert!(!candidates.is_empty(), "dirs fixture has at least one note");
         // Every candidate's path has length 1 (it's a root).
         assert!(
@@ -5385,11 +5462,70 @@ mod search_tests {
         let g = dirs_graph();
         let q = dirs_query();
         for (id, _) in g.nodes() {
-            let row = TreeState::make_row(id, 0, &g, &q);
-            let (display, kind_char) = leaf_display(&g, id);
+            let row = TreeState::make_row(id, 0, &g, &q, FT_TEST_TODAY);
+            let (display, kind_char) = leaf_display(&g, id, FT_TEST_TODAY);
             assert_eq!(row.display, display, "display mismatch for {:?}", id);
             assert_eq!(row.kind_char, kind_char, "kind mismatch for {:?}", id);
         }
+    }
+
+    /// graph-task-interaction §D6: a Task row shows the status marker,
+    /// description, and compact relative due/scheduled + priority when set.
+    #[test]
+    fn leaf_display_task_shows_dates_and_priority() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        let v = ft_core::vault::Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        // Due 3 days ago (relative to FT_TEST_TODAY = 2026-05-12).
+        let scan = ft_core::vault::Scan {
+            tasks: vec![ft_core::task::Task {
+                description: "Fix login bug".into(),
+                status: ft_core::task::Status::Open,
+                priority: Some(ft_core::task::Priority::High),
+                due: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 9).unwrap()),
+                source_file: PathBuf::from("root.md"),
+                source_line: 1,
+                ..Default::default()
+            }],
+            errors: vec![],
+        };
+        let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
+        let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
+        let (display, kind) = leaf_display(&g, task_id, FT_TEST_TODAY);
+        assert_eq!(kind, 'T');
+        assert!(display.starts_with("[ ] Fix login bug"), "got: {display}");
+        assert!(
+            display.contains("📅 3d ago"),
+            "expected relative due: {display}"
+        );
+        assert!(
+            display.contains("⏫"),
+            "expected high priority marker: {display}"
+        );
+    }
+
+    /// A Task with no dates/priority renders just the marker + description.
+    #[test]
+    fn leaf_display_task_omits_absent_fields() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        let v = ft_core::vault::Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = ft_core::vault::Scan {
+            tasks: vec![ft_core::task::Task {
+                description: "Plain task".into(),
+                source_file: PathBuf::from("root.md"),
+                source_line: 1,
+                ..Default::default()
+            }],
+            errors: vec![],
+        };
+        let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
+        let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
+        let (display, kind) = leaf_display(&g, task_id, FT_TEST_TODAY);
+        assert_eq!(kind, 'T');
+        assert_eq!(display, "[ ] Plain task", "got: {display}");
     }
 
     // 7.5
@@ -5443,7 +5579,7 @@ mod search_tests {
             "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
                 .to_string();
         let graph_ref = tab.graph.as_ref().unwrap();
-        tab.views[0].apply_query(Some(graph_ref));
+        tab.views[0].apply_query(Some(graph_ref), FT_TEST_TODAY);
 
         let path = vec![root_id, areas_id, ops_id, shifts_id];
         tab.jump_to_path(path.clone());
@@ -5482,6 +5618,13 @@ mod nav_tests {
 
     use super::*;
 
+    /// Pinned "today" for graph-tab tests, so task relative-date labels in
+    /// snapshots don't drift with the wall clock. Matches `fixed_clock`.
+    const FT_TEST_TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(2026, 5, 12) {
+        Some(d) => d,
+        None => panic!("invalid test date"),
+    };
+
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
@@ -5493,7 +5636,7 @@ mod nav_tests {
             query_buf: EditBuffer::from(query_text),
             ..Default::default()
         };
-        v.apply_query(Some(&graph));
+        v.apply_query(Some(&graph), FT_TEST_TODAY);
         GraphTab {
             graph: Some(graph),
             views: vec![v],

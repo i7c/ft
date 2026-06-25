@@ -51,9 +51,9 @@
 
 ## 8. Graph-tab Task display parity (ft TUI)
 
-- [ ] 8.1 Lift the `relative_date(d, today)` helper from `tasks/search.rs` to a shared spot (e.g. `ft/src/tui/tabs/tasks/datefmt.rs` or `ft/src/tui/util/datefmt.rs`).
-- [ ] 8.2 Extend `leaf_display` for `NodeKind::Task`: append `📅 <rel>` (if due), `⏳ <rel>` (if scheduled), `⏩ <Priority>` (if priority), each space-separated, omitting `None` fields. Status marker unchanged.
-- [ ] 8.3 Update `leaf_display` unit test to cover the extended format.
+- [x] 8.1 Lift the `relative_date(d, today)` helper from `tasks/search.rs` to a shared spot (e.g. `ft/src/tui/tabs/tasks/datefmt.rs` or `ft/src/tui/util/datefmt.rs`).
+- [x] 8.2 Extend `leaf_display` for `NodeKind::Task`: append `📅 <rel>` (if due), `⏳ <rel>` (if scheduled), `⏩ <Priority>` (if priority), each space-separated, omitting `None` fields. Status marker unchanged.
+- [x] 8.3 Update `leaf_display` unit test to cover the extended format.
 
 ## 9. Tasks-tab dedup fix (ft TUI)
 
