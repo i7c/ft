@@ -476,6 +476,54 @@ pub static CREATE_SUBDIR_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Esc", "create-subdir.cancel")
 });
 
+// ── Task edit popup (graph-task-edit-modal §2.4) ────────────────────
+
+const TASK_EDIT_SCOPE: CommandScope = CommandScope::Modal("task-edit");
+
+pub static TASK_EDIT_COMMANDS: &[CommandDef] = &[
+    confirm_def("task-edit.confirm", TASK_EDIT_SCOPE),
+    cancel_def("task-edit.cancel", TASK_EDIT_SCOPE),
+];
+
+pub static TASK_EDIT_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "task-edit.confirm")
+        .bind("Ctrl+s", "task-edit.confirm")
+        .bind("Esc", "task-edit.cancel")
+});
+
+// ── Task create leader (graph-task-edit-modal §4) ──────────────────
+
+const TASK_LEADER_SCOPE: CommandScope = CommandScope::Modal("task-leader");
+
+pub static TASK_LEADER_COMMANDS: &[CommandDef] = &[
+    CommandDef {
+        name: "task-leader.create",
+        description: "Create a new top-level task",
+        scope: TASK_LEADER_SCOPE,
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "task-leader.new-subtask",
+        description: "Create a new subtask under the focused task",
+        scope: TASK_LEADER_SCOPE,
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+];
+
+pub static TASK_LEADER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("c", "task-leader.create")
+        .bind("s", "task-leader.new-subtask")
+        .bind("Esc", "task-edit.cancel")
+});
+
 // ── Confirm-delete ──────────────────────────────────────────────────
 
 const CONFIRM_DELETE_SCOPE: CommandScope = CommandScope::Modal("confirm-delete");

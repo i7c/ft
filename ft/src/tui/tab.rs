@@ -280,6 +280,18 @@ pub enum AppRequest {
         parent: PathBuf,
         name: String,
     },
+    /// Apply validated popup fields to a task at `(path, line)` via
+    /// `ops::update_task_line` (graph-task-edit-modal §3).
+    GraphTaskEdit {
+        path: PathBuf,
+        line: usize,
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+    },
+    /// Open a task-create quickline seeded from the focused row
+    /// (graph-task-edit-modal §4).
+    GraphTaskCreate {
+        kind: crate::tui::tabs::graph::TaskCreateKind,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -407,6 +419,15 @@ impl std::fmt::Debug for AppRequest {
                 .field("parent", parent)
                 .field("name", name)
                 .finish(),
+            AppRequest::GraphTaskEdit { path, line, .. } => f
+                .debug_struct("GraphTaskEdit")
+                .field("path", path)
+                .field("line", line)
+                .finish_non_exhaustive(),
+            AppRequest::GraphTaskCreate { kind } => f
+                .debug_struct("GraphTaskCreate")
+                .field("kind", kind)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -698,6 +719,25 @@ pub trait Tab {
     /// [`AppRequest::GraphCreateSubdir`]). The Graph tab overrides
     /// this to create the directory, refresh the graph, and toast.
     fn graph_create_subdir(&mut self, _ctx: &TabCtx, _parent: PathBuf, _name: String) {}
+
+    /// Hook for the task-edit popup commit (see [`AppRequest::GraphTaskEdit`]).
+    /// The Graph tab overrides this to apply the fields via
+    /// `ops::update_task_line`, refresh the graph, and restore the cursor.
+    fn graph_task_edit(
+        &mut self,
+        _ctx: &TabCtx,
+        _path: PathBuf,
+        _line: usize,
+        _fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+    ) {
+    }
+
+    /// Hook for the task-create leader (see [`AppRequest::GraphTaskCreate`]).
+    /// The Graph tab overrides this to open a quickline seeded with the
+    /// focused note's path (top-level) or the focused task's parent
+    /// (subtask).
+    fn graph_task_create(&mut self, _ctx: &TabCtx, _kind: crate::tui::tabs::graph::TaskCreateKind) {
+    }
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

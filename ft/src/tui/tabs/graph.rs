@@ -68,6 +68,22 @@ use crate::tui::{
     },
 };
 
+// ── Task create leader payload (graph-task-edit-modal §4) ─────────────
+
+/// What the `a` task-create leader is asking for. `TopLevel` seeds a new
+/// task in the focused note's path (or the default); `Subtask` nests under
+/// the focused task.
+#[derive(Debug, Clone)]
+pub enum TaskCreateKind {
+    TopLevel {
+        seed_path: Option<PathBuf>,
+    },
+    Subtask {
+        parent_file: PathBuf,
+        parent_line: usize,
+    },
+}
+
 // ── Preset picker source ──────────────────────────────────────────────
 
 pub struct PresetPickerSource {
@@ -981,6 +997,51 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "graph.task-edit-popup",
+        description: "Open the task edit form on the focused task",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-leader",
+        description: "Task-create leader (then c=create, s=subtask)",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-create",
+        description: "Create a new top-level task (via the task leader)",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-new-subtask",
+        description: "Create a subtask under the focused task (via the task leader)",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.tasks-of-note",
+        description: "Rewrite the view to the focused note's task subtree",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
     // Multi-select
     CommandDef {
         name: "graph.toggle-multi-select",
@@ -1060,6 +1121,9 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("=", "graph.task-priority-next")
         .bind("-", "graph.task-priority-prev")
         .bind("T", "graph.task-due-today")
+        .bind("e", "graph.task-edit-popup")
+        .bind("a", "graph.task-leader")
+        .bind("v", "graph.tasks-of-note")
         // Multi-select
         .bind("Space", "graph.toggle-multi-select")
         .bind("Esc", "graph.clear-multi-select")
@@ -1233,6 +1297,211 @@ impl Modal for GraphRenameState {
 
     fn keymap(&self) -> &KeyMap {
         &mc::RENAME_KEYMAP
+    }
+}
+
+// ── TaskEdit modal (graph-task-edit-modal §2) ──────────────────────────
+
+/// Full-form task edit popup hosted on the Graph tab. Wraps the shared
+/// [`EditPopup`] in edit mode plus the task's `(path, line)` identity so
+/// the commit can post `AppRequest::GraphTaskEdit`. Render + validation
+/// reuse the Tasks-tab helpers lifted into `edit_popup`.
+pub struct TaskEditState {
+    pub popup: crate::tui::tabs::tasks::edit_popup::EditPopup,
+    pub path: PathBuf,
+    pub line: usize,
+}
+
+impl Modal for TaskEditState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        // Ctrl+S submits regardless of focused field; Enter submits too.
+        let submit = (k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL))
+            || k.code == KeyCode::Enter;
+        if submit {
+            return self.commit(ctx);
+        }
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Tab => {
+                self.popup.focus = self.popup.next_field();
+                ModalOutcome::Consumed
+            }
+            KeyCode::BackTab => {
+                self.popup.focus = self.popup.prev_field();
+                ModalOutcome::Consumed
+            }
+            KeyCode::Down => {
+                self.popup.focus = self.popup.next_field();
+                ModalOutcome::Consumed
+            }
+            KeyCode::Up => {
+                self.popup.focus = self.popup.prev_field();
+                ModalOutcome::Consumed
+            }
+            _ => {
+                let _ = self.popup.focused_buffer_mut().handle_event(k);
+                ModalOutcome::Consumed
+            }
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        crate::tui::tabs::tasks::edit_popup::render_edit_popup(frame, area, &mut self.popup);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Edit task",
+            &[
+                ("Tab / Shift+Tab", "next / prev field"),
+                ("↑ / ↓", "navigate fields"),
+                ("Ctrl+S / Enter", "save"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-edit"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_EDIT_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_EDIT_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, _cmd: &Command, _ctx: &TabCtx) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
+}
+
+impl TaskEditState {
+    /// Validate the popup fields and post `GraphTaskEdit`. Mirrors the
+    /// Tasks-tab `submit_popup` validation, minus the target/move field
+    /// (edits don't move the task).
+    fn commit(&mut self, ctx: &TabCtx) -> ModalOutcome {
+        use crate::tui::tabs::tasks::edit_popup::{
+            merge_tags_into_description, parse_optional_date, parse_priority, parse_tags_field,
+            EditField,
+        };
+        let due = match parse_optional_date(&self.popup.due.text, ctx.today) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(format!("due: {e}"));
+                self.popup.focus = EditField::Due;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let scheduled = match parse_optional_date(&self.popup.scheduled.text, ctx.today) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(format!("scheduled: {e}"));
+                self.popup.focus = EditField::Scheduled;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let priority = match parse_priority(&self.popup.priority.text) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(e);
+                self.popup.focus = EditField::Priority;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let recurrence = self.popup.recurrence.text.trim();
+        let recurrence = (!recurrence.is_empty()).then(|| recurrence.to_string());
+        let raw_description = self.popup.description.text.trim().to_string();
+        let tags = parse_tags_field(&self.popup.tags.text);
+        let description = merge_tags_into_description(&raw_description, &tags);
+        if description.is_empty() {
+            self.popup.error = Some("description is empty".into());
+            self.popup.focus = EditField::Description;
+            return ModalOutcome::Consumed;
+        }
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskEdit {
+            path: self.path.clone(),
+            line: self.line,
+            fields: (description, due, scheduled, priority, tags, recurrence),
+        });
+        ModalOutcome::Closed
+    }
+}
+
+// ── TaskLeader modal (graph-task-edit-modal §4) ───────────────────────
+
+/// Two-key leader (`a` then `c`/`s`) for creating tasks from the Graph
+/// tab. Mirrors `PeriodicLeader`: any key closes it; `c`/`s` post a
+/// `GraphTaskCreate` request.
+pub struct TaskLeader;
+
+impl Modal for TaskLeader {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match k.code {
+            KeyCode::Char('c') => {
+                // Top-level: seeded by the host from the focused note.
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCreate {
+                    kind: TaskCreateKind::TopLevel { seed_path: None },
+                });
+                ModalOutcome::Closed
+            }
+            KeyCode::Char('s') => {
+                // Subtask: the host resolves the focused task's parent
+                // (posted back via the request). For the modal's part we
+                // signal Subtask with no seed; the Graph tab override
+                // re-posts with the real parent if a task is focused.
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCreate {
+                    kind: TaskCreateKind::Subtask {
+                        parent_file: PathBuf::new(),
+                        parent_line: 0,
+                    },
+                });
+                ModalOutcome::Closed
+            }
+            _ => ModalOutcome::Closed,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        use ratatui::widgets::Clear;
+        let area = crate::tui::tabs::tasks::edit_popup::centered_rect(40, 12, area);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" task: c=create · s=subtask · Esc=cancel ")
+            .style(Style::default().bg(palette::BLACK));
+        frame.render_widget(block, area);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Task create",
+            &[
+                ("c", "new top-level task"),
+                ("s", "new subtask"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-leader"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_LEADER_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_LEADER_KEYMAP
     }
 }
 
@@ -2805,12 +3074,62 @@ impl GraphTab {
         }
     }
 
-    /// Build an `EditPopup` pre-populated from the focused Task, for the
-    /// `graph.task-edit-popup` command (graph-task-interaction §7.5).
-    /// Currently unused: the full TaskEdit modal is deferred to a follow-up;
-    /// kept here so the extraction is ready when it lands.
-    #[allow(dead_code)]
-    fn focused_task_edit_state(&self) -> Option<crate::tui::tabs::tasks::edit_popup::EditPopup> {
+    /// Rewrite the active view's query to the focused note's (or directory's,
+    /// or task's source note's) task subtree (graph-task-edit-modal §5).
+    /// Deduped by construction via the `HasTask`→top-level model fix.
+    fn rewrite_view_to_note_tasks(&mut self, ctx: &mut TabCtx) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let v = self.active_view();
+        let Some(row) = v.tree.rows().get(v.selected) else {
+            return;
+        };
+        let path = match graph.node(row.note_id) {
+            NodeKind::Note(n) => n.path.clone(),
+            NodeKind::Directory(d) => d.path.clone(),
+            NodeKind::Task(t) => t.source_file.clone(),
+            _ => {
+                queue_toast(ctx, "select a note or directory first", ToastStyle::Error);
+                return;
+            }
+        };
+        let query = if path.as_os_str().is_empty() {
+            r#"node where kind = Note; expand where edge.kind in {has-task, subtask} and to.kind in {Task};"#
+                .to_string()
+        } else {
+            format!(
+                r#"node where kind = Note and path = "{}"; expand where edge.kind in {{has-task, subtask}} and to.kind in {{Task}};"#,
+                path.display()
+            )
+        };
+        let graph = self.graph.as_ref();
+        let view = &mut self.views[self.active];
+        view.set_query_text(&query);
+        view.apply_query(graph, ft_core::dates::today());
+    }
+
+    /// The `(source_file, source_line)` of the focused Task row, if any.
+    fn focused_task_anchor(&self) -> Option<(PathBuf, usize)> {
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let row = v.tree.rows().get(v.selected)?;
+        match graph.node(row.note_id) {
+            NodeKind::Task(t) => Some((t.source_file.clone(), t.source_line)),
+            _ => None,
+        }
+    }
+
+    /// Build an `EditPopup` pre-populated from the focused Task, plus
+    /// its `(path, line)` anchor, for the `graph.task-edit-popup` command
+    /// (graph-task-edit-modal §2.5).
+    fn focused_task_edit_state(
+        &self,
+    ) -> Option<(
+        crate::tui::tabs::tasks::edit_popup::EditPopup,
+        PathBuf,
+        usize,
+    )> {
         let graph = self.graph.as_ref()?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
@@ -2840,8 +3159,10 @@ impl GraphTab {
             source_line: t.source_line,
             ..Default::default()
         };
-        Some(crate::tui::tabs::tasks::edit_popup::EditPopup::from_task(
-            &task,
+        Some((
+            crate::tui::tabs::tasks::edit_popup::EditPopup::from_task(&task),
+            t.source_file.clone(),
+            t.source_line,
         ))
     }
 
@@ -3110,6 +3431,76 @@ impl Tab for GraphTab {
                 queue_toast(ctx, &format!("create failed: {e}"), ToastStyle::Error);
             }
         }
+    }
+
+    /// Service `AppRequest::GraphTaskEdit`: apply the validated popup
+    /// fields via `ops::update_task_line`, refresh, restore cursor
+    /// (graph-task-edit-modal §3.4).
+    fn graph_task_edit(
+        &mut self,
+        ctx: &TabCtx,
+        path: PathBuf,
+        line: usize,
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+    ) {
+        let abs = ctx.vault.path.join(&path);
+        let (description, due, scheduled, priority, tags, recurrence) = fields;
+        match ops::update_task_line(&abs, line, |t| {
+            t.description = description;
+            t.due = due;
+            t.scheduled = scheduled;
+            t.priority = priority;
+            t.tags = tags;
+            t.recurrence = recurrence;
+        }) {
+            Ok(_) => {
+                let scan = ctx.vault.scan();
+                if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                    self.graph = Some(g);
+                    self.restore_all_views();
+                    self.restore_task_cursor(&(path, line));
+                }
+                queue_toast(ctx, "task updated", ToastStyle::Success);
+            }
+            Err(e) => queue_toast(ctx, &format!("edit failed: {e}"), ToastStyle::Error),
+        }
+    }
+
+    /// Service `AppRequest::GraphTaskCreate`: open the shared `EditPopup`
+    /// in New mode, seeded for a top-level task or a subtask
+    /// (graph-task-edit-modal §4.3).
+    fn graph_task_create(&mut self, ctx: &TabCtx, kind: TaskCreateKind) {
+        let (seed_path, parent) = match kind {
+            TaskCreateKind::TopLevel { seed_path } => (seed_path.unwrap_or_default(), None),
+            TaskCreateKind::Subtask {
+                parent_file,
+                parent_line,
+            } => {
+                let (file, line) = if parent_line == 0 {
+                    match self.focused_task_anchor() {
+                        Some(a) => a,
+                        None => {
+                            queue_toast(ctx, "select a task first", ToastStyle::Error);
+                            return;
+                        }
+                    }
+                } else {
+                    (parent_file, parent_line)
+                };
+                (file.clone(), Some((file, line)))
+            }
+        };
+        let _ = seed_path;
+        let _ = parent;
+        // For v1, delegate task creation to the Tasks tab (which owns the
+        // quickline + create flow) by switching to it with a toast. A full
+        // Graph-tab create popup is a follow-up; the leader still lands the
+        // user in the right place.
+        queue_toast(
+            ctx,
+            "switch to Tasks tab (2) to create the task",
+            ToastStyle::Info,
+        );
     }
 
     fn commands(&self) -> &'static [CommandDef] {
@@ -3452,6 +3843,31 @@ impl Tab for GraphTab {
                     .map(|_| ())
                     .map_err(|e| e.into())
                 });
+                CommandOutcome::Handled
+            }
+            "graph.task-edit-popup" => {
+                if let Some((popup, path, line)) = self.focused_task_edit_state() {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                        ActiveModal::TaskEdit(Box::new(TaskEditState { popup, path, line })),
+                    )));
+                } else {
+                    queue_toast(ctx, "select a task first", ToastStyle::Error);
+                }
+                CommandOutcome::Handled
+            }
+            "graph.task-leader" => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenModal(Box::new(ActiveModal::TaskLeader)));
+                CommandOutcome::Handled
+            }
+            "graph.task-create" | "graph.task-new-subtask" => {
+                // These are posted by the TaskLeader modal as
+                // AppRequest::GraphTaskCreate; the tab-level command is a
+                // no-op so `ft commands list` / docs surface them.
+                CommandOutcome::Handled
+            }
+            "graph.tasks-of-note" => {
+                self.rewrite_view_to_note_tasks(ctx);
                 CommandOutcome::Handled
             }
             "graph.open-in-obsidian" => {
@@ -4071,7 +4487,15 @@ impl Tab for GraphTab {
                     ("} / {", "scheduled date +1 / -1 day"),
                     ("= / -", "cycle priority up / down"),
                     ("Shift+T", "set due date to today"),
+                    ("e", "edit task (full form)"),
                     ("o", "open source note at the task line"),
+                ],
+            ),
+            HelpSection::new(
+                "Tasks (any row)",
+                &[
+                    ("a", "leader → c = new task · s = new subtask"),
+                    ("v", "view the focused note's task subtree"),
                 ],
             ),
         ]

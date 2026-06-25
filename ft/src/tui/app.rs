@@ -772,6 +772,16 @@ impl App {
                 });
                 Ok(())
             }
+            AppRequest::GraphTaskEdit { path, line, fields } => {
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_task_edit(ctx, path, line, fields)
+                });
+                Ok(())
+            }
+            AppRequest::GraphTaskCreate { kind } => {
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_task_create(ctx, kind));
+                Ok(())
+            }
         }
     }
 
@@ -1776,6 +1786,16 @@ impl App {
                 self.with_named_tab("Graph", |tab, ctx| {
                     tab.graph_create_subdir(ctx, parent, name)
                 });
+                Ok(())
+            }
+            AppRequest::GraphTaskEdit { path, line, fields } => {
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_task_edit(ctx, path, line, fields)
+                });
+                Ok(())
+            }
+            AppRequest::GraphTaskCreate { kind } => {
+                self.with_named_tab("Graph", |tab, ctx| tab.graph_task_create(ctx, kind));
                 Ok(())
             }
             other => {

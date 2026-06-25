@@ -57,7 +57,7 @@ use crate::tui::tab::{
 };
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
-    SearchPickerModal,
+    SearchPickerModal, TaskEditState, TaskLeader,
 };
 use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
@@ -271,6 +271,12 @@ pub enum ActiveModal {
     ConfirmDelete(ConfirmDeleteState),
     /// Single-line prompt for creating a subdirectory.
     CreateSubdir(CreateSubdirState),
+    /// Full-form task edit popup hosted on the Graph tab
+    /// (graph-task-edit-modal §2). Wraps the shared `EditPopup`.
+    TaskEdit(Box<TaskEditState>),
+    /// Two-key leader (`a` then `c`/`s`) for creating tasks from the
+    /// Graph tab (graph-task-edit-modal §4).
+    TaskLeader,
     /// Sources Manager for the Journal tab: view / add / remove /
     /// clear sources, with an inner ghost-aware fuzzy picker.
     JournalSources(JournalSourcesModal),
@@ -298,6 +304,8 @@ impl Modal for ActiveModal {
             }
             ActiveModal::ConfirmDelete(s) => s.handle_event(ev, ctx),
             ActiveModal::CreateSubdir(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskEdit(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskLeader => TaskLeader.handle_event(ev, ctx),
             ActiveModal::JournalSources(s) => s.handle_event(ev, ctx),
             ActiveModal::JournalAppendOrReplace(s) => s.handle_event(ev, ctx),
         }
@@ -321,6 +329,8 @@ impl Modal for ActiveModal {
             }
             ActiveModal::ConfirmDelete(s) => s.render(frame, area, ctx),
             ActiveModal::CreateSubdir(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskEdit(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskLeader => TaskLeader.render(frame, area, ctx),
             ActiveModal::JournalSources(s) => s.render(frame, area, ctx),
             ActiveModal::JournalAppendOrReplace(s) => s.render(frame, area, ctx),
         }
@@ -342,6 +352,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.keymap_help(),
             ActiveModal::ConfirmDelete(s) => s.keymap_help(),
             ActiveModal::CreateSubdir(s) => s.keymap_help(),
+            ActiveModal::TaskEdit(s) => s.keymap_help(),
+            ActiveModal::TaskLeader => TaskLeader.keymap_help(),
             ActiveModal::JournalSources(s) => s.keymap_help(),
             ActiveModal::JournalAppendOrReplace(s) => s.keymap_help(),
         }
@@ -363,6 +375,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => "query-bar",
             ActiveModal::ConfirmDelete(_) => "confirm-delete",
             ActiveModal::CreateSubdir(_) => "create-subdir",
+            ActiveModal::TaskEdit(_) => "task-edit",
+            ActiveModal::TaskLeader => "task-leader",
             ActiveModal::JournalSources(_) => "journal-sources",
             ActiveModal::JournalAppendOrReplace(_) => "journal-append-or-replace",
         }
@@ -384,6 +398,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { view_id } => QueryBar { view_id: *view_id }.commands(),
             ActiveModal::ConfirmDelete(s) => s.commands(),
             ActiveModal::CreateSubdir(s) => s.commands(),
+            ActiveModal::TaskEdit(s) => s.commands(),
+            ActiveModal::TaskLeader => TaskLeader.commands(),
             ActiveModal::JournalSources(s) => s.commands(),
             ActiveModal::JournalAppendOrReplace(s) => s.commands(),
         }
@@ -405,6 +421,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => empty_keymap(),
             ActiveModal::ConfirmDelete(s) => s.keymap(),
             ActiveModal::CreateSubdir(s) => s.keymap(),
+            ActiveModal::TaskEdit(s) => s.keymap(),
+            ActiveModal::TaskLeader => &mc::TASK_LEADER_KEYMAP,
             ActiveModal::JournalSources(s) => s.keymap(),
             ActiveModal::JournalAppendOrReplace(s) => s.keymap(),
         }
@@ -426,6 +444,8 @@ impl Modal for ActiveModal {
             ActiveModal::QueryBar { .. } => CommandOutcome::NotHandled,
             ActiveModal::ConfirmDelete(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::CreateSubdir(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskEdit(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskLeader => CommandOutcome::NotHandled,
             ActiveModal::JournalSources(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::JournalAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
         }

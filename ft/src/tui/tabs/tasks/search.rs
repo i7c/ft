@@ -29,13 +29,16 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{
-        edit_popup::{relative_date, EditField, EditPopup, PopupFields, PopupMode},
+        edit_popup::{
+            merge_tags_into_description, parse_optional_date, parse_priority, parse_tags_field,
+            relative_date, render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
+        },
         quickline::parse_quickline,
         view::View,
     },
     widgets::{
-        horizontal_scroll, render_inline_input, CursorMode, EditBuffer, FuzzyPicker, InlineInput,
-        PickerOutcome, VaultFilePickerSource,
+        render_inline_input, CursorMode, EditBuffer, FuzzyPicker, InlineInput, PickerOutcome,
+        VaultFilePickerSource,
     },
 };
 
@@ -162,79 +165,6 @@ struct DisplayRow {
 struct Quickline {
     input: EditBuffer,
     error: Option<String>,
-}
-
-fn parse_priority(s: &str) -> Result<Option<Priority>, String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
-        return Ok(None);
-    }
-    match trimmed.to_ascii_lowercase().as_str() {
-        "lowest" => Ok(Some(Priority::Lowest)),
-        "low" => Ok(Some(Priority::Low)),
-        "medium" | "med" => Ok(Some(Priority::Medium)),
-        "high" => Ok(Some(Priority::High)),
-        "highest" => Ok(Some(Priority::Highest)),
-        other => Err(format!(
-            "priority `{other}` not recognized (try none / low / medium / high)"
-        )),
-    }
-}
-
-fn parse_tags_field(s: &str) -> Vec<String> {
-    s.split(|c: char| c.is_whitespace() || c == ',')
-        .map(|t| t.trim_start_matches('#').trim())
-        .filter(|t| !t.is_empty())
-        .map(|t| t.to_string())
-        .collect()
-}
-
-/// Rewrite `description` so its inline `#tag` words exactly match `tags`.
-///
-/// `Task.tags` is a *derived* index extracted from the description on parse —
-/// the serializer never writes tags as a separate field. To persist tag edits
-/// from the popup we have to strip the old inline tags from the description
-/// and re-append the ones the user wants.
-fn merge_tags_into_description(description: &str, tags: &[String]) -> String {
-    let mut kept: Vec<&str> = Vec::new();
-    for word in description.split_whitespace() {
-        if !is_tag_word(word) {
-            kept.push(word);
-        }
-    }
-    let mut out = kept.join(" ");
-    for tag in tags {
-        let bare = tag.trim_start_matches('#');
-        if bare.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push('#');
-        out.push_str(bare);
-    }
-    out
-}
-
-fn is_tag_word(w: &str) -> bool {
-    let Some(rest) = w.strip_prefix('#') else {
-        return false;
-    };
-    !rest.is_empty()
-        && rest
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
-}
-
-fn parse_optional_date(s: &str, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    ft_core::dates::parse(trimmed, today)
-        .map(Some)
-        .map_err(|e| e.to_string())
 }
 
 /// Result of compiling the active `query_text` against the current `today`.
@@ -1702,137 +1632,6 @@ fn handle_target_picker_key(popup: &mut EditPopup, k: KeyEvent) -> EventOutcome 
         PickerOutcome::StillOpen | PickerOutcome::NotHandled => {}
     }
     EventOutcome::Consumed
-}
-
-/// Render the modal edit popup centered over `area`. Compact one-row-per-field
-/// layout (label : value) so all fields fit within an 80x24 viewport.
-/// The focused field is bold and underlined; everyone else stays plain.
-///
-/// Takes `&mut EditPopup` so the optional fuzzy picker (whose `render`
-/// needs `&mut self` to adjust its internal scroll) can draw on top.
-fn render_edit_popup(frame: &mut Frame, area: Rect, popup: &mut EditPopup) {
-    use ratatui::widgets::Clear;
-
-    let popup_area = centered_rect(72, 65, area);
-    frame.render_widget(Clear, popup_area);
-
-    let title = match popup.mode {
-        PopupMode::Edit => " edit task ",
-        PopupMode::New => " new task ",
-    };
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(Style::default().bg(palette::BLACK));
-    let inner = outer.inner(popup_area);
-    frame.render_widget(outer, popup_area);
-
-    let fields = popup.fields();
-    let label_width = fields.iter().map(|f| f.label().len()).max().unwrap_or(0);
-    let mut lines: Vec<Line> = Vec::with_capacity(fields.len() + 3);
-    lines.push(Line::from("")); // top padding
-
-    let inner_width = inner.width.saturating_sub(2) as usize; // 1-col gutter each side
-    let value_width = inner_width.saturating_sub(label_width + 4); // "  " + ": "
-
-    for field in fields {
-        let focused = popup.focus == *field;
-        let buf = popup.buffer_for(*field);
-        let label_style = if focused {
-            Style::default()
-                .fg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette::DIM)
-        };
-
-        let value_spans: Vec<Span<'static>> = if focused {
-            let chars: Vec<char> = buf.text.chars().collect();
-            let cursor = buf.cursor.min(chars.len());
-            let scroll = horizontal_scroll(cursor, chars.len(), value_width);
-            let visible_end = (scroll + value_width.saturating_sub(1)).min(chars.len());
-            let visible: String = chars[scroll..visible_end].iter().collect();
-            let visible_cursor = cursor.saturating_sub(scroll);
-            let split = visible_cursor.min(visible.chars().count());
-            let mut iter = visible.chars();
-            let left: String = iter.by_ref().take(split).collect();
-            let right: String = iter.collect();
-            vec![
-                Span::styled(left, Style::default().fg(palette::WHITE)),
-                Span::styled(
-                    "│",
-                    Style::default()
-                        .fg(palette::PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(right, Style::default().fg(palette::WHITE)),
-            ]
-        } else {
-            let display: String = buf.text.chars().take(value_width).collect();
-            vec![Span::styled(display, Style::default().fg(palette::WHITE))]
-        };
-
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(value_spans.len() + 2);
-        spans.push(Span::styled(
-            format!("  {:>width$} : ", field.label(), width = label_width),
-            label_style,
-        ));
-        spans.extend(value_spans);
-        lines.push(Line::from(spans));
-    }
-
-    lines.push(Line::from("")); // separator before footer
-    let footer = if let Some(msg) = &popup.error {
-        Line::from(vec![
-            Span::styled("  ⚠ ", Style::default().fg(palette::ERROR)),
-            Span::styled(msg.clone(), Style::default().fg(palette::ERROR)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            "  Tab/Shift+Tab next · Ctrl+S save · Esc cancel",
-            Style::default().fg(palette::DIM),
-        ))
-    };
-    lines.push(footer);
-
-    frame.render_widget(Paragraph::new(lines), inner);
-
-    // Picker overlay: rendered last so it floats above the form. The
-    // form's values aren't lost — `popup.target` (and every other
-    // field's buffer) still holds whatever was typed before the
-    // picker opened; we just visually hide them while picking.
-    if let Some(picker) = popup.target_picker.as_mut() {
-        let picker_area = centered_rect(60, 70, popup_area);
-        frame.render_widget(Clear, picker_area);
-        let outer = Block::default()
-            .borders(Borders::ALL)
-            .title(" pick target ")
-            .style(Style::default().bg(palette::BLACK));
-        let inner = outer.inner(picker_area);
-        frame.render_widget(outer, picker_area);
-        picker.render(frame, inner);
-    }
-}
-
-/// Centered rect helper duplicated from `ui.rs` so this file stays
-/// self-contained for popup rendering.
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 // --- row formatting ----------------------------------------------------------

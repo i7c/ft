@@ -6613,6 +6613,131 @@ fn graph_tab_x_completes_focused_task() -> Result<()> {
     Ok(())
 }
 
+/// Drive the Graph tab to a vault with one note + one task, apply the
+/// note-scoped task query, expand the note, and land the cursor on the
+/// task row. Returns the vault path so the caller can assert on disk.
+fn graph_tab_with_focused_task(body: &str) -> (TempDir, std::path::PathBuf, App) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("root.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path.clone())).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1).unwrap();
+    app.switch_to(0).unwrap(); // Graph tab
+                               // Apply the note-scoped task query.
+    app.dispatch(key('/')).unwrap();
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))
+        .unwrap();
+    for _ in 0..300 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+    }
+    for c in "node where kind = Note and path = \"root.md\"; expand where edge.kind in {has-task, subtask} and to.kind in {Task};".chars() {
+        app.dispatch(key(c)).unwrap();
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    // Walk onto the note and expand it so the task row appears, then descend.
+    app.dispatch(key('j')).unwrap();
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    app.dispatch(key('j')).unwrap(); // onto the task
+    (dir, vault_path, app)
+}
+
+#[test]
+fn graph_tab_e_edits_focused_task_due_date() -> Result<()> {
+    let (_dir, vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // `e` opens the edit popup on the focused task.
+    app.dispatch(key('e'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("edit task"),
+        "e should open the edit-task popup:\n{frame}"
+    );
+    // Tab to the due field (description → due in edit-mode field order),
+    // type a date, and Ctrl+S to save.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?; // → due
+    for c in "2026-07-01".chars() {
+        app.dispatch(key(c))?;
+    }
+    let pre_save = render(&mut app, 80, 24);
+    assert!(
+        pre_save.contains("2026-07-01"),
+        "due field should show the typed date before save:\n{pre_save}"
+    );
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?; // Ctrl+S save
+          // Disk-mutating requests go through service_request, not drain_simple.
+    app.service_request_for_test()?;
+    let _ = app.take_pending_request();
+
+    let content = std::fs::read_to_string(vault_path.join("root.md"))?;
+    assert!(
+        content.contains("📅 2026-07-01"),
+        "expected the due date to be saved, got: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_tab_v_rewrites_view_to_note_tasks() -> Result<()> {
+    let (_dir, _vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // Move back up to the note row, then press `v`.
+    app.dispatch(key('k'))?; // note row
+    app.dispatch(key('v'))?;
+    // The query rewrites to the note-scoped task view; expand the note so
+    // its task appears.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Fix login bug"),
+        "v should show the note's task subtree:\n{frame}"
+    );
+    // The query bar should now reflect the note-scoped query.
+    assert!(
+        frame.contains("kind = Note and path"),
+        "query bar should show the note-scoped query:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_tab_a_then_c_opens_task_leader() -> Result<()> {
+    let (_dir, _vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // `a` opens the task-create leader modal.
+    app.dispatch(key('a'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("c=create") && frame.contains("s=subtask"),
+        "a should open the task leader:\n{frame}"
+    );
+    // Esc cancels.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame2 = render(&mut app, 80, 24);
+    assert!(
+        !frame2.contains("c=create"),
+        "Esc should close the leader:
+{frame2}"
+    );
+    Ok(())
+}
+
 #[test]
 fn graph_tab_ctrl_o_opens_selected_note_in_obsidian() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
