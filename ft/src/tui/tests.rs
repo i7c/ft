@@ -184,6 +184,49 @@ fn tasks_tab_subtasks_collapse_and_expand() -> Result<()> {
     Ok(())
 }
 
+/// A matched subtask whose parent is also matched appears exactly once,
+/// nested — not also as a depth-0 root. (graph-task-interaction §D7.)
+#[test]
+fn tasks_tab_dedups_matched_parent_and_subtask() -> Result<()> {
+    let (_dir, vault) = nested_tasks_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?; // Tasks tab
+
+    // A query matching both the top-level task and its subtask (via the
+    // shared source file). Both live in tasks.md.
+    app.dispatch(key('/'))?; // enter query bar
+                             // Clear the default query before typing.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "path includes \"tasks\"".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Expand the first match so any nested children would show.
+    app.dispatch(key('l'))?;
+    let frame = render(&mut app, 80, 24);
+
+    // The parent "Build a house" and subtask "Build the walls" both match;
+    // the subtask must appear exactly once (nested), not twice.
+    let parent_count = frame.matches("Build a house").count();
+    let walls_count = frame.matches("Build the walls").count();
+    assert_eq!(parent_count, 1, "parent appears once: {frame}");
+    assert_eq!(
+        walls_count, 1,
+        "subtask appears once (nested, not duplicated): {frame}"
+    );
+    Ok(())
+}
+
 #[test]
 fn create_subtask_nests_under_selected_and_auto_expands() -> Result<()> {
     let (_dir, vault) = nested_tasks_vault();

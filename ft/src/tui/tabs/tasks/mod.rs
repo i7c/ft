@@ -1,3 +1,4 @@
+pub(crate) mod edit_popup;
 mod quickline;
 mod search;
 mod view;

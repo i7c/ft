@@ -28,7 +28,11 @@ use crate::tui::{
     keymap::{KeyChord, KeyMap},
     palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
-    tabs::tasks::{quickline::parse_quickline, view::View},
+    tabs::tasks::{
+        edit_popup::{EditField, EditPopup, PopupFields, PopupMode},
+        quickline::parse_quickline,
+        view::View,
+    },
     widgets::{
         horizontal_scroll, render_inline_input, CursorMode, EditBuffer, FuzzyPicker, InlineInput,
         PickerOutcome, VaultFilePickerSource,
@@ -117,9 +121,6 @@ pub struct SearchView {
     /// go to its input buffer.
     quickline: Option<Quickline>,
 
-    /// Direct-subtask index map (`parent task idx → child task indices`),
-    /// rebuilt on every reload from `tasks`. Drives lazy tree expansion.
-    children: std::collections::HashMap<usize, Vec<usize>>,
     /// Keys (`source_file`, `source_line`) of tasks the user has expanded.
     /// Keyed by identity (not index) so expansion survives a reload.
     expanded: std::collections::HashSet<(std::path::PathBuf, usize)>,
@@ -161,214 +162,6 @@ struct DisplayRow {
 struct Quickline {
     input: EditBuffer,
     error: Option<String>,
-}
-
-/// Modal form opened with `e` (edit), `Shift+C` (new — blank), or
-/// `Ctrl+E` from the quickline (new — pre-populated from the parsed
-/// quickline tokens). Same render path for both modes; the `mode` field
-/// drives the title and whether the `target` field is part of the form.
-///
-/// `target_picker` is `Some` only while the fuzzy picker is open over
-/// the target field; all keys route to it for the duration. `FuzzyPicker`
-/// holds a `Matcher` (no `Clone`/`Debug`), so the popup itself can't
-/// derive either — nothing currently relies on them.
-struct EditPopup {
-    description: EditBuffer,
-    target: EditBuffer,
-    due: EditBuffer,
-    scheduled: EditBuffer,
-    priority: EditBuffer,
-    tags: EditBuffer,
-    recurrence: EditBuffer,
-    focus: EditField,
-    error: Option<String>,
-    mode: PopupMode,
-    target_picker: Option<FuzzyPicker<VaultFilePickerSource>>,
-}
-
-/// What the popup is doing: editing the task at `(path, line)` or
-/// creating a fresh one. The target field is only relevant in `New`
-/// mode — edits don't move the task to a different file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PopupMode {
-    Edit,
-    New,
-}
-
-/// Validated popup fields ready to be applied to disk: (description,
-/// due, scheduled, priority, tags, recurrence). Aliased so the two
-/// submit-path methods don't trip the `type_complexity` lint each time
-/// they pass the tuple around.
-type PopupFields = (
-    String,
-    Option<NaiveDate>,
-    Option<NaiveDate>,
-    Option<Priority>,
-    Vec<String>,
-    Option<String>,
-);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditField {
-    Description,
-    Target,
-    Due,
-    Scheduled,
-    Priority,
-    Tags,
-    Recurrence,
-}
-
-impl EditField {
-    fn label(self) -> &'static str {
-        match self {
-            EditField::Description => "description",
-            EditField::Target => "target",
-            EditField::Due => "due",
-            EditField::Scheduled => "scheduled",
-            EditField::Priority => "priority",
-            EditField::Tags => "tags",
-            EditField::Recurrence => "recurrence",
-        }
-    }
-}
-
-impl EditPopup {
-    /// Pre-populate from the selected task so the popup opens with the
-    /// current state and the user can edit-in-place.
-    fn from_task(task: &Task) -> Self {
-        Self {
-            description: EditBuffer::from(&task.description),
-            target: EditBuffer::default(),
-            due: EditBuffer::from(&fmt_date(task.due)),
-            scheduled: EditBuffer::from(&fmt_date(task.scheduled)),
-            priority: EditBuffer::from(priority_text(task.priority)),
-            tags: EditBuffer::from(&task.tags.join(" ")),
-            recurrence: EditBuffer::from(task.recurrence.as_deref().unwrap_or("")),
-            focus: EditField::Description,
-            error: None,
-            mode: PopupMode::Edit,
-            target_picker: None,
-        }
-    }
-
-    /// Blank "new task" popup. Opened by `Shift+C` from the search view.
-    fn new_blank() -> Self {
-        Self {
-            description: EditBuffer::default(),
-            target: EditBuffer::default(),
-            due: EditBuffer::default(),
-            scheduled: EditBuffer::default(),
-            priority: EditBuffer::default(),
-            tags: EditBuffer::default(),
-            recurrence: EditBuffer::default(),
-            focus: EditField::Description,
-            error: None,
-            mode: PopupMode::New,
-            target_picker: None,
-        }
-    }
-
-    /// "New task" popup pre-filled from a parsed quickline. Opened by
-    /// `Ctrl+E` so the user can fall through to the full form with their
-    /// in-flight quickline state intact.
-    fn from_quickline(parse: &crate::tui::tabs::tasks::quickline::QuicklineParse) -> Self {
-        let target = parse
-            .target
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        Self {
-            description: EditBuffer::from(&parse.description),
-            target: EditBuffer::from(&target),
-            due: EditBuffer::from(&fmt_date(parse.due)),
-            scheduled: EditBuffer::from(&fmt_date(parse.scheduled)),
-            priority: EditBuffer::from(priority_text(parse.priority)),
-            tags: EditBuffer::from(&parse.tags.join(" ")),
-            recurrence: EditBuffer::from(parse.recurrence.as_deref().unwrap_or("")),
-            focus: EditField::Description,
-            error: None,
-            mode: PopupMode::New,
-            target_picker: None,
-        }
-    }
-
-    /// Ordered field list for the current mode. Edit mode skips the
-    /// `target` field because the task already lives in a known file
-    /// (moving a task is a separate `m` operation, not part of edit).
-    fn fields(&self) -> &'static [EditField] {
-        match self.mode {
-            PopupMode::Edit => &[
-                EditField::Description,
-                EditField::Due,
-                EditField::Scheduled,
-                EditField::Priority,
-                EditField::Tags,
-                EditField::Recurrence,
-            ],
-            PopupMode::New => &[
-                EditField::Description,
-                EditField::Target,
-                EditField::Due,
-                EditField::Scheduled,
-                EditField::Priority,
-                EditField::Tags,
-                EditField::Recurrence,
-            ],
-        }
-    }
-
-    fn next_field(&self) -> EditField {
-        let fields = self.fields();
-        let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
-        fields[(i + 1) % fields.len()]
-    }
-
-    fn prev_field(&self) -> EditField {
-        let fields = self.fields();
-        let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
-        fields[(i + fields.len() - 1) % fields.len()]
-    }
-
-    fn focused_buffer_mut(&mut self) -> &mut EditBuffer {
-        match self.focus {
-            EditField::Description => &mut self.description,
-            EditField::Target => &mut self.target,
-            EditField::Due => &mut self.due,
-            EditField::Scheduled => &mut self.scheduled,
-            EditField::Priority => &mut self.priority,
-            EditField::Tags => &mut self.tags,
-            EditField::Recurrence => &mut self.recurrence,
-        }
-    }
-
-    fn buffer_for(&self, field: EditField) -> &EditBuffer {
-        match field {
-            EditField::Description => &self.description,
-            EditField::Target => &self.target,
-            EditField::Due => &self.due,
-            EditField::Scheduled => &self.scheduled,
-            EditField::Priority => &self.priority,
-            EditField::Tags => &self.tags,
-            EditField::Recurrence => &self.recurrence,
-        }
-    }
-}
-
-fn fmt_date(d: Option<NaiveDate>) -> String {
-    d.map(|x| x.format("%Y-%m-%d").to_string())
-        .unwrap_or_default()
-}
-
-fn priority_text(p: Option<Priority>) -> &'static str {
-    match p {
-        None => "",
-        Some(Priority::Lowest) => "lowest",
-        Some(Priority::Low) => "low",
-        Some(Priority::Medium) => "medium",
-        Some(Priority::High) => "high",
-        Some(Priority::Highest) => "highest",
-    }
 }
 
 fn parse_priority(s: &str) -> Result<Option<Priority>, String> {
@@ -468,7 +261,6 @@ impl SearchView {
             edit_state: None,
             popup: None,
             quickline: None,
-            children: std::collections::HashMap::new(),
             expanded: std::collections::HashSet::new(),
             display: Vec::new(),
             overdue_display_count: 0,
@@ -501,7 +293,6 @@ impl SearchView {
         // result map back to the cached `tasks` Vec by (path, line).
         self.graph = Graph::build(ctx.vault, &scan).ok();
         self.tasks = scan.tasks;
-        self.children = ft_core::task::hierarchy::child_index_map(&self.tasks);
         self.loaded = true;
         if self.query_text.is_empty() {
             self.query_text = Self::default_query(ctx.today);
@@ -598,15 +389,50 @@ impl SearchView {
     /// beneath every expanded task. Keeps the overdue/upcoming bucket
     /// boundary (`overdue_display_count`) in display-row space.
     fn rebuild_display(&mut self) {
-        let mut rows: Vec<DisplayRow> = Vec::with_capacity(self.matches.len());
+        // Deduplicated forest via the shared `expand_forest_visible`
+        // (graph-task-interaction §D7): a matched subtask whose parent is
+        // also matched appears once, nested — never also as a depth-0 root.
+        // The overdue/upcoming split is preserved by building each bucket's
+        // matched-key slice separately and emitting them back-to-back.
         let split = self.overdue_count.min(self.matches.len());
-        for &m in &self.matches[..split] {
-            emit_display_row(m, 0, &self.children, &self.expanded, &self.tasks, &mut rows);
-        }
+        let keys_for = |slice: &[usize]| -> Vec<ft_core::task::TaskKey> {
+            slice
+                .iter()
+                .map(|&i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line))
+                .collect()
+        };
+        let overdue_keys = keys_for(&self.matches[..split]);
+        let upcoming_keys = keys_for(&self.matches[split..]);
+
+        let mut rows: Vec<DisplayRow> = Vec::with_capacity(self.matches.len());
+        let push = |vrows: Vec<ft_core::task::hierarchy::VisibleRow>,
+                    rows: &mut Vec<DisplayRow>| {
+            for r in vrows {
+                rows.push(DisplayRow {
+                    task_idx: r.idx,
+                    depth: r.depth,
+                    has_children: r.has_children,
+                    expanded: r.expanded,
+                });
+            }
+        };
+        push(
+            ft_core::task::hierarchy::expand_forest_visible(
+                &self.tasks,
+                &overdue_keys,
+                &self.expanded,
+            ),
+            &mut rows,
+        );
         self.overdue_display_count = rows.len();
-        for &m in &self.matches[split..] {
-            emit_display_row(m, 0, &self.children, &self.expanded, &self.tasks, &mut rows);
-        }
+        push(
+            ft_core::task::hierarchy::expand_forest_visible(
+                &self.tasks,
+                &upcoming_keys,
+                &self.expanded,
+            ),
+            &mut rows,
+        );
         self.display = rows;
         if self.selected >= self.display.len() {
             self.selected = self.display.len().saturating_sub(1);
@@ -2030,36 +1856,6 @@ fn relative_date(d: NaiveDate, today: NaiveDate) -> String {
         n if (-30..=-28).contains(&n) => "4w ago".into(),
         n if (28..=30).contains(&n) => "in 4w".into(),
         _ => d.format("%Y-%m-%d").to_string(),
-    }
-}
-
-/// Append `idx` (at `depth`) to `out`, then recurse into its direct subtasks
-/// when the task is in the `expanded` set. Pre-order, so each task is followed
-/// immediately by its visible subtree.
-fn emit_display_row(
-    idx: usize,
-    depth: usize,
-    children: &std::collections::HashMap<usize, Vec<usize>>,
-    expanded: &std::collections::HashSet<(std::path::PathBuf, usize)>,
-    tasks: &[Task],
-    out: &mut Vec<DisplayRow>,
-) {
-    let kids = children.get(&idx);
-    let has_children = kids.is_some_and(|k| !k.is_empty());
-    let key = (tasks[idx].source_file.clone(), tasks[idx].source_line);
-    let is_expanded = has_children && expanded.contains(&key);
-    out.push(DisplayRow {
-        task_idx: idx,
-        depth,
-        has_children,
-        expanded: is_expanded,
-    });
-    if is_expanded {
-        if let Some(kids) = kids {
-            for &c in kids {
-                emit_display_row(c, depth + 1, children, expanded, tasks, out);
-            }
-        }
     }
 }
 

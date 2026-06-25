@@ -33,9 +33,9 @@
 
 ## 6. Lift `EditPopup` to a shared module (ft)
 
-- [ ] 6.1 Move `EditPopup` (+ `EditField`, `PopupMode`, `from_task`/`new_blank`/`from_quickline`, the field-list logic) from `ft/src/tui/tabs/tasks/search.rs` to `ft/src/tui/tabs/tasks/edit_popup.rs`.
-- [ ] 6.2 Update `search.rs` imports; keep the Tasks-tab `e` flow working unchanged.
-- [ ] 6.3 Re-bless any Tasks-tab snapshots that move with the popup.
+- [x] 6.1 Move `EditPopup` (+ `EditField`, `PopupMode`, `from_task`/`new_blank`/`from_quickline`, the field-list logic) from `ft/src/tui/tabs/tasks/search.rs` to `ft/src/tui/tabs/tasks/edit_popup.rs`.
+- [x] 6.2 Update `search.rs` imports; keep the Tasks-tab `e` flow working unchanged.
+- [x] 6.3 Re-bless any Tasks-tab snapshots that move with the popup.
 
 ## 7. Graph-tab task interaction (ft TUI)
 
@@ -57,8 +57,8 @@
 
 ## 9. Tasks-tab dedup fix (ft TUI)
 
-- [ ] 9.1 Rewrite `rebuild_display`/`emit_display_row` in `search.rs` to use `hierarchy::dedup_displayed` (D7): a matched subtask appears once, nested under its matched parent (or as a depth-0 root if its parent is not in the display set).
-- [ ] 9.2 Add a test: vault with a note whose top-level task and subtask both match `path includes "N"` → exactly two display rows (parent at depth 0, child nested), not three.
+- [x] 9.1 Rewrite `rebuild_display`/`emit_display_row` in `search.rs` to use `hierarchy::dedup_displayed` (D7): a matched subtask appears once, nested under its matched parent (or as a depth-0 root if its parent is not in the display set).
+- [x] 9.2 Add a test: vault with a note whose top-level task and subtask both match `path includes "N"` → exactly two display rows (parent at depth 0, child nested), not three.
 
 ## 10. Keymap + command registration (ft TUI)
 
