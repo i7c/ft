@@ -12,7 +12,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
         "ghosts" => "node where kind in {Ghost};",
         "links" => "node where kind in {Note}; expand where edge.kind in {link, embed};",
         "tasks-in-fs" => {
-            r#"node where path = ""; expand where edge.kind in {directory-contains, has-task};"#
+            r#"node where path = ""; expand where edge.kind in {directory-contains, has-task, subtask};"#
         }
         "tree" => {
             r#"node where path = ""; expand where edge.kind in {directory-contains, link, embed};"#
@@ -50,21 +50,33 @@ mod tests {
         assert!(builtin("nope").is_none());
     }
 
-    /// tasks-in-fs preset includes tasks when walked against a graph with tasks.
+    /// tasks-in-fs preset includes tasks when walked against a graph with tasks,
+    /// including subtasks reached via the `subtask` edge kind.
     #[test]
     fn tasks_in_fs_preset_includes_tasks() {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
-        tmp.child("root.md").write_str("- [ ] A task\n").unwrap();
+        tmp.child("root.md")
+            .write_str("- [ ] A task\n  - [ ] A subtask\n")
+            .unwrap();
 
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let scan = Scan {
-            tasks: vec![Task {
-                description: "A task".into(),
-                source_file: PathBuf::from("root.md"),
-                source_line: 1,
-                ..Default::default()
-            }],
+            tasks: vec![
+                Task {
+                    description: "A task".into(),
+                    source_file: PathBuf::from("root.md"),
+                    source_line: 1,
+                    ..Default::default()
+                },
+                Task {
+                    description: "A subtask".into(),
+                    source_file: PathBuf::from("root.md"),
+                    source_line: 2,
+                    parent: Some(1),
+                    ..Default::default()
+                },
+            ],
             errors: vec![],
         };
         let g = Graph::build(&v, &scan).unwrap();
@@ -84,9 +96,10 @@ mod tests {
             count
         }
 
-        assert!(
-            count_tasks(&tree, &g) > 0,
-            "tasks-in-fs should include tasks"
+        assert_eq!(
+            count_tasks(&tree, &g),
+            2,
+            "tasks-in-fs should include the top-level task and its subtask"
         );
     }
 

@@ -80,6 +80,103 @@ fn emit_subtree(
     }
 }
 
+/// A node in a depth-annotated task forest that also reports its live
+/// expansion state — for TUI list views that expand/collapse subtrees in
+/// place (e.g. the Tasks tab). `expanded` is true only when the node both
+/// has children and its key is in the caller's `expanded` set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisibleRow {
+    pub idx: usize,
+    pub depth: usize,
+    pub has_children: bool,
+    pub expanded: bool,
+}
+
+/// Like [`expand_forest`] but respects a live expand/collapse state: a
+/// matched task's subtasks are emitted only if the task's key is in
+/// `expanded`. Unexpanded parents emit as a leaf row (their `has_children`
+/// flag still signals the affordance). The result is deduplicated — a task
+/// that is both matched and a child of another matched task appears exactly
+/// once, nested under its parent — mirroring [`expand_forest`]'s `seen`-set.
+///
+/// `matched` is in the caller's desired root order. Roots are matched
+/// tasks whose parent is not itself in the display set.
+pub fn expand_forest_visible(
+    all: &[Task],
+    matched: &[TaskKey],
+    expanded: &HashSet<TaskKey>,
+) -> Vec<VisibleRow> {
+    let index = key_index(all);
+    let children = children_map(all, &index);
+
+    // Display set = matched ∪ all descendants of matched.
+    let mut display: HashSet<usize> = HashSet::new();
+    for key in matched {
+        if let Some(&i) = index.get(key) {
+            collect_subtree(i, &children, &mut display);
+        }
+    }
+
+    let mut rows = Vec::with_capacity(display.len());
+    let mut seen: HashSet<usize> = HashSet::new();
+    let ctx = VisCtx {
+        all,
+        children: &children,
+        display: &display,
+        expanded,
+    };
+    for key in matched {
+        let Some(&i) = index.get(key) else { continue };
+        if parent_idx(all, &index, i).is_some_and(|p| display.contains(&p)) {
+            continue;
+        }
+        emit_visible(i, 0, &ctx, &mut seen, &mut rows);
+    }
+    rows
+}
+
+/// Shared context for [`emit_visible`], kept in a struct to stay under
+/// clippy's argument-count limit and avoid re-threading each ref.
+struct VisCtx<'a> {
+    all: &'a [Task],
+    children: &'a HashMap<usize, Vec<usize>>,
+    display: &'a HashSet<usize>,
+    expanded: &'a HashSet<TaskKey>,
+}
+
+/// Pre-order walk for [`expand_forest_visible`]: emit `idx`, then recurse
+/// into its in-display children only when `idx` is expanded.
+fn emit_visible(
+    idx: usize,
+    depth: usize,
+    ctx: &VisCtx,
+    seen: &mut HashSet<usize>,
+    rows: &mut Vec<VisibleRow>,
+) {
+    if !seen.insert(idx) {
+        return;
+    }
+    let kids = ctx.children.get(&idx);
+    let has_children = kids.is_some_and(|k| !k.is_empty());
+    let key = (ctx.all[idx].source_file.clone(), ctx.all[idx].source_line);
+    let is_expanded = has_children && ctx.expanded.contains(&key);
+    rows.push(VisibleRow {
+        idx,
+        depth,
+        has_children,
+        expanded: is_expanded,
+    });
+    if is_expanded {
+        if let Some(kids) = kids {
+            for &child in kids {
+                if ctx.display.contains(&child) {
+                    emit_visible(child, depth + 1, ctx, seen, rows);
+                }
+            }
+        }
+    }
+}
+
 /// Collect `idx` and all of its transitive descendants into `out`.
 fn collect_subtree(idx: usize, children: &HashMap<usize, Vec<usize>>, out: &mut HashSet<usize>) {
     if !out.insert(idx) {
@@ -310,5 +407,51 @@ mod tests {
         assert_eq!(map.get(&0), Some(&vec![1, 3])); // house → walls, pipes
         assert_eq!(map.get(&1), Some(&vec![2])); // walls → bricks
         assert_eq!(map.get(&2), None); // bricks is a leaf
+    }
+
+    /// A matched subtask whose parent is also matched appears once, nested
+    /// — not also as a depth-0 root. (graph-task-interaction §D7.)
+    #[test]
+    fn visible_forest_dedups_matched_subtask() {
+        let all = resolved(&["- [ ] parent", "  - [ ] child"]);
+        let both = vec![key(1), key(2)];
+        let expanded = HashSet::from([key(1)]); // expand the parent
+        let rows = expand_forest_visible(&all, &both, &expanded);
+        // Exactly two rows: parent at depth 0 (expanded), child nested at 1.
+        assert_eq!(
+            rows.len(),
+            2,
+            "matched child must not also appear as a root"
+        );
+        assert_eq!(rows[0].idx, 0);
+        assert_eq!(rows[0].depth, 0);
+        assert!(rows[0].expanded);
+        assert_eq!(rows[1].idx, 1);
+        assert_eq!(rows[1].depth, 1);
+        assert!(!rows[1].expanded);
+    }
+
+    /// Collapsed parent emits as a leaf (has_children true, expanded false);
+    /// its subtasks are not emitted until it is expanded.
+    #[test]
+    fn visible_forest_collapsed_parent_hides_children() {
+        let all = resolved(&["- [ ] parent", "  - [ ] child"]);
+        let both = vec![key(1), key(2)];
+        let expanded = HashSet::new(); // collapsed
+        let rows = expand_forest_visible(&all, &both, &expanded);
+        assert_eq!(rows.len(), 1, "collapsed parent should hide its child");
+        assert!(rows[0].has_children);
+        assert!(!rows[0].expanded);
+    }
+
+    /// A matched subtask whose parent is NOT matched still renders as a root.
+    #[test]
+    fn visible_forest_matched_orphan_child_is_root() {
+        let all = resolved(&["- [ ] parent", "  - [ ] child"]);
+        let child_only = vec![key(2)];
+        let rows = expand_forest_visible(&all, &child_only, &HashSet::new());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].idx, 1);
+        assert_eq!(rows[0].depth, 0, "un-matched parent → child is a root");
     }
 }

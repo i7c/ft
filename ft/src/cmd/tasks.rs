@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -7,22 +7,20 @@ use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
     dates,
-    graph::{
-        query::{parse_with as parse_query, GraphQuery, Profile},
-        NodeKind,
-    },
+    graph::query::{parse_with as parse_query, GraphQuery, Profile},
     query::{
         preset,
         sort::{parse_sort_key, sort_by_keys},
         SortKey, SortOrder,
     },
     selector,
+    task::resolve,
     task::{
         ops::{
-            self, CompleteError, CompleteOptions, CreateError, CreateInput, CreateOptions,
-            MoveSource, MoveTarget, Position,
+            self, CancelError, CompleteError, CompleteOptions, CreateError, CreateInput,
+            CreateOptions, MoveSource, MoveTarget, Position, UpdateError,
         },
-        Priority, Status, Task,
+        Priority, Status, Task, TaskKey,
     },
     vault::Vault,
 };
@@ -45,6 +43,10 @@ pub enum TasksCommand {
     Complete(CompleteArgs),
     /// Move tasks (and their subtasks) to another file or section.
     Move(MoveArgs),
+    /// Mark a task cancelled.
+    Cancel(CancelArgs),
+    /// Edit a task's fields (due, scheduled, priority, tags, description).
+    Edit(EditArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -184,6 +186,8 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Create(create_args) => run_create(create_args, vault_flag),
         TasksCommand::Complete(complete_args) => run_complete(complete_args, vault_flag),
         TasksCommand::Move(move_args) => run_move(move_args, vault_flag),
+        TasksCommand::Cancel(cancel_args) => run_cancel(cancel_args, vault_flag),
+        TasksCommand::Edit(edit_args) => run_edit(edit_args, vault_flag),
     }
 }
 
@@ -231,32 +235,15 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     // Build the graph once. The query evaluator runs against the graph and
     // returns task NoteIds; we map those back to `&Task` for sort/render.
     let graph = crate::cmd::common::build_graph(&vault, &scan)?;
-    let matched_task_keys: std::collections::HashSet<(PathBuf, usize)> = if graph_queries.is_empty()
-    {
+    let matched_task_keys: HashSet<TaskKey> = if graph_queries.is_empty() {
         // No predicates at all — every task in the scan is admissible.
         scan.tasks
             .iter()
             .map(|t| (t.source_file.clone(), t.source_line))
             .collect()
     } else {
-        // AND-compose: a task must match every graph query. Each query
-        // produces a set of NoteIds; we intersect them.
-        let mut acc: Option<std::collections::HashSet<(PathBuf, usize)>> = None;
-        for q in &graph_queries {
-            let ids = q.select(&graph);
-            let keys: std::collections::HashSet<(PathBuf, usize)> = ids
-                .into_iter()
-                .filter_map(|id| match graph.node(id) {
-                    NodeKind::Task(td) => Some((td.source_file.clone(), td.source_line)),
-                    _ => None,
-                })
-                .collect();
-            acc = Some(match acc {
-                None => keys,
-                Some(prev) => prev.intersection(&keys).cloned().collect(),
-            });
-        }
-        acc.unwrap_or_default()
+        // AND-compose: a task must match every graph query.
+        resolve::by_queries(&graph, &graph_queries)
     };
 
     let mut matches: Vec<&Task> = scan
@@ -676,8 +663,14 @@ fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {
 pub struct CompleteArgs {
     /// Selector: task id (`abc123`), `<file>:<line>`, or fuzzy substring.
     /// If omitted, all open tasks are presented in an interactive picker.
-    #[arg(value_name = "SELECTOR")]
+    /// Mutually exclusive with `--query`.
+    #[arg(value_name = "SELECTOR", conflicts_with = "query")]
     pub selector: Option<String>,
+
+    /// Bulk complete: select tasks by query DSL (`Profile::Tasks`), e.g.
+    /// `--query "due < today"`. Mutually exclusive with the selector.
+    #[arg(long, value_name = "DSL", conflicts_with = "selector")]
+    pub query: Option<String>,
 
     /// Date to record as the done date. Accepts ISO, keywords, relative,
     /// and natural language (same forms as `ft tasks create --due`).
@@ -687,6 +680,7 @@ pub struct CompleteArgs {
 
     /// Skip the interactive picker even when there are multiple matches.
     /// With `--yes`, the picker is replaced by an error listing candidates.
+    /// For `--query` bulk mode, `--yes` skips the confirmation prompt.
     #[arg(long)]
     pub yes: bool,
 }
@@ -703,6 +697,38 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let scan = vault.scan();
     for err in &scan.errors {
         tracing::warn!("{}", err);
+    }
+
+    // Bulk mode: complete every task matched by the query (skipping those
+    // already done). Mirrors `ft tasks move --query`.
+    if let Some(q) = args.query.as_deref() {
+        let parsed = parse_query(q, Profile::Tasks, today)
+            .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
+        let graph = crate::cmd::common::build_graph(&vault, &scan)?;
+        let keys = resolve::by_query(&graph, &parsed);
+        let targets: Vec<&Task> = scan
+            .tasks
+            .iter()
+            .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
+            .collect();
+        if targets.is_empty() {
+            return Err(anyhow!("no tasks match query `{q}`"));
+        }
+        if !args.yes {
+            confirm_bulk("complete", &targets, &vault.path)?;
+        }
+        let mut completed = 0usize;
+        let mut skipped = 0usize;
+        for t in &targets {
+            let abs = vault.path.join(&t.source_file);
+            match ops::complete_task(&abs, t.source_line, CompleteOptions { on }) {
+                Ok(_) => completed += 1,
+                Err(ops::CompleteError::AlreadyDone { .. }) => skipped += 1,
+                Err(e) => return Err(translate_complete_error(e, &vault.path)),
+            }
+        }
+        println!("Completed {completed} task(s) ({skipped} already done)");
+        return Ok(ExitCode::SUCCESS);
     }
 
     let chosen = pick_task(&args, &scan.tasks)?;
@@ -846,6 +872,58 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
     }
 }
 
+/// Confirm a bulk verb (complete / cancel / edit) interactively. Errors on
+/// non-TTY stdin unless `--yes` was already handled by the caller. Mirrors
+/// `run_move`'s confirmation block.
+fn confirm_bulk(verb: &str, targets: &[&Task], vault_root: &std::path::Path) -> Result<()> {
+    if targets.len() <= 1 {
+        return Ok(());
+    }
+    let stdin_is_tty = is_terminal::IsTerminal::is_terminal(&std::io::stdin());
+    if !stdin_is_tty {
+        return Err(anyhow!(
+            "{} tasks would be {verb} — pass --yes to confirm",
+            targets.len()
+        ));
+    }
+    let preview: Vec<String> = targets
+        .iter()
+        .take(5)
+        .map(|t| {
+            format!(
+                "  {}:{}  {}",
+                t.source_file
+                    .strip_prefix(vault_root)
+                    .unwrap_or(&t.source_file)
+                    .display(),
+                t.source_line,
+                t.description
+            )
+        })
+        .collect();
+    let extra = if targets.len() > 5 {
+        format!("\n  … and {} more", targets.len() - 5)
+    } else {
+        String::new()
+    };
+    let prompt = format!(
+        "{} {} task(s)?\n{}{extra}",
+        verb,
+        targets.len(),
+        preview.join("\n")
+    );
+    let confirmed = dialoguer::Confirm::new()
+        .with_prompt(prompt)
+        .default(false)
+        .interact_opt()
+        .map_err(|e| anyhow!("confirmation failed: {e}"))?
+        .unwrap_or(false);
+    if !confirmed {
+        return Err(anyhow!("aborted"));
+    }
+    Ok(())
+}
+
 // ── ft tasks move ────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
@@ -893,14 +971,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         let parsed = parse_query(q, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
         let graph = crate::cmd::common::build_graph(&vault, &scan)?;
-        let ids = parsed.select(&graph);
-        let keys: std::collections::HashSet<(PathBuf, usize)> = ids
-            .into_iter()
-            .filter_map(|id| match graph.node(id) {
-                NodeKind::Task(td) => Some((td.source_file.clone(), td.source_line)),
-                _ => None,
-            })
-            .collect();
+        let keys = resolve::by_query(&graph, &parsed);
         scan.tasks
             .iter()
             .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
@@ -1031,6 +1102,307 @@ fn print_diff(path: &std::path::Path, original: &str, new: &str) {
         };
         print!("{sign}{change}");
     }
+}
+
+// ── ft tasks cancel ────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct CancelArgs {
+    /// Selector: task id (`abc123`), `<file>:<line>`, or fuzzy substring.
+    /// Mutually exclusive with `--query`.
+    #[arg(value_name = "SELECTOR", conflicts_with = "query")]
+    pub selector: Option<String>,
+
+    /// Bulk cancel: select tasks by query DSL. Mutually exclusive with the
+    /// positional selector.
+    #[arg(long, value_name = "DSL", conflicts_with = "selector")]
+    pub query: Option<String>,
+
+    /// Date to record as the cancellation date. Defaults to today.
+    #[arg(long, value_name = "DATE")]
+    pub on: Option<String>,
+
+    /// Skip the confirmation prompt for bulk cancels.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+fn run_cancel(args: CancelArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let today = dates::today();
+    let on = match args.on.as_deref() {
+        Some(s) => dates::parse(s, today).map_err(|e| anyhow!("--on: {e}"))?,
+        None => today,
+    };
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    let targets = resolve_targets(
+        args.selector.as_deref(),
+        args.query.as_deref(),
+        &scan,
+        &vault,
+        today,
+    )?;
+
+    let bulk = targets.len() > 1;
+    if bulk && !args.yes {
+        confirm_bulk("cancel", &targets, &vault.path)?;
+    }
+
+    let mut cancelled = 0usize;
+    let mut skipped = 0usize;
+    for t in &targets {
+        let abs = vault.path.join(&t.source_file);
+        match ops::cancel_task(&abs, t.source_line, on) {
+            Ok(_) => cancelled += 1,
+            Err(ops::CancelError::AlreadyCancelled { .. }) => skipped += 1,
+            Err(e) => return Err(translate_cancel_error(e, &vault.path)),
+        }
+    }
+    if bulk {
+        println!("Cancelled {cancelled} task(s) ({skipped} already cancelled)");
+    } else {
+        let t = targets[0];
+        let abs = vault.path.join(&t.source_file);
+        let rel = vault.relativize(&abs);
+        println!(
+            "Cancelled {}:{}  {}",
+            rel.display(),
+            t.source_line,
+            t.description
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn translate_cancel_error(e: CancelError, vault_root: &std::path::Path) -> anyhow::Error {
+    use CancelError::*;
+    match e {
+        AlreadyCancelled {
+            path,
+            line,
+            cancelled,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{} is already cancelled (on {cancelled})",
+                rel.display(),
+                line
+            )
+        }
+        Update(u) => translate_update_error(u, vault_root),
+    }
+}
+
+// ── ft tasks edit ──────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct EditArgs {
+    /// Selector: task id (`abc123`), `<file>:<line>`, or fuzzy substring.
+    /// Single-task form only in v1; `--query` bulk edit is a follow-up.
+    #[arg(value_name = "SELECTOR")]
+    pub selector: Option<String>,
+
+    /// Set the due date. Pass `none` to clear.
+    #[arg(long, value_name = "DATE|none")]
+    pub due: Option<String>,
+
+    /// Set the scheduled date. Pass `none` to clear.
+    #[arg(long, value_name = "DATE|none")]
+    pub scheduled: Option<String>,
+
+    /// Set the priority. Pass `none` to clear. Accepts highest/high/medium/low/lowest.
+    #[arg(long, value_name = "PRIORITY|none")]
+    pub priority: Option<String>,
+
+    /// Set tags (space-separated, leading `#` optional). Pass `none` to clear.
+    #[arg(long, value_name = "TAGS|none")]
+    pub tags: Option<String>,
+
+    /// Set the description.
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+}
+
+fn parse_priority_arg(s: &str) -> Result<Option<Priority>, String> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "highest" => Ok(Some(Priority::Highest)),
+        "high" => Ok(Some(Priority::High)),
+        "medium" => Ok(Some(Priority::Medium)),
+        "low" => Ok(Some(Priority::Low)),
+        "lowest" => Ok(Some(Priority::Lowest)),
+        other => Err(format!(
+            "priority `{other}` not recognized (try none / low / medium / high / highest)"
+        )),
+    }
+}
+
+fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let today = dates::today();
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    if args.selector.is_none() {
+        return Err(anyhow!("provide a selector (edit is single-task in v1)"));
+    }
+    let targets = resolve_targets(args.selector.as_deref(), None, &scan, &vault, today)?;
+    if targets.len() != 1 {
+        return Err(anyhow!(
+            "edit expects exactly one task; {} matched — be more specific",
+            targets.len()
+        ));
+    }
+    let t = targets[0];
+    let abs = vault.path.join(&t.source_file);
+
+    // Parse the provided field overrides once.
+    let due = parse_opt_date_field(args.due.as_deref(), today)?;
+    let scheduled = parse_opt_date_field(args.scheduled.as_deref(), today)?;
+    let tags_override = args.tags.as_deref().map(parse_tags_field).transpose()?;
+    let description = args.description.clone();
+    let priority = args
+        .priority
+        .as_deref()
+        .map(parse_priority_arg)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if due.is_none()
+        && scheduled.is_none()
+        && priority.is_none()
+        && tags_override.is_none()
+        && description.is_none()
+    {
+        return Err(anyhow!(
+            "no fields given — pass --due / --scheduled / --priority / --tags / --description"
+        ));
+    }
+
+    let updated = ops::update_task_line(&abs, t.source_line, move |task| {
+        if let Some(d) = due {
+            task.due = d;
+        }
+        if let Some(s) = scheduled {
+            task.scheduled = s;
+        }
+        if let Some(p) = priority {
+            task.priority = p;
+        }
+        if let Some(tags) = tags_override {
+            task.tags = tags;
+        }
+        if let Some(desc) = description {
+            task.description = desc;
+        }
+    })
+    .map_err(|e| translate_update_error(e, &vault.path))?;
+
+    let rel = vault.relativize(&abs);
+    println!(
+        "Edited {}:{}  {}",
+        rel.display(),
+        t.source_line,
+        updated.description
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Parse an optional date field: `none` clears, otherwise a date form.
+fn parse_opt_date_field(s: Option<&str>, today: NaiveDate) -> Result<Option<Option<NaiveDate>>> {
+    match s {
+        None => Ok(None),
+        Some(v) if v.eq_ignore_ascii_case("none") => Ok(Some(None)),
+        Some(v) => Ok(Some(Some(
+            dates::parse(v, today).map_err(|e| anyhow!("date: {e}"))?,
+        ))),
+    }
+}
+
+/// Parse the `--tags` field: `none` clears to an empty vec.
+fn parse_tags_field(s: &str) -> Result<Vec<String>, anyhow::Error> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    Ok(s.split_whitespace()
+        .map(|t| t.trim_start_matches('#').to_string())
+        .collect())
+}
+
+fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyhow::Error {
+    use UpdateError::*;
+    match e {
+        Read { path, source } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("could not read {}: {source}", rel.display())
+        }
+        LineMissing {
+            path,
+            line,
+            file_lines,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "line {line} not found in {} ({file_lines} lines)",
+                rel.display()
+            )
+        }
+        NotATask { path, line } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        Write { source } => anyhow!("write failed: {source}"),
+    }
+}
+
+/// Resolve a selector or `--query` into a list of tasks, shared by
+/// `complete`/`cancel`/`edit`. Single-selector path uses the interactive
+/// picker when ambiguous and TTY; `--query` path never picks.
+fn resolve_targets<'a>(
+    selector: Option<&str>,
+    query: Option<&str>,
+    scan: &'a ft_core::vault::Scan,
+    vault: &Vault,
+    today: NaiveDate,
+) -> Result<Vec<&'a Task>> {
+    if let Some(q) = query {
+        let parsed = parse_query(q, Profile::Tasks, today)
+            .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
+        let graph = crate::cmd::common::build_graph(vault, scan)?;
+        let keys = resolve::by_query(&graph, &parsed);
+        let out: Vec<&Task> = scan
+            .tasks
+            .iter()
+            .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
+            .collect();
+        if out.is_empty() {
+            return Err(anyhow!("no tasks match query `{q}`"));
+        }
+        return Ok(out);
+    }
+    let s = selector.unwrap_or_default();
+    let sel = selector::parse(s);
+    let mut matches = selector::resolve(&scan.tasks, &sel);
+    if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) && !s.is_empty() {
+        let fuzzy = ft_core::selector::Selector::Fuzzy(s.to_string());
+        matches = selector::resolve(&scan.tasks, &fuzzy);
+    }
+    if matches.is_empty() {
+        return Err(if s.is_empty() {
+            anyhow!("no open tasks in vault")
+        } else {
+            anyhow!("no tasks match selector `{s}`")
+        });
+    }
+    Ok(matches)
 }
 
 #[cfg(test)]

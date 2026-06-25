@@ -173,6 +173,61 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "tasks.cancel-by-id",
+        description: "Cancel the task with the given id (headless)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[
+            ArgSpec {
+                name: "id",
+                description: "Task id (the `🆔 xyz123` suffix)",
+                required: true,
+            },
+            ArgSpec {
+                name: "on",
+                description: "Cancellation date (YYYY-MM-DD; defaults to today)",
+                required: false,
+            },
+        ],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.edit-by-id",
+        description: "Edit the task with the given id's fields (headless)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[
+            ArgSpec {
+                name: "id",
+                description: "Task id (the `🆔 xyz123` suffix)",
+                required: true,
+            },
+            ArgSpec {
+                name: "due",
+                description: "Set due date (YYYY-MM-DD or `none` to clear)",
+                required: false,
+            },
+            ArgSpec {
+                name: "scheduled",
+                description: "Set scheduled date (YYYY-MM-DD or `none` to clear)",
+                required: false,
+            },
+            ArgSpec {
+                name: "priority",
+                description: "Set priority (highest/high/medium/low/lowest or `none`)",
+                required: false,
+            },
+            ArgSpec {
+                name: "description",
+                description: "Set the description text",
+                required: false,
+            },
+        ],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "tasks.cancel",
         description: "Cancel the selected task",
         scope: CommandScope::Tab("tasks"),

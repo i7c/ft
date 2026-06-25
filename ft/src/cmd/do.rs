@@ -22,8 +22,8 @@ use clap::Args;
 use ft_core::{
     selector::{self, Selector},
     task::{
-        ops::{self, CompleteError, CompleteOptions},
-        Task,
+        ops::{self, CancelError, CompleteError, CompleteOptions, UpdateError},
+        Priority, Task,
     },
 };
 
@@ -72,6 +72,20 @@ pub fn run(args: DoArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         "tasks.complete-by-id" => {
             let id = arg_value(&parsed, "id").expect("validated above");
             handle_tasks_complete_by_id(id, vault_flag, &args.format)
+        }
+        "tasks.cancel-by-id" => {
+            let id = arg_value(&parsed, "id").expect("validated above");
+            let on = arg_value(&parsed, "on").map(String::from);
+            handle_tasks_cancel_by_id(id, on, vault_flag, &args.format)
+        }
+        "tasks.edit-by-id" => {
+            let id = arg_value(&parsed, "id").expect("validated above");
+            let fields = parsed
+                .iter()
+                .filter(|(k, _)| k != "id")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            handle_tasks_edit_by_id(id, fields, vault_flag, &args.format)
         }
         _ => {
             // Registered command without a headless handler. Surface
@@ -202,6 +216,223 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
             )
         }
         other => anyhow!("{other}"),
+    }
+}
+
+/// Resolve a single task by id selector, erroring on zero/multi matches.
+/// Shared by the `*-by-id` headless handlers.
+fn resolve_single_task_by_id<'a>(tasks: &'a [Task], id: &str) -> Result<&'a Task> {
+    let sel = Selector::Id(id.to_string());
+    match selector::resolve(tasks, &sel).as_slice() {
+        [] => anyhow::bail!("no task with id `{id}`"),
+        [t] => Ok(*t),
+        many => anyhow::bail!(
+            "selector `id={id}` matched {} tasks (expected exactly one)",
+            many.len()
+        ),
+    }
+}
+
+/// Headless handler for `tasks.cancel-by-id`. Mirrors
+/// `handle_tasks_complete_by_id` but calls `ops::cancel_task`.
+fn handle_tasks_cancel_by_id(
+    id: &str,
+    on: Option<String>,
+    vault_flag: Option<PathBuf>,
+    format: &str,
+) -> Result<ExitCode> {
+    use ft_core::dates;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let today = dates::today();
+    let on = match on.as_deref() {
+        Some(s) => dates::parse(s, today).map_err(|e| anyhow!("--arg on: {e}"))?,
+        None => today,
+    };
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+    let task = resolve_single_task_by_id(&scan.tasks, id)?;
+    let abs = vault.path.join(&task.source_file);
+    let cancelled = ops::cancel_task(&abs, task.source_line, on)
+        .map_err(|e| translate_cancel_error(e, &vault.path))?;
+    let rel = vault.relativize(&abs);
+    if format == "json" {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "tasks.cancel-by-id",
+                "outcome": "ok",
+                "details": {
+                    "file": rel.display().to_string(),
+                    "line": task.source_line,
+                    "description": cancelled.description,
+                }
+            })
+        );
+    } else {
+        println!(
+            "Cancelled {}:{}  {}",
+            rel.display(),
+            task.source_line,
+            cancelled.description
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Headless handler for `tasks.edit-by-id`. Applies field overrides
+/// (due/scheduled/priority/description) via `ops::update_task_line`.
+/// `tags` is parsed space-separated; `none` clears. `due`/`scheduled`
+/// accept a date or `none`.
+fn handle_tasks_edit_by_id(
+    id: &str,
+    fields: Vec<(String, String)>,
+    vault_flag: Option<PathBuf>,
+    format: &str,
+) -> Result<ExitCode> {
+    use ft_core::dates;
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let today = dates::today();
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+    let task = resolve_single_task_by_id(&scan.tasks, id)?;
+    let abs = vault.path.join(&task.source_file);
+
+    let due = field_opt_date(get(&fields, "due"), today)?;
+    let scheduled = field_opt_date(get(&fields, "scheduled"), today)?;
+    let priority = match get(&fields, "priority") {
+        None => None,
+        Some(v) => Some(parse_priority(v)?),
+    };
+    let description = get(&fields, "description").map(String::from);
+
+    if due.is_none() && scheduled.is_none() && priority.is_none() && description.is_none() {
+        anyhow::bail!("no fields given — pass --arg due=/scheduled=/priority=/description=");
+    }
+
+    let updated = ops::update_task_line(&abs, task.source_line, |t| {
+        if let Some(d) = due {
+            t.due = d;
+        }
+        if let Some(s) = scheduled {
+            t.scheduled = s;
+        }
+        if let Some(p) = priority {
+            t.priority = p;
+        }
+        if let Some(desc) = description.clone() {
+            t.description = desc;
+        }
+    })
+    .map_err(|e| translate_update_error(e, &vault.path))?;
+
+    let rel = vault.relativize(&abs);
+    if format == "json" {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "tasks.edit-by-id",
+                "outcome": "ok",
+                "details": {
+                    "file": rel.display().to_string(),
+                    "line": task.source_line,
+                    "description": updated.description,
+                }
+            })
+        );
+    } else {
+        println!(
+            "Edited {}:{}  {}",
+            rel.display(),
+            task.source_line,
+            updated.description
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn get<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+fn field_opt_date(
+    s: Option<&str>,
+    today: chrono::NaiveDate,
+) -> Result<Option<Option<chrono::NaiveDate>>> {
+    use ft_core::dates;
+    match s {
+        None => Ok(None),
+        Some(v) if v.eq_ignore_ascii_case("none") => Ok(Some(None)),
+        Some(v) => Ok(Some(Some(
+            dates::parse(v, today).map_err(|e| anyhow!("date: {e}"))?,
+        ))),
+    }
+}
+
+fn parse_priority(s: &str) -> Result<Option<Priority>> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "highest" => Ok(Some(Priority::Highest)),
+        "high" => Ok(Some(Priority::High)),
+        "medium" => Ok(Some(Priority::Medium)),
+        "low" => Ok(Some(Priority::Low)),
+        "lowest" => Ok(Some(Priority::Lowest)),
+        other => anyhow::bail!(
+            "priority `{other}` not recognized (try none / low / medium / high / highest)"
+        ),
+    }
+}
+
+fn translate_cancel_error(e: CancelError, vault_root: &std::path::Path) -> anyhow::Error {
+    use CancelError::*;
+    match e {
+        AlreadyCancelled {
+            path,
+            line,
+            cancelled,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{} is already cancelled (on {cancelled})",
+                rel.display(),
+                line
+            )
+        }
+        Update(u) => translate_update_error(u, vault_root),
+    }
+}
+
+fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyhow::Error {
+    use UpdateError::*;
+    match e {
+        Read { path, source } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("could not read {}: {source}", rel.display())
+        }
+        LineMissing {
+            path,
+            line,
+            file_lines,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "line {line} not found in {} ({file_lines} lines)",
+                rel.display()
+            )
+        }
+        NotATask { path, line } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        Write { source } => anyhow!("write failed: {source}"),
     }
 }
 
@@ -397,6 +628,88 @@ mod tests {
         assert!(
             err.to_string().contains("no task with id"),
             "expected no-match error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn run_cancels_task_by_id_headlessly() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        let vault_path = dir.path().join("v");
+        std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+        std::fs::write(
+            vault_path.join("tasks.md"),
+            "- [ ] Buy milk 🆔 abc123 📅 2026-05-10\n",
+        )
+        .unwrap();
+
+        std::env::set_var("FT_TODAY", "2026-05-12");
+
+        let args = DoArgs {
+            command: "tasks.cancel-by-id".into(),
+            args: vec!["id=abc123".to_string()],
+            format: "text".into(),
+        };
+        let code = run(args, Some(vault_path.clone())).expect("run should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let content = std::fs::read_to_string(vault_path.join("tasks.md")).unwrap();
+        assert!(
+            content.contains("[-]"),
+            "expected the task to be marked cancelled, got: {content}"
+        );
+        assert!(
+            content.contains("❌ 2026-05-12"),
+            "expected today's cancelled-date to be recorded, got: {content}"
+        );
+
+        std::env::remove_var("FT_TODAY");
+    }
+
+    #[test]
+    fn run_edits_task_due_by_id_headlessly() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        let vault_path = dir.path().join("v");
+        std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+        std::fs::write(vault_path.join("tasks.md"), "- [ ] Buy milk 🆔 abc123\n").unwrap();
+
+        std::env::set_var("FT_TODAY", "2026-05-12");
+
+        let args = DoArgs {
+            command: "tasks.edit-by-id".into(),
+            args: vec!["id=abc123".to_string(), "due=2026-07-01".to_string()],
+            format: "text".into(),
+        };
+        let code = run(args, Some(vault_path.clone())).expect("run should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let content = std::fs::read_to_string(vault_path.join("tasks.md")).unwrap();
+        assert!(
+            content.contains("📅 2026-07-01"),
+            "expected due date set, got: {content}"
+        );
+
+        std::env::remove_var("FT_TODAY");
+    }
+
+    #[test]
+    fn run_edits_task_priority_by_id_headlessly() {
+        let dir = assert_fs::TempDir::new().unwrap();
+        let vault_path = dir.path().join("v");
+        std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+        std::fs::write(vault_path.join("tasks.md"), "- [ ] Buy milk 🆔 abc123\n").unwrap();
+
+        let args = DoArgs {
+            command: "tasks.edit-by-id".into(),
+            args: vec!["id=abc123".to_string(), "priority=high".to_string()],
+            format: "text".into(),
+        };
+        let code = run(args, Some(vault_path.clone())).expect("run should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let content = std::fs::read_to_string(vault_path.join("tasks.md")).unwrap();
+        assert!(
+            content.contains("⏫"),
+            "expected high priority emoji, got: {content}"
         );
     }
 }

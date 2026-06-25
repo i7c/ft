@@ -1046,6 +1046,80 @@ fn build_creates_subtask_edges_from_parent_pointers() {
     );
 }
 
+/// HasTask edges reach top-level tasks only; subtasks are reachable via
+/// the Subtask edge chain, never via a direct HasTask from the note.
+/// (graph-task-interaction §D1.)
+#[test]
+fn hastask_edges_skip_subtasks() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("house.md")
+        .write_str("- [ ] house\n  - [ ] walls\n  - [ ] pipes\n")
+        .unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+    let parent = Task {
+        description: "house".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 1,
+        ..Default::default()
+    };
+    let walls = Task {
+        description: "walls".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 2,
+        parent: Some(1),
+        ..Default::default()
+    };
+    let pipes = Task {
+        description: "pipes".into(),
+        source_file: PathBuf::from("house.md"),
+        source_line: 3,
+        parent: Some(1),
+        ..Default::default()
+    };
+    let scan = Scan {
+        tasks: vec![parent, walls, pipes],
+        errors: vec![],
+    };
+    let g = Graph::build(&v, &scan).unwrap();
+
+    let note_id = g.note_by_path(Path::new("house.md")).unwrap();
+    // Exactly one HasTask edge: to the top-level task only.
+    let hastask: Vec<_> = g
+        .outgoing(note_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::HasTask))
+        .collect();
+    assert_eq!(
+        hastask.len(),
+        1,
+        "only the top-level task gets a HasTask edge"
+    );
+
+    // Subtasks receive NO direct HasTask edge from the note.
+    for line in [2, 3] {
+        let subtask_id = g.task_by_loc(Path::new("house.md"), line).unwrap();
+        let direct_hastask = g
+            .incoming(subtask_id)
+            .filter(|(_, e)| matches!(e, EdgeKind::HasTask))
+            .count();
+        assert_eq!(
+            direct_hastask, 0,
+            "subtask at line {line} must not have a direct HasTask edge"
+        );
+        // ...but it IS reachable via a Subtask edge from the parent.
+        let via_subtask = g
+            .incoming(subtask_id)
+            .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
+            .count();
+        assert_eq!(
+            via_subtask, 1,
+            "subtask at line {line} must be reachable via a Subtask edge"
+        );
+    }
+}
+
 /// Task 7.3: Graph::build with empty scan produces no task nodes.
 #[test]
 fn build_with_empty_scan_has_no_task_nodes() {

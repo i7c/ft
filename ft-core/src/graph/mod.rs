@@ -388,8 +388,9 @@ impl Graph {
             graph.insert_task_node(task);
         }
 
-        // Create HasTask edges from notes to their tasks.
-        graph.insert_hastask_edges();
+        // Create HasTask edges from notes to their top-level tasks only.
+        // Subtasks are reachable via the Subtask edge chain.
+        graph.insert_hastask_edges(&scan.tasks);
 
         // Create Subtask edges from parent tasks to their subtasks.
         graph.insert_subtask_edges(&scan.tasks);
@@ -813,17 +814,26 @@ impl Graph {
         id
     }
 
-    /// Create HasTask edges from each note node to its task nodes.
-    /// Matches tasks to notes by TaskData.source_file == NoteData.path
-    /// using the already-built path_index for O(N) lookup.
-    fn insert_hastask_edges(&mut self) {
-        let task_ids: Vec<NoteId> = self.task_index.values().copied().collect();
-        for &task_id in &task_ids {
-            let source_file = match &self.g[task_id.0] {
-                NodeKind::Task(data) => data.source_file.clone(),
-                _ => continue,
+    /// Create HasTask edges from each note node to its **top-level** task
+    /// nodes only. Subtasks (tasks whose `parent` is `Some`) are reachable
+    /// from their note exclusively via the chain
+    /// `Note →[HasTask]→ top-level task →[Subtask]→ …`; they receive no
+    /// direct HasTask edge, which keeps "tasks of note N" a deduped tree
+    /// by construction. Matches tasks to notes by
+    /// `TaskData.source_file == NoteData.path` using the already-built
+    /// `path_index` for O(N) lookup.
+    fn insert_hastask_edges(&mut self, tasks: &[Task]) {
+        for task in tasks {
+            if task.parent.is_some() {
+                continue;
+            }
+            let Some(&task_id) = self
+                .task_index
+                .get(&(task.source_file.clone(), task.source_line))
+            else {
+                continue;
             };
-            if let Some(&note_id) = self.path_index.get(&source_file) {
+            if let Some(&note_id) = self.path_index.get(&task.source_file) {
                 if matches!(self.g[note_id.0], NodeKind::Note(_)) {
                     self.g.add_edge(note_id.0, task_id.0, EdgeKind::HasTask);
                 }

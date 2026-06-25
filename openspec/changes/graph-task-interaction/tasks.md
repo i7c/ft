@@ -1,35 +1,35 @@
 ## 1. Model fix — `HasTask` to top-level tasks only (ft-core)
 
-- [ ] 1.1 In `Graph::insert_hastask_edges` (`ft-core/src/graph/mod.rs`), skip any task whose `parent` is `Some(_)`. Thread `tasks: &[Task]` into the function (matching `insert_subtask_edges`) and build a `(source_file, source_line) → parent` lookup, OR look up `parent` per task. Keep the `path_index`-based O(T) lookup from `harden-graph-task-nodes`.
-- [ ] 1.2 Update `Graph::build` to pass `&scan.tasks` to `insert_hastask_edges` (already passes it to `insert_subtask_edges`).
-- [ ] 1.3 New test `hastask_edges_skip_subtasks`: a note with one top-level task and one nested subtask has exactly one outgoing `HasTask` edge (to the top-level task); the subtask is reachable only via `Subtask` from its parent.
-- [ ] 1.4 Confirm `build_with_tasks_creates_task_nodes_and_edges` still passes (its fixture is flat — 3 top-level tasks, no nesting).
-- [ ] 1.5 Update the `tasks-in-fs` built-in preset (`ft-core/src/graph/preset.rs`) to add `subtask` to the `expand` block's `edge.kind` set: `expand where edge.kind in {directory-contains, has-task, subtask};`. Add/adjust a preset test asserting a note's nested subtasks appear in the walk.
+- [x] 1.1 In `Graph::insert_hastask_edges` (`ft-core/src/graph/mod.rs`), skip any task whose `parent` is `Some(_)`. Thread `tasks: &[Task]` into the function (matching `insert_subtask_edges`) and build a `(source_file, source_line) → parent` lookup, OR look up `parent` per task. Keep the `path_index`-based O(T) lookup from `harden-graph-task-nodes`.
+- [x] 1.2 Update `Graph::build` to pass `&scan.tasks` to `insert_hastask_edges` (already passes it to `insert_subtask_edges`).
+- [x] 1.3 New test `hastask_edges_skip_subtasks`: a note with one top-level task and one nested subtask has exactly one outgoing `HasTask` edge (to the top-level task); the subtask is reachable only via `Subtask` from its parent.
+- [x] 1.4 Confirm `build_with_tasks_creates_task_nodes_and_edges` still passes (its fixture is flat — 3 top-level tasks, no nesting).
+- [x] 1.5 Update the `tasks-in-fs` built-in preset (`ft-core/src/graph/preset.rs`) to add `subtask` to the `expand` block's `edge.kind` set: `expand where edge.kind in {directory-contains, has-task, subtask};`. Add/adjust a preset test asserting a note's nested subtasks appear in the walk.
 
 ## 2. Spec drift fix — `path` on Task nodes (ft-core)
 
-- [ ] 2.1 In `ft-core/src/graph/query.rs`, add a short comment on the `Attr::Path` → `NodeKind::Task` arm anchoring it as intentional (canonical per `unify-query-dsls`; `path includes "Areas/"` is a load-bearing task query).
-- [ ] 2.2 Confirm `dsl_path_on_task_matches_source_file` test exists and passes (it does). No code change.
+- [x] 2.1 In `ft-core/src/graph/query.rs`, add a short comment on the `Attr::Path` → `NodeKind::Task` arm anchoring it as intentional (canonical per `unify-query-dsls`; `path includes "Areas/"` is a load-bearing task query).
+- [x] 2.2 Confirm `dsl_path_on_task_matches_source_file` test exists and passes (it does). No code change.
 
 ## 3. Shared resolver + dedup helper (ft-core)
 
-- [ ] 3.1 Add `ft-core/src/task/resolve.rs` with `pub fn by_query(graph: &Graph, q: &GraphQuery) -> Vec<TaskKey>` (parse→`select`→map `NodeId→(source_file, source_line)`), extracting the logic from `ft/src/cmd/tasks.rs::run_move`. Re-export from `task::resolve` in `ft-core/src/task/mod.rs`.
-- [ ] 3.2 Add `hierarchy::dedup_displayed(all: &[Task], matched: &[TaskKey], expanded: &HashSet<TaskKey>) -> Vec<DisplayNode>` (or reuse `expand_forest`'s `seen`-set semantics) returning the deduped display forest. Unit test: matched child of matched parent appears once, nested; matched child whose parent is not matched appears as a depth-0 root.
+- [x] 3.1 Add `ft-core/src/task/resolve.rs` with `pub fn by_query(graph: &Graph, q: &GraphQuery) -> Vec<TaskKey>` (parse→`select`→map `NodeId→(source_file, source_line)`), extracting the logic from `ft/src/cmd/tasks.rs::run_move`. Re-export from `task::resolve` in `ft-core/src/task/mod.rs`.
+- [x] 3.2 Add `hierarchy::dedup_displayed(all: &[Task], matched: &[TaskKey], expanded: &HashSet<TaskKey>) -> Vec<DisplayNode>` (or reuse `expand_forest`'s `seen`-set semantics) returning the deduped display forest. Unit test: matched child of matched parent appears once, nested; matched child whose parent is not matched appears as a depth-0 root.
 
 ## 4. CLI parity — `complete --query`, `cancel`, `edit` (ft)
 
-- [ ] 4.1 `CompleteArgs` (`ft/src/cmd/tasks.rs`): add `--query <DSL>` (conflicts with positional `selector`), mirroring `MoveArgs`.
-- [ ] 4.2 `run_complete`: when `--query` is present, resolve via `task::resolve::by_query` and `ops::complete_task` each match (skip already-done with `CompleteError::AlreadyDone`); report count. Keep the single-selector path.
-- [ ] 4.3 New `TasksCommand::Cancel(CancelArgs)` + `CancelArgs { selector, --query, --on, --yes }` + `run_cancel` wrapping `ops::cancel_task` (skip `AlreadyCancelled`).
-- [ ] 4.4 New `TasksCommand::Edit(EditArgs)` + `EditArgs { selector, --due, --scheduled, --priority, --tags, --description, --yes }` + `run_edit` wrapping `ops::update_task_line` (single-selector form in v1; `--query` bulk is a v1.1 task — flag in code).
-- [ ] 4.5 Refactor `run_list`/`run_move` to call `task::resolve::by_query` (remove the duplicated inline logic).
-- [ ] 4.6 Integration tests (`ft/tests/`): `ft tasks complete --query "..."`, `ft tasks cancel <sel>`, `ft tasks edit <sel> --due 2026-07-01`, bulk complete via `--query`.
+- [x] 4.1 `CompleteArgs` (`ft/src/cmd/tasks.rs`): add `--query <DSL>` (conflicts with positional `selector`), mirroring `MoveArgs`.
+- [x] 4.2 `run_complete`: when `--query` is present, resolve via `task::resolve::by_query` and `ops::complete_task` each match (skip already-done with `CompleteError::AlreadyDone`); report count. Keep the single-selector path.
+- [x] 4.3 New `TasksCommand::Cancel(CancelArgs)` + `CancelArgs { selector, --query, --on, --yes }` + `run_cancel` wrapping `ops::cancel_task` (skip `AlreadyCancelled`).
+- [x] 4.4 New `TasksCommand::Edit(EditArgs)` + `EditArgs { selector, --due, --scheduled, --priority, --tags, --description, --yes }` + `run_edit` wrapping `ops::update_task_line` (single-selector form in v1; `--query` bulk is a v1.1 task — flag in code).
+- [x] 4.5 Refactor `run_list`/`run_move` to call `task::resolve::by_query` (remove the duplicated inline logic).
+- [x] 4.6 Integration tests (`ft/tests/`): `ft tasks complete --query "..."`, `ft tasks cancel <sel>`, `ft tasks edit <sel> --due 2026-07-01`, bulk complete via `--query`.
 
 ## 5. Headless `ft do` handlers (ft)
 
-- [ ] 5.1 Add `tasks.cancel-by-id` `CommandDef` (if not present) and `handle_tasks_cancel_by_id` in `ft/src/cmd/do.rs` (mirror `handle_tasks_complete_by_id`).
-- [ ] 5.2 Add `tasks.edit-by-id` `CommandDef` + `handle_tasks_edit_by_id` accepting `--arg id=… --arg due=…` etc.
-- [ ] 5.3 Tests in `ft/src/cmd/do.rs` mirroring `run_completes_task_by_id_headlessly`.
+- [x] 5.1 Add `tasks.cancel-by-id` `CommandDef` (if not present) and `handle_tasks_cancel_by_id` in `ft/src/cmd/do.rs` (mirror `handle_tasks_complete_by_id`).
+- [x] 5.2 Add `tasks.edit-by-id` `CommandDef` + `handle_tasks_edit_by_id` accepting `--arg id=… --arg due=…` etc.
+- [x] 5.3 Tests in `ft/src/cmd/do.rs` mirroring `run_completes_task_by_id_headlessly`.
 
 ## 6. Lift `EditPopup` to a shared module (ft)
 

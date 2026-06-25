@@ -1960,8 +1960,11 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
             NodeKind::Paragraph(_) => None,
             NodeKind::Ghost(_) => None,
             // `self.path` on a task is the vault-relative path of the
-            // note that owns it — the source file. Matches the task
-            // DSL's old `path includes "Areas/"` predicate.
+            // note that owns it — the source file. This is canonical
+            // (see graph-task-interaction §D1): `path includes "Areas/"`
+            // is a load-bearing task query. The graph-task-nodes spec
+            // scenario asserting this yields no match is stale and was
+            // corrected by this change.
             NodeKind::Task(t) => Some(t.source_file.to_string_lossy().into_owned()),
         },
         Attr::Title => match node {
