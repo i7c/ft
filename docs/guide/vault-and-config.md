@@ -81,8 +81,8 @@ format = "%Y-%m-%d"
 template = "daily"
 
 [presets]
-today = "due on today and not done"
-work = "tag is #work and not done"
+today = "due = today or scheduled = today"
+work = "tags includes \"work\" and status in {Open, InProgress}"
 ```
 
 That's enough to make `ft notes today`, `ft tasks list today`, and
@@ -137,8 +137,8 @@ Tasks-query presets are short names for longer queries:
 
 ```toml
 [presets]
-backlog = "not done and no due date and tag is project"
-review  = "completed after 2026-05-01 sort by completed reverse"
+backlog = "due is null and status in {Open, InProgress} and tags includes \"project\""
+review  = "completed > 2026-05-01"
 ```
 
 Use them positionally on `ft tasks list`:
@@ -149,8 +149,9 @@ ft tasks list review --format markdown
 ```
 
 User presets shadow the built-ins of the same name. The built-ins
-(`today`, `overdue`, `upcoming`, `done-today`) are defined in
-[docs/query-dsl.md](../query-dsl.md#built-in-presets).
+(`today`, `overdue`, `upcoming`, `done-today`, `not-done`) are
+defined in
+[docs/migrating-task-queries.md](../migrating-task-queries.md#built-in-presets).
 
 Graph-query presets are configured separately under `[graph.presets]`,
 and follow the same shadowing rule. See [graph.md](graph.md) for the

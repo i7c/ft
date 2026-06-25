@@ -2,6 +2,12 @@
 
 *2026-06-12*
 
+> **As-of snapshot.** This review describes the codebase at the date
+> above and has not been updated since; some of the duplications it
+> flags may already be addressed. Treat it as a historical artifact,
+> not a current to-do list. For the current architecture see
+> `docs/architecture.md`.
+
 Scope: API and internal data-model duplication, dirty implementations,
 shaky premises. Looks for low-effort high-impact refactors that keep ft
 clean, simple and reliable.

@@ -8,10 +8,11 @@ parser, the same query DSL, and the same atomic write path — so
 anything you can do in one, you can do in the other.
 
 The exact emoji vocabulary (`📅` for due, `⏫` for high priority, etc.)
-is in [docs/task-format.md](../task-format.md). The supported subset of
-the plugin's query language is in
-[docs/query-dsl.md](../query-dsl.md). This chapter is the workflow
-view of both.
+is in [docs/task-format.md](../task-format.md). The query language is
+the unified graph DSL, documented in
+[docs/graph-query-dsl.md](../graph-query-dsl.md); task queries run it
+under `Profile::Tasks` so you can keep typing the short form
+(`priority = High`, `due < today`). This chapter is the workflow view.
 
 ## The shape of a task
 
@@ -37,12 +38,15 @@ ft tasks list today        # due today or scheduled today, not done
 ft tasks list overdue      # due before today, not done
 ft tasks list upcoming     # due after today, not done
 ft tasks list done-today
+ft tasks list not-done     # everything still actionable
 
 # User presets from your config
 ft tasks list backlog
 
-# DSL query inline
-ft tasks list --query 'priority is high and not done'
+# DSL query inline (unified graph DSL, Profile::Tasks)
+ft tasks list --query 'priority = High and status in {Open, InProgress}'
+ft tasks list --query 'due < today'
+ft tasks list --query 'tags includes "work" and not (status = Done)'
 
 # Flag filters (compose as AND with each other and with --query)
 ft tasks list --status open --priority high --tag work
@@ -53,22 +57,23 @@ Flag filters compose with `--query` as additional `and` clauses, so
 this:
 
 ```sh
-ft tasks list --query 'priority is high' --status open --tag work
+ft tasks list --query 'priority = High' --status open --tag work
 ```
 
-…is the same as `'priority is high and status is open and tag is
-work'`.
+…is the same as `'priority = High and status = Open and tags includes
+"work"'`. (Enum values like `Open` / `High` are case-insensitive on
+the parser side; the canonical form capitalises.)
 
 ### Sort and limit
 
-The DSL supports `sort by KEY[, KEY…] [reverse]` and `limit N`:
+Sort and limit are CLI flags, not part of the query string:
 
 ```sh
-ft tasks list --query 'not done and due before today sort by due limit 10'
+ft tasks list --query 'status in {Open, InProgress} and due < today' \
+    --sort due --limit 10
 ```
 
-The CLI also takes a `--sort` flag that overrides any `sort by` in the
-DSL. It accepts comma-separated keys with optional `:reverse` /
+`--sort` accepts comma-separated keys with optional `:reverse` /
 `:desc` per key:
 
 ```sh
@@ -83,7 +88,7 @@ Default sort (nothing specified): `due asc, priority desc, path asc`.
 ```sh
 ft tasks list today --group-by priority
 ft tasks list overdue --format markdown        # the original task lines
-ft tasks list --query 'tag is work' --format ndjson    # one task per line, JSON
+ft tasks list --query 'tags includes "work"' --format ndjson   # one task per line, JSON
 ft tasks list --format json    # one big array
 ```
 
@@ -225,7 +230,7 @@ ft tasks move stale-id --to inbox/triage.md
 ft tasks move "old plan" --to inbox/triage.md#Triage
 
 # Bulk move, with a preview before writing
-ft tasks move --query 'tag is legacy and not done' \
+ft tasks move --query 'tags includes "legacy" and status in {Open, InProgress}' \
               --to inbox/triage.md#Triage --dry-run
 ```
 

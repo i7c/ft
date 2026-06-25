@@ -158,6 +158,12 @@ that `ft do` calls directly. Add a new handler when the underlying
 `ft-core` operation is atomic enough to invoke without the TUI's
 ambient state.
 
+To discover which commands are `ft do`-able without trial and error:
+`ft commands list --opens-modal false` filters to non-modal commands,
+but note that "non-modal" is necessary, not sufficient — a command
+registered there without a handler still exits `3`. Today the only
+command with a headless handler is `tasks.complete-by-id`.
+
 ## Mixed granularity
 
 Top-level commands are flow entry points (`graph.create-note`,

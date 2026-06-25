@@ -2,6 +2,14 @@
 
 *2026-06-02*
 
+> **As-of snapshot.** This review describes the codebase at the date
+> above and has not been updated since. Counts (commands, tabs, LoC,
+> commits) and the DSL landscape have drifted — notably the standalone
+> task DSL it references has since been removed in favour of the
+> unified graph DSL (see `docs/architecture.md` and
+> `docs/migrating-task-queries.md`). Treat this as a historical
+> artifact, not a current map.
+
 ## 1. Architecture recap
 
 **Shape.** Two-crate workspace: `ft-core/` holds the engine (vault

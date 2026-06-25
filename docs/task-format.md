@@ -97,21 +97,6 @@ The "primary" date is the first defined of `due`, `scheduled`, `start`.
 The new instance shifts every other date by the same number of days
 the primary date moved.
 
-## Daily-notes resolution
-
-`ft tasks create` defaults to today's daily note. `[daily_notes].source`
-in `.ft/config.toml` picks one of:
-
-- `core` (default) — reads `<vault>/.obsidian/daily-notes.json`
-- `periodic-notes` — reads `<vault>/.obsidian/plugins/periodic-notes/data.json`
-- `explicit` — uses literal `path` and `format` keys
-
-Both `path` and `format` accept moment.js-style patterns. Supported
-tokens: `YYYY YY MMMM MMM MM M DDDD DD D dddd ddd HH mm ss` plus
-`[literals]`. Tokens not in this list pass through verbatim, so folder
-names like `journal/YYYY` work without bracket escaping. Reserved
-moment.js tokens (`Q`, `Qo`) error explicitly.
-
 ## Deferred (out of scope for v1)
 
 The trait shape lets these plug in later without churn:

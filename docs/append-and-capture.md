@@ -33,6 +33,11 @@ ft notes append <PATH> --template <TEMPLATE>
 | `--obsidian`    | no       | Open via `obsidian://open` URL after appending.                             |
 | `--vault-name`  | no       | Vault name used in `--obsidian` URL.                                        |
 
+The CLI always spawns `$EDITOR` as a one-shot process (resolved via
+`VISUAL` → `EDITOR` → `vi`). The TUI's editor handoff is configured
+separately — see [docs/config.md §`[editor]`](config.md#editor) for
+the tmux-popup / window / split / suspend strategies.
+
 **Examples:**
 
 ```bash

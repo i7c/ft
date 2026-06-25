@@ -25,7 +25,7 @@ silently default.
 | `[periodic_notes.*]`    | table per period                  | either        | Daily/weekly/monthly/quarterly/yearly note layout.     |
 | `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
-| `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](query-dsl.md) presets.               |
+| `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
 | `[synth]`               | table                             | either        | Synthesis ritual: default folder for new synth notes; path-prefix exclude filter for `ft review`. |
 
 `default_vault` is only honored in the user config; setting it in a
@@ -373,12 +373,14 @@ Map of preset names to query strings. Use a preset from the CLI with
 
 ```toml
 [presets]
-work = "tag is #work and not done"
-today = "due on today"
-overdue = "due before today and not done"
+work = "tags includes \"work\" and status in {Open, InProgress}"
+today = "due = today or scheduled = today"
+overdue = "due < today and status in {Open, InProgress}"
 ```
 
-The query syntax is documented in [query-dsl.md](query-dsl.md).
+The query syntax is documented in [graph-query-dsl.md](graph-query-dsl.md)
+(run under `Profile::Tasks`); see also
+[migrating-task-queries.md](migrating-task-queries.md).
 
 ## `[synth]`
 
@@ -398,6 +400,11 @@ folder = "Synthesis/"
 # excluded from `ft review`. Conventional use: filter out your
 # periodic-notes folder so daily-note repetition doesn't drown out
 # real signal. Default: empty.
+#
+# Match is literal starts-with on the vault-relative path: `journal/`
+# excludes `journal/2026/foo.md` but not `journaling/...`. Include
+# the trailing slash to avoid matching sibling folders that happen to
+# share a stem.
 exclude_prefixes = ["journal/"]
 ```
 
@@ -432,6 +439,17 @@ These influence `ft` at runtime but are not config keys:
 | `FT_OBSIDIAN_DRY_RUN`  | When set to `1`, the `--obsidian` flag prints the `obsidian://` URL instead of opening it.    |
 | `FT_PERF_TESTS`        | When set to `1`, the perf-tagged unit tests run; otherwise they're skipped.                   |
 
+### Obsidian integration
+
+Several `ft notes` subcommands (`open`, `create`, `periodic`, `today`,
+`append`) accept `--obsidian` to open the result via an
+`obsidian://open?vault=…&file=…` URL instead of `$EDITOR`, plus
+`--vault-name` to override the vault name in the URL. Set
+`FT_OBSIDIAN_DRY_RUN=1` to short-circuit the OS handoff and just
+print the URL — handy for scripting and for the integration tests.
+This is an `ft notes` convenience; the TUI's editor handoff is
+configured separately under [`[editor]`](#editor).
+
 ## A small worked example
 
 ```toml
@@ -452,8 +470,8 @@ path = "journal/%Y"
 format = "%G-W%V"
 
 [presets]
-today = "due on today and not done"
-work = "tag is #work and not done"
+today = "due = today or scheduled = today"
+work = "tags includes \"work\" and status in {Open, InProgress}"
 ```
 
 ```toml

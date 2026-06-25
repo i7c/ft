@@ -149,14 +149,14 @@ done
 
 ```sh
 # Show what would move; abort if it touches more than 50 lines
-diff=$(ft tasks move --query 'tag is legacy and not done' \
+diff=$(ft tasks move --query 'tags includes "legacy" and status in {Open, InProgress}' \
                     --to inbox/triage.md#Triage --dry-run)
 lines=$(printf '%s\n' "$diff" | wc -l)
 if [ "$lines" -gt 50 ]; then
   echo "too many lines ($lines); review manually" >&2
   exit 1
 fi
-ft tasks move --query 'tag is legacy and not done' \
+ft tasks move --query 'tags includes "legacy" and status in {Open, InProgress}' \
               --to inbox/triage.md#Triage --yes
 ```
 

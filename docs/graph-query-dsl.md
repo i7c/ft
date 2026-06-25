@@ -14,6 +14,27 @@ Consumers compose those two with their own depth and cycle handling.
 The interactive tree (TUI) expands one hop per keystroke; the CLI
 materializes a finite subgraph via `walk` (depth bound + cycle stop).
 
+## Profiles
+
+The parser entry point is `parse_with(src, profile, today)`. The
+`Profile` controls how much sugar is applied:
+
+- **`Profile::Default`** — the verbose graph syntax shown in this
+  doc. Every query starts with an explicit `node` block. This is what
+  `ft graph query` and the TUI Graph tab use.
+- **`Profile::Tasks`** — used by `ft tasks list <query>` and the TUI
+  Tasks tab query bar. A bare predicate list is wrapped in an implicit
+  `node where kind = Task and …` prelude, so you can type
+  `priority = High` or `due < today` without the `node where kind =
+  Task and` prefix. Bare attribute references default to `self`.
+
+`parse(src)` is `parse_with` defaulted to `Profile::Default` and the
+system clock. Enum values (`Open`, `High`, `Note`, …) are
+case-insensitive on the parser side; canonical `Display` capitalises
+them. Sort and limit are CLI flags (`--sort`, `--limit`), not part of
+the DSL — task queries that used to embed `sort by` / `limit` now use
+the flags (see [migrating-task-queries.md](migrating-task-queries.md)).
+
 ## Grammar
 
 ```text

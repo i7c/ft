@@ -177,6 +177,11 @@ marker.
 
 ### Keymap
 
+These are the default chords; the canonical command names (e.g.
+`timeblocks.add-quickline`, `timeblocks.delete-start`) and any
+user overrides live in [docs/keybindings.md](keybindings.md) under
+`tab/timeblocks`.
+
 Navigation:
 
 | Key | Action |

@@ -21,7 +21,7 @@ ft/
 │   │   ├── graph.rs            # `ft graph query`
 │   │   ├── completions.rs      # `ft completions <shell>`
 │   │   └── man.rs              # `ft man [--out DIR]`
-│   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs, links.rs, graph.rs
+│   ├── src/output/             # table/json/markdown/ndjson (Format variants) + links.rs, graph.rs (command renderers)
 │   └── tests/                  # integration tests with assert_cmd
 └── ft-core/                    # library crate (the brain)
     ├── Cargo.toml
@@ -35,9 +35,12 @@ ft/
         │   ├── mod.rs          # Graph + NodeKind/EdgeKind/NoteId/LinkEdge
         │   ├── parser.rs       # extract_links: wikilinks, md links, embeds
         │   ├── resolve.rs      # Obsidian shortest-path resolution rules
-        │   ├── query.rs        # graph query DSL (parse / select / expand)
-        │   └── rename.rs       # plan_rename / apply_rename_plan
-        ├── markdown.rs         # heading extractor + shared LineSkipState
+        │   ├── query.rs        # unified graph DSL (parse_with / select / expand / walk)
+        │   ├── preset.rs       # built-in graph presets
+        │   ├── rename.rs       # plan_rename / apply_rename_plan
+        │   ├── delete.rs       # plan_delete / apply_delete_plan
+        │   └── tests.rs
+        ├── markdown.rs         # heading extractor (used by search)
         ├── dates.rs            # ISO / keyword / relative / NL parsing
         ├── fs.rs               # write_atomic
         ├── selector.rs         # id / file:line / fuzzy
@@ -50,11 +53,8 @@ ft/
         │   ├── ops.rs          # create_task / complete_task / plan_move
         │   └── recurrence.rs   # rule parser + next-instance engine
         └── query/
-            ├── mod.rs
-            ├── filter.rs       # programmatic typed filters
-            ├── expr.rs         # AST: Expr / Atom
-            ├── dsl.rs          # tokenizer + recursive-descent parser
-            ├── preset.rs       # built-in named queries
+            ├── mod.rs          # re-exports; presets + sort helpers
+            ├── preset.rs       # built-in task presets (parsed under Profile::Tasks)
             └── sort.rs         # sort_by_keys + SortKey / SortOrder
 ```
 
@@ -147,30 +147,39 @@ This composes with task-section resolution: the template renders the note
 ### Graph query DSL (`graph::query`)
 
 `ft-core::graph::query::parse(src)` returns a `GraphQuery { initial,
-expansion }`. The DSL describes a navigation *policy*, not a result
-subgraph: `GraphQuery::select(&graph)` returns the initial set of
-`NoteId`s; `GraphQuery::expand(&graph, parent)` returns the children
-for one hop; `GraphQuery::walk(&graph, &WalkOptions)` materializes
-the full reachable subtree as `Vec<WalkNode>` with depth + cycle
-bounds (Stop emits a cycle marker and halts that branch; Allow
-needs `max_depth`). Consumers compose these to taste: the TUI
-graph tab (`ft/src/tui/tabs/graph.rs`) drives `select` + `expand`
-one hop per keystroke; the CLI subcommand `ft graph query`
-(`ft/src/cmd/graph.rs` + `ft/src/output/graph.rs`) calls `walk`
-once and renders the result in tree/json/ndjson/edges/markdown.
-The parser is hand-rolled recursive-descent, mirroring `query::dsl`,
-and rejects op/value type mismatches and scope errors at parse time.
-See `docs/graph-query-dsl.md` for the grammar, attribute compatibility
+expansion }` (it's `parse_with(src, Profile::Default, today)` defaulted;
+`parse_with` is the real entry point). The DSL describes a navigation
+*policy*, not a result subgraph: `GraphQuery::select(&graph)` returns
+the initial set of `NoteId`s; `GraphQuery::expand(&graph, parent)`
+returns the children for one hop; `GraphQuery::walk(&graph,
+&WalkOptions)` materializes the full reachable subtree as
+`Vec<WalkNode>` with depth + cycle bounds (Stop emits a cycle marker
+and halts that branch; Allow needs `max_depth`). Consumers compose
+these to taste: the TUI graph tab (`ft/src/tui/tabs/graph.rs`) drives
+`select` + `expand` one hop per keystroke; the CLI subcommand `ft
+graph query` (`ft/src/cmd/graph.rs` + `ft/src/output/graph.rs`) calls
+`walk` once and renders the result in tree/json/ndjson/edges/markdown.
+The parser is hand-rolled recursive-descent and rejects op/value type
+mismatches and scope errors at parse time. See
+`docs/graph-query-dsl.md` for the grammar, attribute compatibility
 matrix, worked examples, and error catalog.
 
-### Query language (`query::dsl`)
+### Profiles and the unified DSL
 
-`dsl::parse(src, today)` returns a `Query { expr, sort_keys, limit }`.
-The expression AST (`query::expr`) is `Expr` (And/Or/Not over `Atom`s)
-where atoms are predicates like `Status(Open)`, `DueBefore(date)`, etc.
-`Expr::matches(&Task)` evaluates against a task. The CLI composes the
-DSL with flag filters by AND-ing the parsed expression with a typed
-`Filter`. See `docs/query-dsl.md` for the supported subset.
+There is one query engine: `graph::query`. Task queries are not a
+separate DSL — `ft tasks list <query>` and the TUI Tasks tab query bar
+parse the same graph DSL through `parse_with(src, Profile::Tasks,
+today)`. `Profile::Tasks` prepends an implicit `node where kind =
+Task and …` prelude so users can keep typing the short form
+(`priority = High`, `due < today`) while `Profile::Default` is the
+verbose graph syntax with an explicit `node` block. There is no
+separate `Filter` type — `query::mod.rs` is explicit about this; CLI
+flag filters (`--status`, `--tag`, `--due-before`, …) lower to DSL
+fragments and AND into the parsed expression. Sort and limit are CLI
+flags (`--sort`, `--limit`), not DSL clauses. See
+`docs/graph-query-dsl.md` for the grammar and
+`docs/migrating-task-queries.md` for the predicate translation table
+from the removed standalone task DSL.
 
 ### Synthesis ritual (`link_review` + `synth`)
 
@@ -259,6 +268,10 @@ periodic-notes folder).
 
 ### A new TUI tab
 
+The TUI ships six tabs today: Graph, Tasks, Notes, Timeblocks,
+Journal, and Review (the last drives the synthesis ritual's
+link-pick → Journal handoff; see §"Synthesis ritual").
+
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
    `App::new`. The default `help_sections()` returns nothing, which would
    leave the `?` overlay showing only the shared global section — so:
@@ -305,6 +318,9 @@ pub trait Modal {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx);
     fn keymap_help(&self) -> HelpSection;
     fn name(&self) -> &'static str;
+    // Registry integration (defaults to empty / the shared empty keymap):
+    fn commands(&self) -> &[CommandDef] { &[] }
+    fn keymap(&self) -> &KeyMap { &EMPTY_KEYMAP }
 }
 
 pub enum ModalOutcome {
@@ -320,9 +336,17 @@ pub enum ActiveModal {
     SectionMove(SectionMoveState), MoveOuter(GraphMoveOuter),
     Rename(GraphRenameState), PresetPicker(PresetPickerModal),
     Related(RelatedModal), Search(SearchPickerModal),
+    ConfirmDelete(ConfirmDeleteState), CreateSubdir(CreateSubdirState),
+    JournalSources(JournalSourcesModal),
+    JournalAppendOrReplace(JournalAppendOrReplaceModal),
     PeriodicLeader, QueryBar { view_id: usize },
 }
 ```
+
+(`commands`/`keymap` are the hook into the Command/Keymap registry
+[docs/commands.md](commands.md) describes; the variant set is current
+as of this writing — see `ft/src/tui/modal.rs` for the source of
+truth.)
 
 `App` holds `active_modal: RefCell<Option<ActiveModal>>` and exposes
 `active_modal_name() -> Option<&'static str>` for the status-bar
@@ -337,6 +361,13 @@ indicator and tests.
   `notes_view::render_*_overlay`. `Modal::handle_event` wraps the
   handler; `Modal::render` calls the renderer. Modal impls live in
   `modal.rs`.
+- **Tab-resident state machines outside the `Modal` slot.** The
+  synth-section reslice flow (`ResliceState` in
+  `notes_actions/reslice.rs`) is driven as a `NotesState::Reslicing`
+  variant on the Notes tab via its own `handle_reslice_key`, not as an
+  `ActiveModal`. It's the one remaining multi-step flow that predates
+  the modal driver; new multi-step flows should go through `Modal`
+  instead.
 - **Pickers** (`SearchPickerModal`, `PresetPickerModal`,
   `CapturePickerModal`): each is a newtype wrapping
   `FuzzyPicker<S>` plus modal-specific metadata. On
@@ -429,9 +460,8 @@ indicator.
    via `ctx.pending_request`.
 
 The plan-extract-modal-driver work is the reference implementation;
-`GraphMoveOuter` is the one modal still using the legacy
-tab-resident dispatch path and is the subject of a follow-up
-migration.
+the migration is complete (every modal, `GraphMoveOuter` included,
+now goes through `impl Modal`).
 
 ## Commands and keymaps (TUI)
 
