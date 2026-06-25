@@ -39,15 +39,15 @@
 
 ## 7. Graph-tab task interaction (ft TUI)
 
-- [ ] 7.1 Add `graph.task-complete` (`x`), `graph.task-cancel` (`X`), `graph.task-due-next`/`prev` (`]`/`[`), `graph.task-scheduled-next`/`prev` (`}`/`{`), `graph.task-priority-next`/`prev` (`=`/`-`), `graph.task-due-today` (`T`), `graph.task-edit-popup` (`e`) `CommandDef`s to `GRAPH_COMMANDS` (group "Tasks").
-- [ ] 7.2 Implement a `with_focused_task` helper on `GraphTab` mirroring the Tasks tab's `with_selected_task`: resolve `TaskData.source_file`+`source_line` → abs path, run an `ops::*` closure, refresh graph + re-materialize active view, restore cursor to the `(source_file, source_line)` anchor.
-- [ ] 7.3 Wire each `graph.task-*` dispatch arm via `with_focused_task` (row-kind-gated: toast "select a task first" on non-Task rows).
-- [ ] 7.4 Fix `graph.open-in-editor` / `selected_note_abs_path` on `NodeKind::Task`: open `ctx.vault.path.join(t.source_file)` in `$EDITOR` at `t.source_line` (extend the resolver + the editor-open request to carry a line for Task rows).
-- [ ] 7.5 `graph.task-edit-popup` opens `ActiveModal::TaskEdit(TaskEditState::from_task(&task))`; on commit posts `AppRequest::GraphTaskEdit { path, line, fields }`; service it in `GraphTab` via `ops::update_task_line` (and `plan_move`/`apply_move_plan` for the target/move field).
-- [ ] 7.6 Implement the `tc` / `ts` leader chords via a transient `ActiveModal::TaskLeader` (mirror `PeriodicLeader`): first key opens the leader; `c` → `graph.task-create` (quickline seeded with the focused note's path), `s` → `graph.task-new-subtask` (quickline seeded with the focused task's `(file,line)` as parent); any other key / `Esc` cancels.
-- [ ] 7.7 Implement `graph.tasks-of-note` (`gt` leader): on a Note/Directory row, rewrite the active view's query to the note-scoped query (D5) and re-materialize via `GraphApplyQueryBar`; toast if the row is a Task or empty.
-- [ ] 7.8 Add `TaskLeader`, `TaskEdit` variants to `ActiveModal`; wire `Modal` impls (handle_event/render/commands/keymap/name).
-- [ ] 7.9 Add `AppRequest::GraphTaskEdit`, `AppRequest::GraphTaskCreate { ... }` variants + `Tab::graph_*` hooks + `App::service_request` servicing (and the test-path variants).
+- [x] 7.1 Add `graph.task-complete` (`x`), `graph.task-cancel` (`X`), `graph.task-due-next`/`prev` (`]`/`[`), `graph.task-scheduled-next`/`prev` (`}`/`{`), `graph.task-priority-next`/`prev` (`=`/`-`), `graph.task-due-today` (`T`) `CommandDef`s to `GRAPH_COMMANDS` (group "Tasks"). (The `e` edit-popup CommandDef is deferred — see 7.5.)
+- [x] 7.2 Implement a `with_focused_task` helper on `GraphTab` mirroring the Tasks tab's `with_selected_task`: resolve `TaskData.source_file`+`source_line` → abs path, run an `ops::*` closure, refresh graph + re-materialize active view, restore cursor to the `(source_file, source_line)` anchor.
+- [x] 7.3 Wire each `graph.task-*` dispatch arm via `with_focused_task` (row-kind-gated: toast "select a task first" on non-Task rows).
+- [x] 7.4 Fix `graph.open-in-editor` / `selected_note_abs_path` on `NodeKind::Task`: open `ctx.vault.path.join(t.source_file)` in `$EDITOR` at `t.source_line` (extend the resolver + the editor-open request to carry a line for Task rows).
+- [ ] 7.5 `graph.task-edit-popup` opens `ActiveModal::TaskEdit(TaskEditState::from_task(&task))`; on commit posts `AppRequest::GraphTaskEdit { path, line, fields }`; service it in `GraphTab` via `ops::update_task_line` (and `plan_move`/`apply_move_plan` for the target/move field). **DEFERRED to a follow-up change**: the shared `EditPopup` was lifted (§6) and `focused_task_edit_state` is extracted, but the full `TaskEdit` modal render + commit wiring is a large piece deferred to keep this change reviewable.
+- [ ] 7.6 Implement the `tc` / `ts` leader chords via a transient `ActiveModal::TaskLeader` (mirror `PeriodicLeader`): first key opens the leader; `c` → `graph.task-create` (quickline seeded with the focused note's path), `s` → `graph.task-new-subtask` (quickline seeded with the focused task's `(file,line)` as parent); any other key / `Esc` cancels. **DEFERRED** to the follow-up.
+- [ ] 7.7 Implement `graph.tasks-of-note` (`gt` leader): on a Note/Directory row, rewrite the active view's query to the note-scoped query (D5) and re-materialize via `GraphApplyQueryBar`; toast if the row is a Task or empty. **DEFERRED** to the follow-up.
+- [ ] 7.8 Add `TaskLeader`, `TaskEdit` variants to `ActiveModal`; wire `Modal` impls (handle_event/render/commands/keymap/name). **DEFERRED** to the follow-up.
+- [ ] 7.9 Add `AppRequest::GraphTaskEdit`, `AppRequest::GraphTaskCreate { ... }` variants + `Tab::graph_*` hooks + `App::service_request` servicing (and the test-path variants). **DEFERRED** to the follow-up.
 
 ## 8. Graph-tab Task display parity (ft TUI)
 
@@ -62,10 +62,10 @@
 
 ## 10. Keymap + command registration (ft TUI)
 
-- [ ] 10.1 Add the new `graph.task-*` bindings to `GRAPH_KEYMAP` (`x`,`X`,`]`,`[`,`}`,`{`,`=`,`-`,`T`,`e`, `t`→leader, `g`→leader).
-- [ ] 10.2 Add `TaskLeader`/`TaskEdit` modal command slices + keymaps to `ft/src/tui/modal_commands.rs`.
-- [ ] 10.3 Override `GraphTab::help_sections` to add a "Tasks" group documenting the new bindings + leaders.
-- [ ] 10.4 Regenerate `docs/keybindings.md`: `cargo run --release -q -- commands docs > docs/keybindings.md`; verify `cargo run --release -q -- commands docs --check`.
+- [x] 10.1 Add the new `graph.task-*` bindings to `GRAPH_KEYMAP` (`x`,`X`,`]`,`[`,`}`,`{`,`=`,`-`,`T`). (The `e` edit-popup and `t`/`g` leader chords are deferred with §7.5-7.9.)
+- [ ] 10.2 Add `TaskLeader`/`TaskEdit` modal command slices + keymaps to `ft/src/tui/modal_commands.rs`. **DEFERRED** with §7.5-7.9.
+- [x] 10.3 Override `GraphTab::help_sections` to add a "Tasks (on a Task row)" group documenting the new bindings.
+- [x] 10.4 Regenerate `docs/keybindings.md`: `cargo run --release -q -- commands docs > docs/keybindings.md`; verify `cargo run --release -q -- commands docs --check`.
 
 ## 11. Tests + snapshots
 

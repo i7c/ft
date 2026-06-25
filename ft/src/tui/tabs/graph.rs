@@ -38,6 +38,8 @@ use std::sync::Arc;
 
 use ft_core::periodic::Period;
 use ft_core::search::Hit;
+use ft_core::task::ops::{self, CompleteOptions};
+use ft_core::task::{Priority, Status};
 
 use crate::tui::{
     command::{Command, CommandDef, CommandOutcome, CommandScope},
@@ -896,6 +898,89 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    // Tasks — interaction verbs on focused Task rows
+    // (graph-task-interaction §7). All are no-ops (toast) on non-Task rows.
+    CommandDef {
+        name: "graph.task-complete",
+        description: "Complete the focused task",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-cancel",
+        description: "Cancel the focused task",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-due-next",
+        description: "Advance the focused task's due date by one day",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-due-prev",
+        description: "Move the focused task's due date back one day",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-scheduled-next",
+        description: "Advance the focused task's scheduled date by one day",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-scheduled-prev",
+        description: "Move the focused task's scheduled date back one day",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-priority-next",
+        description: "Cycle the focused task's priority up",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-priority-prev",
+        description: "Cycle the focused task's priority down",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "graph.task-due-today",
+        description: "Set the focused task's due date to today",
+        scope: CommandScope::Tab("graph"),
+        group: "Tasks",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
     // Multi-select
     CommandDef {
         name: "graph.toggle-multi-select",
@@ -963,6 +1048,18 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Periodic
         .bind("p", "graph.periodic-leader")
         .bind("t", "graph.today")
+        // Tasks — interaction verbs on focused Task rows
+        // (graph-task-interaction §7). `p`/`t` are taken by the periodic
+        // flow, so priority cycles on `=`/`-` and due-today on `T`.
+        .bind("x", "graph.task-complete")
+        .bind("X", "graph.task-cancel")
+        .bind("]", "graph.task-due-next")
+        .bind("[", "graph.task-due-prev")
+        .bind("}", "graph.task-scheduled-next")
+        .bind("{", "graph.task-scheduled-prev")
+        .bind("=", "graph.task-priority-next")
+        .bind("-", "graph.task-priority-prev")
+        .bind("T", "graph.task-due-today")
         // Multi-select
         .bind("Space", "graph.toggle-multi-select")
         .bind("Esc", "graph.clear-multi-select")
@@ -2622,12 +2719,130 @@ impl GraphTab {
         let Some(row) = v.tree.rows().get(v.selected) else {
             return;
         };
-        if let NodeKind::Note(n) = graph.node(row.note_id) {
-            let abs = ctx.vault.path.join(&n.path);
-            ctx.recents.record_open(&n.path);
-            *ctx.pending_request.borrow_mut() =
-                Some(AppRequest::OpenInEditor { path: abs, line: 1 });
+        match graph.node(row.note_id) {
+            NodeKind::Note(n) => {
+                let abs = ctx.vault.path.join(&n.path);
+                ctx.recents.record_open(&n.path);
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::OpenInEditor { path: abs, line: 1 });
+            }
+            // graph-task-interaction §7.4: open the task's owning note at
+            // the task's line, so the user lands on the task in context.
+            NodeKind::Task(t) => {
+                let abs = ctx.vault.path.join(&t.source_file);
+                ctx.recents.record_open(&t.source_file);
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+                    path: abs,
+                    line: t.source_line,
+                });
+            }
+            _ => {}
         }
+    }
+
+    /// Resolve the focused `NodeKind::Task` row, run an `ops::*` mutation
+    /// against its `(source_file, source_line)`, then rebuild the graph and
+    /// restore the cursor to the same task. Mirrors the Tasks-tab
+    /// `with_selected_task` / `refresh_after_mutation` pattern
+    /// (graph-task-interaction §7.2). On a non-Task row it toasts and is a
+    /// no-op. Returns `true` if the op ran.
+    #[allow(clippy::too_many_lines)]
+    fn with_focused_task<F>(&mut self, ctx: &mut TabCtx, verb: &str, op: F) -> bool
+    where
+        F: FnOnce(&std::path::Path, usize, chrono::NaiveDate) -> anyhow::Result<()>,
+    {
+        // Extract the focused task's identity up front so we drop the
+        // immutable graph borrow before mutating `self` / refreshing.
+        let (abs, anchor, today) = {
+            let Some(graph) = self.graph.as_ref() else {
+                return false;
+            };
+            let v = self.active_view();
+            let Some(row) = v.tree.rows().get(v.selected) else {
+                return false;
+            };
+            let NodeKind::Task(t) = graph.node(row.note_id) else {
+                queue_toast(ctx, "select a task first", ToastStyle::Error);
+                return false;
+            };
+            (
+                ctx.vault.path.join(&t.source_file),
+                (t.source_file.clone(), t.source_line),
+                ctx.today,
+            )
+        };
+        match op(&abs, anchor.1, today) {
+            Ok(()) => {}
+            Err(e) => {
+                queue_toast(ctx, &format!("{verb} failed: {e}"), ToastStyle::Error);
+                return false;
+            }
+        }
+        // Refresh the graph and try to land back on the same task.
+        let scan = ctx.vault.scan();
+        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
+            self.graph = Some(new_graph);
+            self.restore_all_views();
+            self.restore_task_cursor(&anchor);
+        }
+        true
+    }
+
+    /// Move the cursor to the row whose task matches `(source_file,
+    /// source_line)`, if present in the active view's tree.
+    fn restore_task_cursor(&mut self, anchor: &(std::path::PathBuf, usize)) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        // Find the row index without a mutable borrow, then set it.
+        let v = self.active_view();
+        let found = v.tree.rows().iter().position(|r| {
+            matches!(graph.node(r.note_id), NodeKind::Task(t)
+                if t.source_file == anchor.0 && t.source_line == anchor.1)
+        });
+        if let Some(idx) = found {
+            self.active_view_mut().selected = idx;
+        }
+    }
+
+    /// Build an `EditPopup` pre-populated from the focused Task, for the
+    /// `graph.task-edit-popup` command (graph-task-interaction §7.5).
+    /// Currently unused: the full TaskEdit modal is deferred to a follow-up;
+    /// kept here so the extraction is ready when it lands.
+    #[allow(dead_code)]
+    fn focused_task_edit_state(&self) -> Option<crate::tui::tabs::tasks::edit_popup::EditPopup> {
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let row = v.tree.rows().get(v.selected)?;
+        let NodeKind::Task(t) = graph.node(row.note_id) else {
+            return None;
+        };
+        let task = ft_core::task::Task {
+            description: t.description.clone(),
+            status: match t.status.as_str() {
+                "Done" => Status::Done,
+                "InProgress" => Status::InProgress,
+                "Cancelled" => Status::Cancelled,
+                _ => Status::Open,
+            },
+            priority: t.priority.as_deref().and_then(parse_priority),
+            due: t
+                .due
+                .as_deref()
+                .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+            scheduled: t
+                .scheduled
+                .as_deref()
+                .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+            tags: t.tags.clone(),
+            recurrence: None,
+            source_file: t.source_file.clone(),
+            source_line: t.source_line,
+            ..Default::default()
+        };
+        Some(crate::tui::tabs::tasks::edit_popup::EditPopup::from_task(
+            &task,
+        ))
     }
 
     fn request_open_selected_in_obsidian(&self, ctx: &TabCtx) {
@@ -3164,6 +3379,79 @@ impl Tab for GraphTab {
             // Notes
             "graph.open-in-editor" => {
                 self.request_open_selected_in_editor(ctx);
+                CommandOutcome::Handled
+            }
+            // Task interaction (graph-task-interaction §7.3).
+            "graph.task-complete" => {
+                self.with_focused_task(
+                    ctx,
+                    "complete",
+                    |path, line, today| match ops::complete_task(
+                        path,
+                        line,
+                        CompleteOptions { on: today },
+                    ) {
+                        Ok(_) => Ok(()),
+                        Err(ops::CompleteError::AlreadyDone { .. }) => Ok(()),
+                        Err(e) => Err(e.into()),
+                    },
+                );
+                CommandOutcome::Handled
+            }
+            "graph.task-cancel" => {
+                self.with_focused_task(ctx, "cancel", |path, line, today| {
+                    match ops::cancel_task(path, line, today) {
+                        Ok(_) => Ok(()),
+                        Err(ops::CancelError::AlreadyCancelled { .. }) => Ok(()),
+                        Err(e) => Err(e.into()),
+                    }
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-due-next" => {
+                self.with_focused_task(ctx, "due+1", |path, line, today| {
+                    nudge_task_field(path, line, TaskField::Due, 1, today)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-due-prev" => {
+                self.with_focused_task(ctx, "due-1", |path, line, today| {
+                    nudge_task_field(path, line, TaskField::Due, -1, today)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-scheduled-next" => {
+                self.with_focused_task(ctx, "scheduled+1", |path, line, today| {
+                    nudge_task_field(path, line, TaskField::Scheduled, 1, today)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-scheduled-prev" => {
+                self.with_focused_task(ctx, "scheduled-1", |path, line, today| {
+                    nudge_task_field(path, line, TaskField::Scheduled, -1, today)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-priority-next" => {
+                self.with_focused_task(ctx, "priority+1", |path, line, _today| {
+                    cycle_task_priority(path, line, 1)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-priority-prev" => {
+                self.with_focused_task(ctx, "priority-1", |path, line, _today| {
+                    cycle_task_priority(path, line, -1)
+                });
+                CommandOutcome::Handled
+            }
+            "graph.task-due-today" => {
+                self.with_focused_task(ctx, "due=today", |path, line, today| {
+                    ops::update_task_line(path, line, |t| {
+                        t.due = Some(today);
+                    })
+                    .map(|_| ())
+                    .map_err(|e| e.into())
+                });
                 CommandOutcome::Handled
             }
             "graph.open-in-obsidian" => {
@@ -3774,6 +4062,18 @@ impl Tab for GraphTab {
                     ("Ctrl+J", "append selected (or cursor) to Journal sources"),
                 ],
             ),
+            HelpSection::new(
+                "Tasks (on a Task row)",
+                &[
+                    ("x", "complete task"),
+                    ("Shift+X", "cancel task"),
+                    ("] / [", "due date +1 / -1 day"),
+                    ("} / {", "scheduled date +1 / -1 day"),
+                    ("= / -", "cycle priority up / down"),
+                    ("Shift+T", "set due date to today"),
+                    ("o", "open source note at the task line"),
+                ],
+            ),
         ]
     }
 
@@ -4357,6 +4657,72 @@ fn empty_tree_allows(name: &str) -> bool {
 /// Used by [`leaf_display`] to render relative due/scheduled labels.
 fn parse_task_date(s: &str) -> Option<chrono::NaiveDate> {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+/// Which date field a task nudge operates on (graph-task-interaction §7.3).
+enum TaskField {
+    Due,
+    Scheduled,
+}
+
+/// Nudge a task's `due` or `scheduled` by `delta_days` (from `today` if
+/// unset). Mirrors the Tasks-tab `nudge_field` helper.
+fn nudge_task_field(
+    path: &std::path::Path,
+    line: usize,
+    field: TaskField,
+    delta_days: i64,
+    today: chrono::NaiveDate,
+) -> anyhow::Result<()> {
+    use chrono::Duration;
+    ops::update_task_line(path, line, move |t| {
+        let current = match field {
+            TaskField::Due => t.due,
+            TaskField::Scheduled => t.scheduled,
+        };
+        let base = current.unwrap_or(today);
+        let next = base + Duration::days(delta_days);
+        match field {
+            TaskField::Due => t.due = Some(next),
+            TaskField::Scheduled => t.scheduled = Some(next),
+        }
+    })
+    .map(|_| ())
+    .map_err(anyhow::Error::from)
+}
+
+/// Cycle a task's priority forward (`dir = 1`) or backward (`dir = -1`)
+/// through the priority cycle. Mirrors the Tasks-tab `cycle_priority`.
+fn cycle_task_priority(path: &std::path::Path, line: usize, dir: i64) -> anyhow::Result<()> {
+    const CYCLE: [Option<Priority>; 6] = [
+        None,
+        Some(Priority::Lowest),
+        Some(Priority::Low),
+        Some(Priority::Medium),
+        Some(Priority::High),
+        Some(Priority::Highest),
+    ];
+    ops::update_task_line(path, line, move |t| {
+        let pos = CYCLE.iter().position(|p| *p == t.priority).unwrap_or(0) as i64;
+        let len = CYCLE.len() as i64;
+        let next = ((pos + dir).rem_euclid(len)) as usize;
+        t.priority = CYCLE[next];
+    })
+    .map(|_| ())
+    .map_err(anyhow::Error::from)
+}
+
+/// Parse a priority DSL string ("Highest"/"High"/… ) into a `Priority`.
+/// Mirrors the `as_str` spelling the graph exposes.
+fn parse_priority(s: &str) -> Option<Priority> {
+    match s {
+        "Highest" => Some(Priority::Highest),
+        "High" => Some(Priority::High),
+        "Medium" => Some(Priority::Medium),
+        "Low" => Some(Priority::Low),
+        "Lowest" => Some(Priority::Lowest),
+        _ => None,
+    }
 }
 
 /// Foreground color for a node kind, used to visually differentiate types

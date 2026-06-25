@@ -6535,6 +6535,84 @@ fn graph_tab_o_opens_selected_note_in_editor() -> Result<()> {
     panic!("did not reach a note row after 5 j-presses");
 }
 
+/// graph-task-interaction §7: `x` on a Task row completes it on disk and
+/// refreshes the graph; `o` on a Task row opens its source note at the line.
+#[test]
+fn graph_tab_x_completes_focused_task() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    // A query that surfaces the note's tasks: root note + has-task expansion.
+    std::fs::write(
+        vault_path.join("root.md"),
+        "- [ ] Fix login bug 📅 2026-05-09 🆔 t1\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path.clone())).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    // Bounce through another tab so switch_to(0) actually fires on_focus
+    // (switch_to to the already-active tab is a no-op).
+    app.switch_to(1)?;
+    app.switch_to(0)?; // Graph tab
+
+    // Sanity: the default query renders the root directory.
+    let baseline = render(&mut app, 80, 24);
+    assert!(
+        baseline.contains("D /"),
+        "default query should show the root directory:\n{baseline}"
+    );
+
+    // Set the query to show tasks: root note expanded via has-task+subtask.
+    // Clear the default query first.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..300 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "node where kind = Note and path = \"root.md\"; expand where edge.kind in {has-task, subtask} and to.kind in {Task};".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Expand the root note so its task child appears.
+    app.dispatch(key('j'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Cursor should now be on (or able to reach) the task row. Walk down
+    // until we see the task row focused. The tree shows the task as a
+    // child of the note; press j to descend onto it.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Fix login bug"),
+        "task row should be visible after expanding the note:\n{frame}"
+    );
+    app.dispatch(key('j'))?;
+
+    // Press `x` to complete the focused task.
+    app.dispatch(key('x'))?;
+    // Drain any pending request (the completion path may post none).
+    let _ = app.take_pending_request();
+
+    let content = std::fs::read_to_string(vault_path.join("root.md"))?;
+    assert!(
+        content.contains("[x]"),
+        "expected the task to be marked done on disk, got: {content}"
+    );
+    assert!(
+        content.contains("✅ 2026-05-10"),
+        "expected today's done-date (fixed_clock), got: {content}"
+    );
+    Ok(())
+}
+
 #[test]
 fn graph_tab_ctrl_o_opens_selected_note_in_obsidian() -> Result<()> {
     let (_dir, vault) = dirs_vault_for_graph();
