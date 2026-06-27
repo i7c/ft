@@ -30,16 +30,14 @@ use crate::tui::{
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{
         edit_popup::{
-            merge_tags_into_description, parse_optional_date, parse_priority, parse_tags_field,
-            relative_date, render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
+            handle_target_picker_key, merge_tags_into_description, open_target_picker,
+            parse_optional_date, parse_priority, parse_tags_field, relative_date,
+            render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
         },
         quickline::parse_quickline,
         view::View,
     },
-    widgets::{
-        render_inline_input, CursorMode, EditBuffer, FuzzyPicker, InlineInput, PickerOutcome,
-        VaultFilePickerSource,
-    },
+    widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput},
 };
 
 /// Idle-state keymap for the SearchView (the only view under TasksTab
@@ -1584,54 +1582,6 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
             Style::default().fg(palette::DIM),
         ),
     ])
-}
-
-/// Open the fuzzy picker over the target field. Seeds the picker's
-/// input with `seed_char` when triggered by a keystroke, or with the
-/// field's current text when triggered by Enter — so a partial query
-/// the user already typed becomes the starting query.
-fn open_target_picker(popup: &mut EditPopup, ctx: &TabCtx, seed_char: Option<char>) {
-    let source = VaultFilePickerSource::new(
-        std::sync::Arc::clone(ctx.vault),
-        std::sync::Arc::clone(ctx.recents),
-    );
-    let mut picker = FuzzyPicker::new(source);
-    // Seed: either the keystroke that triggered the open, or the
-    // current field text. We send each char through `handle_key` so
-    // the picker's internal `refresh` runs and the result list
-    // populates immediately.
-    let seed: String = match seed_char {
-        Some(c) => c.to_string(),
-        None => popup.target.text.clone(),
-    };
-    for c in seed.chars() {
-        picker.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    }
-    popup.target_picker = Some(picker);
-}
-
-/// Route a key to the open picker; on Selected/Cancelled, close the
-/// picker and (for Selected) replace the target field's text with
-/// `path` or `path#heading text`.
-fn handle_target_picker_key(popup: &mut EditPopup, k: KeyEvent) -> EventOutcome {
-    let Some(picker) = popup.target_picker.as_mut() else {
-        return EventOutcome::Consumed;
-    };
-    match picker.handle_key(k) {
-        PickerOutcome::Selected(hit) => {
-            let text = match &hit.heading {
-                Some(h) => format!("{}#{}", hit.path.display(), h.text),
-                None => hit.path.display().to_string(),
-            };
-            popup.target = EditBuffer::from(&text);
-            popup.target_picker = None;
-        }
-        PickerOutcome::Cancelled => {
-            popup.target_picker = None;
-        }
-        PickerOutcome::StillOpen | PickerOutcome::NotHandled => {}
-    }
-    EventOutcome::Consumed
 }
 
 // --- row formatting ----------------------------------------------------------

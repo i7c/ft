@@ -778,8 +778,14 @@ impl App {
                 });
                 Ok(())
             }
-            AppRequest::GraphTaskCreate { kind } => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_task_create(ctx, kind));
+            AppRequest::GraphTaskCommitCreate {
+                fields,
+                target,
+                subtask_parent,
+            } => {
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_task_commit_create(ctx, fields, target, subtask_parent)
+                });
                 Ok(())
             }
         }
@@ -1794,8 +1800,14 @@ impl App {
                 });
                 Ok(())
             }
-            AppRequest::GraphTaskCreate { kind } => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_task_create(ctx, kind));
+            AppRequest::GraphTaskCommitCreate {
+                fields,
+                target,
+                subtask_parent,
+            } => {
+                self.with_named_tab("Graph", |tab, ctx| {
+                    tab.graph_task_commit_create(ctx, fields, target, subtask_parent)
+                });
                 Ok(())
             }
             other => {

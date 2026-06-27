@@ -27,13 +27,16 @@ keep that change reviewable:
   `AppRequest::GraphTaskEdit { path, line, fields }`; the Graph tab services
   it via `ops::update_task_line`, then refreshes + restores the cursor.
   On non-Task rows `e` toasts.
-- **`TaskLeader` chord (`t`).** A transient `ActiveModal::TaskLeader`
-  (mirroring `PeriodicLeader`): `t` opens it; `c` posts
-  `AppRequest::GraphTaskCreate { kind: TopLevel }`, `s` posts
-  `GraphTaskCreate { kind: Subtask { parent_file, parent_line } }`; any
-  other key / `Esc` cancels. The Graph tab services `GraphTaskCreate` by
-  opening a quickline seeded with the focused note's path (top-level) or
-  the focused task's `(file, line)` (subtask).
+- **`TaskLeader` chord (`a`).** A transient `ActiveModal::TaskLeader`
+  (mirroring `PeriodicLeader`), seeded at open time with the focused row's
+  note path and (if a Task is focused) its `(file, line)`: `a` opens it;
+  `c` swaps straight into a `TaskCreate` popup (shared `EditPopup`, New
+  mode) seeded with the focused note's path, `s` into one nested under the
+  focused task; any other key / `Esc` cancels. The swap uses
+  `ModalOutcome::OpenSibling`, so the popup appears in the same frame. On
+  `Ctrl+S` the popup posts `AppRequest::GraphTaskCommitCreate`, which the
+  Graph tab services via `ops::create_task`, then refreshes + restores the
+  cursor. `s` with no focused task toasts "select a task first".
 - **`gt` note-scoped view.** A new `graph.tasks-of-note` command: on a
   Note/Directory row, rewrite the active view's query to
   `node where kind = Note and path = "<p>"; expand where edge.kind in
@@ -49,36 +52,41 @@ keep that change reviewable:
 
 ### Modified Capabilities
 
-- `graph-task-interaction`: the `e` edit-popup, `tc`/`ts` create leaders,
-  and `gt` note-scoped view requirements deferred from the original change
-  are now satisfied.
+- `graph-task-interaction`: the `e` edit-popup, `a`→`c`/`s` create leader
+  (with a full in-graph `TaskCreate` popup), and `v` note-scoped view
+  requirements deferred from the original change are now satisfied.
 - `tui-commands`: new `graph.task-edit-popup`, `graph.task-create`,
   `graph.task-new-subtask`, `graph.tasks-of-note` `CommandDef`s.
-- `tui-keymaps`: `e`, `t`→leader, `g`→leader bindings on the Graph tab.
-- `tui-modal-driver`: new `TaskEdit` and `TaskLeader` `ActiveModal`
-  variants.
+- `tui-keymaps`: `e`, `a`→leader, `v` bindings on the Graph tab.
+- `tui-modal-driver`: new `TaskEdit`, `TaskLeader`, and `TaskCreate`
+  `ActiveModal` variants.
 
 ## Impact
 
-- **ft/src/tui/modal.rs** — `ActiveModal::TaskEdit(TaskEditState)`,
-  `ActiveModal::TaskLeader` variants + `Modal` impl dispatch arms.
-- **ft/src/tui/tabs/graph.rs** — `TaskEditState`, `TaskLeader` state types
-  (or simple `struct TaskLeader;`), `graph.task-edit-popup` /
+- **ft/src/tui/modal.rs** — `ActiveModal::TaskEdit(Box<TaskEditState>)`,
+  `ActiveModal::TaskLeader(Box<TaskLeader>)`,
+  `ActiveModal::TaskCreate(Box<TaskCreateState>)` variants + `Modal` impl
+  dispatch arms.
+- **ft/src/tui/tabs/graph.rs** — `TaskEditState`, seeded `TaskLeader`, and
+  `TaskCreateState` state types, `graph.task-edit-popup` /
   `graph.task-create` / `graph.task-new-subtask` / `graph.tasks-of-note`
-  dispatch arms, `AppRequest::GraphTaskEdit`/`GraphTaskCreate` servicing
-  via `Tab::graph_*` hooks, `gt` query-rewrite helper, help-section
-  additions.
+  dispatch arms, `AppRequest::GraphTaskEdit`/`GraphTaskCommitCreate`
+  servicing via `Tab::graph_*` hooks, `v` query-rewrite helper,
+  help-section additions.
 - **ft/src/tui/tabs/tasks/edit_popup.rs** — gains `render_edit_popup`,
   `parse_optional_date`, `parse_priority`, `parse_tags_field`,
-  `merge_tags_into_description`, `centered_rect` (moved from `search.rs`).
+  `merge_tags_into_description`, `centered_rect`, and the
+  `open_target_picker` / `handle_target_picker_key` helpers (moved from
+  `search.rs`) so the Graph-tab `TaskCreate` popup reuses the target
+  picker.
 - **ft/src/tui/tabs/tasks/search.rs** — imports the moved helpers.
 - **ft/src/tui/tab.rs** — `AppRequest::GraphTaskEdit`,
-  `AppRequest::GraphTaskCreate` variants + `Tab::graph_task_edit` /
-  `Tab::graph_task_create` hooks.
+  `AppRequest::GraphTaskCommitCreate` variants + `Tab::graph_task_edit` /
+  `Tab::graph_task_commit_create` hooks.
 - **ft/src/tui/app.rs** — service the new requests in `service_request`
-  + `drain_simple_requests` + test-path variants.
+  + test-path variants.
 - **ft/src/tui/modal_commands.rs** — `TASK_EDIT_COMMANDS`/`KEYMAP`,
-  `TASK_LEADER_COMMANDS`/`KEYMAP`.
+  `TASK_LEADER_COMMANDS`/`KEYMAP`, `TASK_CREATE_COMMANDS`/`KEYMAP`.
 - **docs/keybindings.md** — regenerated.
 - **Snapshot tests** — Graph-tab frames with `e`/`tc`/`ts`/`gt`.
 - **No breaking changes**; the `t`/`g`/`e` keys are newly bound on the

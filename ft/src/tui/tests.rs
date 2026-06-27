@@ -6718,7 +6718,7 @@ fn graph_tab_v_rewrites_view_to_note_tasks() -> Result<()> {
 }
 
 #[test]
-fn graph_tab_a_then_c_opens_task_leader() -> Result<()> {
+fn graph_tab_a_then_esc_cancels_leader() -> Result<()> {
     let (_dir, _vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
     // `a` opens the task-create leader modal.
     app.dispatch(key('a'))?;
@@ -6734,6 +6734,91 @@ fn graph_tab_a_then_c_opens_task_leader() -> Result<()> {
         !frame2.contains("c=create"),
         "Esc should close the leader:
 {frame2}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_tab_a_c_creates_top_level_task() -> Result<()> {
+    let (_dir, vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // `a` → `c` opens the create popup, seeded with the focused task's note.
+    app.dispatch(key('a'))?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("new task"),
+        "a→c should open the create popup:\n{frame}"
+    );
+    // The target field is pre-seeded from the focused note.
+    assert!(
+        frame.contains("root.md"),
+        "create popup should seed the target with the focused note:\n{frame}"
+    );
+    // Description is focused by default; type one and Ctrl+S to create.
+    for c in "Write the tests".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.service_request_for_test()?;
+    let _ = app.take_pending_request();
+
+    let content = std::fs::read_to_string(vault_path.join("root.md"))?;
+    assert!(
+        content.contains("- [ ] Write the tests"),
+        "expected the new top-level task on disk, got: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_tab_a_s_creates_subtask() -> Result<()> {
+    let (_dir, vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // `a` → `s` creates a subtask under the focused task.
+    app.dispatch(key('a'))?;
+    app.dispatch(key('s'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("new task"),
+        "a→s should open the create popup:\n{frame}"
+    );
+    for c in "Reproduce the bug".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.service_request_for_test()?;
+    let _ = app.take_pending_request();
+
+    let content = std::fs::read_to_string(vault_path.join("root.md"))?;
+    // The subtask lands indented directly beneath its parent (line 1).
+    assert!(
+        content.contains("  - [ ] Reproduce the bug"),
+        "expected the new subtask indented under its parent, got: {content}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_tab_a_s_on_non_task_toasts() -> Result<()> {
+    let (_dir, _vault_path, mut app) = graph_tab_with_focused_task("- [ ] Fix login bug 🆔 t1\n");
+    // Move up to the note row (not a task), then `a` → `s` should refuse.
+    app.dispatch(key('k'))?;
+    app.dispatch(key('a'))?;
+    app.dispatch(key('s'))?;
+    app.service_pending_for_test()?; // flush the toast request
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("new task"),
+        "a→s on a non-task row must not open the create popup:\n{frame}"
+    );
+    assert!(
+        frame.contains("select a task first"),
+        "a→s on a non-task row should toast:\n{frame}"
     );
     Ok(())
 }

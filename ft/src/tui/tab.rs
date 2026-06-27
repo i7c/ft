@@ -287,10 +287,14 @@ pub enum AppRequest {
         line: usize,
         fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
     },
-    /// Open a task-create quickline seeded from the focused row
-    /// (graph-task-edit-modal §4).
-    GraphTaskCreate {
-        kind: crate::tui::tabs::graph::TaskCreateKind,
+    /// Create a new task from the Graph-tab `TaskCreate` popup via
+    /// `ops::create_task` (graph-task-edit-modal §4). `target` is the raw
+    /// target-field text (`Path` or `Path#heading`); `subtask_parent`, when
+    /// set, nests the new task under that `(file, line)`.
+    GraphTaskCommitCreate {
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+        target: String,
+        subtask_parent: Option<(PathBuf, usize)>,
     },
 }
 
@@ -424,9 +428,14 @@ impl std::fmt::Debug for AppRequest {
                 .field("path", path)
                 .field("line", line)
                 .finish_non_exhaustive(),
-            AppRequest::GraphTaskCreate { kind } => f
-                .debug_struct("GraphTaskCreate")
-                .field("kind", kind)
+            AppRequest::GraphTaskCommitCreate {
+                target,
+                subtask_parent,
+                ..
+            } => f
+                .debug_struct("GraphTaskCommitCreate")
+                .field("target", target)
+                .field("subtask_parent", subtask_parent)
                 .finish_non_exhaustive(),
         }
     }
@@ -732,11 +741,17 @@ pub trait Tab {
     ) {
     }
 
-    /// Hook for the task-create leader (see [`AppRequest::GraphTaskCreate`]).
-    /// The Graph tab overrides this to open a quickline seeded with the
-    /// focused note's path (top-level) or the focused task's parent
-    /// (subtask).
-    fn graph_task_create(&mut self, _ctx: &TabCtx, _kind: crate::tui::tabs::graph::TaskCreateKind) {
+    /// Hook for the task-create popup commit (see
+    /// [`AppRequest::GraphTaskCommitCreate`]). The Graph tab overrides this
+    /// to resolve the target file/position, write via `ops::create_task`,
+    /// refresh the graph, and land the cursor on the new task.
+    fn graph_task_commit_create(
+        &mut self,
+        _ctx: &TabCtx,
+        _fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+        _target: String,
+        _subtask_parent: Option<(PathBuf, usize)>,
+    ) {
     }
 
     /// Test-only probe: does the currently-selected row represent a

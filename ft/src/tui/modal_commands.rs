@@ -492,6 +492,21 @@ pub static TASK_EDIT_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Esc", "task-edit.cancel")
 });
 
+// ── Task create popup (graph-task-edit-modal §4) ───────────────────
+
+const TASK_CREATE_SCOPE: CommandScope = CommandScope::Modal("task-create");
+
+pub static TASK_CREATE_COMMANDS: &[CommandDef] = &[
+    confirm_def("task-create.confirm", TASK_CREATE_SCOPE),
+    cancel_def("task-create.cancel", TASK_CREATE_SCOPE),
+];
+
+pub static TASK_CREATE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Ctrl+s", "task-create.confirm")
+        .bind("Esc", "task-create.cancel")
+});
+
 // ── Task create leader (graph-task-edit-modal §4) ──────────────────
 
 const TASK_LEADER_SCOPE: CommandScope = CommandScope::Modal("task-leader");

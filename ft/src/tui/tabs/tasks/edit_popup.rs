@@ -18,9 +18,12 @@ use ratatui::{
     Frame,
 };
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
 use crate::tui::{
     palette,
-    widgets::{horizontal_scroll, EditBuffer, FuzzyPicker, VaultFilePickerSource},
+    tab::{EventOutcome, TabCtx},
+    widgets::{horizontal_scroll, EditBuffer, FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
 /// The popup's editable form. Holds one `EditBuffer` per field plus a
@@ -451,4 +454,56 @@ pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
         ])
         .split(popup_layout[1]);
     popup_area[1]
+}
+
+// ── Target file picker (New mode) ──────────────────────────────────────
+// Shared by the Tasks-tab create popup and the Graph-tab `TaskCreate`
+// modal so both seed/route the `target` field's fuzzy picker identically.
+
+/// Open the fuzzy picker over the target field. Seeds the picker's
+/// input with `seed_char` when triggered by a keystroke, or with the
+/// field's current text when triggered by Enter — so a partial query
+/// the user already typed becomes the starting query.
+pub(crate) fn open_target_picker(popup: &mut EditPopup, ctx: &TabCtx, seed_char: Option<char>) {
+    let source = VaultFilePickerSource::new(
+        std::sync::Arc::clone(ctx.vault),
+        std::sync::Arc::clone(ctx.recents),
+    );
+    let mut picker = FuzzyPicker::new(source);
+    // Seed: either the keystroke that triggered the open, or the
+    // current field text. We send each char through `handle_key` so
+    // the picker's internal `refresh` runs and the result list
+    // populates immediately.
+    let seed: String = match seed_char {
+        Some(c) => c.to_string(),
+        None => popup.target.text.clone(),
+    };
+    for c in seed.chars() {
+        picker.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    popup.target_picker = Some(picker);
+}
+
+/// Route a key to the open picker; on Selected/Cancelled, close the
+/// picker and (for Selected) replace the target field's text with
+/// `path` or `path#heading text`.
+pub(crate) fn handle_target_picker_key(popup: &mut EditPopup, k: KeyEvent) -> EventOutcome {
+    let Some(picker) = popup.target_picker.as_mut() else {
+        return EventOutcome::Consumed;
+    };
+    match picker.handle_key(k) {
+        PickerOutcome::Selected(hit) => {
+            let text = match &hit.heading {
+                Some(h) => format!("{}#{}", hit.path.display(), h.text),
+                None => hit.path.display().to_string(),
+            };
+            popup.target = EditBuffer::from(&text);
+            popup.target_picker = None;
+        }
+        PickerOutcome::Cancelled => {
+            popup.target_picker = None;
+        }
+        PickerOutcome::StillOpen | PickerOutcome::NotHandled => {}
+    }
+    EventOutcome::Consumed
 }

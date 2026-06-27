@@ -2,12 +2,13 @@
 
 ## ADDED Requirements
 
-### Requirement: `TaskEdit` and `TaskLeader` active-modal variants
+### Requirement: `TaskEdit`, `TaskLeader`, and `TaskCreate` active-modal variants
 
-The `ActiveModal` enum SHALL include `TaskEdit(TaskEditState)` and
-`TaskLeader` variants. Each SHALL implement the `Modal` trait and be
-wired into the `ActiveModal` dispatch (`handle_event`/`render`/
-`keymap_help`/`name`/`commands`/`keymap`/`dispatch_command`).
+The `ActiveModal` enum SHALL include `TaskEdit(Box<TaskEditState>)`,
+`TaskLeader(Box<TaskLeader>)`, and `TaskCreate(Box<TaskCreateState>)`
+variants. Each SHALL implement the `Modal` trait and be wired into the
+`ActiveModal` dispatch (`handle_event`/`render`/`keymap_help`/`name`/
+`commands`/`keymap`/`dispatch_command`).
 
 #### Scenario: TaskEdit modal dispatch
 
@@ -16,8 +17,13 @@ wired into the `ActiveModal` dispatch (`handle_event`/`render`/
 
 #### Scenario: TaskLeader modal dispatch
 
-- **WHEN** `ActiveModal::TaskLeader` is the active modal
+- **WHEN** `ActiveModal::TaskLeader(s)` is the active modal
 - **THEN** `handle_event`/`render`/`name`/`commands`/`keymap` delegate to `TaskLeader`'s `Modal` impl, and `name()` returns `"task-leader"`
+
+#### Scenario: TaskCreate modal dispatch
+
+- **WHEN** `ActiveModal::TaskCreate(s)` is the active modal
+- **THEN** `handle_event`/`render`/`name`/`commands`/`keymap` delegate to `TaskCreateState`'s `Modal` impl, and `name()` returns `"task-create"`
 
 ### Requirement: `TaskEdit` commit routes through `AppRequest`
 
@@ -32,13 +38,28 @@ pattern used by `GraphCommitRename`, `GraphCreateSubdir`, etc.
 - **WHEN** the user commits the `TaskEdit` modal (Enter/Ctrl+S) with valid fields
 - **THEN** `AppRequest::GraphTaskEdit { path, line, fields }` is posted via `ctx.pending_request` and the modal closes
 
-### Requirement: `TaskLeader` routes create through `AppRequest`
+### Requirement: `TaskLeader` opens `TaskCreate`; create commit routes through `AppRequest`
 
-The `TaskLeader` modal's `c`/`s` SHALL post
-`AppRequest::GraphTaskCreate { kind }` rather than opening a quickline
-directly, so the Graph tab host owns the quickline seeding.
+The `TaskLeader` modal SHALL be seeded at open time with the focused
+row's note path and (when a Task is focused) its `(file, line)`. Its
+`c`/`s` SHALL swap to the `TaskCreate` modal via
+`ModalOutcome::OpenSibling` (so the popup opens in the same event pass,
+without an inter-frame `pending_request` hop). The `TaskCreate` modal's
+commit SHALL post `AppRequest::GraphTaskCommitCreate { fields, target,
+subtask_parent }` rather than mutating disk directly, so the Graph tab
+host resolves the target/position and applies via `ops::create_task`.
 
-#### Scenario: TaskLeader c posts GraphTaskCreate
+#### Scenario: TaskLeader c opens a seeded TaskCreate
 
 - **WHEN** the `TaskLeader` modal is active and the user presses `c`
-- **THEN** `AppRequest::GraphTaskCreate { kind: TopLevel { seed_path } }` is posted and the modal closes
+- **THEN** it returns `ModalOutcome::OpenSibling(TaskCreate)` with the popup's `target` field seeded from the focused note
+
+#### Scenario: TaskLeader s with no focused task toasts
+
+- **WHEN** the `TaskLeader` modal is active, no Task is focused, and the user presses `s`
+- **THEN** a "select a task first" toast is queued and the modal closes without opening `TaskCreate`
+
+#### Scenario: TaskCreate commit posts GraphTaskCommitCreate
+
+- **WHEN** the user commits the `TaskCreate` modal (Ctrl+S) with a non-empty description
+- **THEN** `AppRequest::GraphTaskCommitCreate { fields, target, subtask_parent }` is posted via `ctx.pending_request` and the modal closes

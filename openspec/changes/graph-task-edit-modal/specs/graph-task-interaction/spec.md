@@ -25,27 +25,35 @@ non-Task row `e` SHALL show an error toast.
 ### Requirement: Graph tab task create leader chord
 
 The Graph tab SHALL provide an `a` leader chord for creating tasks: `ac`
-creates a new top-level task (quickline seeded with the focused note's
-path), `as` creates a new subtask under the focused task. The leader is a
-transient `TaskLeader` modal; any key other than `c`/`s` (including `Esc`)
-cancels.
+creates a new top-level task (the shared `EditPopup` in New mode, with its
+`target` field seeded from the focused note's path), `as` creates a new
+subtask under the focused task. The leader is a transient `TaskLeader`
+modal seeded at open time with the focused row; `c`/`s` swap to the
+`TaskCreate` popup via `ModalOutcome::OpenSibling`; any other key
+(including `Esc`) cancels. On `Ctrl+S` the popup posts
+`AppRequest::GraphTaskCommitCreate`, serviced via `ops::create_task`.
 
 #### Scenario: ac creates a top-level task
 
 - **WHEN** the user presses `a` then `c`
-- **THEN** a quickline opens seeded with the focused note's path
-- **AND** on submit `ops::create_task` inserts the task and the graph refreshes
+- **THEN** the `TaskCreate` popup opens with its `target` field seeded from the focused note's path
+- **AND** on `Ctrl+S` `ops::create_task` inserts the task and the graph refreshes
 
 #### Scenario: as creates a subtask under the focused task
 
 - **WHEN** the focused row is a `NodeKind::Task` and the user presses `a` then `s`
-- **THEN** a quickline opens with the parent set to the focused task's `(source_file, source_line)`
-- **AND** on submit `ops::create_task` inserts the subtask nested under the parent
+- **THEN** the `TaskCreate` popup opens with its subtask parent set to the focused task's `(source_file, source_line)`
+- **AND** on `Ctrl+S` `ops::create_task` inserts the subtask nested under the parent
+
+#### Scenario: as on a non-Task row toasts
+
+- **WHEN** the focused row is not a `NodeKind::Task` and the user presses `a` then `s`
+- **THEN** a "select a task first" toast is shown and no popup opens
 
 #### Scenario: a leader cancels on other key
 
 - **WHEN** the `a` leader is active and the user presses a key other than `c` or `s` (including `Esc`)
-- **THEN** the leader cancels and no quickline opens
+- **THEN** the leader cancels and no popup opens
 
 ### Requirement: Graph tab note-scoped task view
 

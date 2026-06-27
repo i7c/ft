@@ -21,11 +21,11 @@
 
 ## 4. `TaskLeader` chord + create (ft TUI)
 
-- [x] 4.1 Add `ActiveModal::TaskLeader` variant + `struct TaskLeader;` to `modal.rs`; implement `Modal` mirroring `PeriodicLeader` (`c`→`GraphTaskCreate{TopLevel}`, `s`→`GraphTaskCreate{Subtask{...}}`, any other→Closed).
-- [x] 4.2 Add `AppRequest::GraphTaskCreate { kind: TaskCreateKind }` where `TaskCreateKind` is `TopLevel { seed_path: Option<PathBuf> }` | `Subtask { parent_file: PathBuf, parent_line: usize }` to `tab.rs`.
-- [x] 4.3 Add `Tab::graph_task_create(&mut self, ctx, kind)` default no-op; service `GraphTaskCreate` in App. **v1 delegates to the Tasks tab** (toast directing the user there); a full in-graph create quickline is a follow-up — the leader + request plumbing are in place for it.
-- [x] 4.4 In `graph.rs`, add `graph.task-create`/`graph.task-new-subtask` CommandDefs + `a`→`graph.task-leader` binding + dispatch arm opening `TaskLeader`.
-- [x] 4.5 `as` on a non-Task row toasts "select a task first" (the leader posts an empty parent; `graph_task_create` resolves the focused task or toasts).
+- [x] 4.1 Add `ActiveModal::TaskLeader(Box<TaskLeader>)` + `ActiveModal::TaskCreate(Box<TaskCreateState>)` variants to `modal.rs`; `struct TaskLeader { seed_note, focused_task }` mirrors `PeriodicLeader` but `c`/`s`→`OpenSibling(TaskCreate)` (seeded), any other→Closed. `TaskCreateState` wraps the shared `EditPopup` (New mode) + optional subtask parent.
+- [x] 4.2 Add `AppRequest::GraphTaskCommitCreate { fields: PopupFields, target: String, subtask_parent: Option<(PathBuf, usize)> }` to `tab.rs` (posted by the `TaskCreate` popup on `Ctrl+S`).
+- [x] 4.3 Add a `TaskCreate` modal (shared `EditPopup` in New mode + optional subtask parent). The seeded `TaskLeader` opens it directly via `ModalOutcome::OpenSibling` (no inter-frame request hop): `c` → top-level seeded with the focused note's path; `s` → subtask under the focused task. On `Ctrl+S` it posts `AppRequest::GraphTaskCommitCreate`; `Tab::graph_task_commit_create` on the Graph tab resolves the target/position and writes via `ops::create_task`, then refreshes + restores the cursor.
+- [x] 4.4 In `graph.rs`, add `graph.task-create`/`graph.task-new-subtask` CommandDefs + `a`→`graph.task-leader` binding + dispatch arm seeding + opening `TaskLeader`.
+- [x] 4.5 `as` on a non-Task row toasts "select a task first" (the leader is seeded with the focused task at open time; `s` with no focused task toasts and closes).
 
 ## 5. `v` note-scoped task view (ft TUI)
 
@@ -41,5 +41,5 @@
 
 ## 7. Tests + build invariants
 
-- [x] 7.1 TUI snapshot/unit tests: `e` opens edit popup on a Task row and commit updates the task on disk; `ac` opens a quickline seeded with the focused note's path; `as` under a task seeds the parent; `v` on a note rewrites the view to its tasks.
+- [x] 7.1 TUI snapshot/unit tests: `e` opens edit popup on a Task row and commit updates the task on disk; `ac` opens the create popup (target seeded from the focused note) and `Ctrl+S` writes the new task to disk; `as` under a task writes an indented subtask; `as` on a non-task row toasts; `v` on a note rewrites the view to its tasks.
 - [x] 7.2 `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `commands docs --check`.

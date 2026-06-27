@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use ft_core::periodic::Period;
 use ft_core::search::Hit;
-use ft_core::task::ops::{self, CompleteOptions};
+use ft_core::task::ops::{self, CompleteOptions, CreateInput, CreateOptions, Position};
 use ft_core::task::{Priority, Status};
 
 use crate::tui::{
@@ -62,27 +62,12 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::notes::view as notes_view,
+    tabs::tasks::edit_popup::EditPopup,
     widgets::{
         render_inline_input, render_scroll_list, CursorMode, EditBuffer, FuzzyPicker, InlineInput,
         PickerOutcome, ScrollListOpts, VaultFilePickerSource,
     },
 };
-
-// ── Task create leader payload (graph-task-edit-modal §4) ─────────────
-
-/// What the `a` task-create leader is asking for. `TopLevel` seeds a new
-/// task in the focused note's path (or the default); `Subtask` nests under
-/// the focused task.
-#[derive(Debug, Clone)]
-pub enum TaskCreateKind {
-    TopLevel {
-        seed_path: Option<PathBuf>,
-    },
-    Subtask {
-        parent_file: PathBuf,
-        parent_line: usize,
-    },
-}
 
 // ── Preset picker source ──────────────────────────────────────────────
 
@@ -1436,9 +1421,37 @@ impl TaskEditState {
 // ── TaskLeader modal (graph-task-edit-modal §4) ───────────────────────
 
 /// Two-key leader (`a` then `c`/`s`) for creating tasks from the Graph
-/// tab. Mirrors `PeriodicLeader`: any key closes it; `c`/`s` post a
-/// `GraphTaskCreate` request.
-pub struct TaskLeader;
+/// tab. Seeded at open time with the focused row's note path and (if a
+/// Task is focused) its `(file, line)` so `c`/`s` can open the create
+/// popup with the right target/parent. Mirrors `PeriodicLeader`: any
+/// other key closes it.
+pub struct TaskLeader {
+    /// Note path to seed the new task's `target` field with (the focused
+    /// Note, or a focused Task's source note). `None` falls back to the
+    /// daily note at commit time.
+    pub seed_note: Option<PathBuf>,
+    /// The focused Task's `(source_file, source_line)`, used as the parent
+    /// when creating a subtask. `None` → `s` toasts "select a task first".
+    pub focused_task: Option<(PathBuf, usize)>,
+}
+
+impl TaskLeader {
+    /// Build the seeded create popup the leader hands off to. Top-level
+    /// seeds the `target` field from `seed_note`; subtask leaves it blank
+    /// (the parent's file wins on commit).
+    fn create_modal(&self, subtask_parent: Option<(PathBuf, usize)>) -> ActiveModal {
+        let mut popup = EditPopup::new_blank();
+        if subtask_parent.is_none() {
+            if let Some(p) = &self.seed_note {
+                popup.target = EditBuffer::from(&p.display().to_string());
+            }
+        }
+        ActiveModal::TaskCreate(Box::new(TaskCreateState {
+            popup,
+            subtask_parent,
+        }))
+    }
+}
 
 impl Modal for TaskLeader {
     fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
@@ -1446,26 +1459,16 @@ impl Modal for TaskLeader {
             return ModalOutcome::NotHandled;
         };
         match k.code {
-            KeyCode::Char('c') => {
-                // Top-level: seeded by the host from the focused note.
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCreate {
-                    kind: TaskCreateKind::TopLevel { seed_path: None },
-                });
-                ModalOutcome::Closed
-            }
-            KeyCode::Char('s') => {
-                // Subtask: the host resolves the focused task's parent
-                // (posted back via the request). For the modal's part we
-                // signal Subtask with no seed; the Graph tab override
-                // re-posts with the real parent if a task is focused.
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCreate {
-                    kind: TaskCreateKind::Subtask {
-                        parent_file: PathBuf::new(),
-                        parent_line: 0,
-                    },
-                });
-                ModalOutcome::Closed
-            }
+            KeyCode::Char('c') => ModalOutcome::OpenSibling(Box::new(self.create_modal(None))),
+            KeyCode::Char('s') => match self.focused_task.clone() {
+                Some(parent) => {
+                    ModalOutcome::OpenSibling(Box::new(self.create_modal(Some(parent))))
+                }
+                None => {
+                    queue_toast(ctx, "select a task first", ToastStyle::Error);
+                    ModalOutcome::Closed
+                }
+            },
             _ => ModalOutcome::Closed,
         }
     }
@@ -1502,6 +1505,160 @@ impl Modal for TaskLeader {
 
     fn keymap(&self) -> &KeyMap {
         &mc::TASK_LEADER_KEYMAP
+    }
+}
+
+// ── TaskCreate modal (graph-task-edit-modal §4) ───────────────────────
+
+/// Full-form task *create* popup hosted on the Graph tab. Wraps the
+/// shared [`EditPopup`] in New mode plus an optional subtask parent.
+/// Render + validation reuse the Tasks-tab helpers; on `Ctrl+S` it posts
+/// `AppRequest::GraphTaskCommitCreate`, which the Graph tab services via
+/// `ops::create_task`. `Enter` on the `target` field opens the file
+/// picker (matching the Tasks-tab create flow), so only `Ctrl+S` submits.
+pub struct TaskCreateState {
+    pub popup: EditPopup,
+    pub subtask_parent: Option<(PathBuf, usize)>,
+}
+
+impl Modal for TaskCreateState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        use crate::tui::tabs::tasks::edit_popup::{
+            handle_target_picker_key, open_target_picker, EditField,
+        };
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+
+        // While the target picker is open every key routes to it.
+        if self.popup.target_picker.is_some() {
+            handle_target_picker_key(&mut self.popup, k);
+            return ModalOutcome::Consumed;
+        }
+
+        // Ctrl+S submits regardless of focused field.
+        if k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.commit(ctx);
+        }
+
+        // On the target field, Enter or a printable char opens the file
+        // picker (seeded with that keystroke) — never inserts inline.
+        if self.popup.focus == EditField::Target {
+            match (k.code, k.modifiers) {
+                (KeyCode::Enter, _) => {
+                    open_target_picker(&mut self.popup, ctx, None);
+                    return ModalOutcome::Consumed;
+                }
+                (KeyCode::Char(c), m)
+                    if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+                {
+                    open_target_picker(&mut self.popup, ctx, Some(c));
+                    return ModalOutcome::Consumed;
+                }
+                _ => {}
+            }
+        }
+
+        match k.code {
+            KeyCode::Esc => ModalOutcome::Closed,
+            KeyCode::Tab | KeyCode::Down => {
+                self.popup.focus = self.popup.next_field();
+                ModalOutcome::Consumed
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.popup.focus = self.popup.prev_field();
+                ModalOutcome::Consumed
+            }
+            _ => {
+                let _ = self.popup.focused_buffer_mut().handle_event(k);
+                ModalOutcome::Consumed
+            }
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        crate::tui::tabs::tasks::edit_popup::render_edit_popup(frame, area, &mut self.popup);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Create task",
+            &[
+                ("Tab / Shift+Tab", "next / prev field"),
+                ("Enter", "pick target file (on target field)"),
+                ("Ctrl+S", "create"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-create"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_CREATE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_CREATE_KEYMAP
+    }
+
+    fn dispatch_command(&mut self, _cmd: &Command, _ctx: &TabCtx) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
+}
+
+impl TaskCreateState {
+    /// Validate the popup fields and post `GraphTaskCommitCreate`. Mirrors
+    /// the Tasks-tab `submit_popup` validation; disk resolution (target /
+    /// duplicate) happens in the Graph-tab servicing hook and surfaces as
+    /// a toast on error.
+    fn commit(&mut self, ctx: &TabCtx) -> ModalOutcome {
+        use crate::tui::tabs::tasks::edit_popup::{
+            merge_tags_into_description, parse_optional_date, parse_priority, parse_tags_field,
+            EditField,
+        };
+        let due = match parse_optional_date(&self.popup.due.text, ctx.today) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(format!("due: {e}"));
+                self.popup.focus = EditField::Due;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let scheduled = match parse_optional_date(&self.popup.scheduled.text, ctx.today) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(format!("scheduled: {e}"));
+                self.popup.focus = EditField::Scheduled;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let priority = match parse_priority(&self.popup.priority.text) {
+            Ok(v) => v,
+            Err(e) => {
+                self.popup.error = Some(e);
+                self.popup.focus = EditField::Priority;
+                return ModalOutcome::Consumed;
+            }
+        };
+        let recurrence = self.popup.recurrence.text.trim();
+        let recurrence = (!recurrence.is_empty()).then(|| recurrence.to_string());
+        let raw_description = self.popup.description.text.trim().to_string();
+        let tags = parse_tags_field(&self.popup.tags.text);
+        let description = merge_tags_into_description(&raw_description, &tags);
+        if description.is_empty() {
+            self.popup.error = Some("description is empty".into());
+            self.popup.focus = EditField::Description;
+            return ModalOutcome::Consumed;
+        }
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCommitCreate {
+            fields: (description, due, scheduled, priority, tags, recurrence),
+            target: self.popup.target.text.trim().to_string(),
+            subtask_parent: self.subtask_parent.clone(),
+        });
+        ModalOutcome::Closed
     }
 }
 
@@ -3120,6 +3277,21 @@ impl GraphTab {
         }
     }
 
+    /// The note path to seed a new top-level task's `target` field from the
+    /// focused row: a Note's own path, or a Task's source note. A Directory
+    /// (no concrete file) yields `None`, so the create popup falls back to
+    /// the daily note.
+    fn focused_seed_note(&self) -> Option<PathBuf> {
+        let graph = self.graph.as_ref()?;
+        let v = self.active_view();
+        let row = v.tree.rows().get(v.selected)?;
+        match graph.node(row.note_id) {
+            NodeKind::Note(n) => Some(n.path.clone()),
+            NodeKind::Task(t) => Some(t.source_file.clone()),
+            _ => None,
+        }
+    }
+
     /// Build an `EditPopup` pre-populated from the focused Task, plus
     /// its `(path, line)` anchor, for the `graph.task-edit-popup` command
     /// (graph-task-edit-modal §2.5).
@@ -3466,41 +3638,99 @@ impl Tab for GraphTab {
         }
     }
 
-    /// Service `AppRequest::GraphTaskCreate`: open the shared `EditPopup`
-    /// in New mode, seeded for a top-level task or a subtask
-    /// (graph-task-edit-modal §4.3).
-    fn graph_task_create(&mut self, ctx: &TabCtx, kind: TaskCreateKind) {
-        let (seed_path, parent) = match kind {
-            TaskCreateKind::TopLevel { seed_path } => (seed_path.unwrap_or_default(), None),
-            TaskCreateKind::Subtask {
-                parent_file,
-                parent_line,
-            } => {
-                let (file, line) = if parent_line == 0 {
-                    match self.focused_task_anchor() {
-                        Some(a) => a,
-                        None => {
-                            queue_toast(ctx, "select a task first", ToastStyle::Error);
+    /// Service `AppRequest::GraphTaskCommitCreate`: resolve the target
+    /// file + insertion position, write the new task via `ops::create_task`,
+    /// then refresh the graph and land the cursor on it. Mirrors the
+    /// Tasks-tab `submit_popup_new` (graph-task-edit-modal §4.3).
+    fn graph_task_commit_create(
+        &mut self,
+        ctx: &TabCtx,
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+        target: String,
+        subtask_parent: Option<(PathBuf, usize)>,
+    ) {
+        let (description, due, scheduled, priority, tags, recurrence) = fields;
+
+        // Resolve target file + position. A subtask's parent file and
+        // indentation win over the (blank) target field.
+        let (resolved, position) = match &subtask_parent {
+            Some((pfile, pline)) => (
+                ctx.vault.path.join(pfile),
+                Position::Subtask {
+                    parent_line: *pline,
+                },
+            ),
+            None => {
+                // `target` may be `Path` or `Path#heading text`.
+                let (target_path, heading): (Option<PathBuf>, Option<String>) = if target.is_empty()
+                {
+                    (None, None)
+                } else {
+                    let q = ft_core::search::Query::parse(&target);
+                    let path = (!q.file_part.is_empty()).then(|| PathBuf::from(&q.file_part));
+                    (path, q.heading_part)
+                };
+                let (today_n, now_n) = ft_core::dates::now_pair();
+                let resolved =
+                    match ctx
+                        .vault
+                        .ensure_target(ctx.today, target_path.as_deref(), today_n, now_n)
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            queue_toast(ctx, &format!("create failed: {e}"), ToastStyle::Error);
                             return;
                         }
-                    }
-                } else {
-                    (parent_file, parent_line)
+                    };
+                let position = match heading {
+                    Some(h) => Position::UnderHeading(h),
+                    None => ops::auto_position(
+                        &resolved,
+                        ctx.vault.config.config.tasks.default_section.as_deref(),
+                    ),
                 };
-                (file.clone(), Some((file, line)))
+                (resolved, position)
             }
         };
-        let _ = seed_path;
-        let _ = parent;
-        // For v1, delegate task creation to the Tasks tab (which owns the
-        // quickline + create flow) by switching to it with a toast. A full
-        // Graph-tab create popup is a follow-up; the leader still lands the
-        // user in the right place.
-        queue_toast(
-            ctx,
-            "switch to Tasks tab (2) to create the task",
-            ToastStyle::Info,
-        );
+
+        let input = CreateInput {
+            description,
+            status: Status::Open,
+            priority,
+            scheduled,
+            due,
+            tags,
+            recurrence,
+            ..Default::default()
+        };
+
+        match ops::create_task(
+            &resolved,
+            input,
+            CreateOptions {
+                position,
+                force: false,
+            },
+        ) {
+            Ok(outcome) => {
+                let rel = ctx.vault.relativize(&resolved).to_path_buf();
+                let scan = ctx.vault.scan();
+                if let Ok(g) = Graph::build(ctx.vault, &scan) {
+                    self.graph = Some(g);
+                    self.restore_all_views();
+                    // Lands on the new task when it's already visible (a
+                    // top-level task in an expanded note, say); a subtask of
+                    // a collapsed parent stays hidden until the user expands.
+                    self.restore_task_cursor(&(rel.clone(), outcome.line));
+                }
+                queue_toast(
+                    ctx,
+                    &format!("created {}:{}", rel.display(), outcome.line),
+                    ToastStyle::Success,
+                );
+            }
+            Err(e) => queue_toast(ctx, &format!("create failed: {e}"), ToastStyle::Error),
+        }
     }
 
     fn commands(&self) -> &'static [CommandDef] {
@@ -3856,14 +4086,19 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.task-leader" => {
-                *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::OpenModal(Box::new(ActiveModal::TaskLeader)));
+                let leader = TaskLeader {
+                    seed_note: self.focused_seed_note(),
+                    focused_task: self.focused_task_anchor(),
+                };
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::TaskLeader(Box::new(leader)),
+                )));
                 CommandOutcome::Handled
             }
             "graph.task-create" | "graph.task-new-subtask" => {
-                // These are posted by the TaskLeader modal as
-                // AppRequest::GraphTaskCreate; the tab-level command is a
-                // no-op so `ft commands list` / docs surface them.
+                // The leader modal (`a`) opens the create popup directly via
+                // `ModalOutcome::OpenSibling`; these tab-level commands are
+                // no-ops so `ft commands list` / docs still surface them.
                 CommandOutcome::Handled
             }
             "graph.tasks-of-note" => {

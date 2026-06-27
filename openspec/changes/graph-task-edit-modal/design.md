@@ -24,7 +24,8 @@ commit.
 - `e` opens the shared `EditPopup` on a focused Graph-tab Task row; commit
   applies fields via `ops::update_task_line` and refreshes.
 - `a` leader: `ac` creates a top-level task, `as` a subtask under the
-  focused task, via a quickline seeded with the right target/parent.
+  focused task, via the shared `EditPopup` (New mode) seeded with the
+  right target/parent.
 - `v` on a Note/Directory row rewrites the active view to that note's
   task subtree (deduped by construction via the `HasTask`→top-level model).
 - Reuse the Tasks-tab popup render + validation verbatim (no duplication).
@@ -70,12 +71,19 @@ it via `ops::update_task_line` + `refresh` + `restore_task_cursor`.
 
 ### D3: `TaskLeader` mirrors `PeriodicLeader`
 
-`struct TaskLeader;` — `a` opens it; `handle_event` maps `c`→`GraphTaskCreate
-{ kind: TopLevel }`, `s`→`GraphTaskCreate { kind: Subtask { parent_file,
-parent_line } }`; any other key (incl. `Esc`) closes without action. The
-Graph tab services `GraphTaskCreate` by opening a quickline seeded with
-the focused note's path (top-level) or the focused task's `(file, line)`
-(subtask). If no task is focused for `as`, it toasts.
+`struct TaskLeader { seed_note, focused_task }` — the `graph.task-leader`
+dispatch resolves both from the focused row and seeds the leader at open
+time. `handle_event` maps `c`→`OpenSibling(TaskCreate)` seeded with
+`seed_note`, `s`→`OpenSibling(TaskCreate)` nested under `focused_task`;
+any other key (incl. `Esc`) closes without action. `OpenSibling` swaps the
+modal in the same `handle_event` pass, so the create popup appears without
+the inter-frame delay a `pending_request`→hook→`OpenModal` hop would incur
+(the run loop services one request per iteration). The `TaskCreate` modal
+is the shared `EditPopup` in New mode; on `Ctrl+S` it posts
+`AppRequest::GraphTaskCommitCreate { fields, target, subtask_parent }`,
+serviced by `GraphTab::graph_task_commit_create` →
+`vault.ensure_target` + `ops::auto_position` + `ops::create_task`. If no
+task is focused for `as`, the leader toasts "select a task first".
 
 ### D4: `v` rewrites the active view's query
 
