@@ -3,7 +3,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Tabs,
+    },
     Frame,
 };
 
@@ -264,12 +266,13 @@ pub fn render_help_overlay(
     tab_title: &str,
     global: &HelpSection,
     tab_sections: &[HelpSection],
+    scroll: &mut usize,
+    view_height_out: &mut u16,
 ) {
-    // Widened to 75% (was 60% pre-plan-022) so the key + description
-    // columns survive on a standard 80-col terminal once section headers
-    // and grouped Tasks/Graph bindings are stacked. 95% height handles
-    // tabs with long binding lists; sections render top-to-bottom without
-    // scrolling so the popup needs the room.
+    // 75% width keeps the key + description columns readable on an
+    // 80-col terminal; 95% height gives the popup room, and the
+    // scroll + scrollbar below handle the case where the composed
+    // lines still overflow (e.g. the Graph tab's ~35 bindings).
     let popup = centered_rect(75, 95, area);
     frame.render_widget(Clear, popup);
 
@@ -318,7 +321,7 @@ pub fn render_help_overlay(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  press ? or Esc to close",
+        "  ↑/↓ or j/k scroll · PgUp/PgDn · g/G · ?/Esc/q close",
         Style::default()
             .fg(palette::DIM)
             .add_modifier(Modifier::ITALIC),
@@ -328,8 +331,51 @@ pub fn render_help_overlay(
         .borders(Borders::ALL)
         .title(" help ")
         .style(Style::default().bg(palette::BLACK));
-    let para = Paragraph::new(lines).block(block);
-    frame.render_widget(para, popup);
+    frame.render_widget(block, popup);
+    let inner = {
+        let b = Block::default().borders(Borders::ALL);
+        b.inner(popup)
+    };
+
+    // Clamp the scroll offset to the valid range for the current
+    // layout. `max_scroll` is 0 when the content fits, which also
+    // disables the scrollbar below.
+    let total = lines.len();
+    let max_scroll = total.saturating_sub(inner.height as usize);
+    *scroll = (*scroll).min(max_scroll);
+    *view_height_out = inner.height;
+
+    let overflows = total > inner.height as usize;
+    // Reserve the rightmost column for the scrollbar track on overflow
+    // so the thumb never paints over row text — mirrors
+    // `widgets::scroll_list`.
+    let text_area = if overflows {
+        Rect {
+            width: inner.width.saturating_sub(1),
+            ..inner
+        }
+    } else {
+        inner
+    };
+    let para = Paragraph::new(lines).scroll((*scroll as u16, 0));
+    frame.render_widget(para, text_area);
+
+    if overflows {
+        let scrollbar_area = Rect {
+            x: inner.x + inner.width.saturating_sub(1),
+            width: 1,
+            ..inner
+        };
+        let mut sb_state = ScrollbarState::new(total)
+            .viewport_content_length(inner.height as usize)
+            .position(*scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .thumb_style(Style::default().fg(palette::PRIMARY))
+            .track_style(Style::default().fg(palette::DIM));
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut sb_state);
+    }
 }
 
 /// Small overlay showing the second-key choices for the `g` leader.

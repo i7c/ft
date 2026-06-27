@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 3146
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
-┌ notes ──│Keybindings — Notes                                       │─────────┐
-│         │                                                          │         │
-│  Notes —│  Global                                                  │         │
-│         │  q / Ctrl+c  Quit the TUI                                │         │
-│  o     o│  ?           Open the keymap help overlay                │         │
-│  m     m│  g           Enter the git-sync leader (then `s` to sync)│         │
-│  r     r│  Tab         Switch to the next tab                      │         │
-│  c     c│  BackTab     Switch to the previous tab                  │         │
-│  C     c│  1..9        Switch to the tab at the given 0-based index│         │
-│  t     o│                                                          │         │
-│  p     p│  Notes                                                   │         │
-│  ?     s│  o           Open the fuzzy file / heading picker to open│         │
-│  Esc   c│  m           Enter the move-section flow                 │         │
-│         │  r           Reslice a synth note's protected section (gr│         │
-│         │  c           Create a new note (blank)                   │         │
-│         │  a           Append a template to a note                 │         │
-│         │  Shift+q     Quick capture (run a preset)                │         │
-│         │  Shift+c     Create a new note from a template           │         │
-│         │                                                          │         │
-│         │  Periodic notes                                          │         │
-│         │  t           Open today's daily note                     │         │
+┌ notes ──│Keybindings — Notes                                      █│─────────┐
+│         │                                                         █│         │
+│  Notes —│  Global                                                 █│         │
+│         │  q / Ctrl+c  Quit the TUI                               █│         │
+│  o     o│  ?           Open the keymap help overlay               █│         │
+│  m     m│  g           Enter the git-sync leader (then `s` to sync█│         │
+│  r     r│  Tab         Switch to the next tab                     █│         │
+│  c     c│  BackTab     Switch to the previous tab                 █│         │
+│  C     c│  1..9        Switch to the tab at the given 0-based inde█│         │
+│  t     o│                                                         █│         │
+│  p     p│  Notes                                                  ║│         │
+│  ?     s│  o           Open the fuzzy file / heading picker to ope║│         │
+│  Esc   c│  m           Enter the move-section flow                ║│         │
+│         │  r           Reslice a synth note's protected section (g║│         │
+│         │  c           Create a new note (blank)                  ║│         │
+│         │  a           Append a template to a note                ║│         │
+│         │  Shift+q     Quick capture (run a preset)               ║│         │
+│         │  Shift+c     Create a new note from a template          ║│         │
+│         │                                                         ║│         │
+│         │  Periodic notes                                         ║│         │
+│         │  t           Open today's daily note                    ║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Notes           not yet refreshed        mode: help

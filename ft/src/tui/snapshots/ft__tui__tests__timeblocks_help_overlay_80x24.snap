@@ -1,29 +1,28 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 2922
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
-┌ sidebar │Keybindings — Timeblocks                                  │─────────┐
-│         │                                                          │         │
-│ Sun 10 M│  Global                                                  │         │
-│ 14:32:05│  q / Ctrl+c  Quit the TUI                                │         │
-│         │  ?           Open the keymap help overlay                │         │
-│ ── total│  g           Enter the git-sync leader (then `s` to sync)│         │
-│ total 00│  Tab         Switch to the next tab                      │         │
-│         │  BackTab     Switch to the previous tab                  │         │
-│ ── focus│  1..9        Switch to the tab at the given 0-based index│         │
-│ ▶ 2026-0│                                                          │         │
-│ view: si│  Navigation                                              │         │
-│         │  ↑ / k       Move the cursor up one block                │         │
-│         │  ↓ / j       Move the cursor down one block              │         │
-│         │  g           Jump to the first block                     │         │
-│         │  Shift+g     Jump to the last block                      │         │
-│         │  ← / h       Toggle focus to the previous pane (Split) / │         │
-│         │  → / l       Toggle focus to the next pane (Split) / next│         │
-│         │  f           Toggle between Split and Single view        │         │
-│         │  Shift+h     Slide the anchor day back by one day        │         │
-│         │  Shift+l     Slide the anchor day forward by one day     │         │
-│         │  Shift+t     Jump the anchor day to today                │         │
+┌ sidebar │Keybindings — Timeblocks                                 █│─────────┐
+│         │                                                         █│         │
+│ Sun 10 M│  Global                                                 █│         │
+│ 14:32:05│  q / Ctrl+c  Quit the TUI                               █│         │
+│         │  ?           Open the keymap help overlay               █│         │
+│ ── total│  g           Enter the git-sync leader (then `s` to sync█│         │
+│ total 00│  Tab         Switch to the next tab                     █│         │
+│         │  BackTab     Switch to the previous tab                 ║│         │
+│ ── focus│  1..9        Switch to the tab at the given 0-based inde║│         │
+│ ▶ 2026-0│                                                         ║│         │
+│ view: si│  Navigation                                             ║│         │
+│         │  ↑ / k       Move the cursor up one block               ║│         │
+│         │  ↓ / j       Move the cursor down one block             ║│         │
+│         │  g           Jump to the first block                    ║│         │
+│         │  Shift+g     Jump to the last block                     ║│         │
+│         │  ← / h       Toggle focus to the previous pane (Split) /║│         │
+│         │  → / l       Toggle focus to the next pane (Split) / nex║│         │
+│         │  f           Toggle between Split and Single view       ║│         │
+│         │  Shift+h     Slide the anchor day back by one day       ║│         │
+│         │  Shift+l     Slide the anchor day forward by one day    ║│         │
+│         │  Shift+t     Jump the anchor day to today               ║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Timeblocks      not yet refreshed        mode: help

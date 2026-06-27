@@ -3262,6 +3262,107 @@ fn timeblocks_tab_help_overlay_renders() -> Result<()> {
     Ok(())
 }
 
+// --- help overlay scrolling --------------------------------------------------
+//
+// `?` on the Graph tab overflows an 80×24 terminal, so it exercises the
+// scroll + scrollbar path. These tests assert the overlay actually
+// moves its viewport in response to the mode-local scroll keys and
+// clamps at the bounds, rather than silently clipping rows.
+
+fn key_event(code: KeyCode) -> Event {
+    Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+#[test]
+fn help_overlay_scrolls_on_graph_tab() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    // Graph is tab 0 (the default). Enter help; the content overflows
+    // 80×24 so a scrollbar is rendered.
+    app.enter_help();
+    let top = render(&mut app, 80, 24);
+    assert_tui_snapshot!("help_overlay_graph_scrolled_top_80x24", top);
+    // The scrollbar thumb is rendered on the right edge on overflow.
+    assert!(
+        top.contains('█'),
+        "scrollbar thumb should be visible on overflow"
+    );
+    // The header is visible at the top.
+    assert!(top.contains("Keybindings — Graph"));
+
+    // Scroll down several lines. The header should scroll out of view
+    // and rows that were previously clipped become visible.
+    for _ in 0..6 {
+        app.dispatch(key_event(KeyCode::Down))?;
+    }
+    let down = render(&mut app, 80, 24);
+    assert_tui_snapshot!("help_overlay_graph_scrolled_down_80x24", down);
+    // Header no longer visible after scrolling past it.
+    assert!(!down.contains("Keybindings — Graph"));
+    Ok(())
+}
+
+#[test]
+fn help_overlay_page_keys() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.enter_help();
+    let top = render(&mut app, 80, 24);
+
+    // PageDown advances by one viewport. The visible window must
+    // differ from the top frame.
+    app.dispatch(key_event(KeyCode::PageDown))?;
+    let paged = render(&mut app, 80, 24);
+    assert_ne!(top, paged, "PageDown should move the viewport");
+
+    // PageUp returns to the top.
+    app.dispatch(key_event(KeyCode::PageUp))?;
+    let back = render(&mut app, 80, 24);
+    assert_eq!(top, back, "PageUp should return to the top");
+    Ok(())
+}
+
+#[test]
+fn help_overlay_scroll_clamps_at_bottom() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.enter_help();
+    // `G` jumps to the end; the render clamp bounds the offset to
+    // `max_scroll` so no panic and the last row is visible.
+    app.dispatch(key_event(KeyCode::Char('G')))?;
+    let at_end = render(&mut app, 80, 24);
+    // The footer hint is the last line; at the bottom of the content it
+    // must be visible.
+    assert!(at_end.contains("?/Esc/q close"));
+
+    // Pressing `j` past the end must not advance further — the frame
+    // is stable (clamped).
+    app.dispatch(key_event(KeyCode::Char('j')))?;
+    let still_end = render(&mut app, 80, 24);
+    assert_eq!(at_end, still_end, "scroll should clamp at the bottom");
+    Ok(())
+}
+
+#[test]
+fn help_overlay_reopen_resets_scroll() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.enter_help();
+    let top = render(&mut app, 80, 24);
+
+    // Scroll down, close, reopen: the reopened overlay must show the
+    // top again (offset reset to 0 on entry).
+    for _ in 0..4 {
+        app.dispatch(key_event(KeyCode::Down))?;
+    }
+    let _scrolled = render(&mut app, 80, 24);
+    app.dispatch(key('?'))?; // close
+    app.enter_help();
+    let reopened = render(&mut app, 80, 24);
+    assert_eq!(top, reopened, "reopening should reset scroll to the top");
+    Ok(())
+}
+
 #[test]
 fn notes_tab_open_picker_renders_results() -> Result<()> {
     let (_dir, vault) = notes_vault();

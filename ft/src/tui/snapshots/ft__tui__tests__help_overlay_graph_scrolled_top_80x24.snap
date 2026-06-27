@@ -1,12 +1,12 @@
 ---
 source: ft/src/tui/tests.rs
-expression: frame
+expression: top
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
 >         │Keybindings — Graph                                      █│          
  1: (empty│                                                         █│          
 ┌ (empty) │  Global                                                 █│─────────┐
-│         │  Ctrl+c / x     Quit the TUI                            █│         │
+│         │  q / Ctrl+c     Quit the TUI                            █│         │
 │press / t│  ?              Open the keymap help overlay            █│         │
 │         │  g              Enter the git-sync leader (then `s` to s█│         │
 │         │  Tab            Switch to the next tab                  ║│         │
@@ -25,4 +25,4 @@ expression: frame
 │         │  Shift+r        Open the Related-section updater modal f║│         │
 │         │  Shift+j        Open the Journal tab for the selected no║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
- vault: keymap-vault  ·  tab: Graph         not yet refreshed        mode: help
+ vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

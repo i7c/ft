@@ -105,6 +105,16 @@ pub struct App {
     /// Set by `App::set_initial_action` before `run`; consumed on the
     /// first iteration of the event loop.
     initial_action: RefCell<Option<crate::tui::InitialAction>>,
+    /// Vertical scroll offset (lines) for the `?` help overlay. Reset
+    /// to 0 on entry; clamped each render against the live popup inner
+    /// height. `Cell` because `draw` is `&self` (same reason
+    /// `last_refresh` / `toast` are cells).
+    help_scroll: Cell<usize>,
+    /// Last-rendered inner height of the help overlay popup. Written
+    /// by `render_help_overlay` each frame so the page-step scroll
+    /// keys (`PageDown`/`PageUp`) advance by a real viewport size
+    /// instead of a guessed constant.
+    help_view_height: Cell<u16>,
     should_quit: bool,
 }
 
@@ -162,6 +172,8 @@ impl App {
             effective_global_keymap,
             per_modal_overlays,
             initial_action: RefCell::new(None),
+            help_scroll: Cell::new(0),
+            help_view_height: Cell::new(0),
             should_quit: false,
         }
     }
@@ -358,13 +370,19 @@ impl App {
                         ),
                     }
                 };
+                let mut scroll = self.help_scroll.get();
+                let mut view_height: u16 = 0;
                 ui::render_help_overlay(
                     frame,
                     frame.area(),
                     self.tabs[self.active].title(),
                     &global,
                     &sections,
+                    &mut scroll,
+                    &mut view_height,
                 );
+                self.help_scroll.set(scroll);
+                self.help_view_height.set(view_height);
             }
             Mode::GitLeader => ui::render_git_leader(frame, frame.area()),
             Mode::SyncConflict => {
@@ -385,14 +403,43 @@ impl App {
             return Ok(());
         }
 
-        // Help overlay swallows everything except its own dismiss keys.
+        // Help overlay: scroll keys move the offset (clamped per
+        // render in `render_help_overlay`); dismiss keys close it.
+        // These are mode-local verbs, not `CommandDef`s — same
+        // precedent as `GitLeader`/`SyncConflict`.
         if self.mode == Mode::Help {
             if let Event::Key(k) = ev {
-                if matches!(
-                    k.code,
-                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-                ) {
-                    self.mode = Mode::Normal;
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                        self.mode = Mode::Normal;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.help_scroll
+                            .set(self.help_scroll.get().saturating_add(1));
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.help_scroll
+                            .set(self.help_scroll.get().saturating_sub(1));
+                    }
+                    KeyCode::Char('g') => {
+                        self.help_scroll.set(0);
+                    }
+                    KeyCode::Char('G') => {
+                        // Past any real max; the renderer clamps to
+                        // `max_scroll` on the next frame.
+                        self.help_scroll.set(usize::MAX / 2);
+                    }
+                    KeyCode::PageDown | KeyCode::Char(' ') => {
+                        let step = self.help_view_height.get() as usize;
+                        self.help_scroll
+                            .set(self.help_scroll.get().saturating_add(step.max(1)));
+                    }
+                    KeyCode::PageUp | KeyCode::Char('b') => {
+                        let step = self.help_view_height.get() as usize;
+                        self.help_scroll
+                            .set(self.help_scroll.get().saturating_sub(step.max(1)));
+                    }
+                    _ => {}
                 }
             }
             return Ok(());
@@ -542,6 +589,7 @@ impl App {
                 }
             }
             "app.help" => {
+                self.help_scroll.set(0);
                 self.mode = Mode::Help;
             }
             "app.git-leader" => {
@@ -1406,6 +1454,7 @@ impl App {
     }
 
     pub fn enter_help(&mut self) {
+        self.help_scroll.set(0);
         self.mode = Mode::Help;
     }
 
