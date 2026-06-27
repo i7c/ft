@@ -8,7 +8,7 @@ expression: frame
 ┌ (empty) │  Global                                                 █│─────────┐
 │         │  q / Ctrl+c     Quit the TUI                            █│         │
 │press / t│  ?              Open the keymap help overlay            █│         │
-│         │  g              Enter the git-sync leader (then `s` to s█│         │
+│         │  g              Enter the git-sync leader (then `s` to s║│         │
 │         │  Tab            Switch to the next tab                  ║│         │
 │         │  BackTab        Switch to the previous tab              ║│         │
 │         │  1..9           Switch to the tab at the given 0-based i║│         │

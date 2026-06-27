@@ -4,12 +4,12 @@ expression: down
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
 >         │  Tab            Switch to the next tab                  ║│          
- 1: (empty│  BackTab        Switch to the previous tab              ║│          
+ 1: (empty│  BackTab        Switch to the previous tab              █│          
 ┌ (empty) │  1..9           Switch to the tab at the given 0-based i█│─────────┐
 │         │                                                         █│         │
 │press / t│  Views                                                  █│         │
 │         │  Ctrl+n         Add a new view (pick preset or blank)   █│         │
-│         │  Ctrl+p         Load a preset into the active view      █│         │
+│         │  Ctrl+p         Load a preset into the active view      ║│         │
 │         │  Ctrl+w         Close the active view                   ║│         │
 │         │  Ctrl+PageDown  Switch to the next view                 ║│         │
 │         │  Ctrl+PageUp    Switch to the previous view             ║│         │
