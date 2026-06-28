@@ -41,12 +41,21 @@ pub struct RelatedScore {
 /// already in the Related section) appear in the result with
 /// `already_in_related = true`.
 pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Vec<RelatedScore>> {
-    let note_path = match graph.node(note_id) {
-        NodeKind::Note(n) => n.path.clone(),
+    // Ghost targets have no backing file, so there is no Related
+    // section to read aliases from — mirror journal::build_journal's
+    // ghost handling (note_path = None, aliases = []). The
+    // co-occurrence walk below runs unchanged because ghosts can be
+    // the target of incoming ParagraphLink edges.
+    let note_path: Option<PathBuf> = match graph.node(note_id) {
+        NodeKind::Note(n) => Some(n.path.clone()),
+        NodeKind::Ghost(_) => None,
         _ => return Ok(Vec::new()),
     };
 
-    let alias_ids = resolve_related_aliases(graph, note_id, vault, &note_path)?;
+    let alias_ids = match &note_path {
+        Some(p) => resolve_related_aliases(graph, note_id, vault, p)?,
+        None => Vec::new(),
+    };
     let alias_set: HashSet<NoteId> = alias_ids.iter().copied().collect();
     let mut target_set: HashSet<NoteId> = HashSet::new();
     target_set.insert(note_id);
@@ -457,6 +466,63 @@ mod tests {
             .expect("Alias appears in results");
         assert!(alias.already_in_related);
         assert!(alias.score > 0);
+    }
+
+    // ── ghost targets ──────────────────────────────────────────────
+
+    #[test]
+    fn ghost_target_produces_scored_concepts() {
+        // Phantom is an unresolved link target (no Phantom.md). A
+        // paragraph links to both Phantom and C in the same paragraph.
+        let (_tmp, v, g) = build_vault_and_graph(|tmp| {
+            tmp.child("C.md").write_str("# C\n").unwrap();
+            tmp.child("Note.md")
+                .write_str("Mentions [[Phantom]] and [[C]] together.\n")
+                .unwrap();
+        });
+        let phantom = g.ghost_by_raw("Phantom").expect("ghost materialized");
+        let rows = score_related(&g, phantom, &v).unwrap();
+        let c = rows.iter().find(|r| r.title == "C").expect("C scored");
+        assert_eq!(c.score, 3);
+    }
+
+    #[test]
+    fn ghost_target_skips_alias_resolution() {
+        // A ghost has no Related section to read aliases from, so no
+        // returned row may carry already_in_related == true — even
+        // when a co-occurring concept would otherwise qualify.
+        let (_tmp, v, g) = build_vault_and_graph(|tmp| {
+            tmp.child("C.md").write_str("# C\n").unwrap();
+            tmp.child("D.md").write_str("# D\n").unwrap();
+            tmp.child("Note.md")
+                .write_str("[[Phantom]] and [[C]] together.\n\nLater, [[D]].\n")
+                .unwrap();
+        });
+        let phantom = g.ghost_by_raw("Phantom").expect("ghost materialized");
+        let rows = score_related(&g, phantom, &v).unwrap();
+        assert!(!rows.is_empty(), "ghost target yields scored concepts");
+        assert!(
+            rows.iter().all(|r| !r.already_in_related),
+            "no already_in_related rows for a ghost target"
+        );
+    }
+
+    #[test]
+    fn ghost_target_self_excluded_from_results() {
+        // The ghost itself must not appear in its own scored results,
+        // mirroring the note self-exclusion guard.
+        let (_tmp, v, g) = build_vault_and_graph(|tmp| {
+            tmp.child("C.md").write_str("# C\n").unwrap();
+            tmp.child("Note.md")
+                .write_str("[[Phantom]] and [[C]] together.\n")
+                .unwrap();
+        });
+        let phantom = g.ghost_by_raw("Phantom").expect("ghost materialized");
+        let rows = score_related(&g, phantom, &v).unwrap();
+        assert!(
+            rows.iter().all(|r| title(&g, r.note_id) != "Phantom"),
+            "ghost target excluded from its own results"
+        );
     }
 
     // ── plan_related_update / apply_related_update ────────────────────

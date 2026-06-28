@@ -572,7 +572,7 @@ pub trait Tab {
 
     /// Hook for the App's startup-action mechanism (see
     /// [`crate::tui::InitialAction`]). The graph tab uses this to
-    /// queue opening the Related updater modal for a specific note
+    /// queue opening the Related panel modal for a specific note
     /// when launched via `ft notes update-related`. Default is a
     /// no-op: tabs that don't host the modal ignore the request.
     fn queue_related_modal(&mut self, _note_path: &std::path::Path) {}

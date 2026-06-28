@@ -71,6 +71,11 @@ pub enum NotesCommand {
     /// note (and its Related-section aliases) across the vault. Dates
     /// come from `git blame`.
     Journal(JournalArgs),
+    /// Print the graph-derived co-occurrence suggestions for a note
+    /// (or a `[[ghost]]` target) — the same scored concept list the
+    /// `update-related` modal shows, as a read-only CLI surface.
+    /// Unlike `journal`, needs no git history (scoring is pure graph).
+    Related(RelatedArgs),
     /// Interactively update a note's `## Related` section. Launches
     /// the TUI graph tab with a co-occurrence-scoring modal for the
     /// target note.
@@ -93,6 +98,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
         NotesCommand::Move(a) => run_mv(a, vault_flag),
         NotesCommand::Journal(a) => run_journal(a, vault_flag),
+        NotesCommand::Related(a) => run_related(a, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
     }
@@ -1230,6 +1236,76 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
     Ok(exit)
 }
 
+// ── ft notes related ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct RelatedArgs {
+    /// Note to score. Vault-relative path (e.g. `Areas/finance.md`),
+    /// bare title (e.g. `finance` — falls back to fuzzy search), fuzzy
+    /// query, or — for an unresolved-link target with no backing file —
+    /// the explicit `[[Phantom]]` form (or just `Phantom` as a
+    /// last-resort fallback). A ghost target yields candidates only
+    /// (it has no Related section to read aliases from).
+    #[arg(value_name = "NOTE", required = true)]
+    pub note: Vec<String>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Table)]
+    pub format: Format,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+
+    /// Treat an empty result set as a successful run. Default: exit 1
+    /// when there are no concepts to show.
+    #[arg(long)]
+    pub allow_empty: bool,
+}
+
+fn run_related(args: RelatedArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+
+    // Resolve a note *or* ghost target: unlike `backlinks`/`links`, a
+    // phantom (unresolved `[[link]]`) is a first-class related-scoring
+    // target — it's the case most in need of "what's related to this?"
+    // context. No git/blame dependency: scoring is pure graph.
+    let query = args.note.join(" ");
+    let note_id = resolve_note_or_ghost(&graph, &vault, &query)?;
+    let scores = ft_core::related::score_related(&graph, note_id, &vault)
+        .context("scoring related concepts")?;
+    let rows = crate::output::related::rows_from_scores(&graph, &scores);
+
+    let exit = if rows.is_empty() && !args.allow_empty {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    };
+
+    use crate::output::related::{
+        render_json, render_markdown, render_ndjson, render_table, TableOpts,
+    };
+    match args.format {
+        Format::Table => {
+            let use_color = !args.no_color
+                && std::env::var_os("NO_COLOR").is_none()
+                && io::stdout().is_terminal();
+            if rows.is_empty() {
+                println!("no related concepts");
+            } else {
+                let out = render_table(&rows, TableOpts { use_color });
+                println!("{out}");
+            }
+        }
+        Format::Json => render_json(&rows)?,
+        Format::Ndjson => render_ndjson(&rows)?,
+        Format::Markdown => print!("{}", render_markdown(&rows)),
+    }
+
+    Ok(exit)
+}
+
 // ── ft notes update-related ──────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
@@ -1340,7 +1416,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         ids
     } else {
         let query = args.note.join(" ");
-        vec![resolve_journal_target(&graph, &vault, &query)?]
+        vec![resolve_note_or_ghost(&graph, &vault, &query)?]
     };
 
     let mut cache =
@@ -1602,14 +1678,18 @@ fn resolve_note_query(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteI
     ))
 }
 
-/// Like [`resolve_note_query`] but adds two ghost selectors so
-/// `ft notes journal` works on unresolved-link targets too: the
+/// Like [`resolve_note_query`] but adds two ghost selectors so a
+/// note-or-ghost target works on unresolved-link targets too: the
 /// explicit `[[Phantom]]` form (always wins), and a bare-string
 /// fallback after the normal Note resolution misses. The bare
-/// fallback is journal-only — other commands (e.g. `notes rename`)
+/// fallback is ghost-aware — other commands (e.g. `notes rename`)
 /// have their own explicit selectors and should not silently target
 /// ghosts.
-fn resolve_journal_target(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
+///
+/// Shared by `ft notes journal` and `ft notes related`. The name
+/// reflects that it is no longer journal-specific: both commands
+/// accept a note path, title, fuzzy query, or `[[Ghost]]` target.
+fn resolve_note_or_ghost(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
     let trimmed = query.trim();
     if let Some(stripped) = trimmed
         .strip_prefix("[[")

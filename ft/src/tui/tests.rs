@@ -8562,6 +8562,41 @@ fn graph_related_modal_opens_on_initial_action() -> Result<()> {
     assert!(frame.contains("[[Alias]]"), "modal shows alias:\n{frame}");
     assert!(frame.contains("[[C]]"), "modal shows candidate C:\n{frame}");
     assert!(frame.contains("[[D]]"), "modal shows candidate D:\n{frame}");
+    // Unified read/write panel framing — the title dropped "Update".
+    assert!(
+        frame.contains("Related:"),
+        "modal title reads 'Related:' (not 'Update Related:'):\n{frame}"
+    );
+    assert!(
+        !frame.contains("Update Related"),
+        "old 'Update Related' wording is gone:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_related_modal_is_read_safe_without_commit() -> Result<()> {
+    // Opening the panel and closing with Esc must not write anything,
+    // even after toggling a candidate — the modal is a read surface
+    // that *can* commit, not a write-only flow.
+    let (dir, vault) = related_modal_vault();
+    let note_path = vault.path.join("N.md");
+    let before = std::fs::read_to_string(&note_path)?;
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.set_initial_action(Some(crate::tui::InitialAction::OpenRelatedModal {
+        note_path: std::path::PathBuf::from("N.md"),
+    }));
+    app.apply_initial_action_for_test()?;
+    // Toggle the first candidate (mutates in-memory checked state),
+    // then cancel without committing.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let after = std::fs::read_to_string(&note_path)?;
+    assert_eq!(before, after, "Esc without Enter writes nothing");
+    drop(dir);
     Ok(())
 }
 

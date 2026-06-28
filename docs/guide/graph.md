@@ -171,7 +171,7 @@ each with their own cursor and expansion state.
 | `Q`       | quick capture (run a preset)                                     |
 | `m`       | enter the move-section flow with the selected note as source     |
 | `r`       | rename the selected note (or move the multi-selection)           |
-| `R`       | open the Related-section updater modal                           |
+| `R`       | open the Related panel for the selected note                     |
 | `J`       | open the Journal tab for the selected note                       |
 | `Ctrl+r`  | refresh the graph from disk                                      |
 

@@ -3,6 +3,7 @@ pub mod json;
 pub mod links;
 pub mod markdown;
 pub mod ndjson;
+pub mod related;
 pub mod table;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

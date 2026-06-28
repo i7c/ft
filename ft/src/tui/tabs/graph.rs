@@ -654,7 +654,7 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "graph.related",
-        description: "Open the Related-section updater modal for the selected note",
+        description: "Open the Related panel for the selected note",
         scope: CommandScope::Tab("graph"),
         group: "Notes",
         args_schema: &[],
@@ -1662,14 +1662,18 @@ impl TaskCreateState {
     }
 }
 
-/// Related-section updater modal state. Built on `R` keypress against
-/// a Note row (or via `ft notes update-related`). Splits scored
-/// concepts into two visual groups: entries already in N's Related
-/// section (non-interactive, marked) followed by suggested candidates
-/// the user toggles with Space.
+/// Related panel modal state. Built on `R` keypress against a Note
+/// row (or via `ft notes update-related`). A unified read + write
+/// surface: it shows the scored concepts (`ft notes related` prints
+/// the same data) and optionally commits checked concepts to the
+/// note's `## Related` section. Splits scored concepts into two
+/// visual groups: entries already in N's Related section
+/// (non-interactive, marked) followed by suggested candidates the
+/// user toggles with Space. Note-only — ghost rows toast (a ghost
+/// has no file to write; reading-for-ghosts is via `ft notes related`).
 #[derive(Debug)]
 pub struct RelatedModal {
-    /// The note whose Related section is being updated.
+    /// The note whose Related panel is open.
     target_path: PathBuf,
     target_title: String,
     /// Concepts already in the Related section (alias links inside
@@ -2322,8 +2326,8 @@ impl GraphTab {
         matches!(graph.node(row.note_id), NodeKind::Note(_)).then_some(row.note_id)
     }
 
-    /// Handle a key while the Related-section modal is open.
-    /// Compute scores and build the Related-updater modal for the
+    /// Handle a key while the Related panel modal is open.
+    /// Compute scores and build the Related panel modal for the
     /// note at `note_path`. Returns `None` when the path doesn't
     /// resolve to a real note. Caller is responsible for posting
     /// `AppRequest::OpenModal(Related(...))`.
@@ -2333,14 +2337,16 @@ impl GraphTab {
         self.build_related_modal_for_id(note_id, ctx)
     }
 
-    /// Build the Related modal for a known `NoteId`. Toasts on errors
-    /// (non-note row, scoring failure).
+    /// Build the Related panel modal for a known `NoteId`. Toasts on
+    /// errors (non-note row, scoring failure). Ghost rows are
+    /// rejected here — a ghost has no file to write, so the panel is
+    /// Note-only; ghost reading is via `ft notes related`.
     fn build_related_modal_for_id(&self, note_id: NoteId, ctx: &TabCtx) -> Option<RelatedModal> {
         let graph = self.graph.as_ref()?;
         let NodeKind::Note(note_data) = graph.node(note_id) else {
             queue_toast(
                 ctx,
-                "select a note row (paragraphs / directories aren't supported)",
+                "select a Note row — ghosts are read via `ft notes related`",
                 ToastStyle::Error,
             );
             return None;
@@ -3784,7 +3790,7 @@ impl Tab for GraphTab {
                 } else {
                     queue_toast(
                         ctx,
-                        "select a Note row to update its Related section",
+                        "select a Note row to open its Related panel",
                         ToastStyle::Error,
                     );
                 }
@@ -4698,9 +4704,9 @@ impl Tab for GraphTab {
                 ],
             ),
             HelpSection::new(
-                "Related section",
+                "Related",
                 &[
-                    ("Shift+R", "open Related-section updater modal"),
+                    ("Shift+R", "open Related panel for the selected note"),
                     ("Space", "toggle candidate (in modal)"),
                     ("Enter", "append checked concepts (in modal)"),
                     ("Esc / q", "close modal without writing"),
@@ -5001,7 +5007,7 @@ fn render_related_modal(frame: &mut Frame, area: Rect, modal: &RelatedModal) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" Update Related: {} ", modal.target_title))
+        .title(format!(" Related: {} ", modal.target_title))
         .style(Style::default());
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);

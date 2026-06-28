@@ -267,7 +267,7 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 #[derive(Debug, Clone)]
 pub enum InitialAction {
     /// Switch to the graph tab on startup and open the Related
-    /// updater modal for the note at the given vault-relative path.
+    /// panel modal for the note at the given vault-relative path.
     OpenRelatedModal { note_path: std::path::PathBuf },
 }
 

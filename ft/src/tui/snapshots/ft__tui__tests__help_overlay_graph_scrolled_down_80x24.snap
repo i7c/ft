@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 3299
 expression: down
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
@@ -16,7 +17,7 @@ expression: down
 │         │  Alt+1..Alt+9   Switch to the view at the given 0-based ║│         │
 │         │                                                         ║│         │
 │         │  Notes                                                  ║│         │
-│         │  Shift+r        Open the Related-section updater modal f║│         │
+│         │  Shift+r        Open the Related panel for the selected ║│         │
 │         │  Shift+j        Open the Journal tab for the selected no║│         │
 │         │  Ctrl+j         Append selected (or cursor) Note/Ghost r║│         │
 │         │  o              Open the selected note in $EDITOR       ║│         │

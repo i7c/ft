@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 9273
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
@@ -22,7 +23,7 @@ expression: frame
 │         │  Alt+1..Alt+9   Switch to the view at the given 0-based ║│         │
 │         │                                                         ║│         │
 │         │  Notes                                                  ║│         │
-│         │  Shift+r        Open the Related-section updater modal f║│         │
+│         │  Shift+r        Open the Related panel for the selected ║│         │
 │         │  Shift+j        Open the Journal tab for the selected no║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: keymap-vault  ·  tab: Graph         not yet refreshed        mode: help
