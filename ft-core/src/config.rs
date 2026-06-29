@@ -916,7 +916,7 @@ typo_field = "oops"
             .write_str(
                 r#"
 [graph.presets]
-my-backlinks = "node where title includes \"Foo\"; expand where edge.kind = link;"
+my-backlinks = "node where title includes \"Foo\"; expand where edge.kind = note-link;"
 "#,
             )
             .unwrap();
@@ -927,7 +927,7 @@ my-backlinks = "node where title includes \"Foo\"; expand where edge.kind = link
                 .presets
                 .get("my-backlinks")
                 .map(|s| s.as_str()),
-            Some("node where title includes \"Foo\"; expand where edge.kind = link;")
+            Some("node where title includes \"Foo\"; expand where edge.kind = note-link;")
         );
     }
 

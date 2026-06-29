@@ -129,18 +129,20 @@ pub fn build_journal(
         (None, Vec::new())
     };
 
-    // Build the set of NoteIds whose incoming ParagraphLink edges count.
+    // Build the set of NoteIds whose mentions count. Use mentions_of
+    // (note + its headings) so anchored links targeting a heading of
+    // the note still count as a mention of the note.
     let mut target_set: HashSet<NoteId> = targets.iter().copied().collect();
     target_set.extend(alias_ids.iter().copied());
 
-    // Collect candidate paragraph nodes (dedup via HashSet).
+    // Collect candidate paragraph nodes (dedup via HashSet). A mention's
+    // source is the paragraph node for ParagraphLink edges (and the
+    // note for NoteLink, which we skip here — journal entries are
+    // paragraph-scoped).
     let mut paragraph_ids: Vec<NoteId> = Vec::new();
     let mut seen_paragraph: HashSet<NoteId> = HashSet::new();
     for target in &target_set {
-        for (src, edge) in graph.incoming(*target) {
-            if !matches!(edge, EdgeKind::ParagraphLink) {
-                continue;
-            }
+        for (src, _edge) in graph.mentions_of(*target) {
             if !matches!(graph.node(src), NodeKind::Paragraph(_)) {
                 continue;
             }
@@ -192,13 +194,17 @@ pub fn build_journal(
 
         // Compute the matched subset. Single-target: always vec![targets[0]].
         // Multi-target: the subset of `targets` (preserving caller order) that
-        // this paragraph has a ParagraphLink edge to.
+        // this paragraph has a ParagraphLink edge to. A ParagraphLink may
+        // target a heading node (anchored link); map each target back to
+        // its note-level identity via link_target_note so anchored links
+        // still match the owning note.
         let matched: Vec<NoteId> = if single_mode {
             vec![targets[0]]
         } else {
             let direct: HashSet<NoteId> = graph
                 .outgoing(p_id)
-                .filter_map(|(dst, edge)| matches!(edge, EdgeKind::ParagraphLink).then_some(dst))
+                .filter_map(|(dst, edge)| matches!(edge, EdgeKind::ParagraphLink(_)).then_some(dst))
+                .filter_map(|dst| graph.link_target_note(dst))
                 .collect();
             targets
                 .iter()
@@ -259,7 +265,7 @@ pub fn resolve_related_aliases(
     let mut seen: HashSet<NoteId> = HashSet::new();
     for (dst, edge) in graph.outgoing(note_id) {
         let link = match edge {
-            EdgeKind::Link(l) => l,
+            EdgeKind::NoteLink(l) => l,
             _ => continue,
         };
         let line = link.line as u32;

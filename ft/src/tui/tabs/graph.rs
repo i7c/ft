@@ -583,7 +583,7 @@ impl Modal for SearchPickerModal {
 /// TUI-presentation default, not an engine concern.
 const BUILTIN_DEFAULT_QUERY: &str = concat!(
     "node where path = \"\"; ",
-    "expand where edge.kind in {directory-contains, link, embed};",
+    "expand where edge.kind in {directory-contains, note-link};",
 );
 
 /// Width budget for a view's tab-strip label query snippet, in characters.
@@ -6267,13 +6267,13 @@ mod view_tests {
     fn z_on_note_rewrites_query() {
         let mut tab = tab_with_node_selected(
             &[("Areas/finance.md", "[[Projects/alpha]]"), ("Projects/alpha.md", "")],
-            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};",
+            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, note-link};",
             "Areas/finance.md",
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_buf.text,
-            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, link};"
+            "node where kind in {Note} and path = \"Areas/finance.md\"; expand where edge.kind in {directory-contains, note-link};"
         );
     }
 
@@ -6361,13 +6361,13 @@ mod view_tests {
     fn z_preserves_expand_block() {
         let mut tab = tab_with_node_selected(
             &[("Areas/finance.md", "")],
-            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};",
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, note-link};",
             "", // root directory is always in the tree for this query
         );
         tab.rewrite_query_for_root();
         assert_eq!(
             tab.views[0].query_buf.text,
-            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, link, embed};"
+            "node where kind in {Directory} and path = \"\"; expand where edge.kind in {directory-contains, links-into, note-link};"
         );
     }
 
@@ -6468,7 +6468,7 @@ mod search_tests {
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let g = Graph::build(&vault, &Scan::default()).unwrap();
         let q = parse_query(
-            "node where kind = Note and path = \"a.md\"; expand where edge.kind = link;",
+            "node where kind = Note and path = \"a.md\"; expand where edge.kind = note-link;",
         )
         .unwrap();
 
@@ -6757,7 +6757,7 @@ mod nav_tests {
         let g = Graph::build(&vault, &Scan::default()).unwrap();
         let tab = tab_with_query(
             g,
-            "node where kind = Note and path = \"A.md\"; expand where edge.kind in {links-into, link, embed};",
+            "node where kind = Note and path = \"A.md\"; expand where edge.kind in {links-into, note-link};",
         );
 
         // A links to C, and A links to D which links to C.

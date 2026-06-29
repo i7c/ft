@@ -459,7 +459,10 @@ fn build_replacement(
     let link = edge
         .link()
         .expect("build_replacement called on Contains edge");
-    let is_embed = matches!(edge, EdgeKind::Embed(_));
+    let is_embed = edge
+        .link()
+        .expect("build_replacement called on non-link edge")
+        .is_embed;
     match link.form {
         LinkForm::WikiLink => {
             let new_target = if link.target_text.contains('/') {

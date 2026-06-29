@@ -126,14 +126,22 @@ For `indegree` / `outdegree`, only `=`, `!=`, and `in` are meaningful
 
 | Attribute            | Allowed values                                |
 |----------------------|-----------------------------------------------|
-| `self.kind` / `from.kind` / `to.kind` | `Note`, `Directory`, `Ghost`, `Task`, `Paragraph` |
-| `edge.kind`          | `link`, `embed`, `directory-contains`, `has-task`, `subtask`, `links-into`, `owns-paragraph`, `paragraph-link` |
+| `self.kind` / `from.kind` / `to.kind` | `Note`, `Directory`, `Ghost`, `Task`, `Paragraph`, `Heading` |
+| `edge.kind`          | `note-link`, `heading-link`, `paragraph-link`, `directory-contains`, `has-task`, `subtask`, `links-into`, `owns-paragraph`, `owns-heading` |
 | `edge.form`          | `wiki`, `md`                                  |
+| `edge.embed`         | `true`, `false`                               |
 
-`has-task` runs note → task; `subtask` runs parent task → child task
-(indentation-derived, always intra-file). Both point from container to
-contained, like `directory-contains`, so the same expand/walk machinery
-follows them.
+The three link kinds (`note-link`, `heading-link`, `paragraph-link`)
+share one `LinkEdge` payload and identical resolution semantics
+(wikilink + markdown forms, shortest-path rules, ghost keying,
+anchor handling). Embed-ness is a property of the link occurrence
+(`edge.embed`), not a separate edge kind — `![[Foo]]` is a link edge
+with `edge.embed = true`. See `docs/graph-semantics.md` for the full
+model. `owns-heading` and `owns-paragraph` are exclusive containment
+edges (heading/paragraph owned by nearest container); `has-task` runs
+note → task and `subtask` runs parent task → child task (indentation-
+derived, always intra-file). All containment edges point from
+container to contained, so the same expand/walk machinery follows them.
 
 Unknown values fail at parse time with a hint listing the allowed set.
 
@@ -173,11 +181,18 @@ node where kind = Note and path starts_with "Areas/finance/";
 ```
 
 All notes' outbound link graph (initial set: every note, expand over
-link edges):
+note-level link edges):
 
 ```dsl
 node where kind = Note;
-expand where edge.kind in {link, embed};
+expand where edge.kind = note-link;
+```
+
+Embeds only (`![[...]]`):
+
+```dsl
+node where kind = Note;
+expand where edge.kind = note-link and edge.embed = true;
 ```
 
 A task tree (initial set: matching top-level tasks, expand follows

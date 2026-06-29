@@ -13,9 +13,12 @@
 //! ## Heterogeneous from day one
 //!
 //! v1 has only [`NodeKind::Note`] / [`NodeKind::Ghost`] and
-//! [`EdgeKind::Link`] / [`EdgeKind::Embed`], but the enum shape is here so
-//! later plans can add `Folder`, `Task`, `Tag`, `FrontmatterValue`, `HasTag`
-//! etc. additively without rewriting the graph type.
+//! [`EdgeKind::NoteLink`], but the enum shape is here so later plans can
+//! add `Folder`, `Task`, `Tag`, `FrontmatterValue`, `HasTag` etc.
+//! additively without rewriting the graph type. Today the model carries
+//! six node kinds (Note, Heading, Paragraph, Task, Ghost, Directory) and
+//! three reference edge kinds (NoteLink, HeadingLink, ParagraphLink)
+//! sharing one [`LinkEdge`] payload — see `docs/graph-semantics.md`.
 //!
 //! ## Ghost nodes
 //!
@@ -213,11 +216,18 @@ pub struct TaskData {
 /// Per-edge payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
-    /// `[[Foo]]`, `[[Foo|alias]]`, `[[Foo#anchor]]`, `[Foo](path.md)`, ...
-    Link(LinkEdge),
-    /// `![[Foo]]`, `![[image.png]]`, `![alt](path.png)` — same data shape
-    /// as `Link`, distinct variant so callers can filter.
-    Embed(LinkEdge),
+    /// One link occurrence anywhere in a note, from the note node.
+    /// Target is the resolved note (or ghost); anchors are retained as
+    /// metadata but note-level edges never target a heading.
+    NoteLink(LinkEdge),
+    /// One link occurrence on a heading line, from the heading node.
+    /// Target may be a heading node (resolvable anchor) or note/ghost.
+    HeadingLink(LinkEdge),
+    /// One link occurrence in a paragraph body (including a heading
+    /// line, since it begins a paragraph per Fork A2), from the
+    /// paragraph node. Target may be a heading node (resolvable anchor)
+    /// or note/ghost.
+    ParagraphLink(LinkEdge),
     /// A directory contains a child node (note or subdirectory). Unit
     /// variant — there is no textual link to rewrite.
     Contains,
@@ -229,7 +239,8 @@ pub enum EdgeKind {
     Subtask,
     /// A note links to one or more notes contained in a directory.
     /// Derived edge — one per unique (source-note, target-directory) pair
-    /// from resolved Link / Embed edges. Unit variant (no LinkEdge data).
+    /// from resolved link edges (NoteLink/HeadingLink/ParagraphLink).
+    /// Unit variant (no LinkEdge data).
     LinksInto,
     /// A note owns a paragraph node, or a heading owns a paragraph
     /// under it. Edge from note/heading → paragraph. Exclusive: each
@@ -240,23 +251,22 @@ pub enum EdgeKind {
     /// heading. Models the heading section tree: a heading at level `L`
     /// is owned by the nearest heading of level `< L`, or by the note.
     OwnsHeading,
-    /// A paragraph links to a note (or ghost) via a wiki link in its
-    /// body. Edge from paragraph → target. Each wiki-form link in a
-    /// paragraph produces one edge.
-    ParagraphLink,
 }
 
 impl EdgeKind {
+    /// The `LinkEdge` payload if this edge is one of the three link kinds,
+    /// else `None`.
     pub fn link(&self) -> Option<&LinkEdge> {
         match self {
-            EdgeKind::Link(e) | EdgeKind::Embed(e) => Some(e),
+            EdgeKind::NoteLink(e) | EdgeKind::HeadingLink(e) | EdgeKind::ParagraphLink(e) => {
+                Some(e)
+            }
             EdgeKind::Contains
             | EdgeKind::HasTask
             | EdgeKind::Subtask
             | EdgeKind::LinksInto
             | EdgeKind::OwnsParagraph
-            | EdgeKind::OwnsHeading
-            | EdgeKind::ParagraphLink => None,
+            | EdgeKind::OwnsHeading => None,
         }
     }
 }
@@ -288,7 +298,8 @@ impl LinkTarget {
     }
 }
 
-/// Per-occurrence link record stored on each edge.
+/// Per-occurrence link record stored on each link edge (NoteLink,
+/// HeadingLink, ParagraphLink).
 ///
 /// `byte_range` indexes into the **source file's content at parse time**
 /// — re-parse the file (via [`Graph::refresh_note`]) before relying on it
@@ -296,6 +307,10 @@ impl LinkTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkEdge {
     pub form: LinkForm,
+    /// `true` for `!`-prefixed transclusions (`![[...]]`, `![...](...)`).
+    /// Embed-ness is a property of the link occurrence, not a separate
+    /// edge kind, so all three link levels treat embeds uniformly.
+    pub is_embed: bool,
     /// Byte range in the source file's content.
     pub byte_range: std::ops::Range<usize>,
     /// 1-indexed source line number.
@@ -655,6 +670,79 @@ impl Graph {
         out
     }
 
+    /// Resolve an anchor (`#heading` text) against a note's headings.
+    /// Returns the heading node whose normalized `text` matches `anchor`
+    /// (case-insensitive, whitespace-collapsed, trailing `#`s stripped),
+    /// searching the note's full heading subtree. Returns `None` if no
+    /// heading matches. Used by the build phase to target `HeadingLink`/
+    /// `ParagraphLink` edges at heading nodes when an anchor resolves.
+    pub fn resolve_anchor(&self, note_id: NoteId, anchor: &str) -> Option<NoteId> {
+        let needle = normalize_anchor(anchor);
+        if needle.is_empty() {
+            return None;
+        }
+        self.all_headings(note_id).into_iter().find(|h_id| {
+            matches!(self.node(*h_id), NodeKind::Heading(h) if normalize_anchor(&h.text) == needle)
+        })
+    }
+
+    /// Resolve a link target node id to its note-level identity: for a
+    /// `Heading`, walk up `OwnsHeading` to the owning `Note`; for a `Note`
+    /// or `Ghost`, return as-is. Returns `None` for other node kinds.
+    /// Used by consumers that treat any link (including anchored links to
+    /// a heading) as a mention of the underlying note/ghost.
+    pub fn link_target_note(&self, id: NoteId) -> Option<NoteId> {
+        match self.node(id) {
+            NodeKind::Note(_) | NodeKind::Ghost(_) => Some(id),
+            NodeKind::Heading(_) => {
+                // Walk up OwnsHeading until we reach a Note.
+                let mut cur = id;
+                loop {
+                    let parent = self
+                        .g
+                        .edges_directed(cur.0, Direction::Incoming)
+                        .find(|e| matches!(e.weight(), EdgeKind::OwnsHeading))
+                        .map(|e| NoteId(e.source()));
+                    match parent {
+                        Some(p) => {
+                            if matches!(self.node(p), NodeKind::Note(_)) {
+                                return Some(p);
+                            }
+                            cur = p;
+                        }
+                        None => return None,
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Every incoming link edge (at all three levels: NoteLink,
+    /// HeadingLink, ParagraphLink) whose target is `note_id` OR any of
+    /// the note's transitively-owned headings. This is the canonical
+    /// "any `[[Foo…]]` mentions note Foo" traversal — anchored links that
+    /// resolved to a heading still count as mentions of the heading's
+    /// owning note. Returns `(source_node_id, LinkEdge)` pairs.
+    pub fn mentions_of(&self, note_id: NoteId) -> Vec<(NoteId, LinkEdge)> {
+        let mut targets = self.all_headings(note_id);
+        targets.push(note_id);
+        let target_set: HashSet<NoteId> = targets.into_iter().collect();
+        let mut out = Vec::new();
+        for src in self.g.node_indices() {
+            for e in self.g.edges_directed(src, Direction::Outgoing) {
+                let dst = NoteId(e.target());
+                if !target_set.contains(&dst) {
+                    continue;
+                }
+                if let Some(l) = e.weight().link() {
+                    out.push((NoteId(src), l.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// All nodes in the graph in arbitrary order.
     pub fn nodes(&self) -> impl Iterator<Item = (NoteId, &NodeKind)> {
         self.g
@@ -757,6 +845,7 @@ impl Graph {
             };
             let edge = LinkEdge {
                 form: raw.form,
+                is_embed: raw.is_embed,
                 byte_range: raw.byte_range.clone(),
                 line: raw.line,
                 raw_text: raw.raw_text.clone(),
@@ -764,12 +853,10 @@ impl Graph {
                 anchor: raw.anchor.clone(),
                 display: raw.display.clone(),
             };
-            let kind = if raw.is_embed {
-                EdgeKind::Embed(edge)
-            } else {
-                EdgeKind::Link(edge)
-            };
-            self.g.add_edge(src.0, dst.0, kind);
+            // Note-level link: one per occurrence, targeting the note
+            // (or ghost). Anchors are retained as metadata but note-level
+            // edges never target a heading (D5).
+            self.g.add_edge(src.0, dst.0, EdgeKind::NoteLink(edge));
         }
     }
 
@@ -1040,8 +1127,10 @@ impl Graph {
     /// Remove all heading nodes owned (directly or transitively) by
     /// `note_id`'s heading subtree. Walks `OwnsHeading` from the note,
     /// removes each heading node (with its edges) and its
-    /// `heading_index` entry. Incoming edges from other notes are not
-    /// touched (they belong to those notes' outgoing sets).
+    /// `heading_index` entry. Orphaned ghosts (HeadingLink-only ghosts
+    /// that lose their last incoming edge) are garbage-collected.
+    /// Incoming edges from other notes are not touched (they belong to
+    /// those notes' outgoing sets).
     fn remove_heading_nodes(&mut self, note_id: NoteId) {
         // Collect all heading descendants via OwnsHeading DFS.
         let mut heading_ids: Vec<NoteId> = Vec::new();
@@ -1055,6 +1144,18 @@ impl Graph {
                 }
             }
         }
+        // Collect ghost neighbors of those headings before removal
+        // (HeadingLink edges).
+        let mut ghost_candidates: Vec<NoteId> = Vec::new();
+        for h_id in &heading_ids {
+            for e in self.g.edges_directed(h_id.0, Direction::Outgoing) {
+                if matches!(e.weight(), EdgeKind::HeadingLink(_))
+                    && matches!(self.g[e.target()], NodeKind::Ghost(_))
+                {
+                    ghost_candidates.push(NoteId(e.target()));
+                }
+            }
+        }
         for h_id in &heading_ids {
             if let NodeKind::Heading(data) = &self.g[h_id.0] {
                 self.heading_index
@@ -1063,6 +1164,20 @@ impl Graph {
         }
         for h_id in heading_ids {
             self.g.remove_node(h_id.0);
+        }
+        // GC orphaned ghosts.
+        for ghost in ghost_candidates {
+            if self
+                .g
+                .edges_directed(ghost.0, Direction::Incoming)
+                .next()
+                .is_none()
+            {
+                if let NodeKind::Ghost(GhostData { raw }) = &self.g[ghost.0] {
+                    self.ghost_index.remove(raw);
+                }
+                self.g.remove_node(ghost.0);
+            }
         }
     }
 
@@ -1136,44 +1251,90 @@ impl Graph {
                 .insert((note_rel_norm.clone(), paragraph.line_start), p_id);
             self.g.add_edge(owner.0, p_id.0, EdgeKind::OwnsParagraph);
 
+            // Build a set of heading lines for O(1) "is this link on a
+            // heading line?" checks. The heading nodes were inserted by
+            // insert_heading_nodes_for and are in heading_index.
+            // (Rebuilt once per paragraph from the headings slice; the
+            // slice is small and this keeps the loop simple.)
+            // Note: headings is already in document order from
+            // extract_headings; we don't mutate it here.
             for raw in links {
-                if raw.form != LinkForm::WikiLink {
-                    continue;
-                }
                 let line = raw.line as u32;
                 if line < paragraph.line_start || line > paragraph.line_end {
                     continue;
                 }
-                let target = resolve::resolve_wiki(&raw.target_text, self);
-                let dst = match target {
+                // Resolve both wiki and markdown forms (unified link
+                // kinds include both at all three levels).
+                let target = match raw.form {
+                    LinkForm::WikiLink => resolve::resolve_wiki(&raw.target_text, self),
+                    LinkForm::MdLink => resolve::resolve_md(&raw.target_text, note_rel, self),
+                };
+                let note_dst = match target {
                     resolve::Resolution::Resolved(id) => id,
                     resolve::Resolution::Unresolved(key) => self.intern_ghost(&key),
                     resolve::Resolution::NotALink => continue,
                 };
-                self.g.add_edge(p_id.0, dst.0, EdgeKind::ParagraphLink);
+                // Container-level target (HeadingLink/ParagraphLink):
+                // if the link has an anchor and resolves to a note, try
+                // to resolve the anchor to a heading node in that note.
+                // Falls back to the note (or ghost) if the anchor doesn't
+                // resolve. NoteLink always targets note_dst (D5).
+                let container_dst = (|| {
+                    let anchor = raw.anchor.as_ref()?;
+                    if matches!(self.node(note_dst), NodeKind::Note(_)) {
+                        self.resolve_anchor(note_dst, anchor)
+                    } else {
+                        None
+                    }
+                })()
+                .unwrap_or(note_dst);
+                let edge = LinkEdge {
+                    form: raw.form,
+                    is_embed: raw.is_embed,
+                    byte_range: raw.byte_range.clone(),
+                    line: raw.line,
+                    raw_text: raw.raw_text.clone(),
+                    target_text: raw.target_text.clone(),
+                    anchor: raw.anchor.clone(),
+                    display: raw.display.clone(),
+                };
+                // Paragraph-level link: always, for every occurrence in
+                // the paragraph (including heading lines, per Fork A2).
+                self.g.add_edge(
+                    p_id.0,
+                    container_dst.0,
+                    EdgeKind::ParagraphLink(edge.clone()),
+                );
+                // Heading-level link: when the occurrence is on a heading
+                // line. A heading line begins a paragraph, so a link there
+                // produces both a HeadingLink (from the heading) and a
+                // ParagraphLink (from the paragraph) — the intended overlap.
+                if let Some(&h_id) = self.heading_index.get(&(note_rel_norm.clone(), line)) {
+                    self.g
+                        .add_edge(h_id.0, container_dst.0, EdgeKind::HeadingLink(edge));
+                }
             }
         }
     }
 
-    /// Remove all paragraph nodes owned by `note_id`. Each removal
-    /// takes the OwnsParagraph edge and any outgoing ParagraphLink
-    /// edges with it (petgraph removes connected edges automatically).
-    /// Orphaned ghosts (ParagraphLink-only ghosts that lose their last
-    /// incoming edge) are garbage-collected.
+    /// Remove all paragraph nodes under `note_id` (direct + heading-owned,
+    /// via [`Graph::note_paragraphs`]). Each removal takes the
+    /// `OwnsParagraph` edge and any outgoing `ParagraphLink` edges with it
+    /// (petgraph removes connected edges automatically). Orphaned ghosts
+    /// (ParagraphLink-only ghosts that lose their last incoming edge)
+    /// are garbage-collected.
     fn remove_paragraph_nodes(&mut self, note_id: NoteId) {
-        // Collect paragraph children of `note_id`.
-        let paragraph_ids: Vec<NoteId> = self
-            .g
-            .edges_directed(note_id.0, Direction::Outgoing)
-            .filter(|e| matches!(e.weight(), EdgeKind::OwnsParagraph))
-            .map(|e| NoteId(e.target()))
-            .collect();
+        // All paragraphs under the note — direct (heading-less) plus
+        // those owned by any transitively-owned heading. Headings still
+        // exist at this point in refresh_note, so note_paragraphs sees
+        // the full set.
+        let paragraph_ids = self.note_paragraphs(note_id);
 
         // Collect ghost neighbors of those paragraphs before removal.
         let mut ghost_candidates: Vec<NoteId> = Vec::new();
         for p_id in &paragraph_ids {
             for e in self.g.edges_directed(p_id.0, Direction::Outgoing) {
-                if matches!(e.weight(), EdgeKind::ParagraphLink)
+                if matches!(e.weight(), EdgeKind::ParagraphLink(_))
                     && matches!(self.g[e.target()], NodeKind::Ghost(_))
                 {
                     ghost_candidates.push(NoteId(e.target()));
@@ -1220,7 +1381,7 @@ impl Graph {
             .map(|e| (NoteId(e.target()), e.weight().clone()))
             .collect();
         for (dst, edge) in &candidates {
-            if !matches!(edge, EdgeKind::Link(_) | EdgeKind::Embed(_)) {
+            if !matches!(edge, EdgeKind::NoteLink(_)) {
                 continue;
             }
             if let NodeKind::Note(note_data) = self.node(*dst) {
@@ -1256,6 +1417,33 @@ pub(crate) fn normalize_path(p: &Path) -> PathBuf {
             // paths; preserve them verbatim if they do rather than
             // silently rewriting.
             other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Normalize a heading anchor for matching: lowercase, collapse internal
+/// whitespace runs to a single space, trim, and strip trailing `#`s.
+/// Matches [`crate::markdown::Heading::text`] normalization (which already
+/// strips leading `#`s + the required space and trailing `#`s/whitespace).
+fn normalize_anchor(s: &str) -> String {
+    let mut t = s.trim().to_string();
+    // Strip trailing `#`s and any whitespace before them (closing hashes).
+    while t.ends_with('#') {
+        t.pop();
+    }
+    let t = t.trim();
+    let mut out = String::with_capacity(t.len());
+    let mut prev_ws = false;
+    for c in t.chars() {
+        if c.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(c.to_ascii_lowercase());
+            prev_ws = false;
         }
     }
     out

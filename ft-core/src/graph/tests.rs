@@ -44,15 +44,15 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 }
             };
             let edge_kind = match edge {
-                EdgeKind::Link(_) => "link",
-                EdgeKind::Embed(_) => "embed",
+                EdgeKind::NoteLink(_) => "note-link",
+                EdgeKind::HeadingLink(_) => "heading-link",
+                EdgeKind::ParagraphLink(_) => "paragraph-link",
                 EdgeKind::Contains => "contains",
                 EdgeKind::HasTask => "has-task",
                 EdgeKind::Subtask => "subtask",
                 EdgeKind::LinksInto => "links-into",
                 EdgeKind::OwnsParagraph => "owns-paragraph",
                 EdgeKind::OwnsHeading => "owns-heading",
-                EdgeKind::ParagraphLink => "paragraph-link",
             };
             let l = edge.link()?;
             Some(format!(
@@ -81,9 +81,11 @@ fn hub_outgoing_covers_every_link_shape() {
     let v = fixture_vault();
     let g = Graph::build(&v, &Scan::default()).unwrap();
     let hub = note(&g, "notes/hub.md");
+    // Note-level links: one NoteLink per occurrence (the note level is the
+    // multiset of all link occurrences in the note).
     let edges: Vec<&EdgeKind> = g
         .outgoing(hub)
-        .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
+        .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
         .map(|(_, e)| e)
         .collect();
 
@@ -91,19 +93,31 @@ fn hub_outgoing_covers_every_link_shape() {
     // fixture all show up. Exact count below.
     let wiki = edges
         .iter()
-        .filter(|e| e.link().unwrap().form == LinkForm::WikiLink && matches!(e, EdgeKind::Link(_)))
+        .filter(|e| {
+            let l = e.link().unwrap();
+            l.form == LinkForm::WikiLink && !l.is_embed
+        })
         .count();
     let md = edges
         .iter()
-        .filter(|e| e.link().unwrap().form == LinkForm::MdLink && matches!(e, EdgeKind::Link(_)))
+        .filter(|e| {
+            let l = e.link().unwrap();
+            l.form == LinkForm::MdLink && !l.is_embed
+        })
         .count();
     let wiki_embed = edges
         .iter()
-        .filter(|e| e.link().unwrap().form == LinkForm::WikiLink && matches!(e, EdgeKind::Embed(_)))
+        .filter(|e| {
+            let l = e.link().unwrap();
+            l.form == LinkForm::WikiLink && l.is_embed
+        })
         .count();
     let md_embed = edges
         .iter()
-        .filter(|e| e.link().unwrap().form == LinkForm::MdLink && matches!(e, EdgeKind::Embed(_)))
+        .filter(|e| {
+            let l = e.link().unwrap();
+            l.form == LinkForm::MdLink && l.is_embed
+        })
         .count();
 
     // 8 wikilinks: alpha, beta|alias, gamma#anchor, gamma#anchor|alias,
@@ -125,10 +139,13 @@ fn fenced_and_indented_and_inline_code_are_skipped() {
     // The hub has fenced and indented code blocks containing fake links;
     // those should not contribute outgoing edges. Total checked above.
     // Spot-check: the inline-code `[[alpha]]` doesn't add a 9th wikilink.
+    // (Excludes wiki-form embeds, which are NoteLink with is_embed = true.)
     let wiki_count = g
         .outgoing(hub)
+        .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
         .filter(|(_, e)| {
-            matches!(e, EdgeKind::Link(_)) && e.link().unwrap().form == LinkForm::WikiLink
+            let l = e.link().unwrap();
+            l.form == LinkForm::WikiLink && !l.is_embed
         })
         .count();
     assert_eq!(wiki_count, 8);
@@ -161,7 +178,7 @@ fn ghost_node_is_shared_across_linkers() {
     // hub plus a ParagraphLink edge from hub's owning paragraph.
     let link_incoming: Vec<_> = g
         .incoming(phantom)
-        .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
+        .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
         .collect();
     assert_eq!(link_incoming.len(), 1);
 }
@@ -253,12 +270,16 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     let b = note(&g, "b.md");
     let c = note(&g, "c.md");
     assert_eq!(
-        g.outgoing(a).filter(|(_, e)| e.link().is_some()).count(),
+        g.outgoing(a)
+            .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+            .count(),
         2,
-        "a starts with two link edges"
+        "a starts with two note-level link edges"
     );
     assert_eq!(
-        g.incoming(a).filter(|(_, e)| e.link().is_some()).count(),
+        g.incoming(a)
+            .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+            .count(),
         1,
         "c links to a"
     );
@@ -281,9 +302,19 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     assert_eq!(outgoing, vec![PathBuf::from("c.md")]);
 
     // Incoming to a is untouched (c.md still links to a).
-    assert_eq!(g.incoming(a).filter(|(_, e)| e.link().is_some()).count(), 1);
+    assert_eq!(
+        g.incoming(a)
+            .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+            .count(),
+        1
+    );
     // b lost its incoming edge from a.
-    assert_eq!(g.incoming(b).filter(|(_, e)| e.link().is_some()).count(), 0);
+    assert_eq!(
+        g.incoming(b)
+            .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+            .count(),
+        0
+    );
     let _ = c;
 }
 
@@ -500,6 +531,250 @@ fn has_owns_paragraph(g: &Graph, parent: NoteId, child: NoteId) -> bool {
 }
 
 #[test]
+fn link_in_paragraph_body_produces_note_link_and_paragraph_link() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "body [[b]] here\n").unwrap();
+        std::fs::write(root.join("b.md"), "# b\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+
+    // Note-level: one NoteLink a -> b.
+    let note_links: Vec<_> = g
+        .outgoing(a)
+        .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+        .collect();
+    assert_eq!(note_links.len(), 1);
+    assert_eq!(note_links[0].0, b);
+
+    // Paragraph-level: one ParagraphLink from a's paragraph to b.
+    let paras = g.note_paragraphs(a);
+    assert_eq!(paras.len(), 1);
+    let p_links: Vec<_> = g
+        .outgoing(paras[0])
+        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
+        .collect();
+    assert_eq!(p_links.len(), 1);
+    assert_eq!(p_links[0].0, b);
+
+    // No HeadingLink (the link is not on a heading line).
+    let h_links = g
+        .outgoing(a)
+        .filter(|(_, e)| matches!(e, EdgeKind::HeadingLink(_)))
+        .count();
+    assert_eq!(h_links, 0);
+}
+
+#[test]
+fn link_on_heading_line_produces_all_three_levels() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "# See [[b]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# b\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+    let heading = g.heading_by_loc(Path::new("a.md"), 1).unwrap();
+    let para = g.paragraph_by_loc(Path::new("a.md"), 1).unwrap();
+
+    // NoteLink: a -> b.
+    assert!(g
+        .outgoing(a)
+        .any(|(dst, e)| dst == b && matches!(e, EdgeKind::NoteLink(_))));
+    // HeadingLink: heading -> b.
+    assert!(g
+        .outgoing(heading)
+        .any(|(dst, e)| dst == b && matches!(e, EdgeKind::HeadingLink(_))));
+    // ParagraphLink: paragraph -> b (the heading line begins a paragraph).
+    assert!(g
+        .outgoing(para)
+        .any(|(dst, e)| dst == b && matches!(e, EdgeKind::ParagraphLink(_))));
+}
+
+#[test]
+fn embed_links_carry_is_embed_flag() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "![[b]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# b\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let note_link = g
+        .outgoing(a)
+        .find(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+        .unwrap();
+    assert!(note_link.1.link().unwrap().is_embed, "![[b]] is an embed");
+    // No separate Embed edge kind exists in the unified model.
+    let _ = note_link; // (EdgeKind::Embed no longer exists; nothing to assert against.)
+}
+
+#[test]
+fn markdown_link_in_paragraph_produces_paragraph_link_with_full_data() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [b](b.md) here\n").unwrap();
+        std::fs::write(root.join("b.md"), "# b\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+    let para = g.note_paragraphs(a).pop().unwrap();
+    let p_link = g
+        .outgoing(para)
+        .find(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
+        .unwrap();
+    assert_eq!(p_link.0, b);
+    let l = p_link.1.link().unwrap();
+    assert_eq!(l.form, LinkForm::MdLink, "markdown form at paragraph level");
+    assert_eq!(l.raw_text, "[b](b.md)");
+    let _ = l;
+}
+
+#[test]
+fn ghost_kept_alive_by_heading_link_is_garbage_collected() {
+    use assert_fs::prelude::*;
+    use std::io::Write as _;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    // A heading whose line links to [[Phantom]]; the ghost's only incoming
+    // edge at the heading level is the HeadingLink.
+    tmp.child("a.md")
+        .write_str("# Heading [[Phantom]]\n")
+        .unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    assert!(g.ghost_by_raw("Phantom").is_some());
+    // Rewrite a.md to drop the link.
+    let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
+    writeln!(f, "# Heading\n").unwrap();
+    drop(f);
+    g.refresh_note(&v.path, &tmp.path().join("a.md")).unwrap();
+    assert!(
+        g.ghost_by_raw("Phantom").is_none(),
+        "heading-link-only ghost is GC'd across all levels"
+    );
+}
+
+#[test]
+fn resolvable_anchor_targets_heading_node() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+    let section = g
+        .resolve_anchor(b, "Section")
+        .expect("anchor resolves to heading Section");
+    // The ParagraphLink from a's paragraph targets the heading, not b.
+    let para = g.note_paragraphs(a).pop().unwrap();
+    let p_link_target = g
+        .outgoing(para)
+        .find(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
+        .unwrap()
+        .0;
+    assert_eq!(
+        p_link_target, section,
+        "anchored ParagraphLink targets heading"
+    );
+    assert_ne!(p_link_target, b);
+}
+
+#[test]
+fn unresolvable_anchor_targets_note() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[b#Nope]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# Top\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+    let para = g.note_paragraphs(a).pop().unwrap();
+    let p_link = g
+        .outgoing(para)
+        .find(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
+        .unwrap();
+    assert_eq!(p_link.0, b, "unresolvable anchor falls back to the note");
+    assert_eq!(
+        p_link.1.link().unwrap().anchor.as_deref(),
+        Some("Nope"),
+        "anchor retained as metadata"
+    );
+}
+
+#[test]
+fn anchor_on_unresolved_note_targets_ghost() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[Missing#Bar]]\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let ghost = g.ghost_by_raw("Missing").expect("ghost materialized");
+    let para = g.note_paragraphs(a).pop().unwrap();
+    let p_link = g
+        .outgoing(para)
+        .find(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
+        .unwrap();
+    assert_eq!(p_link.0, ghost, "anchored link to ghost targets the ghost");
+    assert_eq!(p_link.1.link().unwrap().anchor.as_deref(), Some("Bar"));
+}
+
+#[test]
+fn note_link_ignores_anchor_for_target() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = note(&g, "a.md");
+    let b = note(&g, "b.md");
+    // NoteLink targets the note b (not the heading), even with an anchor.
+    let note_link = g
+        .outgoing(a)
+        .find(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
+        .unwrap();
+    assert_eq!(note_link.0, b, "NoteLink ignores anchor for target");
+}
+
+#[test]
+fn mentions_of_includes_heading_targeted_links() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
+        std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let b = note(&g, "b.md");
+    // mentions_of(b) yields a's paragraph link (anchored to b's heading).
+    let a_para = g.paragraph_by_loc(Path::new("a.md"), 1).unwrap();
+    let mentions: Vec<NoteId> = g.mentions_of(b).iter().map(|(src, _)| *src).collect();
+    assert!(
+        mentions.contains(&a_para),
+        "a's paragraph mentions b via the anchored link"
+    );
+}
+
+#[test]
+fn anchor_match_normalizes_case_whitespace_trailing_hashes() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("a.md"), "see [[b#My Section]]\n").unwrap();
+        // Heading text "My Section" (trailing ### stripped by extract_headings).
+        std::fs::write(root.join("b.md"), "# My Section ###\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let b = note(&g, "b.md");
+    assert!(
+        g.resolve_anchor(b, "my section").is_some(),
+        "case-insensitive"
+    );
+    assert!(
+        g.resolve_anchor(b, "  My   Section  ").is_some(),
+        "whitespace-collapsed"
+    );
+    assert!(g.resolve_anchor(b, "Nope").is_none());
+}
+
+#[test]
 fn refresh_note_garbage_collects_orphaned_ghost() {
     use assert_fs::prelude::*;
     use std::io::Write as _;
@@ -541,7 +816,7 @@ fn refresh_note_keeps_ghost_when_other_linkers_remain() {
     // via ParagraphLink — filter to Link-form edges for this assertion.
     let link_in = |g: &Graph, id: NoteId| {
         g.incoming(id)
-            .filter(|(_, e)| matches!(e, EdgeKind::Link(_) | EdgeKind::Embed(_)))
+            .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
             .count()
     };
     assert_eq!(link_in(&g, phantom), 2);
@@ -606,7 +881,7 @@ fn paragraph_link_edges_resolve_to_target_note() {
         .expect("a.md owns one paragraph");
     let targets: Vec<NoteId> = g
         .outgoing(paragraph)
-        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink))
+        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
         .map(|(t, _)| t)
         .collect();
     assert_eq!(targets, vec![b], "paragraph links to b via ParagraphLink");
@@ -625,7 +900,7 @@ fn paragraph_link_to_unresolved_target_creates_ghost() {
     let phantom = g.ghost_by_raw("Phantom").expect("ghost exists");
     let paragraph_link_in: usize = g
         .incoming(phantom)
-        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink))
+        .filter(|(_, e)| matches!(e, EdgeKind::ParagraphLink(_)))
         .count();
     assert_eq!(paragraph_link_in, 1);
 }

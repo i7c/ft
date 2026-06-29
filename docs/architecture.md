@@ -146,6 +146,14 @@ This composes with task-section resolution: the template renders the note
 
 ### Graph query DSL (`graph::query`)
 
+The graph model itself — node kinds (Note, Heading, Paragraph, Task,
+Ghost, Directory), the two edge families (exclusive containment vs
+duplicated reference links), identity, build/refresh invariants, and
+anchor resolution — is documented canonically in
+[`docs/graph-semantics.md`](graph-semantics.md). The DSL `edge.kind`
+value-set migration from `link`/`embed` to the unified link kinds is
+documented in [`docs/graph-dsl-migration.md`](graph-dsl-migration.md).
+
 `ft-core::graph::query::parse(src)` returns a `GraphQuery { initial,
 expansion }` (it's `parse_with(src, Profile::Default, today)` defaulted;
 `parse_with` is the real entry point). The DSL describes a navigation

@@ -15,7 +15,7 @@ use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::fs::write_atomic;
 use ft_core::graph::rename::{apply_rename_plan, plan_rename, RenamePlan};
-use ft_core::graph::{Graph, NodeKind, NoteId};
+use ft_core::graph::{EdgeKind, Graph, NodeKind, NoteId};
 use ft_core::markdown::{extract_headings, Heading};
 use ft_core::notes::append::{self, append_template as core_append_template};
 use ft_core::notes::template::{render as render_template, TemplateContext};
@@ -1184,7 +1184,7 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
         Direction::Backlinks => {
             let mut rows: Vec<LinkRow> = graph
                 .incoming(id)
-                .filter(|(_, e)| e.link().is_some())
+                .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
                 .map(|(src, edge)| LinkRow::from_incoming(&graph, src, &queried_path, edge))
                 .collect();
             // Stable order: linker path, then line.
@@ -1194,7 +1194,7 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
         Direction::Forward => {
             let mut rows: Vec<LinkRow> = graph
                 .outgoing(id)
-                .filter(|(_, e)| e.link().is_some())
+                .filter(|(_, e)| matches!(e, EdgeKind::NoteLink(_)))
                 .map(|(dst, edge)| LinkRow::from_outgoing(&graph, &queried_path, dst, edge))
                 .collect();
             // Outgoing edges are already in document order; sort by

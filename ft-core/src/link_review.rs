@@ -180,15 +180,20 @@ pub fn compute_link_review(
                 continue;
             }
 
-            // Walk paragraph→target edges.
+            // Walk paragraph→target edges. Map heading targets back to
+            // their owning note/ghost so the review keys on note-level
+            // identity (anchored links count for the note).
             for (target_id, edge) in graph.outgoing(paragraph_id) {
-                if !matches!(edge, EdgeKind::ParagraphLink) {
+                if !matches!(edge, EdgeKind::ParagraphLink(_)) {
                     continue;
                 }
-                let key = (target_id, ParagraphKey::Paragraph(paragraph_id));
+                let Some(target_note) = graph.link_target_note(target_id) else {
+                    continue;
+                };
+                let key = (target_note, ParagraphKey::Paragraph(paragraph_id));
                 if counted.insert(key) {
                     source_paths_per_target
-                        .entry(target_id)
+                        .entry(target_note)
                         .or_default()
                         .insert(p.source_file.clone());
                 }

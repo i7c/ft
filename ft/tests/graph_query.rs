@@ -207,7 +207,7 @@ fn graph_query_json_cycle_marker_is_serialized() {
             tmp.path().to_str().unwrap(),
             "graph",
             "query",
-            "node where path = \"a.md\"; expand where edge.kind = link;",
+            "node where path = \"a.md\"; expand where edge.kind = note-link;",
             "--format",
             "json",
         ])
@@ -346,7 +346,7 @@ fn graph_query_parse_error_exits_two_with_message_on_stderr() {
             v.to_str().unwrap(),
             "graph",
             "query",
-            "expand where edge.kind = link;",
+            "expand where edge.kind = note-link;",
         ])
         .assert()
         .failure()

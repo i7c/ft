@@ -266,14 +266,14 @@ fn node_title(node: &NodeKind) -> String {
 
 fn edge_kind_label(e: &EdgeKind) -> &'static str {
     match e {
-        EdgeKind::Link(_) => "link",
-        EdgeKind::Embed(_) => "embed",
+        EdgeKind::NoteLink(_) => "note-link",
+        EdgeKind::HeadingLink(_) => "heading-link",
+        EdgeKind::ParagraphLink(_) => "paragraph-link",
         EdgeKind::Contains => "directory-contains",
         EdgeKind::HasTask => "has-task",
         EdgeKind::Subtask => "subtask",
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
         EdgeKind::OwnsHeading => "owns-heading",
-        EdgeKind::ParagraphLink => "paragraph-link",
     }
 }

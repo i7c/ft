@@ -10,12 +10,12 @@ pub fn builtin(name: &str) -> Option<&'static str> {
     Some(match name {
         "fs" => r#"node where path = ""; expand where edge.kind in {directory-contains};"#,
         "ghosts" => "node where kind in {Ghost};",
-        "links" => "node where kind in {Note}; expand where edge.kind in {link, embed};",
+        "links" => "node where kind in {Note}; expand where edge.kind in {note-link};",
         "tasks-in-fs" => {
             r#"node where path = ""; expand where edge.kind in {directory-contains, has-task, subtask};"#
         }
         "tree" => {
-            r#"node where path = ""; expand where edge.kind in {directory-contains, link, embed};"#
+            r#"node where path = ""; expand where edge.kind in {directory-contains, note-link};"#
         }
         _ => return None,
     })

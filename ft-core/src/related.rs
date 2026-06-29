@@ -61,15 +61,14 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
     target_set.insert(note_id);
     target_set.extend(alias_set.iter().copied());
 
-    // Same-paragraph co-occurrence: walk paragraphs that link to any
-    // target; collect their other ParagraphLink targets.
+    // Same-paragraph co-occurrence: walk paragraphs that mention any
+    // target (via mentions_of, which includes anchored links to a
+    // target's headings); collect their other ParagraphLink targets,
+    // mapped to note-level identity.
     let mut same_paragraph: HashMap<NoteId, u32> = HashMap::new();
     let mut matched_paragraphs: HashSet<NoteId> = HashSet::new();
     for target in &target_set {
-        for (src, edge) in graph.incoming(*target) {
-            if !matches!(edge, EdgeKind::ParagraphLink) {
-                continue;
-            }
+        for (src, _edge) in graph.mentions_of(*target) {
             if !matches!(graph.node(src), NodeKind::Paragraph(_)) {
                 continue;
             }
@@ -79,15 +78,19 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
     for p_id in &matched_paragraphs {
         let mut per_paragraph: HashSet<NoteId> = HashSet::new();
         for (dst, edge) in graph.outgoing(*p_id) {
-            if !matches!(edge, EdgeKind::ParagraphLink) {
+            if !matches!(edge, EdgeKind::ParagraphLink(_)) {
                 continue;
             }
-            if dst == note_id {
+            // Map heading targets back to their owning note/ghost.
+            let Some(dst_note) = graph.link_target_note(dst) else {
+                continue;
+            };
+            if dst_note == note_id {
                 continue;
             }
             // De-dup per paragraph: a paragraph counts +3 for C once
             // even if it links to C multiple times.
-            per_paragraph.insert(dst);
+            per_paragraph.insert(dst_note);
         }
         for c in per_paragraph {
             *same_paragraph.entry(c).or_insert(0) += 3;
@@ -116,13 +119,17 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
                 continue;
             }
             for (dst, e) in graph.outgoing(p_id) {
-                if !matches!(e, EdgeKind::ParagraphLink) {
+                if !matches!(e, EdgeKind::ParagraphLink(_)) {
                     continue;
                 }
-                if dst == note_id {
+                // Map heading targets back to their owning note/ghost.
+                let Some(dst_note) = graph.link_target_note(dst) else {
+                    continue;
+                };
+                if dst_note == note_id {
                     continue;
                 }
-                file_concepts.insert(dst);
+                file_concepts.insert(dst_note);
             }
         }
         for c in file_concepts {

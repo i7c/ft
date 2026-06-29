@@ -157,6 +157,9 @@ pub enum Attr {
     Path,
     Title,
     Form,
+    /// Edge-only: whether the link is an embed (`is_embed`). Accepts
+    /// `true` / `false` as enum-style values.
+    Embed,
     Indegree,
     Outdegree,
     /// Task-specific: status (e.g., "Open", "Done")
@@ -196,7 +199,9 @@ impl Attr {
     /// validation.
     pub fn value_type(self) -> ValueType {
         match self {
-            Attr::Kind | Attr::Form | Attr::Status | Attr::Priority => ValueType::Enum,
+            Attr::Kind | Attr::Form | Attr::Status | Attr::Priority | Attr::Embed => {
+                ValueType::Enum
+            }
             Attr::Path | Attr::Title | Attr::Description => ValueType::Str,
             Attr::Indegree | Attr::Outdegree => ValueType::Int,
             Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed => {
@@ -1089,11 +1094,13 @@ impl Parser {
             _ => {}
         }
 
-        // Parse-time kind/form value check (only for the enum-like attrs).
+        // Parse-time kind/form/embed value check (only for the enum-like attrs).
         if matches!(attr, Attr::Kind) {
             self.check_kind_values(subject, &value, op_pos)?;
         } else if matches!(attr, Attr::Form) {
             self.check_form_values(&value, op_pos)?;
+        } else if matches!(attr, Attr::Embed) {
+            self.check_embed_values(&value, op_pos)?;
         }
 
         Ok(Condition {
@@ -1390,6 +1397,33 @@ impl Parser {
             Value::None => Ok(()),
         }
     }
+
+    fn check_embed_values(&self, value: &Value, position: usize) -> Result<(), DslError> {
+        let allowed: &[&str] = &["true", "false"];
+        let check = |lit: &Literal| -> Result<(), DslError> {
+            let s = literal_as_str(lit);
+            if allowed.contains(&s) {
+                Ok(())
+            } else {
+                Err(DslError::UnknownKindValue {
+                    attr: "embed".into(),
+                    value: s.to_string(),
+                    allowed: allowed.iter().map(|s| (*s).to_string()).collect(),
+                    position,
+                })
+            }
+        };
+        match value {
+            Value::Single(l) => check(l),
+            Value::Set(ls) => {
+                for l in ls {
+                    check(l)?;
+                }
+                Ok(())
+            }
+            Value::None => Ok(()),
+        }
+    }
 }
 
 /// Parse-time check: does this operator make sense on this attribute?
@@ -1452,6 +1486,7 @@ fn parse_attr(s: &str, position: usize) -> Result<Attr, DslError> {
         "path" => Ok(Attr::Path),
         "title" => Ok(Attr::Title),
         "form" => Ok(Attr::Form),
+        "embed" => Ok(Attr::Embed),
         "indegree" => Ok(Attr::Indegree),
         "outdegree" => Ok(Attr::Outdegree),
         // Task-specific attributes
@@ -1489,11 +1524,17 @@ fn validate_attr_subject(
         }),
         (Attr::Path | Attr::Title, _) => Ok(()),
 
-        // Form: edge-only.
+        // Form / Embed: edge-only.
         (Attr::Form, Subject::Edge) => Ok(()),
         (Attr::Form, _) => Err(DslError::ScopeError {
             entity: subject_name(subject).into(),
             hint: "`form` is an edge attribute — use `edge.form` in an expand block or neighbor filter".into(),
+            position,
+        }),
+        (Attr::Embed, Subject::Edge) => Ok(()),
+        (Attr::Embed, _) => Err(DslError::ScopeError {
+            entity: subject_name(subject).into(),
+            hint: "`embed` is an edge attribute — use `edge.embed` in an expand block or neighbor filter".into(),
             position,
         }),
 
@@ -1883,8 +1924,8 @@ fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> bool {
             let count = graph.outgoing(id).count() as i64;
             eval_int_op(count, c.op, &c.value)
         }
-        // Form is edge-only — never reached on a node.
-        Attr::Form => false,
+        // Form / Embed are edge-only — never reached on a node.
+        Attr::Form | Attr::Embed => false,
     }
 }
 
@@ -1943,6 +1984,10 @@ fn eval_cond_on_edge(edge: &EdgeKind, c: &Condition) -> bool {
         Attr::Kind => edge_kind_str(edge).to_string(),
         Attr::Form => match edge_form_str(edge) {
             Some(s) => s.to_string(),
+            None => return false,
+        },
+        Attr::Embed => match edge.link() {
+            Some(l) => if l.is_embed { "true" } else { "false" }.to_string(),
             None => return false,
         },
         _ => return false,
@@ -2016,28 +2061,28 @@ fn node_kind_str(n: &NodeKind) -> &'static str {
 /// truth for parse-time validation; a test keeps it in lockstep with
 /// `edge_kind_str` so a new edge variant can't silently become unqueryable.
 pub(crate) const EDGE_KIND_VALUES: &[&str] = &[
-    "link",
-    "embed",
+    "note-link",
+    "heading-link",
+    "paragraph-link",
     "directory-contains",
     "has-task",
     "subtask",
     "links-into",
     "owns-paragraph",
     "owns-heading",
-    "paragraph-link",
 ];
 
 fn edge_kind_str(e: &EdgeKind) -> &'static str {
     match e {
-        EdgeKind::Link(_) => "link",
-        EdgeKind::Embed(_) => "embed",
+        EdgeKind::NoteLink(_) => "note-link",
+        EdgeKind::HeadingLink(_) => "heading-link",
+        EdgeKind::ParagraphLink(_) => "paragraph-link",
         EdgeKind::Contains => "directory-contains",
         EdgeKind::HasTask => "has-task",
         EdgeKind::Subtask => "subtask",
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
         EdgeKind::OwnsHeading => "owns-heading",
-        EdgeKind::ParagraphLink => "paragraph-link",
     }
 }
 
@@ -2245,6 +2290,7 @@ fn attr_name(a: Attr) -> &'static str {
         Attr::Path => "path",
         Attr::Title => "title",
         Attr::Form => "form",
+        Attr::Embed => "embed",
         Attr::Indegree => "indegree",
         Attr::Outdegree => "outdegree",
         Attr::Status => "status",
@@ -2314,6 +2360,7 @@ mod tests {
         fn link() -> crate::graph::LinkEdge {
             crate::graph::LinkEdge {
                 form: LinkForm::WikiLink,
+                is_embed: false,
                 byte_range: 0..0,
                 line: 1,
                 raw_text: String::new(),
@@ -2325,15 +2372,15 @@ mod tests {
         // Exhaustive by construction: a new EdgeKind variant forces a new
         // entry here (and then in EDGE_KIND_VALUES to pass).
         let all = [
-            EdgeKind::Link(link()),
-            EdgeKind::Embed(link()),
+            EdgeKind::NoteLink(link()),
+            EdgeKind::HeadingLink(link()),
+            EdgeKind::ParagraphLink(link()),
             EdgeKind::Contains,
             EdgeKind::HasTask,
             EdgeKind::Subtask,
             EdgeKind::LinksInto,
             EdgeKind::OwnsParagraph,
             EdgeKind::OwnsHeading,
-            EdgeKind::ParagraphLink,
         ];
         for e in &all {
             let name = edge_kind_str(e);
@@ -2473,7 +2520,7 @@ mod tests {
 
         #[test]
         fn parse_expand_simple() {
-            let q = parse_ok("node; expand where edge.kind = link;");
+            let q = parse_ok("node; expand where edge.kind = note-link;");
             let pol = q.expansion.as_ref().unwrap();
             assert_eq!(pol.conditions.len(), 1);
             assert_eq!(pol.conditions[0].subject, Subject::Edge);
@@ -2508,7 +2555,7 @@ mod tests {
 
         #[test]
         fn no_initial_set() {
-            let err = parse("expand where edge.kind = link;").unwrap_err();
+            let err = parse("expand where edge.kind = note-link;").unwrap_err();
             assert!(matches!(err, DslError::NoInitialSet));
         }
 
@@ -3019,6 +3066,80 @@ mod tests {
         }
 
         #[test]
+        fn edge_kind_values_include_new_link_kinds() {
+            // note-link / heading-link / paragraph-link are all accepted.
+            for k in ["note-link", "heading-link", "paragraph-link"] {
+                let q = parse(&format!(
+                    "node where kind = Note; expand where edge.kind = {k};"
+                ));
+                assert!(q.is_ok(), "{k} should parse: {:?}", q);
+            }
+        }
+
+        #[test]
+        fn edge_embed_predicate_filters_embeds() {
+            use assert_fs::prelude::*;
+
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("note.md")
+                .write_str("plain [[b]] and embed ![[b]]\n")
+                .unwrap();
+            tmp.child("b.md").write_str("# b\n").unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            // expand following only embed edges yields b (via ![[b]]) but
+            // we ask for embed=true: both link occurrences to b exist, but
+            // the embed-only filter yields exactly the embed occurrence.
+            let q = parse(
+                "node where kind = Note; \
+                 expand where edge.kind = note-link and edge.embed = true;",
+            )
+            .unwrap();
+            let roots = q.select(&g);
+            assert_eq!(roots.len(), 2, "note.md and b.md are both notes");
+            // Expand only from note.md (the one with the embed).
+            let note_id = roots
+                .iter()
+                .copied()
+                .find(
+                    |id| matches!(g.node(*id), NodeKind::Note(n) if n.path == Path::new("note.md")),
+                )
+                .unwrap();
+            let children = q.expand(&g, note_id).unwrap();
+            // The embed filter keeps only ![[b]]; the destination is b.
+            assert!(!children.is_empty(), "embed edge yields b");
+            for id in &children {
+                assert!(matches!(g.node(*id), NodeKind::Note(_)));
+            }
+            // Non-embed filter also yields b (sanity).
+            let q2 = parse(
+                "node where kind = Note; \
+                 expand where edge.kind = note-link and edge.embed = false;",
+            )
+            .unwrap();
+            let children2 = q2.expand(&g, note_id).unwrap();
+            assert!(!children2.is_empty(), "non-embed edge yields b");
+        }
+
+        #[test]
+        fn edge_embed_rejects_non_boolean() {
+            let err = parse("node; expand where edge.embed = yes;").unwrap_err();
+            assert!(matches!(err, DslError::UnknownKindValue { .. }));
+        }
+
+        #[test]
+        fn old_edge_kind_values_rejected() {
+            for old in ["link", "embed"] {
+                let err = parse(&format!("node; expand where edge.kind = {old};")).unwrap_err();
+                assert!(
+                    matches!(err, DslError::UnknownKindValue { .. }),
+                    "{old} should be rejected"
+                );
+            }
+        }
+
+        #[test]
         fn expand_paragraph_link_yields_target_notes() {
             use assert_fs::prelude::*;
 
@@ -3206,7 +3327,7 @@ mod tests {
             let (_tmp, g) = cyclic_graph();
             let q = parse(
                 "node where path = \"a.md\"; \
-                 expand where edge.kind = link;",
+                 expand where edge.kind = note-link;",
             )
             .unwrap();
             let tree = q.walk(
@@ -3237,7 +3358,7 @@ mod tests {
             let (_tmp, g) = cyclic_graph();
             let q = parse(
                 "node where path = \"a.md\"; \
-                 expand where edge.kind = link;",
+                 expand where edge.kind = note-link;",
             )
             .unwrap();
             let tree = q.walk(
@@ -3298,7 +3419,8 @@ mod tests {
             // Sanity: Stop policy + unlimited depth must terminate on a
             // cycle (otherwise this test would hang).
             let (_tmp, g) = cyclic_graph();
-            let q = parse("node where path = \"a.md\"; expand where edge.kind = link;").unwrap();
+            let q =
+                parse("node where path = \"a.md\"; expand where edge.kind = note-link;").unwrap();
             let tree = q.walk(&g, &WalkOptions::unlimited());
             // a(root) + b + a(cycle) = 3 nodes total
             assert_eq!(count_nodes(&tree), 3);
@@ -3321,7 +3443,7 @@ mod tests {
         }
 
         snap_err!(err_empty_input, "   ");
-        snap_err!(err_no_initial_set, "expand where edge.kind = link;");
+        snap_err!(err_no_initial_set, "expand where edge.kind = note-link;");
         snap_err!(
             err_type_mismatch_eq_with_set,
             "node where kind = {Note, Directory};"
@@ -3383,8 +3505,9 @@ mod tests {
 
         fn arb_edge_kind_literal() -> impl Strategy<Value = Literal> {
             prop_oneof![
-                Just(Literal::Ident("link".into())),
-                Just(Literal::Ident("embed".into())),
+                Just(Literal::Ident("note-link".into())),
+                Just(Literal::Ident("heading-link".into())),
+                Just(Literal::Ident("paragraph-link".into())),
                 Just(Literal::Ident("directory-contains".into())),
                 Just(Literal::Ident("has-task".into())),
                 Just(Literal::Ident("subtask".into())),
@@ -3709,7 +3832,7 @@ mod tests {
         fn every_dslerror_variant_is_reachable() {
             let cases: &[(&str, &str)] = &[
                 ("EmptyInput", "   "),
-                ("NoInitialSet", "expand where edge.kind = link;"),
+                ("NoInitialSet", "expand where edge.kind = note-link;"),
                 ("UnexpectedToken", "node where = Note;"),
                 ("UnknownAttribute", "node where foo = bar;"),
                 ("AmbiguousAttribute", "node; expand where kind = link;"),
