@@ -2,7 +2,8 @@
 
 `ft` exists because Obsidian is excellent at being Obsidian, and bad
 at being a CLI. This chapter is the long-form answer to *why the tool
-is shaped the way it is* — companion-to-Obsidian, not replacement.
+is shaped the way it is* — an alternative that is built to sit next to
+Obsidian, not a replacement for it.
 
 ## A companion, not a replacement
 
@@ -29,6 +30,51 @@ This has practical consequences:
   rewritten by `ft` is byte-equivalent to what the plugin produces
   for the same fields, so the plugin keeps working over `ft`'s
   writes.
+
+Because `ft` brings no editor and no renderer, it is not a *drop-in*
+replacement for Obsidian: there are many things Obsidian does (canvas,
+plugins, rich preview, collaboration) that `ft` has no knowledge of.
+It can be an *alternative* — you can migrate to it if you supply your
+own editor and renderer — but the practical, intended relationship is
+side-by-side: the vault is the contract, and both tools honour it.
+
+## Quick add anywhere, connect later
+
+There are many ways to organize notes — folder structures, numbering
+schemes, PARA, Zettelkasten — and most assume that the point of
+organizing is to *retrieve* notes later, so they impose structure up
+front to keep things from sliding into chaos. `ft` is flexible about
+which system you layer on top, but it is tuned for one need in
+particular: **quick add anywhere, connect later.**
+
+That need comes from a dynamic work style. You have a day you can't
+pre-plan. A conversation starts about project A, reveals a connection
+to project B, and turns out to touch a longstanding problem that has
+no home yet. You can't decide where a note belongs before the
+conversation that produces it — and by the time you could, the thought
+is gone. The systems that make you choose the right folder first are
+fighting that reality.
+
+So `ft` doesn't try to make you file correctly the first time. Write
+anywhere — a daily note, an inbox, a scratch file — it doesn't matter
+where. What `ft` provides is a *process* to gather and reorganize
+after the fact:
+
+- **Wikilinks mention concepts, not only notes that exist.** Write
+  about a topic and drop `[[that topic]]` into the paragraph. The link
+  target doesn't need to exist; `ft` tracks it as a ghost. Backlinks
+  and the journal surface every reference.
+- **The multi-source journal regathers context.** `ft notes journal
+  --link "[[Foo]]" --link "[[Bar]]"` walks the graph and pulls every
+  paragraph mentioning either concept into one reverse-chronological
+  feed, with a `matched:` badge on paragraphs that touch both. So a
+  note's "right place" is found *after* the fact, not imposed before.
+- **Synthesis compiles new focused notes from that feed**, with each
+  excerpt pinned to the commit it came from. See
+  [synthesis.md](synthesis.md).
+
+Notes don't need to be right-placed or right-sized at creation. You
+connect later.
 
 ## The CLI / TUI split
 

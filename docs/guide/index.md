@@ -1,10 +1,14 @@
 # The `ft` user guide
 
-`ft` is a command-line companion to your Obsidian vault. It reads and
-writes the same Markdown files Obsidian does, focused on the
-[Tasks-plugin](https://publish.obsidian.md/tasks/) emoji format, the
-day-planner block format, and the link graph. It does not replace
-Obsidian — it sits next to it.
+`ft` is a tool to organize, analyze, and manipulate notes. On top of
+that core it adds exactly two things — task management and time
+management — and nothing else. It is format-compatible with Obsidian
+(same wikilinks, same [Tasks-plugin](https://publish.obsidian.md/tasks/)
+emoji format, same Day-Planner blocks) so it reads and writes the same
+vault, but it is not a replacement for Obsidian: there is no Markdown
+editor and no Markdown renderer — bring your own. It can be an
+*alternative* if you supply your own editor and renderer, and it is
+designed to sit next to Obsidian in the same vault.
 
 This guide explains the tool in narrative order: what it's for, how to
 install and configure it, how to drive it from the CLI and the TUI, and

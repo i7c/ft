@@ -16,6 +16,26 @@ in a while sit down and connect dots. The ritual:
 The whole thing assumes your vault is a git repository — without
 history, "what's been on my mind recently" can't be computed.
 
+## Why plain text with provenance, not live embeds
+
+Step 3 — synthesis — compiles a new, focused note from gathered
+material. Obsidian and Roam suggest doing that with **block links and
+block embeds**: a dynamic mechanism where editing a source block
+updates every note that embeds it. `ft` deliberately does not.
+
+The updatable aspect adds little in practice; people rarely keep
+editing a source block once it's been pulled into a composed note.
+And critically, live embeds **require Markdown rendering** to be
+useful, which makes the resulting note hostile to machines: a composed
+note full of embed links has to be resolved before you can read it or
+hand it to an AI. What `ft` keeps from the embed idea is the only part
+that matters — **provenance.** Each excerpt is quoted into the synth
+note as plain text and pinned to the git commit it came from via an
+`[!ft-source]` callout. The note is a self-contained document you can
+read as-is *and* pass to a machine as-is: no resolution step, no
+rendering required, and `ft synth verify` confirms each excerpt still
+matches its pinned source.
+
 ## Step 1: the review window
 
 `ft review` scans every wikilink added between two commits and ranks
