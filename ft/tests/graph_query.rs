@@ -1,5 +1,5 @@
 //! Integration tests for `ft graph query`. Covers the five output
-//! formats, the depth bound, the cycle policy guard, parse-error exit
+//! formats, the depth bound, the visit policy guard, parse-error exit
 //! code, and `--from-file` parity with the inline form.
 
 use assert_cmd::Command;
@@ -183,7 +183,7 @@ fn graph_query_json_produces_valid_document() {
     assert_eq!(root["kind"], "Directory");
     assert_eq!(root["path"], "");
     assert_eq!(root["depth"], 0);
-    assert_eq!(root["cycle"], false);
+    assert_eq!(root["closure"], "open");
     assert!(root["edge_to_parent"].is_null());
 
     // Count nodes via JSON walk: 8 total (4 dirs + 4 notes).
@@ -195,12 +195,13 @@ fn graph_query_json_produces_valid_document() {
 }
 
 #[test]
-fn graph_query_json_cycle_marker_is_serialized() {
+fn graph_query_json_closure_marker_is_serialized() {
     let tmp = TempDir::new().unwrap();
     tmp.child(".obsidian").create_dir_all().unwrap();
     tmp.child("a.md").write_str("[[b]]\n").unwrap();
     tmp.child("b.md").write_str("[[a]]\n").unwrap();
 
+    // Default dedup policy: the re-entered `a` is a reference leaf.
     let out = ft()
         .args([
             "--vault",
@@ -220,12 +221,40 @@ fn graph_query_json_cycle_marker_is_serialized() {
     let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let root = &v[0];
     let b = &root["children"][0];
-    let a_cycle = &b["children"][0];
-    assert_eq!(a_cycle["cycle"], true, "the re-entered a should be a cycle");
-    assert!(
-        a_cycle["children"].as_array().unwrap().is_empty(),
-        "cycle nodes have no children"
+    let a_ref = &b["children"][0];
+    assert_eq!(
+        a_ref["closure"], "reference",
+        "under dedup the re-entered a is a reference"
     );
+    assert!(
+        a_ref["children"].as_array().unwrap().is_empty(),
+        "reference nodes have no children"
+    );
+
+    // Tree policy (depth-bounded) reports the ancestor re-entry as a cycle.
+    let out = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "graph",
+            "query",
+            "node where path = \"a.md\"; expand where edge.kind = note-link;",
+            "--visit-policy",
+            "tree",
+            "--depth",
+            "5",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let a_cycle = &v[0]["children"][0]["children"][0];
+    assert_eq!(a_cycle["closure"], "cycle", "tree mode reports the cycle");
 }
 
 // ── NDJSON format ─────────────────────────────────────────────────────
@@ -432,10 +461,10 @@ fn graph_query_from_file_missing_path_errors_out() {
     .stderr(predicate::str::contains("could not read query"));
 }
 
-// ── Cycle policy ──────────────────────────────────────────────────────
+// ── Visit policy ──────────────────────────────────────────────────────
 
 #[test]
-fn graph_query_cycle_allow_without_depth_is_rejected() {
+fn graph_query_visit_allow_without_depth_is_rejected() {
     let v = dirs_vault();
     ft().args([
         "--vault",
@@ -443,12 +472,29 @@ fn graph_query_cycle_allow_without_depth_is_rejected() {
         "graph",
         "query",
         DIRS_FULL_QUERY,
-        "--cycle-policy",
+        "--visit-policy",
         "allow",
     ])
     .assert()
     .failure()
-    .stderr(predicate::str::contains("--cycle-policy allow"));
+    .stderr(predicate::str::contains("--visit-policy {tree,allow}"));
+}
+
+#[test]
+fn graph_query_visit_tree_without_depth_is_rejected() {
+    let v = dirs_vault();
+    ft().args([
+        "--vault",
+        v.to_str().unwrap(),
+        "graph",
+        "query",
+        DIRS_FULL_QUERY,
+        "--visit-policy",
+        "tree",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("--visit-policy {tree,allow}"));
 }
 
 // ── Tree snapshot for the dirs fixture ────────────────────────────────

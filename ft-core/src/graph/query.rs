@@ -45,6 +45,7 @@
 //! See `docs/graph-query-dsl.md` for worked examples and the error
 //! catalog.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use chrono::NaiveDate;
@@ -270,19 +271,46 @@ pub enum Profile {
 
 // ── Walk types ───────────────────────────────────────────────────────
 
-/// Control how [`GraphQuery::walk`] handles back-edges that would cause
-/// the same node to appear in its own ancestor chain.
+/// Control how [`GraphQuery::walk`] handles re-encountering a node it has
+/// already seen during the same walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CyclePolicy {
-    /// When a candidate child is already on the ancestor path, emit it
-    /// with [`WalkNode::cycle`] set to `true` and don't descend into it.
-    /// Default.
+pub enum VisitPolicy {
+    /// Expand each reachable node at most once across the whole walk. A
+    /// node reached again — whether via a back-edge or via a distinct
+    /// non-cyclic path (a shared hub or diamond) — is emitted as a
+    /// [`NodeClosure::Reference`] leaf and not descended into. This bounds
+    /// an unbounded walk to `O(V + E)` and is the only policy that is safe
+    /// without a [`WalkOptions::max_depth`] bound. Default.
     #[default]
-    Stop,
-    /// Don't detect cycles. The traversal only terminates via
-    /// [`WalkOptions::max_depth`]; combining `Allow` with an unbounded
-    /// depth over a cyclic subgraph will loop forever.
+    Dedup,
+    /// `tree(1)`-style: a node reachable by multiple paths is repeated with
+    /// its full subtree under every parent. Only a node appearing in its
+    /// own ancestor chain is stopped (emitted as [`NodeClosure::Cycle`]).
+    /// Because shared descendants are re-expanded once per path, a dense or
+    /// cyclic graph requires a [`WalkOptions::max_depth`] bound to terminate
+    /// in practical time.
+    Tree,
+    /// No re-encounter detection at all. The traversal terminates only via
+    /// [`WalkOptions::max_depth`]; combining `Allow` with an unbounded depth
+    /// over a cyclic subgraph will loop forever.
     Allow,
+}
+
+/// Why a [`WalkNode`] was not descended into, distinguishing a node the
+/// walk fully expanded from one it deliberately stopped at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeClosure {
+    /// Expanded normally. `children` reflects the matching neighbors, which
+    /// may legitimately be empty for a genuine leaf or a depth-bounded node.
+    #[default]
+    Open,
+    /// Already expanded earlier in this walk; emitted so the incoming edge
+    /// is visible, but with empty `children` and not descended into.
+    /// Produced by [`VisitPolicy::Dedup`].
+    Reference,
+    /// Re-entered via the current ancestor path. Emitted with empty
+    /// `children`. Produced by [`VisitPolicy::Tree`].
+    Cycle,
 }
 
 /// Knobs for [`GraphQuery::walk`].
@@ -291,11 +319,18 @@ pub struct WalkOptions {
     /// Maximum tree depth. `None` means unlimited. `Some(0)` returns
     /// roots only — every child list is empty.
     pub max_depth: Option<usize>,
-    pub cycle_policy: CyclePolicy,
+    pub visit: VisitPolicy,
+    /// Defensive cap on the total number of materialized nodes. `None`
+    /// means unbounded. When the walk would exceed this it stops descending
+    /// and returns the partial tree. Primarily a backstop for the
+    /// unbounded-unsafe [`VisitPolicy::Tree`] / [`VisitPolicy::Allow`]; the
+    /// default [`VisitPolicy::Dedup`] is already `O(V + E)`.
+    pub max_nodes: Option<usize>,
 }
 
 impl WalkOptions {
-    /// Unlimited depth with cycle detection — the `tree(1)` default.
+    /// Unlimited depth with the default [`VisitPolicy::Dedup`] — each
+    /// reachable node expanded once, terminating on any finite graph.
     pub fn unlimited() -> Self {
         Self::default()
     }
@@ -310,10 +345,10 @@ pub struct WalkNode {
     /// Edge kind that led from the immediate parent to this node.
     /// `None` for roots returned from [`GraphQuery::select`].
     pub edge_to_parent: Option<EdgeKind>,
-    /// `true` when this node's id appeared in its own ancestor chain
-    /// under [`CyclePolicy::Stop`]. The node is still emitted (so the
-    /// user can see the cycle close) but `children` is always empty.
-    pub cycle: bool,
+    /// Whether this node was expanded, or stopped at as a dedup reference
+    /// or an ancestor cycle. `Reference`/`Cycle` always have empty
+    /// `children`. See [`NodeClosure`].
+    pub closure: NodeClosure,
     pub children: Vec<WalkNode>,
 }
 
@@ -1755,21 +1790,29 @@ impl GraphQuery {
     ///
     /// - `opts.max_depth = None` is unlimited; `Some(0)` returns roots
     ///   only; `Some(n)` returns at most n hops below each root.
-    /// - `opts.cycle_policy = Stop` (default) emits a node whose id
-    ///   appears in its own ancestor chain with `cycle: true` and does
-    ///   not descend into it. `Allow` performs no cycle check — the
-    ///   caller is responsible for bounding via `max_depth`.
+    /// - `opts.visit = Dedup` (default) expands each reachable node once;
+    ///   a re-encounter is emitted as a [`NodeClosure::Reference`] leaf, so
+    ///   an unbounded walk is `O(V + E)`. `Tree` repeats shared subtrees and
+    ///   only stops ancestor cycles ([`NodeClosure::Cycle`]); `Allow` stops
+    ///   nothing — both rely on `max_depth` to terminate on dense or cyclic
+    ///   graphs. See [`VisitPolicy`].
+    /// - `opts.max_nodes` is a defensive cap; when exceeded the walk stops
+    ///   descending and returns the partial tree.
     ///
     /// When the query has no `expand` block, the returned `WalkNode`s
     /// have empty `children`, matching the `None` return from
     /// [`GraphQuery::expand`].
     pub fn walk(&self, graph: &Graph, opts: &WalkOptions) -> Vec<WalkNode> {
         let roots = self.select(graph);
-        let mut ancestors: Vec<NoteId> = Vec::new();
-        roots
-            .into_iter()
-            .map(|id| self.walk_node(graph, id, 0, None, opts, &mut ancestors))
-            .collect()
+        let mut st = WalkState::default();
+        let mut out = Vec::with_capacity(roots.len());
+        for id in roots {
+            if st.over_budget(opts) {
+                break;
+            }
+            out.push(self.walk_node(graph, id, 0, None, opts, &mut st));
+        }
+        out
     }
 
     fn walk_node(
@@ -1779,35 +1822,44 @@ impl GraphQuery {
         depth: usize,
         edge_to_parent: Option<EdgeKind>,
         opts: &WalkOptions,
-        ancestors: &mut Vec<NoteId>,
+        st: &mut WalkState,
     ) -> WalkNode {
-        let is_cycle = matches!(opts.cycle_policy, CyclePolicy::Stop) && ancestors.contains(&id);
+        st.count += 1;
+
+        let closure = match opts.visit {
+            VisitPolicy::Dedup if st.visited.contains(&id) => NodeClosure::Reference,
+            VisitPolicy::Tree if st.ancestors.contains(&id) => NodeClosure::Cycle,
+            _ => NodeClosure::Open,
+        };
 
         let at_depth_limit = opts.max_depth == Some(depth);
+        let descend =
+            matches!(closure, NodeClosure::Open) && !at_depth_limit && !st.over_budget(opts);
 
-        let children = if is_cycle || at_depth_limit {
+        let children = if !descend {
             Vec::new()
         } else {
+            // Mark expanded before descending so siblings reached later in
+            // this subtree dedup against it under `Dedup`.
+            if matches!(opts.visit, VisitPolicy::Dedup) {
+                st.visited.insert(id);
+            }
             // Walk one hop using the expand policy; this returns None
             // when there is no expand block, which we map to no children.
             let child_ids = self.expand(graph, id).unwrap_or_default();
             if child_ids.is_empty() {
                 Vec::new()
             } else {
-                ancestors.push(id);
+                st.ancestors.push(id);
                 let mut out = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
+                    if st.over_budget(opts) {
+                        break;
+                    }
                     let edge_kind = edge_kind_between(graph, id, child_id);
-                    out.push(self.walk_node(
-                        graph,
-                        child_id,
-                        depth + 1,
-                        edge_kind,
-                        opts,
-                        ancestors,
-                    ));
+                    out.push(self.walk_node(graph, child_id, depth + 1, edge_kind, opts, st));
                 }
-                ancestors.pop();
+                st.ancestors.pop();
                 out
             }
         };
@@ -1816,9 +1868,28 @@ impl GraphQuery {
             id,
             depth,
             edge_to_parent,
-            cycle: is_cycle,
+            closure,
             children,
         }
+    }
+}
+
+/// Mutable bookkeeping carried through a single [`GraphQuery::walk`].
+#[derive(Default)]
+struct WalkState {
+    /// Nodes already expanded in this walk — the dedup set for
+    /// [`VisitPolicy::Dedup`].
+    visited: HashSet<NoteId>,
+    /// The current DFS path, for ancestor-cycle detection under
+    /// [`VisitPolicy::Tree`].
+    ancestors: Vec<NoteId>,
+    /// Total materialized nodes so far, for the `max_nodes` backstop.
+    count: usize,
+}
+
+impl WalkState {
+    fn over_budget(&self, opts: &WalkOptions) -> bool {
+        opts.max_nodes.is_some_and(|cap| self.count >= cap)
     }
 }
 
@@ -3256,7 +3327,7 @@ mod tests {
                 &g,
                 &WalkOptions {
                     max_depth: Some(0),
-                    cycle_policy: CyclePolicy::Stop,
+                    ..Default::default()
                 },
             );
             assert_eq!(tree.len(), 1);
@@ -3273,7 +3344,7 @@ mod tests {
                 &g,
                 &WalkOptions {
                     max_depth: Some(1),
-                    cycle_policy: CyclePolicy::Stop,
+                    ..Default::default()
                 },
             );
             assert_eq!(tree.len(), 1);
@@ -3323,7 +3394,37 @@ mod tests {
         }
 
         #[test]
-        fn walk_stops_on_cycle_when_policy_stop() {
+        fn walk_dedup_marks_reentry_as_reference() {
+            let (_tmp, g) = cyclic_graph();
+            let q = parse(
+                "node where path = \"a.md\"; \
+                 expand where edge.kind = note-link;",
+            )
+            .unwrap();
+            // Dedup is the default; unbounded.
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            // a → b → a(reference)
+            assert_eq!(tree.len(), 1);
+            assert_eq!(tree[0].closure, NodeClosure::Open);
+            assert_eq!(tree[0].children.len(), 1, "a has one child b");
+            let b = &tree[0].children[0];
+            assert_eq!(b.closure, NodeClosure::Open);
+            assert_eq!(b.children.len(), 1, "b expands once to the a-reference");
+            let a_ref = &b.children[0];
+            assert_eq!(
+                a_ref.closure,
+                NodeClosure::Reference,
+                "the re-entered a is a dedup reference, not re-expanded"
+            );
+            assert!(
+                a_ref.children.is_empty(),
+                "reference markers have no children"
+            );
+            assert_eq!(a_ref.id, tree[0].id, "same node id as the root a");
+        }
+
+        #[test]
+        fn walk_tree_marks_ancestor_reentry_as_cycle() {
             let (_tmp, g) = cyclic_graph();
             let q = parse(
                 "node where path = \"a.md\"; \
@@ -3334,27 +3435,24 @@ mod tests {
                 &g,
                 &WalkOptions {
                     max_depth: None,
-                    cycle_policy: CyclePolicy::Stop,
+                    visit: VisitPolicy::Tree,
+                    ..Default::default()
                 },
             );
-            // a → b → a(cycle)
+            // a → b → a(cycle) — Tree mode reports the ancestor re-entry as
+            // a cycle rather than a dedup reference.
             assert_eq!(tree.len(), 1);
-            assert!(!tree[0].cycle);
-            assert_eq!(tree[0].children.len(), 1, "a has one child b");
-            let b = &tree[0].children[0];
-            assert!(!b.cycle);
-            assert_eq!(b.children.len(), 1, "b expands once to a-cycle");
-            let a_cycle = &b.children[0];
-            assert!(a_cycle.cycle, "the re-entered a is a cycle marker");
+            let a_cycle = &tree[0].children[0].children[0];
+            assert_eq!(a_cycle.closure, NodeClosure::Cycle);
             assert!(
                 a_cycle.children.is_empty(),
                 "cycle markers have no children"
             );
-            assert_eq!(a_cycle.id, tree[0].id, "same node id as the root a");
+            assert_eq!(a_cycle.id, tree[0].id);
         }
 
         #[test]
-        fn walk_allows_cycle_when_policy_allow_under_depth_bound() {
+        fn walk_allow_never_marks_and_relies_on_depth() {
             let (_tmp, g) = cyclic_graph();
             let q = parse(
                 "node where path = \"a.md\"; \
@@ -3365,15 +3463,16 @@ mod tests {
                 &g,
                 &WalkOptions {
                     max_depth: Some(3),
-                    cycle_policy: CyclePolicy::Allow,
+                    visit: VisitPolicy::Allow,
+                    ..Default::default()
                 },
             );
-            // No cycle detection — a → b → a → b, terminating at depth 3.
+            // No detection — a → b → a → b, terminating only at depth 3.
             assert_eq!(tree.len(), 1);
             let mut current = &tree[0];
             let mut visited_depths = vec![current.depth];
             while let Some(child) = current.children.first() {
-                assert!(!child.cycle, "Allow policy never sets the cycle marker");
+                assert_eq!(child.closure, NodeClosure::Open, "Allow never marks a node");
                 visited_depths.push(child.depth);
                 current = child;
             }
@@ -3382,6 +3481,119 @@ mod tests {
                 current.children.is_empty(),
                 "depth bound is what terminates the walk"
             );
+        }
+
+        /// Build a diamond: `a → b`, `a → c`, `b → d`, `c → d`. `d` is a
+        /// shared descendant reachable via two distinct, non-cyclic paths.
+        fn diamond_graph() -> (assert_fs::TempDir, Graph) {
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("a.md").write_str("[[b]]\n[[c]]\n").unwrap();
+            tmp.child("b.md").write_str("[[d]]\n").unwrap();
+            tmp.child("c.md").write_str("[[d]]\n").unwrap();
+            tmp.child("d.md").write_str("no links\n").unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            (tmp, g)
+        }
+
+        #[test]
+        fn walk_dedup_expands_shared_descendant_once() {
+            let (_tmp, g) = diamond_graph();
+            let q =
+                parse("node where path = \"a.md\"; expand where edge.kind = note-link;").unwrap();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            // a + b + c + d(open under one parent) + d(reference under the
+            // other) = 5 nodes — d is expanded exactly once.
+            assert_eq!(count_nodes(&tree), 5);
+
+            let a = &tree[0];
+            let d_under: Vec<&WalkNode> =
+                a.children.iter().map(|child| &child.children[0]).collect();
+            assert_eq!(d_under.len(), 2, "d appears under both b and c");
+            let opens = d_under
+                .iter()
+                .filter(|n| n.closure == NodeClosure::Open)
+                .count();
+            let refs = d_under
+                .iter()
+                .filter(|n| n.closure == NodeClosure::Reference)
+                .count();
+            assert_eq!(opens, 1, "d is expanded under exactly one parent");
+            assert_eq!(refs, 1, "and a reference under the other");
+        }
+
+        #[test]
+        fn walk_tree_repeats_shared_descendant() {
+            let (_tmp, g) = diamond_graph();
+            let q =
+                parse("node where path = \"a.md\"; expand where edge.kind = note-link;").unwrap();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: None,
+                    visit: VisitPolicy::Tree,
+                    ..Default::default()
+                },
+            );
+            // Tree mode repeats d's (empty) subtree under both b and c —
+            // both are Open, neither a reference.
+            let a = &tree[0];
+            for child in &a.children {
+                let d = &child.children[0];
+                assert_eq!(
+                    d.closure,
+                    NodeClosure::Open,
+                    "Tree repeats, never references"
+                );
+            }
+        }
+
+        #[test]
+        fn walk_dedup_terminates_on_dense_graph() {
+            // A complete digraph on N nodes: every note links to every
+            // other. Under the old path-based behavior this enumerates O(N!)
+            // simple paths; under Dedup it is bounded.
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            let n = 8;
+            let names: Vec<String> = (0..n).map(|i| format!("n{i}")).collect();
+            for i in 0..n {
+                let body: String = names
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, name)| format!("[[{name}]]\n"))
+                    .collect();
+                tmp.child(format!("n{i}.md")).write_str(&body).unwrap();
+            }
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q =
+                parse("node where path = \"n0.md\"; expand where edge.kind = note-link;").unwrap();
+            let tree = q.walk(&g, &WalkOptions::unlimited());
+            // Each of the n nodes is expanded once (n Open nodes); every
+            // other incident edge yields a single reference leaf. The total
+            // is bounded by O(V + E) = O(n^2), nowhere near O(n!).
+            assert!(
+                count_nodes(&tree) <= n * n,
+                "dedup keeps the dense walk bounded"
+            );
+        }
+
+        #[test]
+        fn walk_max_nodes_truncates() {
+            let g = dirs_graph();
+            let q = dirs_query();
+            let tree = q.walk(
+                &g,
+                &WalkOptions {
+                    max_depth: None,
+                    visit: VisitPolicy::Dedup,
+                    max_nodes: Some(3),
+                },
+            );
+            assert_eq!(count_nodes(&tree), 3, "the budget caps materialized nodes");
         }
 
         #[test]
@@ -3396,7 +3608,7 @@ mod tests {
                     root.children.is_empty(),
                     "no expand block means no children regardless of max_depth"
                 );
-                assert!(!root.cycle);
+                assert_eq!(root.closure, NodeClosure::Open);
                 assert!(root.edge_to_parent.is_none());
             }
             // depth_zero with a None max_depth still returns nothing

@@ -3,9 +3,10 @@
 //!
 //! The CLI's mental model is *static traversal*: pass a single DSL
 //! expression plus a depth bound, get the full subtree printed at
-//! once. Depth defaults to unlimited with cycle-stop semantics — the
-//! same default as `tree(1)` — so a typical invocation prints the
-//! whole reachable subgraph without configuration.
+//! once. Depth defaults to unlimited with dedup semantics — each
+//! reachable node is expanded once — so a typical invocation prints the
+//! whole reachable subgraph without configuration and without blowing up
+//! on densely linked vaults.
 //!
 //! Exit codes:
 //! - `0` — happy path.
@@ -22,7 +23,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::graph::delete::{apply_delete, plan_delete};
 use ft_core::graph::preset;
-use ft_core::graph::query::{parse_with, CyclePolicy, Profile, WalkOptions};
+use ft_core::graph::query::{parse_with, Profile, VisitPolicy, WalkOptions};
 use ft_core::vault::Vault;
 
 use crate::output::graph::{render, Format};
@@ -70,11 +71,13 @@ pub struct QueryArgs {
     #[arg(long)]
     pub depth: Option<usize>,
 
-    /// How to handle back-edges that would re-visit an ancestor.
-    /// `stop` (default) emits the cycle marker and halts that branch;
-    /// `allow` requires `--depth` to bound the traversal.
-    #[arg(long, value_enum, default_value_t = CycleArg::Stop)]
-    pub cycle_policy: CycleArg,
+    /// How to handle re-encountering an already-seen node.
+    /// `dedup` (default) expands each node once and marks re-encounters as
+    /// references — safe without `--depth`. `tree` repeats shared subtrees
+    /// (`tree(1)`-style) and `allow` disables detection entirely; both
+    /// require `--depth` to bound the traversal.
+    #[arg(long, value_enum, default_value_t = VisitArg::Dedup)]
+    pub visit_policy: VisitArg,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Tree)]
@@ -103,16 +106,18 @@ impl From<ProfileArg> for Profile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum CycleArg {
-    Stop,
+pub enum VisitArg {
+    Dedup,
+    Tree,
     Allow,
 }
 
-impl From<CycleArg> for CyclePolicy {
-    fn from(v: CycleArg) -> Self {
+impl From<VisitArg> for VisitPolicy {
+    fn from(v: VisitArg) -> Self {
         match v {
-            CycleArg::Stop => CyclePolicy::Stop,
-            CycleArg::Allow => CyclePolicy::Allow,
+            VisitArg::Dedup => VisitPolicy::Dedup,
+            VisitArg::Tree => VisitPolicy::Tree,
+            VisitArg::Allow => VisitPolicy::Allow,
         }
     }
 }
@@ -143,11 +148,15 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     let opts = WalkOptions {
         max_depth: args.depth,
-        cycle_policy: args.cycle_policy.into(),
+        visit: args.visit_policy.into(),
+        max_nodes: None,
     };
 
-    if matches!(opts.cycle_policy, CyclePolicy::Allow) && opts.max_depth.is_none() {
-        bail!("--cycle-policy allow requires --depth (otherwise a cyclic query loops forever)");
+    if matches!(opts.visit, VisitPolicy::Tree | VisitPolicy::Allow) && opts.max_depth.is_none() {
+        bail!(
+            "--visit-policy {{tree,allow}} requires --depth (it can blow up on dense or cyclic \
+             graphs); the default --visit-policy dedup is unbounded-safe"
+        );
     }
 
     let tree = query.walk(&graph, &opts);

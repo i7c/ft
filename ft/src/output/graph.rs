@@ -7,14 +7,14 @@
 //!   downstream tools
 //!
 //! All formatters consume `&[WalkNode]` directly — no format-specific
-//! re-traversal of the graph — and emit cycle nodes (those with
-//! [`WalkNode::cycle`] = `true`) with empty children regardless of
-//! format, matching the cycle stop semantics of [`super::super::...`]
-//! `GraphQuery::walk`.
+//! re-traversal of the graph — and emit stopped nodes (dedup references
+//! and ancestor cycles, see [`WalkNode::closure`]) with empty children
+//! regardless of format, matching the visit semantics of
+//! [`super::super::...`] `GraphQuery::walk`.
 
 use std::io::{self, Write};
 
-use ft_core::graph::query::WalkNode;
+use ft_core::graph::query::{NodeClosure, WalkNode};
 use ft_core::graph::{EdgeKind, Graph, NodeKind};
 
 /// Output shape. Mirrors the clap value enum the CLI exposes.
@@ -62,12 +62,11 @@ fn render_tree(out: &mut impl Write, tree: &[WalkNode], graph: &Graph) -> io::Re
 
 fn write_tree_node(out: &mut impl Write, node: &WalkNode, graph: &Graph) -> io::Result<()> {
     let indent = "  ".repeat(node.depth);
-    let glyph = if node.cycle {
-        '↺'
-    } else if !node.children.is_empty() {
-        '▶'
-    } else {
-        '·'
+    let glyph = match node.closure {
+        NodeClosure::Cycle => '↺',
+        NodeClosure::Reference => '↪',
+        NodeClosure::Open if !node.children.is_empty() => '▶',
+        NodeClosure::Open => '·',
     };
     let kind = kind_char(graph.node(node.id));
     let label = display_label(graph.node(node.id));
@@ -95,7 +94,7 @@ fn node_to_json(node: &WalkNode, graph: &Graph) -> serde_json::Value {
         "path": node_path(kind),
         "title": node_title(kind),
         "depth": node.depth,
-        "cycle": node.cycle,
+        "closure": closure_str(node.closure),
         "edge_to_parent": node.edge_to_parent.as_ref().map(edge_kind_label),
         "children": node.children.iter().map(|c| node_to_json(c, graph)).collect::<Vec<_>>(),
     })
@@ -122,7 +121,7 @@ fn write_ndjson_node(
         "path": node_path(kind),
         "title": node_title(kind),
         "depth": node.depth,
-        "cycle": node.cycle,
+        "closure": closure_str(node.closure),
         "edge_to_parent": node.edge_to_parent.as_ref().map(edge_kind_label),
     });
     writeln!(out, "{row}")?;
@@ -183,8 +182,12 @@ fn write_markdown_node(out: &mut impl Write, node: &WalkNode, graph: &Graph) -> 
     let kind = graph.node(node.id);
     let title = node_title(kind);
     let path = node_path(kind);
-    let cycle = if node.cycle { " (↺)" } else { "" };
-    writeln!(out, "{indent}- {title} ({path}){cycle}")?;
+    let marker = match node.closure {
+        NodeClosure::Cycle => " (↺)",
+        NodeClosure::Reference => " (↪)",
+        NodeClosure::Open => "",
+    };
+    writeln!(out, "{indent}- {title} ({path}){marker}")?;
     for child in &node.children {
         write_markdown_node(out, child, graph)?;
     }
@@ -192,6 +195,14 @@ fn write_markdown_node(out: &mut impl Write, node: &WalkNode, graph: &Graph) -> 
 }
 
 // ── Node / edge helpers ───────────────────────────────────────────────
+
+fn closure_str(closure: NodeClosure) -> &'static str {
+    match closure {
+        NodeClosure::Open => "open",
+        NodeClosure::Reference => "reference",
+        NodeClosure::Cycle => "cycle",
+    }
+}
 
 fn kind_char(node: &NodeKind) -> char {
     match node {
