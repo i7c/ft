@@ -39,6 +39,9 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 NodeKind::Paragraph(p) => {
                     format!("paragraph:{}:{}", p.source_file.display(), p.line_start)
                 }
+                NodeKind::Heading(h) => {
+                    format!("heading:{}:{}", h.source_file.display(), h.line)
+                }
             };
             let edge_kind = match edge {
                 EdgeKind::Link(_) => "link",
@@ -48,6 +51,7 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 EdgeKind::Subtask => "subtask",
                 EdgeKind::LinksInto => "links-into",
                 EdgeKind::OwnsParagraph => "owns-paragraph",
+                EdgeKind::OwnsHeading => "owns-heading",
                 EdgeKind::ParagraphLink => "paragraph-link",
             };
             let l = edge.link()?;
@@ -281,6 +285,218 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     // b lost its incoming edge from a.
     assert_eq!(g.incoming(b).filter(|(_, e)| e.link().is_some()).count(), 0);
     let _ = c;
+}
+
+#[test]
+fn heading_nodes_created_with_owns_heading_tree() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(
+            root.join("note.md"),
+            "# A\nintro\n\n## B\nbody\n\n### C\nmore\n",
+        )
+        .unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let n = note(&g, "note.md");
+
+    // Three headings, each owned by the nearest shallower heading.
+    let a = g
+        .heading_by_loc(Path::new("note.md"), 1)
+        .expect("A heading");
+    let b = g
+        .heading_by_loc(Path::new("note.md"), 4)
+        .expect("B heading");
+    let c = g
+        .heading_by_loc(Path::new("note.md"), 7)
+        .expect("C heading");
+
+    // OwnsHeading: note -> A, A -> B, B -> C.
+    assert!(has_owns_heading(&g, n, a));
+    assert!(has_owns_heading(&g, a, b));
+    assert!(has_owns_heading(&g, b, c));
+    assert!(
+        !has_owns_heading(&g, n, b),
+        "B is not a direct child of the note"
+    );
+
+    // Levels + text.
+    assert_eq!(heading_text(&g, a), "A");
+    assert_eq!(heading_level(&g, a), 1);
+    assert_eq!(heading_text(&g, b), "B");
+    assert_eq!(heading_level(&g, b), 2);
+    assert_eq!(heading_text(&g, c), "C");
+    assert_eq!(heading_level(&g, c), 3);
+}
+
+#[test]
+fn heading_sibling_closes_prior_section() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "# A\n## B\n## C\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let n = note(&g, "note.md");
+    let a = g.heading_by_loc(Path::new("note.md"), 1).unwrap();
+    let b = g.heading_by_loc(Path::new("note.md"), 2).unwrap();
+    let c = g.heading_by_loc(Path::new("note.md"), 3).unwrap();
+    // A owns both B and C (sibling headings); B does not own C.
+    assert!(has_owns_heading(&g, n, a));
+    assert!(has_owns_heading(&g, a, b));
+    assert!(has_owns_heading(&g, a, c));
+    assert!(!has_owns_heading(&g, b, c));
+}
+
+#[test]
+fn heading_in_fenced_code_is_not_a_heading() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "```\n# Fake\n```\n# Real\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    assert!(g.heading_by_loc(Path::new("note.md"), 2).is_none());
+    assert!(g.heading_by_loc(Path::new("note.md"), 4).is_some());
+}
+
+#[test]
+fn paragraph_ownership_uses_nearest_container() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "intro\n\n# A\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let n = note(&g, "note.md");
+    let a = g.heading_by_loc(Path::new("note.md"), 3).unwrap();
+    let paras = g.note_paragraphs(n);
+    assert_eq!(paras.len(), 2, "intro + heading-body");
+    // Intro (line 1) owned by the note; the paragraph starting at the
+    // `# A` heading line (3) owned by A.
+    let intro = g.paragraph_by_loc(Path::new("note.md"), 1).unwrap();
+    let body = g.paragraph_by_loc(Path::new("note.md"), 3).unwrap();
+    assert!(has_owns_paragraph(&g, n, intro));
+    assert!(!has_owns_paragraph(&g, n, body), "body owned by heading A");
+    assert!(has_owns_paragraph(&g, a, body));
+    assert!(!has_owns_paragraph(&g, a, intro));
+}
+
+#[test]
+fn paragraph_at_heading_line_owned_by_that_heading() {
+    // Fork A2: the heading line begins a paragraph; that paragraph is
+    // owned by the heading whose line it begins at.
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "# A\n## B\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let a = g.heading_by_loc(Path::new("note.md"), 1).unwrap();
+    let b = g.heading_by_loc(Path::new("note.md"), 2).unwrap();
+    // The paragraph beginning at line 2 (## B) is owned by B, not A.
+    let p2 = g.paragraph_by_loc(Path::new("note.md"), 2).unwrap();
+    assert!(has_owns_paragraph(&g, b, p2));
+    assert!(!has_owns_paragraph(&g, a, p2));
+}
+
+#[test]
+fn paragraph_ownership_is_exclusive() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "# A\nbody\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let body = g.paragraph_by_loc(Path::new("note.md"), 1).unwrap();
+    let incoming_owners: Vec<_> = g
+        .incoming(body)
+        .filter(|(_, e)| matches!(e, EdgeKind::OwnsParagraph))
+        .collect();
+    assert_eq!(
+        incoming_owners.len(),
+        1,
+        "exactly one OwnsParagraph edge per paragraph"
+    );
+}
+
+#[test]
+fn note_headings_and_all_headings() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "# A\n## B\n### C\n# D\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let n = note(&g, "note.md");
+    // Direct children: A and D (both top-level).
+    let direct = g.note_headings(n);
+    assert_eq!(direct.len(), 2, "A and D are direct children");
+    // Full subtree: A, B, C, D.
+    let all = g.all_headings(n);
+    assert_eq!(all.len(), 4, "A, B, C, D in subtree");
+}
+
+#[test]
+fn note_paragraphs_recurses_through_nested_headings() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "intro\n# A\np1\n## B\np2\n").unwrap();
+    });
+    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let n = note(&g, "note.md");
+    let paras = g.note_paragraphs(n);
+    assert_eq!(paras.len(), 3, "intro + p1 + p2 across nested headings");
+}
+
+#[test]
+fn refresh_note_updates_heading_count_and_cleans_index() {
+    use assert_fs::prelude::*;
+    use std::io::Write as _;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("note.md").write_str("# A\nbody\n").unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    assert!(g.heading_by_loc(Path::new("note.md"), 1).is_some());
+    // Edit: replace # A with # B and add ## C.
+    let mut f = std::fs::File::create(tmp.path().join("note.md")).unwrap();
+    writeln!(f, "# B\nbody\n\n## C\n").unwrap();
+    drop(f);
+    g.refresh_note(&v.path, &tmp.path().join("note.md"))
+        .unwrap();
+    assert!(
+        g.heading_by_loc(Path::new("note.md"), 1).is_some(),
+        "B at line 1"
+    );
+    assert!(
+        g.heading_by_loc(Path::new("note.md"), 4).is_some(),
+        "C at line 4"
+    );
+}
+
+#[test]
+fn stable_key_round_trips_for_heading() {
+    let (v, _tmp) = temp_vault(|root| {
+        std::fs::write(root.join("note.md"), "# A\n").unwrap();
+    });
+    let g1 = Graph::build(&v, &Scan::default()).unwrap();
+    let h = g1.heading_by_loc(Path::new("note.md"), 1).unwrap();
+    let key = g1.stable_key(h);
+    let g2 = Graph::build(&v, &Scan::default()).unwrap();
+    assert_eq!(g2.id_for_key(&key), Some(h));
+}
+
+// ── heading test helpers ───────────────────────────────────────
+
+fn heading_text(g: &Graph, id: NoteId) -> String {
+    match g.node(id) {
+        NodeKind::Heading(h) => h.text.clone(),
+        _ => panic!("not a heading"),
+    }
+}
+
+fn heading_level(g: &Graph, id: NoteId) -> u8 {
+    match g.node(id) {
+        NodeKind::Heading(h) => h.level,
+        _ => panic!("not a heading"),
+    }
+}
+
+fn has_owns_heading(g: &Graph, parent: NoteId, child: NoteId) -> bool {
+    g.outgoing(parent)
+        .any(|(dst, e)| dst == child && matches!(e, EdgeKind::OwnsHeading))
+}
+
+fn has_owns_paragraph(g: &Graph, parent: NoteId, child: NoteId) -> bool {
+    g.outgoing(parent)
+        .any(|(dst, e)| dst == child && matches!(e, EdgeKind::OwnsParagraph))
 }
 
 #[test]

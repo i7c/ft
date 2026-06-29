@@ -5,36 +5,36 @@
 
 ## 2. Heading extraction + Heading node kind (ft-core)
 
-- [ ] 2.1 Add `NodeKind::Heading(HeadingData)` and `HeadingData { source_file: PathBuf, line: u32, level: u8, text: String }` to `ft-core/src/graph/mod.rs`; derive `PartialEq, Eq, Clone, Debug`
-- [ ] 2.2 Add `NodeKey::Heading(PathBuf, u32)` to `NodeKey`; implement `stable_key` + `id_for_key` arms for it
-- [ ] 2.3 Add `heading_index: HashMap<(PathBuf, u32), NoteId>` to `Graph`; add `heading_by_loc(&self, path: &Path, line: u32) -> Option<NoteId>` lookup
-- [ ] 2.4 Add `EdgeKind::OwnsHeading` variant; update all exhaustive `match` arms across `ft-core` and `ft` (`cargo build` will surface them)
-- [ ] 2.5 Extend `Graph::build`'s parallel parse phase to also call `markdown::extract_headings(&content)` (already `LineSkipState`-aware), collecting `(rel_path, headings)` tuples alongside links/paragraphs
-- [ ] 2.6 In the serial phase of `Graph::build`, insert heading nodes + `OwnsHeading` edges via the heading-stack algorithm (D6): process headings in document order; for a heading at level `L`, pop every heading with level `>= L`, set parent to new top-of-stack or the note, add `OwnsHeading`, push. Populate `heading_index`
-- [ ] 2.7 Write graph unit tests for heading nodes: note with `# A\n## B\n### C` yields `OwnsHeading` edges note→A, A→B, B→C; sibling `## B\n## C` both owned by `A`; heading-in-fenced-code not a node; `heading_by_loc` round-trip; `stable_key`/`id_for_key` round-trip across rebuild
+- [x] 2.1 Add `NodeKind::Heading(HeadingData)` and `HeadingData { source_file: PathBuf, line: u32, level: u8, text: String }` to `ft-core/src/graph/mod.rs`; derive `PartialEq, Eq, Clone, Debug`
+- [x] 2.2 Add `NodeKey::Heading(PathBuf, u32)` to `NodeKey`; implement `stable_key` + `id_for_key` arms for it
+- [x] 2.3 Add `heading_index: HashMap<(PathBuf, u32), NoteId>` to `Graph`; add `heading_by_loc(&self, path: &Path, line: u32) -> Option<NoteId>` lookup
+- [x] 2.4 Add `EdgeKind::OwnsHeading` variant; update all exhaustive `match` arms across `ft-core` and `ft` (`cargo build` will surface them)
+- [x] 2.5 Extend `Graph::build`'s parallel parse phase to also call `markdown::extract_headings(&content)` (already `LineSkipState`-aware), collecting `(rel_path, headings)` tuples alongside links/paragraphs
+- [x] 2.6 In the serial phase of `Graph::build`, insert heading nodes + `OwnsHeading` edges via the heading-stack algorithm (D6): process headings in document order; for a heading at level `L`, pop every heading with level `>= L`, set parent to new top-of-stack or the note, add `OwnsHeading`, push. Populate `heading_index`
+- [x] 2.7 Write graph unit tests for heading nodes: note with `# A\n## B\n### C` yields `OwnsHeading` edges note→A, A→B, B→C; sibling `## B\n## C` both owned by `A`; heading-in-fenced-code not a node; `heading_by_loc` round-trip; `stable_key`/`id_for_key` round-trip across rebuild
 
 ## 3. Nearest-container OwnsParagraph (ft-core)
 
-- [ ] 3.1 Change `insert_paragraph_nodes_for` to assign each paragraph to its nearest container: parent = heading on top of the heading stack at the paragraph's start line, or the note if the stack is empty. Add `OwnsParagraph(parent -> paragraph)`
-- [ ] 3.2 Enforce the heading-paragraph ordering invariant (D6): within one note, process headings and paragraphs in ascending `line` order; when a heading and a paragraph share a start line (Fork A2), process the heading first so the paragraph is owned by its own heading
-- [ ] 3.3 Add `Graph::note_paragraphs(note_id) -> Vec<NoteId>` (recursive `OwnsHeading` walk ∪ direct `OwnsParagraph` children) and `note_headings(note_id) -> Vec<NoteId>` (direct `OwnsHeading` children) and `all_headings(note_id) -> Vec<NoteId>` (full subtree)
-- [ ] 3.4 Update `Graph::refresh_note`: remove the note's heading nodes (and their `OwnsHeading`/`OwnsParagraph`/outgoing link edges) and paragraph nodes, re-insert headings + paragraphs via the same stack/nearest-container rules, purge `heading_index`/`paragraph_index`
-- [ ] 3.5 Write unit tests: intro paragraph before first heading is note-owned; paragraph under `# A` is A-owned; paragraph under `# A\n## B` is B-owned; exclusive ownership (exactly one incoming `OwnsParagraph` per paragraph); `note_paragraphs` recurses through nested headings; `note_headings` returns only direct children; `refresh_note` updates heading count and cleans stale `heading_index`
+- [x] 3.1 Change `insert_paragraph_nodes_for` to assign each paragraph to its nearest container: parent = heading on top of the heading stack at the paragraph's start line, or the note if the stack is empty. Add `OwnsParagraph(parent -> paragraph)`
+- [x] 3.2 Enforce the heading-paragraph ordering invariant (D6): within one note, process headings and paragraphs in ascending `line` order; when a heading and a paragraph share a start line (Fork A2), process the heading first so the paragraph is owned by its own heading
+- [x] 3.3 Add `Graph::note_paragraphs(note_id) -> Vec<NoteId>` (recursive `OwnsHeading` walk ∪ direct `OwnsParagraph` children) and `note_headings(note_id) -> Vec<NoteId>` (direct `OwnsHeading` children) and `all_headings(note_id) -> Vec<NoteId>` (full subtree)
+- [x] 3.4 Update `Graph::refresh_note`: remove the note's heading nodes (and their `OwnsHeading`/`OwnsParagraph`/outgoing link edges) and paragraph nodes, re-insert headings + paragraphs via the same stack/nearest-container rules, purge `heading_index`/`paragraph_index`
+- [x] 3.5 Write unit tests: intro paragraph before first heading is note-owned; paragraph under `# A` is A-owned; paragraph under `# A\n## B` is B-owned; exclusive ownership (exactly one incoming `OwnsParagraph` per paragraph); `note_paragraphs` recurses through nested headings; `note_headings` returns only direct children; `refresh_note` updates heading count and cleans stale `heading_index`
 
 ## 4. DSL: Heading kind + owns-heading edge (ft-core, ft)
 
-- [ ] 4.1 Add `Heading` to `node_kind_str` / kind-value validation table in `ft-core/src/graph/query.rs`; add `owns-heading` to the edge-kind value table; update `child_sort_key` with a `Heading` rank (between Directory and Note, per design)
-- [ ] 4.2 Add heading `title` support to `node_string_attr` (return `HeadingData.text` for `Attr::Title` on `NodeKind::Heading`); keep `path` returning `None` for Heading (Non-Goal: no `source_file` via `path`)
-- [ ] 4.3 Update DSL parse/eval tests: `node where kind = Heading` selects headings; `node where kind = Heading and title = "X"` filters by heading text; `expand where edge.kind = owns-heading` yields sub-headings; `node where kind = Note; expand where edge.kind in {owns-heading, owns-paragraph}` yields a note's headings + heading-less paragraphs
-- [ ] 4.4 Regenerate `insta` snapshots in `ft-core/src/graph/tests.rs` and `ft-core/src/graph/query.rs` tests for the new heading-node counts and `owns-heading` edges
-- [ ] 4.5 Update `ft/src/output/graph.rs` and `ft/src/tui/tabs/graph.rs` to render `Heading` nodes (label = heading text or `#`-prefixed level); regenerate TUI `TestBackend` snapshots in `ft/src/tui/tests.rs`
+- [x] 4.1 Add `Heading` to `node_kind_str` / kind-value validation table in `ft-core/src/graph/query.rs`; add `owns-heading` to the edge-kind value table; update `child_sort_key` with a `Heading` rank (between Directory and Note, per design)
+- [x] 4.2 Add heading `title` support to `node_string_attr` (return `HeadingData.text` for `Attr::Title` on `NodeKind::Heading`); keep `path` returning `None` for Heading (Non-Goal: no `source_file` via `path`)
+- [x] 4.3 Update DSL parse/eval tests: `node where kind = Heading` selects headings; `node where kind = Heading and title = "X"` filters by heading text; `expand where edge.kind = owns-heading` yields sub-headings; `node where kind = Note; expand where edge.kind in {owns-heading, owns-paragraph}` yields a note's headings + heading-less paragraphs
+- [x] 4.4 Regenerate `insta` snapshots in `ft-core/src/graph/tests.rs` and `ft-core/src/graph/query.rs` tests for the new heading-node counts and `owns-heading` edges
+- [x] 4.5 Update `ft/src/output/graph.rs` and `ft/src/tui/tabs/graph.rs` to render `Heading` nodes (label = heading text or `#`-prefixed level); regenerate TUI `TestBackend` snapshots in `ft/src/tui/tests.rs`
 
 ## 5. Migrate consumers to note_paragraphs (ft-core, no link changes yet)
 
-- [ ] 5.1 `ft-core/src/journal.rs`: replace `graph.outgoing(note).filter(OwnsParagraph)` paragraph enumeration with `Graph::note_paragraphs`; keep `ParagraphLink` (still wiki-only/data-less at this phase) matching for now
-- [ ] 5.2 `ft-core/src/related.rs`: replace the same-file cross-paragraph paragraph enumeration (`outgoing(owner).filter(OwnsParagraph)`) with `Graph::note_paragraphs`
-- [ ] 5.3 `ft-core/src/link_review.rs`: replace `graph.outgoing(note_id).filter(OwnsParagraph)` with `Graph::note_paragraphs`
-- [ ] 5.4 Run `cargo test --workspace`; fix any consumer tests that assumed flat note→paragraph ownership. Regenerate affected `insta` snapshots (journal/related outputs unchanged in *content* at this phase — only the traversal path changed — but verify)
+- [x] 5.1 `ft-core/src/journal.rs`: replace `graph.outgoing(note).filter(OwnsParagraph)` paragraph enumeration with `Graph::note_paragraphs`; keep `ParagraphLink` (still wiki-only/data-less at this phase) matching for now
+- [x] 5.2 `ft-core/src/related.rs`: replace the same-file cross-paragraph paragraph enumeration (`outgoing(owner).filter(OwnsParagraph)`) with `Graph::note_paragraphs`
+- [x] 5.3 `ft-core/src/link_review.rs`: replace `graph.outgoing(note_id).filter(OwnsParagraph)` with `Graph::note_paragraphs`
+- [x] 5.4 Run `cargo test --workspace`; fix any consumer tests that assumed flat note→paragraph ownership. Regenerate affected `insta` snapshots (journal/related outputs unchanged in *content* at this phase — only the traversal path changed — but verify)
 
 ## 6. Unified link kinds + LinkEdge.is_embed (ft-core)
 

@@ -200,6 +200,7 @@ fn kind_char(node: &NodeKind) -> char {
         NodeKind::Ghost(_) => 'G',
         NodeKind::Task(_) => 'T',
         NodeKind::Paragraph(_) => 'P',
+        NodeKind::Heading(_) => 'H',
     }
 }
 
@@ -210,6 +211,7 @@ fn kind_name(node: &NodeKind) -> &'static str {
         NodeKind::Ghost(_) => "Ghost",
         NodeKind::Task(_) => "Task",
         NodeKind::Paragraph(_) => "Paragraph",
+        NodeKind::Heading(_) => "Heading",
     }
 }
 
@@ -230,6 +232,7 @@ fn display_label(node: &NodeKind) -> String {
         NodeKind::Ghost(g) => g.raw.clone(),
         NodeKind::Task(t) => t.description.clone(),
         NodeKind::Paragraph(p) => format!("{}:{}", p.source_file.display(), p.line_start),
+        NodeKind::Heading(h) => format!("{}:{}", h.source_file.display(), h.line),
     }
 }
 
@@ -240,6 +243,7 @@ fn node_path(node: &NodeKind) -> String {
         NodeKind::Ghost(g) => g.raw.clone(),
         NodeKind::Task(t) => t.source_file.to_string_lossy().into_owned(),
         NodeKind::Paragraph(p) => p.source_file.to_string_lossy().into_owned(),
+        NodeKind::Heading(h) => h.source_file.to_string_lossy().into_owned(),
     }
 }
 
@@ -256,6 +260,7 @@ fn node_title(node: &NodeKind) -> String {
         NodeKind::Ghost(g) => g.raw.clone(),
         NodeKind::Task(t) => t.description.clone(),
         NodeKind::Paragraph(p) => format!("{}:{}", p.source_file.display(), p.line_start),
+        NodeKind::Heading(h) => h.text.clone(),
     }
 }
 
@@ -268,6 +273,7 @@ fn edge_kind_label(e: &EdgeKind) -> &'static str {
         EdgeKind::Subtask => "subtask",
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
+        EdgeKind::OwnsHeading => "owns-heading",
         EdgeKind::ParagraphLink => "paragraph-link",
     }
 }

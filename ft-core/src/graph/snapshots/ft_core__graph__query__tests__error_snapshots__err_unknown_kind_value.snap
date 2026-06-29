@@ -2,4 +2,4 @@
 source: ft-core/src/graph/query.rs
 expression: "format! (\"{err}\")"
 ---
-unknown value `Notes` for `kind` at position 16 (allowed: Note, Directory, Ghost, Task, Paragraph)
+unknown value `Notes` for `kind` at position 16 (allowed: Note, Directory, Ghost, Task, Paragraph, Heading)

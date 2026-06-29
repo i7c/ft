@@ -1337,7 +1337,7 @@ impl Parser {
     ) -> Result<(), DslError> {
         let allowed: &[&str] = match subject {
             Subject::Edge => EDGE_KIND_VALUES,
-            _ => &["Note", "Directory", "Ghost", "Task", "Paragraph"],
+            _ => &["Note", "Directory", "Ghost", "Task", "Paragraph", "Heading"],
         };
         let check = |lit: &Literal| -> Result<(), DslError> {
             let s = literal_as_str(lit);
@@ -1813,6 +1813,7 @@ fn child_sort_key(graph: &Graph, id: NoteId) -> (u8, String) {
             4,
             format!("{}:{:08}", p.source_file.display(), p.line_start),
         ),
+        NodeKind::Heading(h) => (5, format!("{}:{:08}", h.source_file.display(), h.line)),
     }
 }
 
@@ -1955,9 +1956,11 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
         Attr::Path => match node {
             NodeKind::Note(n) => Some(n.path.to_string_lossy().into_owned()),
             NodeKind::Directory(d) => Some(d.path.to_string_lossy().into_owned()),
-            // Paragraphs live inside notes; they don't have their own
-            // filesystem path. Use `kind = Paragraph` to filter to them.
+            // Paragraphs and headings live inside notes; they don't have
+            // their own filesystem path. Use `kind = Paragraph` /
+            // `kind = Heading` to filter to them.
             NodeKind::Paragraph(_) => None,
+            NodeKind::Heading(_) => None,
             NodeKind::Ghost(_) => None,
             // `self.path` on a task is the vault-relative path of the
             // note that owns it — the source file. This is canonical
@@ -1969,6 +1972,7 @@ fn node_string_attr(node: &NodeKind, attr: Attr) -> Option<String> {
         },
         Attr::Title => match node {
             NodeKind::Note(n) => Some(n.title.clone()),
+            NodeKind::Heading(h) => Some(h.text.clone()),
             _ => None,
         },
         // Task-specific string attributes
@@ -2003,6 +2007,7 @@ fn node_kind_str(n: &NodeKind) -> &'static str {
         NodeKind::Ghost(_) => "Ghost",
         NodeKind::Task(_) => "Task",
         NodeKind::Paragraph(_) => "Paragraph",
+        NodeKind::Heading(_) => "Heading",
     }
 }
 
@@ -2018,6 +2023,7 @@ pub(crate) const EDGE_KIND_VALUES: &[&str] = &[
     "subtask",
     "links-into",
     "owns-paragraph",
+    "owns-heading",
     "paragraph-link",
 ];
 
@@ -2030,6 +2036,7 @@ fn edge_kind_str(e: &EdgeKind) -> &'static str {
         EdgeKind::Subtask => "subtask",
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
+        EdgeKind::OwnsHeading => "owns-heading",
         EdgeKind::ParagraphLink => "paragraph-link",
     }
 }
@@ -2325,6 +2332,7 @@ mod tests {
             EdgeKind::Subtask,
             EdgeKind::LinksInto,
             EdgeKind::OwnsParagraph,
+            EdgeKind::OwnsHeading,
             EdgeKind::ParagraphLink,
         ];
         for e in &all {
@@ -2737,8 +2745,8 @@ mod tests {
             let g = Graph::build(&v, &Scan::default()).unwrap();
             let q = parse("node;").unwrap();
             let ids = q.select(&g);
-            // 4 notes + 4 dirs + 4 paragraphs (one heading per note) = 12
-            assert_eq!(ids.len(), 12);
+            // 4 notes + 4 dirs + 4 paragraphs + 4 headings = 16
+            assert_eq!(ids.len(), 16);
         }
 
         #[test]
@@ -2918,9 +2926,10 @@ mod tests {
         fn title_match_on_note() {
             let v = dirs_vault();
             let g = Graph::build(&v, &Scan::default()).unwrap();
+            // `title` matches both the note `root` and its heading `root`.
             let q = parse("node where title = \"root\";").unwrap();
             let ids = q.select(&g);
-            assert_eq!(ids.len(), 1);
+            assert_eq!(ids.len(), 2);
         }
 
         #[test]
@@ -2957,6 +2966,55 @@ mod tests {
             assert_eq!(children.len(), 2);
             for id in children {
                 assert!(matches!(g.node(id), NodeKind::Paragraph(_)));
+            }
+        }
+
+        #[test]
+        fn select_kind_heading_returns_only_heading_nodes() {
+            let v = dirs_vault();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q = parse("node where kind = Heading;").unwrap();
+            let ids = q.select(&g);
+            assert_eq!(ids.len(), 4, "one heading per note");
+            for id in &ids {
+                assert!(matches!(g.node(*id), NodeKind::Heading(_)));
+            }
+        }
+
+        #[test]
+        fn heading_title_filter_matches_heading_text() {
+            let v = dirs_vault();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let q = parse("node where kind = Heading and title = \"root\";").unwrap();
+            let ids = q.select(&g);
+            assert_eq!(ids.len(), 1);
+            assert!(matches!(g.node(ids[0]), NodeKind::Heading(_)));
+        }
+
+        #[test]
+        fn expand_owns_heading_yields_subheadings() {
+            use assert_fs::prelude::*;
+
+            let tmp = assert_fs::TempDir::new().unwrap();
+            tmp.child(".obsidian").create_dir_all().unwrap();
+            tmp.child("note.md").write_str("# A\n## B\n## C\n").unwrap();
+            let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+            let g = Graph::build(&v, &Scan::default()).unwrap();
+            // Note -> direct headings A; then A -> B, A -> C via owns-heading.
+            // The expand clause matches both hops (from Note and from Heading).
+            let q = parse(
+                "node where kind = Note; \
+                 expand where from.kind in {Note, Heading} and edge.kind = owns-heading;",
+            )
+            .unwrap();
+            let roots = q.select(&g);
+            assert_eq!(roots.len(), 1);
+            let top = q.expand(&g, roots[0]).unwrap();
+            assert_eq!(top.len(), 1, "only A is a direct child of the note");
+            let subs = q.expand(&g, top[0]).unwrap();
+            assert_eq!(subs.len(), 2, "A owns B and C");
+            for id in subs {
+                assert!(matches!(g.node(id), NodeKind::Heading(_)));
             }
         }
 

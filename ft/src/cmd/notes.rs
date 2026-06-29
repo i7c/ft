@@ -1175,6 +1175,9 @@ fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Re
         NodeKind::Paragraph(_) => {
             unreachable!("paragraph nodes are not selectable from the CLI yet")
         }
+        NodeKind::Heading(_) => {
+            unreachable!("heading nodes are not selectable from the CLI yet")
+        }
     };
 
     let rows: Vec<LinkRow> = match dir {
@@ -1760,6 +1763,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         NodeKind::Directory(_) => None,
         NodeKind::Task(_) => None,
         NodeKind::Paragraph(_) => None,
+        NodeKind::Heading(_) => None,
     };
 
     let new_path = parse_new_name(&args.new, source_rel.as_deref())?;

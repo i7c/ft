@@ -161,10 +161,7 @@ pub fn compute_link_review(
 
         // For each paragraph the note owns, see if any of its lines
         // overlap an added line.
-        for (paragraph_id, edge) in graph.outgoing(note_id) {
-            if !matches!(edge, EdgeKind::OwnsParagraph) {
-                continue;
-            }
+        for paragraph_id in graph.note_paragraphs(note_id) {
             let NodeKind::Paragraph(p) = graph.node(paragraph_id) else {
                 continue;
             };

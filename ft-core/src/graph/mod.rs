@@ -83,6 +83,8 @@ pub enum NodeKey {
     Task(PathBuf, usize),
     /// A paragraph in a note. (source_file, 1-indexed line_start).
     Paragraph(PathBuf, u32),
+    /// A heading in a note. (source_file, 1-indexed heading line).
+    Heading(PathBuf, u32),
 }
 
 /// Per-node payload.
@@ -100,9 +102,17 @@ pub enum NodeKind {
     /// [`EdgeKind::HasTask`] edges.
     Task(TaskData),
     /// A paragraph-sized section of a note. Connected to its owning
-    /// note via [`EdgeKind::OwnsParagraph`] and to any wiki-link
-    /// targets it mentions via [`EdgeKind::ParagraphLink`].
+    /// note (or nearest heading) via [`EdgeKind::OwnsParagraph`] and
+    /// to any wiki-link targets it mentions via
+    /// [`EdgeKind::ParagraphLink`].
     Paragraph(ParagraphData),
+    /// An ATX heading in a note. Connected to its nearest enclosing
+    /// heading (or the note) via [`EdgeKind::OwnsHeading`], and to its
+    /// sub-headings and the paragraphs under it via the same family.
+    /// The heading line is also the first line of the paragraph that
+    /// begins at that line (Fork A2): the heading node owns the
+    /// structure, the paragraph node owns the text.
+    Heading(HeadingData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +165,24 @@ pub struct ParagraphData {
     pub text: String,
 }
 
+/// Heading node data — an ATX heading line in a note. Created during
+/// [`Graph::build`] from [`crate::markdown::extract_headings`]. The
+/// heading line is also the start of the paragraph that begins at that
+/// line (Fork A2), so `ParagraphData.text` for that paragraph includes
+/// the heading line verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadingData {
+    /// Vault-relative path of the owning note.
+    pub source_file: PathBuf,
+    /// 1-indexed line number of the heading within the source note.
+    pub line: u32,
+    /// ATX level (1..=6).
+    pub level: u8,
+    /// Heading text with leading `#`s, trailing `#`s, and surrounding
+    /// whitespace stripped (matches [`crate::markdown::Heading::text`]).
+    pub text: String,
+}
+
 /// Task node data — denormalized from [`crate::task::Task`] for graph queries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskData {
@@ -203,8 +231,15 @@ pub enum EdgeKind {
     /// Derived edge — one per unique (source-note, target-directory) pair
     /// from resolved Link / Embed edges. Unit variant (no LinkEdge data).
     LinksInto,
-    /// A note owns a paragraph node. Edge from note → paragraph.
+    /// A note owns a paragraph node, or a heading owns a paragraph
+    /// under it. Edge from note/heading → paragraph. Exclusive: each
+    /// paragraph has exactly one owner (its nearest enclosing heading,
+    /// or the note if there is none).
     OwnsParagraph,
+    /// A note or heading owns a heading. Edge from note/heading →
+    /// heading. Models the heading section tree: a heading at level `L`
+    /// is owned by the nearest heading of level `< L`, or by the note.
+    OwnsHeading,
     /// A paragraph links to a note (or ghost) via a wiki link in its
     /// body. Edge from paragraph → target. Each wiki-form link in a
     /// paragraph produces one edge.
@@ -220,6 +255,7 @@ impl EdgeKind {
             | EdgeKind::Subtask
             | EdgeKind::LinksInto
             | EdgeKind::OwnsParagraph
+            | EdgeKind::OwnsHeading
             | EdgeKind::ParagraphLink => None,
         }
     }
@@ -277,6 +313,18 @@ pub struct LinkEdge {
     pub display: Option<String>,
 }
 
+/// Result of the parallel parse phase of [`Graph::build`]: one per
+/// markdown file, bundling the vault-relative path, raw content, and the
+/// extracted links, paragraphs, and headings. Struct (not a tuple) so
+/// the field reads stay self-documenting and clippy's
+/// `type_complexity` lint stays quiet.
+pub(crate) struct ParsedFile {
+    pub rel: PathBuf,
+    pub links: Vec<parser::RawLink>,
+    pub paragraphs: Vec<crate::markdown::Paragraph>,
+    pub headings: Vec<crate::markdown::Heading>,
+}
+
 /// In-memory graph of notes and the links between them.
 ///
 /// Built up-front by [`Graph::build`] (parallel scan). Mutated
@@ -303,6 +351,10 @@ pub struct Graph {
     /// line. Populated during `Graph::build` / refreshed by
     /// `Graph::refresh_note`.
     paragraph_index: HashMap<(PathBuf, u32), NoteId>,
+    /// (source_file, line) → heading node. Each heading is uniquely
+    /// identified by its owning note's path and 1-indexed heading line.
+    /// Populated during `Graph::build` / refreshed by `Graph::refresh_note`.
+    heading_index: HashMap<(PathBuf, u32), NoteId>,
 }
 
 impl Graph {
@@ -319,21 +371,22 @@ impl Graph {
     pub fn build(vault: &Vault, scan: &Scan) -> Result<Graph> {
         let files = vault.markdown_files();
 
-        // Parse phase (parallel): read each file, extract raw links and
-        // paragraph ranges in the same pass.
-        let parsed: Vec<(
-            PathBuf,
-            String,
-            Vec<parser::RawLink>,
-            Vec<crate::markdown::Paragraph>,
-        )> = files
+        // Parse phase (parallel): read each file, extract raw links,
+        // paragraph ranges, and headings in the same pass.
+        let parsed: Vec<ParsedFile> = files
             .par_iter()
             .filter_map(|abs| {
                 let rel = abs.strip_prefix(&vault.path).ok()?.to_path_buf();
                 let content = std::fs::read_to_string(abs).ok()?;
                 let links = parser::extract_links(&content);
                 let paragraphs = crate::markdown::extract_paragraphs(&content);
-                Some((rel, content, links, paragraphs))
+                let headings = crate::markdown::extract_headings(&content);
+                Some(ParsedFile {
+                    rel,
+                    links,
+                    paragraphs,
+                    headings,
+                })
             })
             .collect();
 
@@ -344,12 +397,13 @@ impl Graph {
             ghost_index: HashMap::new(),
             task_index: HashMap::new(),
             paragraph_index: HashMap::new(),
+            heading_index: HashMap::new(),
         };
 
         // Insert all note nodes first so resolution can see the full
         // path/title indexes for any cross-reference.
-        for (rel, _content, _links, _paragraphs) in &parsed {
-            graph.insert_note_node(rel.clone());
+        for pf in &parsed {
+            graph.insert_note_node(pf.rel.clone());
         }
 
         // Insert directory nodes (root + every directory the vault
@@ -364,23 +418,35 @@ impl Graph {
         graph.insert_contains_edges();
 
         // Now resolve and insert link edges.
-        for (rel, _content, links, _paragraphs) in &parsed {
+        for pf in &parsed {
             let src = *graph
                 .path_index
-                .get(rel)
+                .get(&pf.rel)
                 .expect("note node was just inserted");
-            graph.insert_edges_for(src, rel, links);
+            graph.insert_edges_for(src, &pf.rel, &pf.links);
         }
 
-        // Insert paragraph nodes, OwnsParagraph edges, and
-        // ParagraphLink edges. Done after link resolution so the
-        // path/title indexes are fully populated.
-        for (rel, _content, links, paragraphs) in &parsed {
+        // Insert heading nodes + OwnsHeading edges (heading-stack
+        // algorithm). Done after note-link insertion so the path/title
+        // indexes are populated, and before paragraphs so paragraph
+        // ownership can resolve against the heading stack.
+        for pf in &parsed {
             let src = *graph
                 .path_index
-                .get(rel)
+                .get(&pf.rel)
                 .expect("note node was just inserted");
-            graph.insert_paragraph_nodes_for(src, rel, paragraphs, links);
+            graph.insert_heading_nodes_for(src, &pf.rel, &pf.headings);
+        }
+
+        // Insert paragraph nodes, OwnsParagraph edges (nearest-container),
+        // and ParagraphLink edges. Done after heading insertion so the
+        // heading stack is available for paragraph ownership.
+        for pf in &parsed {
+            let src = *graph
+                .path_index
+                .get(&pf.rel)
+                .expect("note node was just inserted");
+            graph.insert_paragraph_nodes_for(src, &pf.rel, &pf.paragraphs, &pf.headings, &pf.links);
         }
 
         // Insert task nodes from scan data.
@@ -432,6 +498,7 @@ impl Graph {
         })?;
         let links = parser::extract_links(&content);
         let paragraphs = crate::markdown::extract_paragraphs(&content);
+        let headings = crate::markdown::extract_headings(&content);
 
         let normalized = normalize_path(&rel);
         let src = match self.path_index.get(&normalized) {
@@ -441,10 +508,12 @@ impl Graph {
 
         self.ensure_dir_chain_for(src, &rel);
         self.remove_paragraph_nodes(src);
+        self.remove_heading_nodes(src);
         self.remove_outgoing_edges(src);
         self.insert_edges_for(src, &rel, &links);
         self.insert_links_into_for(src);
-        self.insert_paragraph_nodes_for(src, &rel, &paragraphs, &links);
+        self.insert_heading_nodes_for(src, &rel, &headings);
+        self.insert_paragraph_nodes_for(src, &rel, &paragraphs, &headings, &links);
         Ok(())
     }
 
@@ -481,6 +550,14 @@ impl Graph {
             .copied()
     }
 
+    /// The heading node at `(path, line)`, if any. `path` is
+    /// vault-relative; `line` is 1-indexed.
+    pub fn heading_by_loc(&self, path: &Path, line: u32) -> Option<NoteId> {
+        self.heading_index
+            .get(&(normalize_path(path), line))
+            .copied()
+    }
+
     /// The task node at `(source_file, source_line)`, if any.
     /// `source_file` is vault-relative; `source_line` is 1-indexed.
     pub fn task_by_loc(&self, source_file: &Path, source_line: usize) -> Option<NoteId> {
@@ -501,6 +578,7 @@ impl Graph {
             NodeKind::Ghost(g) => NodeKey::Ghost(g.raw.clone()),
             NodeKind::Task(t) => NodeKey::Task(t.source_file.clone(), t.source_line),
             NodeKind::Paragraph(p) => NodeKey::Paragraph(p.source_file.clone(), p.line_start),
+            NodeKind::Heading(h) => NodeKey::Heading(h.source_file.clone(), h.line),
         }
     }
 
@@ -519,6 +597,7 @@ impl Graph {
             NodeKey::Ghost(raw) => self.ghost_by_raw(raw),
             NodeKey::Task(path, line) => self.task_by_loc(path, *line),
             NodeKey::Paragraph(path, line_start) => self.paragraph_by_loc(path, *line_start),
+            NodeKey::Heading(path, line) => self.heading_by_loc(path, *line),
         }
     }
 
@@ -527,6 +606,53 @@ impl Graph {
     /// always live.
     pub fn node(&self, id: NoteId) -> &NodeKind {
         &self.g[id.0]
+    }
+
+    /// All paragraphs transitively owned by `note_id`: direct
+    /// `OwnsParagraph` children of the note plus `OwnsParagraph`
+    /// children of every transitively-`OwnsHeading`-descendant heading.
+    /// Replaces the pre-refactor flat
+    /// `outgoing(note).filter(OwnsParagraph)` walk, which only returned
+    /// heading-less paragraphs under nearest-container ownership.
+    pub fn note_paragraphs(&self, note_id: NoteId) -> Vec<NoteId> {
+        let mut out = Vec::new();
+        let mut work = vec![note_id];
+        while let Some(node) = work.pop() {
+            for e in self.g.edges_directed(node.0, Direction::Outgoing) {
+                match e.weight() {
+                    EdgeKind::OwnsParagraph => out.push(NoteId(e.target())),
+                    EdgeKind::OwnsHeading => work.push(NoteId(e.target())),
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// The note's direct `OwnsHeading` children (its top-level
+    /// headings). For the full heading subtree use [`all_headings`].
+    pub fn note_headings(&self, note_id: NoteId) -> Vec<NoteId> {
+        self.g
+            .edges_directed(note_id.0, Direction::Outgoing)
+            .filter(|e| matches!(e.weight(), EdgeKind::OwnsHeading))
+            .map(|e| NoteId(e.target()))
+            .collect()
+    }
+
+    /// The full heading subtree under `note_id` (direct + transitively
+    /// nested headings).
+    pub fn all_headings(&self, note_id: NoteId) -> Vec<NoteId> {
+        let mut out = Vec::new();
+        let mut work = self.note_headings(note_id);
+        while let Some(h) = work.pop() {
+            out.push(h);
+            for e in self.g.edges_directed(h.0, Direction::Outgoing) {
+                if matches!(e.weight(), EdgeKind::OwnsHeading) {
+                    work.push(NoteId(e.target()));
+                }
+            }
+        }
+        out
     }
 
     /// All nodes in the graph in arbitrary order.
@@ -647,16 +773,7 @@ impl Graph {
         }
     }
 
-    fn insert_directory_nodes(
-        &mut self,
-        parsed: &[(
-            PathBuf,
-            String,
-            Vec<parser::RawLink>,
-            Vec<crate::markdown::Paragraph>,
-        )],
-        vault_dirs: &[PathBuf],
-    ) {
+    fn insert_directory_nodes(&mut self, parsed: &[ParsedFile], vault_dirs: &[PathBuf]) {
         let mut dir_paths: BTreeSet<PathBuf> = BTreeSet::new();
         // From the filesystem walk: every dir, including empty ones and
         // dirs whose only content is non-markdown (attachments not
@@ -666,8 +783,8 @@ impl Graph {
         }
         // From note ancestors: covers dirs that the walk missed because
         // they came into existence after the walk started.
-        for (rel, _, _, _) in parsed {
-            let normalized = normalize_path(rel);
+        for pf in parsed {
+            let normalized = normalize_path(&pf.rel);
             let mut current = normalized.parent();
             while let Some(parent) = current {
                 if !parent.as_os_str().is_empty() {
@@ -881,21 +998,132 @@ impl Graph {
         }
     }
 
+    /// Insert heading nodes and `OwnsHeading` edges for one note using
+    /// the heading-stack algorithm. A heading at level `L` is owned by
+    /// the nearest enclosing heading of level `< L`, or by the note if
+    /// there is no such heading. Populates `heading_index`.
+    fn insert_heading_nodes_for(
+        &mut self,
+        note_id: NoteId,
+        note_rel: &Path,
+        headings: &[crate::markdown::Heading],
+    ) {
+        let note_rel_norm = normalize_path(note_rel);
+        // Stack of (level, heading NoteId) currently open.
+        let mut stack: Vec<(u8, NoteId)> = Vec::new();
+        for heading in headings {
+            // Pop every heading with level >= this one (its section
+            // has closed).
+            while let Some(&(top_level, _)) = stack.last() {
+                if top_level >= heading.level {
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+            let parent = stack.last().map(|&(_, id)| id).unwrap_or(note_id);
+            let data = HeadingData {
+                source_file: note_rel_norm.clone(),
+                line: heading.line as u32,
+                level: heading.level,
+                text: heading.text.clone(),
+            };
+            let idx = self.g.add_node(NodeKind::Heading(data));
+            let h_id = NoteId(idx);
+            self.heading_index
+                .insert((note_rel_norm.clone(), heading.line as u32), h_id);
+            self.g.add_edge(parent.0, h_id.0, EdgeKind::OwnsHeading);
+            stack.push((heading.level, h_id));
+        }
+    }
+
+    /// Remove all heading nodes owned (directly or transitively) by
+    /// `note_id`'s heading subtree. Walks `OwnsHeading` from the note,
+    /// removes each heading node (with its edges) and its
+    /// `heading_index` entry. Incoming edges from other notes are not
+    /// touched (they belong to those notes' outgoing sets).
+    fn remove_heading_nodes(&mut self, note_id: NoteId) {
+        // Collect all heading descendants via OwnsHeading DFS.
+        let mut heading_ids: Vec<NoteId> = Vec::new();
+        let mut work: Vec<NoteId> = vec![note_id];
+        while let Some(node) = work.pop() {
+            for e in self.g.edges_directed(node.0, Direction::Outgoing) {
+                if matches!(e.weight(), EdgeKind::OwnsHeading) {
+                    let child = NoteId(e.target());
+                    heading_ids.push(child);
+                    work.push(child);
+                }
+            }
+        }
+        for h_id in &heading_ids {
+            if let NodeKind::Heading(data) = &self.g[h_id.0] {
+                self.heading_index
+                    .remove(&(data.source_file.clone(), data.line));
+            }
+        }
+        for h_id in heading_ids {
+            self.g.remove_node(h_id.0);
+        }
+    }
+
     /// Insert paragraph nodes and their edges for one note. Creates
     /// one `NodeKind::Paragraph` per element of `paragraphs`, an
-    /// `OwnsParagraph` edge from `note_id` → paragraph, and a
+    /// `OwnsParagraph` edge from the paragraph's **nearest container**
+    /// (the heading on top of the heading stack at the paragraph's start
+    /// line, or the note if there is none) → paragraph, and a
     /// `ParagraphLink` edge from paragraph → each wiki-form link
     /// target it contains. Markdown-form links are ignored — only
     /// `[[...]]` and `![[...]]` produce ParagraphLink edges.
+    ///
+    /// Must run after `insert_heading_nodes_for` so headings exist in
+    /// the graph. The heading/paragraph merged walk below enforces the
+    /// build ordering invariant (Fork A2): when a heading and a
+    /// paragraph share a start line, the heading is processed first so
+    /// the paragraph is owned by its own heading.
     fn insert_paragraph_nodes_for(
         &mut self,
         note_id: NoteId,
         note_rel: &Path,
         paragraphs: &[crate::markdown::Paragraph],
+        headings: &[crate::markdown::Heading],
         links: &[parser::RawLink],
     ) {
         let note_rel_norm = normalize_path(note_rel);
+        // Stack of (level, heading NoteId) currently open. The top is
+        // the nearest enclosing heading for any paragraph at or after
+        // the heading's line, until a heading of equal-or-lower level
+        // is pushed (which pops it).
+        let mut stack: Vec<(u8, NoteId)> = Vec::new();
+        let mut h_idx = 0usize;
+
         for paragraph in paragraphs {
+            // Advance through every heading whose line <= this
+            // paragraph's start line. A heading exactly at the
+            // paragraph's start line is pushed before the paragraph is
+            // assigned an owner, so it owns the paragraph (Fork A2).
+            while h_idx < headings.len() && headings[h_idx].line as u32 <= paragraph.line_start {
+                let heading = &headings[h_idx];
+                // Pop sections that have closed: any heading whose
+                // level >= this heading's level.
+                while let Some(&(top_level, _)) = stack.last() {
+                    if top_level >= heading.level {
+                        stack.pop();
+                    } else {
+                        break;
+                    }
+                }
+                // The heading node was inserted by insert_heading_nodes_for;
+                // look it up by loc.
+                if let Some(&h_id) = self
+                    .heading_index
+                    .get(&(note_rel_norm.clone(), heading.line as u32))
+                {
+                    stack.push((heading.level, h_id));
+                }
+                h_idx += 1;
+            }
+            let owner = stack.last().map(|&(_, id)| id).unwrap_or(note_id);
+
             let data = ParagraphData {
                 source_file: note_rel_norm.clone(),
                 line_start: paragraph.line_start,
@@ -906,7 +1134,7 @@ impl Graph {
             let p_id = NoteId(idx);
             self.paragraph_index
                 .insert((note_rel_norm.clone(), paragraph.line_start), p_id);
-            self.g.add_edge(note_id.0, p_id.0, EdgeKind::OwnsParagraph);
+            self.g.add_edge(owner.0, p_id.0, EdgeKind::OwnsParagraph);
 
             for raw in links {
                 if raw.form != LinkForm::WikiLink {

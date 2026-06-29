@@ -45,6 +45,7 @@ fn fmt_node(graph: &Graph, id: NoteId) -> String {
         NodeKind::Ghost(g) => format!("G {}", g.raw),
         NodeKind::Task(t) => format!("T {}", t.description),
         NodeKind::Paragraph(p) => format!("P {}:{}", p.source_file.display(), p.line_start),
+        NodeKind::Heading(h) => format!("H {}:{}", h.source_file.display(), h.line),
     }
 }
 

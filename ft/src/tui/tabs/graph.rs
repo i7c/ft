@@ -2710,6 +2710,11 @@ impl GraphTab {
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_default(),
+            NodeKind::Heading(h) => h
+                .source_file
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
         }
     }
 
@@ -5399,6 +5404,7 @@ fn node_kind_color(kind: &NodeKind) -> Color {
         NodeKind::Ghost(_) => palette::DIM,            // warm gray
         NodeKind::Task(_) => palette::PRIMARY,         // orange
         NodeKind::Paragraph(_) => Color::Rgb(210, 150, 100), // warm tan/purple
+        NodeKind::Heading(_) => Color::Rgb(190, 130, 200), // warm magenta
     }
 }
 
@@ -5477,6 +5483,13 @@ fn leaf_display(graph: &Graph, id: NoteId, today: chrono::NaiveDate) -> (String,
                     'P',
                 )
             }
+        }
+        NodeKind::Heading(h) => {
+            let hashes = "#".repeat(h.level as usize);
+            (
+                format!("{} {} {}", hashes, h.text, h.source_file.display()),
+                'H',
+            )
         }
     }
 }

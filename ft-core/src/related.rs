@@ -111,10 +111,7 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
         };
         // Collect distinct C's from non-matched paragraphs in this file.
         let mut file_concepts: HashSet<NoteId> = HashSet::new();
-        for (p_id, edge) in graph.outgoing(owner) {
-            if !matches!(edge, EdgeKind::OwnsParagraph) {
-                continue;
-            }
+        for p_id in graph.note_paragraphs(owner) {
             if matched_paragraphs.contains(&p_id) {
                 continue;
             }
