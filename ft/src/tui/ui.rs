@@ -407,6 +407,18 @@ pub fn render_git_leader(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled(
+                "  c     ",
+                Style::default()
+                    .fg(palette::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "commit (local only, no pull/push)",
+                Style::default().fg(palette::WHITE),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
                 "  Esc   ",
                 Style::default()
                     .fg(palette::SECONDARY)

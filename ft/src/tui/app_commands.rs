@@ -65,7 +65,7 @@ pub static APP_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "app.git-leader",
-        description: "Enter the git-sync leader (then `s` to sync)",
+        description: "Enter the git-sync leader (then `s` to sync, `c` to commit)",
         scope: CommandScope::Global,
         group: "App",
         args_schema: &[],
@@ -77,10 +77,10 @@ pub static APP_COMMANDS: &[CommandDef] = &[
 /// Default App-global keymap. Mirrors the pre-migration
 /// `App::handle_global_key` match arms one-for-one.
 ///
-/// The single `g` chord enters the git-leader mode — the `g s` second
-/// keystroke is handled by `Mode::GitLeader` rather than as a chord
-/// sequence in the keymap (chord sequences are out of scope in v1;
-/// leaders are transient modals).
+/// The single `g` chord enters the git-leader mode — the `g s` (sync)
+/// and `g c` (commit) second keystrokes are handled by `Mode::GitLeader`
+/// rather than as chord sequences in the keymap (chord sequences are out
+/// of scope in v1; leaders are transient modals).
 pub static APP_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         .bind("q", "app.quit")

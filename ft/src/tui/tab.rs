@@ -128,6 +128,12 @@ pub enum AppRequest {
     SyncGit {
         message: Option<String>,
     },
+    /// Run `ft_core::git::commit` (lightweight sync: stage + commit
+    /// only, no pull/push) against the vault's enclosing repo. Raised
+    /// by the `g c` leader chord. Same `message` parity as `SyncGit`.
+    CommitGit {
+        message: Option<String>,
+    },
     /// Switch the active tab to the Journal tab and queue the given
     /// target on it so the journal auto-loads. Raised by the graph
     /// tab's `Shift+J` keybinding; accepts both real notes and ghost
@@ -318,6 +324,10 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::SyncGit { message } => {
                 f.debug_struct("SyncGit").field("message", message).finish()
             }
+            AppRequest::CommitGit { message } => f
+                .debug_struct("CommitGit")
+                .field("message", message)
+                .finish(),
             AppRequest::JournalFor { target } => f
                 .debug_struct("JournalFor")
                 .field("target", target)

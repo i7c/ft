@@ -5955,7 +5955,7 @@ fn shift_g_does_not_trigger_leader() -> Result<()> {
 
 // ── plan 014: background git sync ────────────────────────────────────────
 
-use crate::tui::event::{BgEvent, EventStream, SyncJobResult};
+use crate::tui::event::{BgEvent, CommitJobResult, EventStream, SyncJobResult};
 use crate::tui::jobs::JobKind;
 use crate::tui::tab::ToastStyle;
 use ft_core::git::SyncOutcome;
@@ -6283,6 +6283,215 @@ fn e2e_background_sync_dirty_tree_dispatches_event_and_renders_toast() -> Result
         toast.text.starts_with("sync ok"),
         "expected 'sync ok …' toast, got: {}",
         toast.text
+    );
+    Ok(())
+}
+
+// ── plan 014: background git commit (lightweight sync) ────────────────
+//
+// `g c` mirrors `g s` but fires the commit-only worker. The leader
+// dispatches `CommitGit`, the worker posts `BgEvent::CommitCompleted`,
+// and `apply_commit_result` toasts the outcome. These mirror the sync
+// tests above minus the conflict branch (commit never pulls).
+
+fn bg_commit_event(outcome: Result<ft_core::git::CommitOutcome, String>) -> Event {
+    Event::Background(BgEvent::CommitCompleted(CommitJobResult {
+        outcome,
+        repo: std::path::PathBuf::from("/tmp/test-repo"),
+    }))
+}
+
+#[test]
+fn git_leader_c_queues_commit_request_and_returns_to_normal() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.dispatch(key('g'))?;
+    app.dispatch(key('c'))?;
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    let req = app
+        .take_pending_request()
+        .expect("`g c` should queue an AppRequest::CommitGit");
+    match req {
+        AppRequest::CommitGit { message } => {
+            assert!(message.is_none(), "TUI never overrides the commit message");
+        }
+        other => panic!("expected CommitGit, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn commit_completed_clean_renders_nothing_to_commit_toast_and_clears_job() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.set_in_flight_for_test(JobKind::Commit);
+    assert_eq!(app.in_flight_job_for_test(), Some(JobKind::Commit));
+
+    app.dispatch(bg_commit_event(Ok(ft_core::git::CommitOutcome::Clean)))?;
+
+    assert!(app.in_flight_job_for_test().is_none());
+    let toast = app.current_toast().expect("toast should be set");
+    assert_eq!(toast.text, "nothing to commit");
+    assert_eq!(toast.style, ToastStyle::Success);
+    assert_eq!(app.mode(), crate::tui::ui::Mode::Normal);
+    Ok(())
+}
+
+#[test]
+fn commit_completed_committed_renders_toast_and_clears_job() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.set_in_flight_for_test(JobKind::Commit);
+
+    app.dispatch(bg_commit_event(Ok(
+        ft_core::git::CommitOutcome::Committed { committed: 2 },
+    )))?;
+
+    assert!(app.in_flight_job_for_test().is_none());
+    let toast = app.current_toast().expect("toast should be set");
+    assert_eq!(toast.text, "committed 2 file(s)");
+    assert_eq!(toast.style, ToastStyle::Success);
+    Ok(())
+}
+
+#[test]
+fn commit_completed_error_renders_red_toast() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.set_in_flight_for_test(JobKind::Commit);
+
+    app.dispatch(bg_commit_event(Err(
+        "repository has unresolved conflicts in 1 file(s); resolve before committing".to_string(),
+    )))?;
+
+    let toast = app.current_toast().expect("error toast should be set");
+    assert!(
+        toast.text.contains("git commit failed:"),
+        "expected error prefix, got: {}",
+        toast.text
+    );
+    assert_eq!(toast.style, ToastStyle::Error);
+    assert!(app.in_flight_job_for_test().is_none());
+    Ok(())
+}
+
+#[test]
+fn g_c_while_job_in_flight_toasts_already_in_progress() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    app.set_in_flight_for_test(JobKind::Commit);
+
+    let events = EventStream::new(std::time::Duration::from_secs(60));
+    app.submit_commit_for_test(&events, None)?;
+
+    let toast = app.current_toast().expect("re-entrancy toast");
+    assert_eq!(toast.text, "commit already in progress");
+    assert_eq!(toast.style, ToastStyle::Info);
+    assert_eq!(app.in_flight_job_for_test(), Some(JobKind::Commit));
+    Ok(())
+}
+
+#[test]
+fn dispatch_commit_git_with_no_git_repo_toasts_and_does_not_spawn() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test(vault);
+    let events = EventStream::new(std::time::Duration::from_secs(60));
+
+    app.submit_commit_for_test(&events, None)?;
+
+    let toast = app.current_toast().expect("no-repo toast");
+    assert!(
+        toast.text.contains("no git repository"),
+        "expected no-repo error, got: {}",
+        toast.text
+    );
+    assert_eq!(toast.style, ToastStyle::Error);
+    assert!(
+        app.in_flight_job_for_test().is_none(),
+        "no worker should be spawned when discover_repo fails"
+    );
+    Ok(())
+}
+
+#[test]
+fn status_bar_shows_commit_indicator_while_job_in_flight() -> Result<()> {
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.set_in_flight_for_test(JobKind::Commit);
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("⟳ commit"),
+        "expected commit indicator in status bar, got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn commit_indicator_persists_across_modes() -> Result<()> {
+    // The commit indicator is orthogonal to mode — opening help while a
+    // commit runs must not hide it.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.set_in_flight_for_test(JobKind::Commit);
+
+    app.enter_help();
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("⟳ commit"),
+        "indicator should survive help mode, got:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn e2e_background_commit_dirty_tree_dispatches_event_and_renders_toast() -> Result<()> {
+    // Commit-only e2e: the worker commits locally and posts a
+    // `CommitCompleted` event with the Committed outcome. We also
+    // assert the commit was NOT pushed by checking the bare origin.
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let vault_path = setup_origin_and_vault(tmp.path());
+
+    std::fs::write(vault_path.join("new.md"), "hello\n").unwrap();
+
+    let vault = Vault::discover(Some(vault_path.clone())).unwrap();
+    let mut app = App::for_test(vault);
+    let events = EventStream::new(std::time::Duration::from_millis(500));
+
+    app.submit_commit_for_test(&events, None)?;
+    assert_eq!(app.in_flight_job_for_test(), Some(JobKind::Commit));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let bg_event = loop {
+        if std::time::Instant::now() > deadline {
+            panic!("worker did not complete within 15s");
+        }
+        match events.next()? {
+            Event::Background(b) => break b,
+            _ => continue,
+        }
+    };
+
+    app.dispatch(Event::Background(bg_event))?;
+
+    assert!(app.in_flight_job_for_test().is_none());
+    let toast = app.current_toast().expect("success toast after commit");
+    assert_eq!(toast.style, ToastStyle::Success);
+    assert!(
+        toast.text.starts_with("committed"),
+        "expected 'committed …' toast, got: {}",
+        toast.text
+    );
+
+    // Commit must not push — the bare origin must NOT have new.md.
+    let origin = tmp.path().join("origin.git");
+    let bare = std::process::Command::new("git")
+        .current_dir(&origin)
+        .args(["show", "main:new.md"])
+        .output()
+        .unwrap();
+    assert!(
+        !bare.status.success(),
+        "commit must not push; origin should not have new.md"
     );
     Ok(())
 }

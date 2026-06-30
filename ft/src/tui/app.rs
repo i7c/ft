@@ -24,7 +24,7 @@ use crate::tui::{
     app_commands::{APP_COMMANDS, APP_KEYMAP},
     command::{Command as TuiCommand, CommandRegistry},
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
-    event::{BgEvent, Event, EventStream, SyncJobResult},
+    event::{BgEvent, CommitJobResult, Event, EventStream, SyncJobResult},
     help::{global_section, sections_from_keymap, HelpSection},
     jobs::{JobHandle, JobKind},
     keymap::KeyChord,
@@ -38,7 +38,7 @@ use crate::tui::{
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
 };
-use ft_core::git::{discover_repo, sync, SyncOptions, SyncOutcome};
+use ft_core::git::{commit, discover_repo, sync, CommitOptions, SyncOptions, SyncOutcome};
 
 /// A transient status-bar message. The center cell of the status bar
 /// shows the toast text in place of `refreshed HH:MM:SS` until the
@@ -445,18 +445,23 @@ impl App {
             return Ok(());
         }
 
-        // Git-leader: `s` fires sync, `Esc` (and any other key) dismisses.
-        // We never fall through to the tab/global handler so a stray
-        // global key (q) doesn't quit while the leader is open.
+        // Git-leader: `s` fires sync, `c` fires commit, `Esc` (and any
+        // other key) dismisses. We never fall through to the tab/global
+        // handler so a stray global key (q) doesn't quit while the leader
+        // is open.
         if self.mode == Mode::GitLeader {
             if let Event::Key(k) = ev {
                 self.mode = Mode::Normal;
-                if matches!(
-                    (k.code, k.modifiers),
-                    (KeyCode::Char('s'), KeyModifiers::NONE)
-                ) {
-                    *self.pending_request.borrow_mut() =
-                        Some(AppRequest::SyncGit { message: None });
+                match (k.code, k.modifiers) {
+                    (KeyCode::Char('s'), KeyModifiers::NONE) => {
+                        *self.pending_request.borrow_mut() =
+                            Some(AppRequest::SyncGit { message: None });
+                    }
+                    (KeyCode::Char('c'), KeyModifiers::NONE) => {
+                        *self.pending_request.borrow_mut() =
+                            Some(AppRequest::CommitGit { message: None });
+                    }
+                    _ => {}
                 }
             }
             return Ok(());
@@ -692,6 +697,10 @@ impl App {
                 self.dispatch_sync_git(events, message)?;
                 Ok(())
             }
+            AppRequest::CommitGit { message } => {
+                self.dispatch_commit_git(events, message)?;
+                Ok(())
+            }
             AppRequest::JournalFor { target } => {
                 self.with_named_tab("Journal", |tab, _| tab.queue_journal_for(&target));
                 if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
@@ -886,11 +895,11 @@ impl App {
         Ok(())
     }
 
-    /// Apply a background event to the App state. Currently the only
-    /// variant is [`BgEvent::SyncCompleted`]; future plans add more.
+    /// Apply a background event to the App state.
     fn handle_background(&mut self, bg: BgEvent) -> Result<()> {
         match bg {
             BgEvent::SyncCompleted(result) => self.apply_sync_result(result),
+            BgEvent::CommitCompleted(result) => self.apply_commit_result(result),
         }
     }
 
@@ -956,6 +965,77 @@ impl App {
             }
             Err(msg) => {
                 self.push_toast(format!("git sync failed: {msg}"), ToastStyle::Error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Submit a lightweight git commit (no pull/push) to a background
+    /// worker thread. Mirrors [`dispatch_sync_git`] but with the
+    /// [`JobKind::Commit`] indicator and the commit-only worker; the
+    /// re-entrancy guard, the no-repo toast, and the refresh-on-completion
+    /// behavior are all shared with the sync path. No `GIT_TERMINAL_PROMPT`
+    /// prompts because `commit` never touches the network.
+    fn dispatch_commit_git(&mut self, events: &EventStream, message: Option<String>) -> Result<()> {
+        if self.jobs.borrow().is_some() {
+            self.push_toast("commit already in progress", ToastStyle::Info);
+            return Ok(());
+        }
+
+        let repo = match discover_repo(&self.vault.path) {
+            Some(r) => r,
+            None => {
+                self.push_toast(
+                    "no git repository at or above vault root",
+                    ToastStyle::Error,
+                );
+                return Ok(());
+            }
+        };
+
+        let opts = CommitOptions { message };
+
+        let tx = events.sender();
+        *self.jobs.borrow_mut() = Some(JobHandle::new(JobKind::Commit));
+        self.push_toast("committing in background…", ToastStyle::Info);
+
+        std::thread::spawn(move || run_commit_job(repo, opts, tx));
+
+        Ok(())
+    }
+
+    /// Map a finished commit's outcome onto the user-facing surface.
+    /// Mirrors [`apply_sync_result`] minus the conflict branch (commit
+    /// never pulls, so it can't surface a merge/rebase conflict — a
+    /// pre-existing conflicted tree arrives as a hard error).
+    fn apply_commit_result(&mut self, result: CommitJobResult) -> Result<()> {
+        *self.jobs.borrow_mut() = None;
+
+        {
+            let mut ctx = TabCtx {
+                vault: &self.vault,
+                recents: &self.recents,
+                today: self.today,
+                last_refresh: &self.last_refresh,
+                pending_request: &self.pending_request,
+                active_modal_name: self.active_modal_name(),
+                host_popup_open: false,
+            };
+            let _ = self.tabs[self.active].refresh(&mut ctx);
+        }
+
+        match result.outcome {
+            Ok(ft_core::git::CommitOutcome::Clean) => {
+                self.push_toast("nothing to commit", ToastStyle::Success);
+            }
+            Ok(ft_core::git::CommitOutcome::Committed { committed }) => {
+                self.push_toast(
+                    format!("committed {committed} file(s)"),
+                    ToastStyle::Success,
+                );
+            }
+            Err(msg) => {
+                self.push_toast(format!("git commit failed: {msg}"), ToastStyle::Error);
             }
         }
         Ok(())
@@ -1313,6 +1393,32 @@ fn run_sync_job(repo: std::path::PathBuf, opts: SyncOptions, tx: std::sync::mpsc
     })));
 }
 
+/// Body of the `g c` worker thread. Mirrors [`run_sync_job`] for the
+/// lightweight commit-only path: runs the synchronous
+/// `ft_core::git::commit` call to completion, then posts exactly one
+/// [`BgEvent::CommitCompleted`] back into the main loop. Panics are
+/// caught and converted into `Err` payloads so a bug doesn't strand the
+/// in-flight indicator forever.
+fn run_commit_job(
+    repo: std::path::PathBuf,
+    opts: CommitOptions,
+    tx: std::sync::mpsc::Sender<Event>,
+) {
+    let outcome =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit(&repo, &opts))) {
+            Ok(Ok(o)) => Ok(o),
+            Ok(Err(e)) => Err(format!("{e:#}")),
+            Err(panic) => {
+                let msg = panic_message(&panic);
+                Err(format!("internal panic in commit worker: {msg}"))
+            }
+        };
+
+    let _ = tx.send(Event::Background(BgEvent::CommitCompleted(
+        CommitJobResult { outcome, repo },
+    )));
+}
+
 /// Extract a human-readable message from `catch_unwind`'s payload.
 /// Panic payloads are typed `Box<dyn Any + Send>`; the standard payload
 /// from `panic!("...")` is either `&'static str` or `String`.
@@ -1517,7 +1623,7 @@ impl App {
     /// `apply_initial_action_for_test` / `switch_to` test helpers so
     /// modal-opens posted from `on_focus` and queued requests are
     /// serviced without a full event loop. Terminal-touching variants
-    /// (`OpenInEditor`, `SyncGit`, …) stay in the slot.
+    /// (`OpenInEditor`, `SyncGit`, `CommitGit`, …) stay in the slot.
     fn drain_simple_requests(&mut self) {
         loop {
             let req = self.pending_request.borrow_mut().take();
@@ -1948,6 +2054,16 @@ impl App {
         message: Option<String>,
     ) -> Result<()> {
         self.dispatch_sync_git(events, message)
+    }
+
+    /// Drive the real `dispatch_commit_git` against a test-provided event
+    /// channel. Used by the commit end-to-end integration test.
+    pub fn submit_commit_for_test(
+        &mut self,
+        events: &EventStream,
+        message: Option<String>,
+    ) -> Result<()> {
+        self.dispatch_commit_git(events, message)
     }
 
     /// Return the effective keymap for the tab at `idx`. Used by

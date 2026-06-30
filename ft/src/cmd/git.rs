@@ -16,7 +16,10 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
-use ft_core::git::{discover_repo, status, sync, upstream, PullStrategy, SyncOptions, SyncOutcome};
+use ft_core::git::{
+    commit, discover_repo, status, sync, upstream, CommitOptions, CommitOutcome, PullStrategy,
+    SyncOptions, SyncOutcome,
+};
 
 #[derive(Args)]
 pub struct GitArgs {
@@ -28,6 +31,10 @@ pub struct GitArgs {
 pub enum GitCommand {
     /// Commit dirty tree, pull upstream, push.
     Sync(SyncArgs),
+    /// Commit all dirty files without pulling or pushing. Lighter
+    /// than `sync` for fast local iteration — no network, and safe
+    /// on a branch with no upstream.
+    Commit(CommitCliArgs),
 }
 
 #[derive(Args, Debug)]
@@ -43,9 +50,18 @@ pub struct SyncArgs {
     pub dry_run: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct CommitCliArgs {
+    /// Override the auto-generated commit message
+    /// (`"ft sync <iso8601-utc>"` — the same default as `sync`).
+    #[arg(short = 'm', long, value_name = "MSG")]
+    pub message: Option<String>,
+}
+
 pub fn run(args: GitArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         GitCommand::Sync(s) => run_sync(s, vault_flag),
+        GitCommand::Commit(c) => run_commit(c, vault_flag),
     }
 }
 
@@ -71,6 +87,36 @@ fn run_sync(args: SyncArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     };
     let outcome = sync(&repo, &opts)?;
     render_outcome(outcome)
+}
+
+fn run_commit(args: CommitCliArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+
+    let repo = discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!(
+            "no git repository found at or above vault root: {}",
+            vault.path.display()
+        )
+    })?;
+
+    let opts = CommitOptions {
+        message: args.message,
+    };
+    let outcome = commit(&repo, &opts)?;
+    render_commit_outcome(outcome)
+}
+
+fn render_commit_outcome(outcome: CommitOutcome) -> Result<ExitCode> {
+    match outcome {
+        CommitOutcome::Clean => {
+            println!("nothing to commit");
+            Ok(ExitCode::SUCCESS)
+        }
+        CommitOutcome::Committed { committed } => {
+            println!("committed {committed} file(s)");
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 fn run_dry(repo: &std::path::Path, strategy: PullStrategy) -> Result<ExitCode> {

@@ -52,7 +52,7 @@ enum Commands {
     Synth(cmd::synth::SynthArgs),
     /// Graph operations: query (walk DSL-selected subgraph)
     Graph(cmd::graph::GraphArgs),
-    /// Git operations: sync (commit + pull + push)
+    /// Git operations: sync (commit + pull + push), commit (commit only)
     Git(cmd::git::GitArgs),
     /// Launch the interactive terminal UI
     Tui(cmd::tui::TuiArgs),

@@ -1,7 +1,8 @@
-//! Git integration — discovery, working-tree status, and `sync`
-//! (commit + pull + push). All operations shell out to `git -C <repo>`
-//! so we inherit the user's full git configuration: credential helper,
-//! SSH agent, GPG signing, `~/.gitconfig`. (Plan 012.)
+//! Git integration — discovery, working-tree status, `sync`
+//! (commit + pull + push), and `commit` (commit only, no network).
+//! All operations shell out to `git -C <repo>` so we inherit the
+//! user's full git configuration: credential helper, SSH agent, GPG
+//! signing, `~/.gitconfig`. (Plan 012.)
 //!
 //! `sync()` is the single orchestrator. It does, in order:
 //!
@@ -18,6 +19,12 @@
 //!    progress) and return the matching [`SyncOutcome`] variant.
 //! 5. `git push`. If there is nothing to push, the call is still
 //!    made but is a no-op as far as the remote is concerned.
+//!
+//! [`commit`] is the lightweight variant: the conflict pre-check and
+//! the stage+commit step of `sync` only — no upstream check, no pull,
+//! no push. Safe on a branch with no remote-tracking config, and fast
+//! because there's no network round-trip. Use it for local iteration
+//! when a full sync isn't wanted.
 //!
 //! Authentication uses whatever the user has configured globally; we
 //! set `GIT_TERMINAL_PROMPT=0` on every spawn so the subprocess fails
@@ -56,6 +63,16 @@ pub struct SyncOptions {
     pub strategy: PullStrategy,
     /// Override the auto-generated commit message. `None` means
     /// `format!("ft sync {iso8601-utc}")`.
+    pub message: Option<String>,
+}
+
+/// Per-call inputs for [`commit`].
+#[derive(Debug, Default, Clone)]
+pub struct CommitOptions {
+    /// Override the auto-generated commit message. `None` means
+    /// `format!("ft sync {iso8601-utc}")` — the same default as
+    /// [`SyncOptions`] so local-only commits blend into the same
+    /// history shape as full-sync commits.
     pub message: Option<String>,
 }
 
@@ -105,6 +122,19 @@ pub enum SyncOutcome {
     /// `git pull --rebase` surfaced conflicts. Repo is mid-rebase;
     /// `files` lists the paths with markers.
     RebaseConflict { files: Vec<PathBuf> },
+}
+
+/// Defined end state of a [`commit`] call. Conflict states can't
+/// arise from `commit` itself (it never pulls), so — unlike
+/// [`SyncOutcome`] — there are no conflict variants; a pre-existing
+/// conflicted tree surfaces as a hard [`Error::Git`] before staging.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOutcome {
+    /// Tree was already clean — nothing staged or committed.
+    Clean,
+    /// Local changes were staged and committed. `committed` is the
+    /// file count reported by `git diff --cached --name-only`.
+    Committed { committed: usize },
 }
 
 // ── Discovery ────────────────────────────────────────────────────────────
@@ -603,6 +633,49 @@ pub fn sync(repo: &Path, opts: &SyncOptions) -> Result<SyncOutcome> {
             pulled,
             pushed,
         }
+    })
+}
+
+// ── Commit (lightweight sync) ───────────────────────────────────────────
+
+/// Lightweight commit-only variant of [`sync`]: snapshot the working
+/// tree, refuse on unresolved conflicts, `git add -A`, `git commit`,
+/// return. No upstream check, no pull, no push — so it's safe on a
+/// branch with no remote-tracking config and fast (no network
+/// round-trip). See the module docs for the contrast with [`sync`].
+pub fn commit(repo: &Path, opts: &CommitOptions) -> Result<CommitOutcome> {
+    let initial = status(repo)?;
+    if initial.has_conflicts() {
+        return Err(Error::Git(format!(
+            "repository has unresolved conflicts in {} file(s); resolve before committing",
+            initial.conflicted.len()
+        )));
+    }
+
+    if initial.is_clean() {
+        return Ok(CommitOutcome::Clean);
+    }
+
+    let out = git(repo).args(["add", "-A"]).output().map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err("add -A", &out.stderr));
+    }
+    let committed_count = staged_file_count(repo)?;
+
+    let message = opts
+        .message
+        .clone()
+        .unwrap_or_else(|| format!("ft sync {}", Utc::now().format("%Y-%m-%dT%H:%M:%SZ")));
+    let out = git(repo)
+        .args(["commit", "-m", &message])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err("commit", &out.stderr));
+    }
+
+    Ok(CommitOutcome::Committed {
+        committed: committed_count,
     })
 }
 
@@ -1165,5 +1238,157 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "my custom msg");
+    }
+
+    // ── commit ──────────────────────────────────────────────────────
+    //
+    // `commit` is the lightweight variant of `sync`: stage + commit
+    // only — no upstream check, no pull, no push. The first test
+    // mirrors `sync_commits_and_pushes_new_file` but checks for the
+    // absence of a push; the rest cover the clean path, the no-upstream
+    // case (which `sync` rejects), the conflict pre-check, the custom
+    // message, and the auto-message shape.
+
+    #[test]
+    fn commit_commits_new_file_without_pushing() {
+        let tmp = TempDir::new().unwrap();
+        let (_origin, a) = setup_origin_and_clone(tmp.path());
+        fs::write(a.join("new.md"), "new\n").unwrap();
+
+        let outcome = commit(&a, &CommitOptions::default()).unwrap();
+        match outcome {
+            CommitOutcome::Committed { committed } => assert_eq!(committed, 1),
+            other => panic!("expected Committed, got {other:?}"),
+        }
+
+        // The new file is now committed locally.
+        let s = status(&a).unwrap();
+        assert!(s.is_clean(), "tree not clean after commit: {s:?}");
+        // But it was NOT pushed — origin still lacks the file.
+        let bare = Command::new("git")
+            .current_dir(_origin)
+            .args(["show", "main:new.md"])
+            .output()
+            .unwrap();
+        assert!(
+            !bare.status.success(),
+            "commit must not push; origin should not have new.md"
+        );
+    }
+
+    #[test]
+    fn commit_clean_tree_is_noop() {
+        let tmp = TempDir::new().unwrap();
+        let (_origin, a) = setup_origin_and_clone(tmp.path());
+        let outcome = commit(&a, &CommitOptions::default()).unwrap();
+        assert!(matches!(outcome, CommitOutcome::Clean));
+    }
+
+    #[test]
+    fn commit_works_on_branch_with_no_upstream() {
+        // `sync` rejects a branch with no upstream; `commit` must not,
+        // because it never pulls or pushes.
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        fs::write(repo.join("seed.md"), "x\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "seed"]);
+        assert!(upstream(repo).unwrap().is_none());
+
+        fs::write(repo.join("new.md"), "new\n").unwrap();
+        let outcome = commit(repo, &CommitOptions::default()).unwrap();
+        assert!(matches!(outcome, CommitOutcome::Committed { committed: 1 }));
+
+        let s = status(repo).unwrap();
+        assert!(s.is_clean(), "tree not clean after commit: {s:?}");
+    }
+
+    #[test]
+    fn commit_refuses_on_preexisting_conflicts() {
+        // Manufacture a real conflict via a divergent side-branch merge
+        // (pulling into a clean tree would just fast-forward).
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        fs::write(repo.join("seed.md"), "base\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "base"]);
+
+        run_git(repo, &["checkout", "-b", "feature"]);
+        fs::write(repo.join("seed.md"), "from feature\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "feature"]);
+
+        run_git(repo, &["checkout", "main"]);
+        fs::write(repo.join("seed.md"), "from main\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "main"]);
+
+        // `git merge feature` conflicts — `run_git` asserts success, so
+        // shell out directly and check for the expected failure.
+        let merge = Command::new("git")
+            .current_dir(repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(["merge", "feature"])
+            .output()
+            .unwrap();
+        assert!(
+            !merge.status.success(),
+            "precondition: merge should have conflicted"
+        );
+        let porcelain = Command::new("git")
+            .current_dir(repo)
+            .args(["status", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&porcelain.stdout).contains("UU"),
+            "precondition: repo should be conflicted"
+        );
+
+        let err = commit(repo, &CommitOptions::default()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unresolved conflicts"),
+            "expected conflict error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn commit_uses_custom_message_when_provided() {
+        let tmp = TempDir::new().unwrap();
+        let (_origin, a) = setup_origin_and_clone(tmp.path());
+        fs::write(a.join("new.md"), "v\n").unwrap();
+        let opts = CommitOptions {
+            message: Some("my commit msg".to_string()),
+        };
+        commit(&a, &opts).unwrap();
+        let out = Command::new("git")
+            .current_dir(&a)
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "my commit msg");
+    }
+
+    #[test]
+    fn commit_auto_message_has_ft_sync_prefix() {
+        // `commit` shares `sync`'s default message shape so local-only
+        // commits blend into the same history as full-sync commits.
+        let tmp = TempDir::new().unwrap();
+        let (_origin, a) = setup_origin_and_clone(tmp.path());
+        fs::write(a.join("new.md"), "v\n").unwrap();
+        commit(&a, &CommitOptions::default()).unwrap();
+        let out = Command::new("git")
+            .current_dir(&a)
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        let subject = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            subject.starts_with("ft sync "),
+            "expected `ft sync <iso8601>` subject, got: {subject}"
+        );
     }
 }

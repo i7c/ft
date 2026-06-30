@@ -1,5 +1,5 @@
-//! Integration tests for `ft git sync` — the CLI surface added in
-//! plan 012 session 2.
+//! Integration tests for `ft git sync` and `ft git commit` — the CLI
+//! surfaces added in plan 012 session 2 and its lightweight sibling.
 //!
 //! Each test builds a fresh `TempDir` vault (with `.obsidian/` marker)
 //! that is also a git repository, then drives `ft` via `assert_cmd` and
@@ -261,4 +261,116 @@ fn sync_no_upstream_errors_before_committing() {
         .unwrap();
     let out = String::from_utf8_lossy(&porcelain.stdout);
     assert!(out.contains("?? new.md"), "got: {out}");
+}
+
+// ── ft git commit: lightweight, local-only ───────────────────────────────
+//
+// `commit` shares `sync`'s stage+commit step but skips the upstream
+// check, pull, and push. These tests mirror the sync happy-paths and
+// add the two differentiators: it commits on a branch with no
+// upstream, and it never pushes.
+
+#[test]
+fn commit_commits_dirty_tree_without_pushing() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let vault = setup_origin_and_vault(tmp.path());
+    std::fs::write(vault.join("new.md"), "x\n").unwrap();
+
+    ft().args(["--vault", vault.to_str().unwrap(), "git", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("committed 1 file(s)"))
+        // No "pushed" line — commit never touches the network.
+        .stdout(predicate::str::contains("pushed").not());
+
+    // Origin does not have the new file: commit didn't push.
+    let origin = tmp.path().join("origin.git");
+    let bare = ProcCommand::new("git")
+        .current_dir(&origin)
+        .args(["show", "main:new.md"])
+        .output()
+        .unwrap();
+    assert!(
+        !bare.status.success(),
+        "commit must not push; origin should not have new.md"
+    );
+    // Working tree is clean locally.
+    let porcelain = ProcCommand::new("git")
+        .current_dir(&vault)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&porcelain.stdout).trim().is_empty(),
+        "tree not clean after commit"
+    );
+}
+
+#[test]
+fn commit_clean_tree_reports_nothing_to_commit() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let vault = setup_origin_and_vault(tmp.path());
+
+    ft().args(["--vault", vault.to_str().unwrap(), "git", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to commit"));
+}
+
+#[test]
+fn commit_works_on_branch_with_no_upstream() {
+    // `sync` rejects this setup; `commit` must succeed because it never
+    // pulls or pushes.
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let vault = tmp.path();
+    init_repo(vault);
+    make_vault(vault);
+    std::fs::write(vault.join("seed.md"), "x\n").unwrap();
+    run_git(vault, &["add", "."]);
+    run_git(vault, &["commit", "-m", "seed"]);
+    std::fs::write(vault.join("new.md"), "y\n").unwrap();
+
+    ft().args(["--vault", vault.to_str().unwrap(), "git", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("committed 1 file(s)"));
+}
+
+#[test]
+fn commit_uses_custom_message_with_dash_m() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    let vault = setup_origin_and_vault(tmp.path());
+    std::fs::write(vault.join("new.md"), "x\n").unwrap();
+
+    ft().args([
+        "--vault",
+        vault.to_str().unwrap(),
+        "git",
+        "commit",
+        "-m",
+        "manual subject",
+    ])
+    .assert()
+    .success();
+
+    let out = ProcCommand::new("git")
+        .current_dir(&vault)
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "manual subject"
+    );
+}
+
+#[test]
+fn commit_with_no_git_repo_errors_with_documented_message() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    make_vault(tmp.path());
+
+    ft().args(["--vault", tmp.path().to_str().unwrap(), "git", "commit"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no git repository"));
 }

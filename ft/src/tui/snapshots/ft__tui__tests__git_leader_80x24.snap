@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests.rs
-assertion_line: 5489
 expression: frame
 ---
   1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
@@ -14,8 +13,8 @@ expression: frame
 │                    ┌ git · pick an action ──────────────┐                    │
 │                    │                                    │                    │
 │                    │  s     sync (commit + pull + push) │                    │
+│                    │  c     commit (local only, no pull/│                    │
 │                    │  Esc   cancel                      │                    │
-│                    │                                    │                    │
 │                    │                                    │                    │
 │                    │                                    │                    │
 │                    └────────────────────────────────────┘                    │

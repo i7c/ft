@@ -1,3 +1,5 @@
+#![allow(dead_code)] // JobKind variants surfaced in §8 (ft commands list) and the status bar
+
 //! Background job tracking for the TUI event loop (plan 014).
 //!
 //! Concurrency model: the App owns a single-slot
@@ -39,6 +41,9 @@ impl JobHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
     Sync,
+    /// `ft git commit` equivalent — stage + commit only, no pull/push.
+    /// Spawned by the `g c` leader chord.
+    Commit,
 }
 
 impl JobKind {
@@ -47,6 +52,7 @@ impl JobKind {
     pub fn indicator_label(self) -> &'static str {
         match self {
             JobKind::Sync => "sync",
+            JobKind::Commit => "commit",
         }
     }
 }

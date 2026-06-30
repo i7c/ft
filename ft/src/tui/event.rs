@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use crossterm::event::{self, Event as CtEvent, KeyEvent, KeyEventKind, MouseEvent};
-use ft_core::git::SyncOutcome;
+use ft_core::git::{CommitOutcome, SyncOutcome};
 
 /// Events flowing through the TUI loop. `Tick` fires once per second so the
 /// sidebar clock can update without forcing a full redraw on every keystroke.
@@ -37,6 +37,7 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub enum BgEvent {
     SyncCompleted(SyncJobResult),
+    CommitCompleted(CommitJobResult),
 }
 
 /// Result of a single `ft_core::git::sync` job spawned by the TUI.
@@ -54,6 +55,17 @@ pub struct SyncJobResult {
     pub outcome: Result<SyncOutcome, String>,
     /// Carried for future plans (multi-repo, job-id disambiguation).
     /// Unread for v1's single-slot handler.
+    #[allow(dead_code)]
+    pub repo: PathBuf,
+}
+
+/// Result of a single `ft_core::git::commit` job spawned by the TUI.
+/// Mirrors [`SyncJobResult`] for the lightweight commit-only path:
+/// `outcome` is `Ok` for [`CommitOutcome::Clean`] / [`CommitOutcome::Committed`],
+/// `Err` for hard failures (conflicted tree, commit failure).
+#[derive(Debug, Clone)]
+pub struct CommitJobResult {
+    pub outcome: Result<CommitOutcome, String>,
     #[allow(dead_code)]
     pub repo: PathBuf,
 }
