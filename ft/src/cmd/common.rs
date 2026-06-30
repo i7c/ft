@@ -11,7 +11,7 @@ use ft_core::vault::{Scan, Vault};
 /// user-config `default_vault`) with the standard "could not locate"
 /// context attached. Used by every CLI subcommand.
 pub fn discover_vault(vault_flag: Option<PathBuf>) -> Result<Vault> {
-    Vault::discover(vault_flag).context("could not locate an Obsidian vault")
+    Vault::discover(vault_flag).context("could not locate a vault")
 }
 
 /// Build the note-link graph for `vault` with the standard "graph build

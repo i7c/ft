@@ -149,8 +149,8 @@ man pages — see [install.md](docs/guide/install.md).
 ## First run
 
 `ft` auto-discovers your vault by walking up from the current
-directory looking for `.obsidian/`. Override with `--vault DIR`, the
-`FT_VAULT` env var, or `default_vault` in `~/.config/ft/config.toml`.
+directory looking for `.obsidian/` or `.ft/`. Override with `--vault DIR`,
+the `FT_VAULT` env var, or `default_vault` in `~/.config/ft/config.toml`.
 
 ```sh
 cd ~/my-vault

@@ -17,6 +17,11 @@ use crate::{
 
 /// Folders excluded from scanning by default. Combined with `.gitignore` and
 /// the vault's `ignored_paths` config.
+///
+/// Dotfile directories — `.obsidian/`, `.git/`, and `.ft/` — are additionally
+/// excluded by the walker's `.hidden(true)` filter (see `markdown_files` /
+/// `directories`). `.ft/` is intentionally absent from this list to avoid dead
+/// config: it would never be the active exclusion path.
 pub const DEFAULT_IGNORED: &[&str] = &[".obsidian", ".git", "attachments"];
 
 #[derive(Debug)]
@@ -40,7 +45,11 @@ impl Vault {
     /// 1. `vault_flag` — from `--vault` CLI flag
     /// 2. `FT_VAULT` environment variable
     /// 3. Walk up from the current working directory looking for `.obsidian/`
+    ///    or `.ft/`
     /// 4. `default_vault` key in `~/.config/ft/config.toml`
+    ///
+    /// A directory qualifies as a vault root when it contains either an
+    /// `.obsidian/` or a `.ft/` marker directory (see `is_vault_root`).
     ///
     /// If none of the above succeeds, returns [`Error::VaultNotFound`] with
     /// every location that was attempted.
@@ -333,12 +342,12 @@ fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
         let canonical = flag_path
             .canonicalize()
             .unwrap_or_else(|_| flag_path.clone());
-        if canonical.join(".obsidian").exists() {
+        if is_vault_root(&canonical) {
             debug!("vault from --vault flag: {}", canonical.display());
             return Ok(canonical);
         }
         tried.push(format!(
-            "  --vault {}: no .obsidian/ found",
+            "  --vault {}: no .obsidian/ or .ft/ found",
             flag_path.display()
         ));
     } else {
@@ -350,11 +359,11 @@ fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
         Ok(val) if !val.is_empty() => {
             let p = PathBuf::from(&val);
             let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
-            if canonical.join(".obsidian").exists() {
+            if is_vault_root(&canonical) {
                 debug!("vault from $FT_VAULT: {}", canonical.display());
                 return Ok(canonical);
             }
-            tried.push(format!("  $FT_VAULT={}: no .obsidian/ found", val));
+            tried.push(format!("  $FT_VAULT={}: no .obsidian/ or .ft/ found", val));
         }
         _ => {
             tried.push("  $FT_VAULT: not set".into());
@@ -368,7 +377,7 @@ fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(found);
     }
     tried.push(format!(
-        "  CWD walk from {}: no ancestor contains .obsidian/",
+        "  CWD walk from {}: no ancestor contains .obsidian/ or .ft/",
         cwd.display()
     ));
 
@@ -377,12 +386,12 @@ fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(default_vault) = read_default_vault(&user_config_path) {
         let p = PathBuf::from(&default_vault);
         let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
-        if canonical.join(".obsidian").exists() {
+        if is_vault_root(&canonical) {
             debug!("vault from config default_vault: {}", canonical.display());
             return Ok(canonical);
         }
         tried.push(format!(
-            "  {}: default_vault={}: no .obsidian/ found",
+            "  {}: default_vault={}: no .obsidian/ or .ft/ found",
             user_config_path.display(),
             default_vault
         ));
@@ -399,11 +408,21 @@ fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
 fn walk_up(start: &Path) -> Option<PathBuf> {
     let mut cur = start;
     loop {
-        if cur.join(".obsidian").exists() {
+        if is_vault_root(cur) {
             return Some(cur.to_path_buf());
         }
         cur = cur.parent()?;
     }
+}
+
+/// A directory is a vault root iff it contains a recognized vault marker
+/// directory — either `.obsidian/` (Obsidian vault) or `.ft/` (ft-native
+/// standalone vault). The two markers are equivalent: neither is preferred,
+/// and a directory with both is one vault. A regular file named `.obsidian`
+/// or `.ft` does not qualify; the check uses [`Path::is_dir`] so a stray
+/// file can't be mistaken for a marker.
+fn is_vault_root(path: &Path) -> bool {
+    path.join(".obsidian").is_dir() || path.join(".ft").is_dir()
 }
 
 fn read_default_vault(config_path: &Path) -> Option<String> {
@@ -438,6 +457,11 @@ mod tests {
         dir.child(".obsidian").create_dir_all().unwrap();
     }
 
+    /// Mark `dir` as an ft-native standalone vault (no `.obsidian/`).
+    fn make_ft_dir(dir: &TempDir) {
+        dir.child(".ft").create_dir_all().unwrap();
+    }
+
     // ── flag ─────────────────────────────────────────────────────────────────
 
     #[test]
@@ -452,11 +476,33 @@ mod tests {
     }
 
     #[test]
+    fn flag_pointing_at_ft_only_vault() {
+        let dir = TempDir::new().unwrap();
+        make_ft_dir(&dir);
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        assert_eq!(
+            vault.path.canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn flag_pointing_at_dotfile_not_dir_does_not_qualify() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("FT_VAULT");
+        let dir = TempDir::new().unwrap();
+        // A regular *file* named `.ft` is not a vault marker.
+        dir.child(".ft").touch().unwrap();
+        let result = Vault::discover(Some(dir.path().to_path_buf()));
+        assert!(matches!(result, Err(Error::VaultNotFound { .. })));
+    }
+
+    #[test]
     fn flag_pointing_at_non_vault_errors() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("FT_VAULT");
         let dir = TempDir::new().unwrap();
-        // No .obsidian/ here
+        // No vault marker (`.obsidian/` or `.ft/`) here.
         let result = Vault::discover(Some(dir.path().to_path_buf()));
         assert!(matches!(result, Err(Error::VaultNotFound { .. })));
     }
@@ -471,6 +517,16 @@ mod tests {
         assert!(
             msg.contains("--vault"),
             "error should mention --vault; got: {msg}"
+        );
+        // Each marker-specific line names both recognized markers so the
+        // user knows either suffices, and does not assert Obsidian is required.
+        assert!(
+            msg.contains(".obsidian/ or .ft/"),
+            "error should name both markers; got: {msg}"
+        );
+        assert!(
+            !msg.contains("Obsidian vault"),
+            "error must not assert Obsidian is required; got: {msg}"
         );
     }
 
@@ -497,6 +553,27 @@ mod tests {
     }
 
     #[test]
+    fn discover_walk_up_finds_ft_only_ancestor() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("FT_VAULT");
+
+        let vault_dir = TempDir::new().unwrap();
+        make_ft_dir(&vault_dir);
+        let sub = vault_dir.child("notes/2026");
+        sub.create_dir_all().unwrap();
+
+        // Run find_vault from inside `sub`: the CWD walk-up rung should
+        // resolve to the `.ft`-only ancestor. We can't easily set the
+        // process CWD portably, so drive walk_up directly — it's the same
+        // predicate find_vault uses for rung 3.
+        let found = walk_up(sub.path()).unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            vault_dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
     fn walk_up_finds_self() {
         let dir = TempDir::new().unwrap();
         make_obsidian_dir(&dir);
@@ -505,6 +582,39 @@ mod tests {
             found.canonicalize().unwrap(),
             dir.path().canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn walk_up_finds_ft_marker_in_parent() {
+        let vault_dir = TempDir::new().unwrap();
+        make_ft_dir(&vault_dir);
+        let sub = vault_dir.child("notes/2026");
+        sub.create_dir_all().unwrap();
+
+        let found = walk_up(sub.path()).unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            vault_dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn walk_up_finds_ft_marker_self() {
+        let dir = TempDir::new().unwrap();
+        make_ft_dir(&dir);
+        let found = walk_up(dir.path()).unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn walk_up_ignores_dotfile_named_ft() {
+        let dir = TempDir::new().unwrap();
+        // A file named `.ft` (not a dir) must not count as a marker.
+        dir.child(".ft").touch().unwrap();
+        assert!(walk_up(dir.path()).is_none());
     }
 
     // ── find_vault (env) ─────────────────────────────────────────────────────
@@ -570,6 +680,27 @@ mod tests {
         let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
         assert!(descs.contains(&"public task".to_string()));
         assert!(!descs.contains(&"private task".to_string()));
+    }
+
+    #[test]
+    fn scan_excludes_ft_dir_contents() {
+        // A `.ft/` directory is excluded by the walker's dotfile filter
+        // (`.hidden(true)`), so tasks inside it are never scanned — even
+        // when `.ft/` is the *only* vault marker present.
+        let dir = TempDir::new().unwrap();
+        make_ft_dir(&dir);
+        dir.child(".ft/notes.md")
+            .write_str("- [ ] hidden ft task\n")
+            .unwrap();
+        dir.child("visible.md")
+            .write_str("- [ ] visible task\n")
+            .unwrap();
+
+        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(descs.contains(&"visible task".to_string()));
+        assert!(!descs.contains(&"hidden ft task".to_string()));
     }
 
     #[test]
@@ -692,6 +823,26 @@ mod tests {
         std::env::remove_var("FT_VAULT");
 
         // The env var vault should be found
+        let found = result.unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            vault_dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn env_var_ft_only_vault() {
+        let vault_dir = TempDir::new().unwrap();
+        make_ft_dir(&vault_dir);
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("FT_VAULT", vault_dir.path().to_str().unwrap());
+
+        // Pass a flag that fails so we fall through to the env rung.
+        let bad_dir = TempDir::new().unwrap();
+        let result = find_vault(Some(bad_dir.path().to_path_buf()));
+        std::env::remove_var("FT_VAULT");
+
         let found = result.unwrap();
         assert_eq!(
             found.canonicalize().unwrap(),

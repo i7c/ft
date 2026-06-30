@@ -1261,6 +1261,7 @@ fn default_ignored_dirs_stay_excluded_even_as_empty_dirs() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::create_dir_all(root.join("attachments")).unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join(".ft")).unwrap();
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
     let g = Graph::build(&v, &Scan::default()).unwrap();
@@ -1276,6 +1277,10 @@ fn default_ignored_dirs_stay_excluded_even_as_empty_dirs() {
     assert!(
         g.node_by_path(Path::new(".obsidian")).is_none(),
         ".obsidian/ must not appear"
+    );
+    assert!(
+        g.node_by_path(Path::new(".ft")).is_none(),
+        ".ft/ must not appear as a directory node"
     );
 }
 

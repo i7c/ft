@@ -1,10 +1,11 @@
 # Vault discovery and configuration
 
-`ft` always operates against a single Obsidian vault — the directory
-that contains an `.obsidian/` folder. This chapter explains how that
-vault is located, the two-layer configuration model, and the small
-number of settings you'll probably want to write before doing anything
-serious.
+`ft` always operates against a single note vault — the directory
+that contains a `.obsidian/` *or* `.ft/` folder. (`.obsidian/` marks an
+Obsidian vault; `.ft/` is the ft-native marker for a standalone vault that
+doesn't use Obsidian.) This chapter explains how that vault is located,
+the two-layer configuration model, and the small number of settings you'll
+probably want to write before doing anything serious.
 
 The full schema (every key, every default, every token) lives in
 [docs/config.md](../config.md). This chapter is the workflow-shaped
@@ -17,19 +18,19 @@ trying these in order and stopping at the first hit:
 
 1. **`--vault DIR`** — an explicit flag passed on the command line.
 2. **`$FT_VAULT`** — environment variable.
-3. **Walk up from CWD** — looks for `.obsidian/` in the current
+3. **Walk up from CWD** — looks for `.obsidian/` or `.ft/` in the current
    directory, then each parent, all the way to `/`.
 4. **`default_vault`** in `~/.config/ft/config.toml`.
 
 The first candidate that points at a directory containing `.obsidian/`
-wins. If every candidate fails, `ft` prints exactly which paths it
-tried, so the failure is debuggable:
+or `.ft/` wins. If every candidate fails, `ft` prints exactly which paths
+it tried, so the failure is debuggable:
 
 ```
-Error: could not locate an Obsidian vault
-  --vault /tmp/notes: no .obsidian/ found
+Error: could not locate a vault
+  --vault /tmp/notes: no .obsidian/ or .ft/ found
   $FT_VAULT: not set
-  CWD walk from /home/you: no ancestor contains .obsidian/
+  CWD walk from /home/you: no ancestor contains .obsidian/ or .ft/
   /home/you/.config/ft/config.toml: default_vault not set
 ```
 
