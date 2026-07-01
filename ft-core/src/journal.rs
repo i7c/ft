@@ -89,7 +89,26 @@ pub struct JournalReport {
 /// which they appear in `targets`).
 ///
 /// Both modes: dates come from `git blame` via `cache` (lazy-populated),
-/// sort is date descending with source title ascending as tiebreak.
+/// sort is date descending with source title ascending, then
+/// `line_start` ascending as a final document-order tiebreak (never
+/// overrides a date or title difference — paragraph recentness stays
+/// dominant).
+///
+/// ## Heading-section expansion
+///
+/// A paragraph is also included when a heading in its owning chain has
+/// a `HeadingLink` edge to a target (a link written *inside* heading
+/// text, e.g. `## Thoughts about [[Foo]]`). The whole section under
+/// that heading — its `OwnsParagraph` children plus those of its
+/// `OwnsHeading`-descendant sub-headings, via `Graph::note_paragraphs`
+/// — is added, one entry per paragraph. Per-paragraph dates are
+/// preserved (each entry's date is its own blame range, not a shared
+/// section date). A paragraph reachable both via a direct
+/// `ParagraphLink` and via expansion appears once; its `matched` is
+/// derived from its own direct edge when present (direct wins), else
+/// inherited from the linking heading chain. Anchored links *targeting*
+/// a heading from elsewhere (`[[Foo#Bar]]` in a body) do not trigger
+/// expansion — only `HeadingLink` *from* a heading does.
 ///
 /// Targets that resolve to `Directory`/`Task`/`Paragraph` nodes are
 /// silently ignored — those node kinds have no journal semantics.
@@ -135,19 +154,42 @@ pub fn build_journal(
     let mut target_set: HashSet<NoteId> = targets.iter().copied().collect();
     target_set.extend(alias_ids.iter().copied());
 
-    // Collect candidate paragraph nodes (dedup via HashSet). A mention's
-    // source is the paragraph node for ParagraphLink edges (and the
-    // note for NoteLink, which we skip here — journal entries are
-    // paragraph-scoped).
+    // Collect candidate paragraph nodes (dedup via HashSet). Two passes:
+    //
+    // (1) Direct match: a mention's source is the paragraph node for
+    //     ParagraphLink edges (and the note for NoteLink, which we skip
+    //     — journal entries are paragraph-scoped).
+    // (2) Heading-section expansion: a Heading source (a heading whose
+    //     HeadingLink targets a target) contributes every paragraph
+    //     transitively owned by it via `Graph::note_paragraphs(H)` —
+    //     the section up to the next same-or-higher heading, including
+    //     nested sub-sections. Sibling paragraphs need not repeat the
+    //     link; having it in the heading is enough.
+    //
+    // A paragraph reachable both ways is deduped via `seen_paragraph`;
+    // the direct-match pass runs first so direct attribution wins.
     let mut paragraph_ids: Vec<NoteId> = Vec::new();
     let mut seen_paragraph: HashSet<NoteId> = HashSet::new();
+    let mut expansion_headings: HashSet<NoteId> = HashSet::new();
     for target in &target_set {
         for (src, _edge) in graph.mentions_of(*target) {
-            if !matches!(graph.node(src), NodeKind::Paragraph(_)) {
-                continue;
+            match graph.node(src) {
+                NodeKind::Paragraph(_) if seen_paragraph.insert(src) => {
+                    paragraph_ids.push(src);
+                }
+                NodeKind::Heading(_) => {
+                    // Defer expansion until after the direct pass so
+                    // direct-matched paragraphs keep their attribution.
+                    expansion_headings.insert(src);
+                }
+                _ => {} // NoteLink sources (the note) have no paragraph entry.
             }
-            if seen_paragraph.insert(src) {
-                paragraph_ids.push(src);
+        }
+    }
+    for h_id in expansion_headings {
+        for p_id in graph.note_paragraphs(h_id) {
+            if seen_paragraph.insert(p_id) {
+                paragraph_ids.push(p_id);
             }
         }
     }
@@ -197,7 +239,10 @@ pub fn build_journal(
         // this paragraph has a ParagraphLink edge to. A ParagraphLink may
         // target a heading node (anchored link); map each target back to
         // its note-level identity via link_target_note so anchored links
-        // still match the owning note.
+        // still match the owning note. Direct matches win: an expansion-only
+        // paragraph (no direct ParagraphLink to any target) falls back to
+        // the targets its owning-chain headings link to, so it is attributed
+        // to the heading that pulled it in rather than reported as empty.
         let matched: Vec<NoteId> = if single_mode {
             vec![targets[0]]
         } else {
@@ -205,11 +250,17 @@ pub fn build_journal(
                 .outgoing(p_id)
                 .filter_map(|(dst, edge)| matches!(edge, EdgeKind::ParagraphLink(_)).then_some(dst))
                 .filter_map(|dst| graph.link_target_note(dst))
+                .filter(|t| target_set.contains(t))
                 .collect();
+            let inherited = if direct.is_empty() {
+                heading_chain_targets(graph, p_id, &target_set)
+            } else {
+                HashSet::new()
+            };
             targets
                 .iter()
                 .copied()
-                .filter(|t| direct.contains(t))
+                .filter(|t| direct.contains(t) || inherited.contains(t))
                 .collect()
         };
 
@@ -224,17 +275,75 @@ pub fn build_journal(
         });
     }
 
-    // Reverse-chronological; stable tiebreak on title ascending.
+    // Reverse-chronological; title ascending tiebreak; final `line_start`
+    // ascending so co-located same-date paragraphs read top-to-bottom.
+    // The tiebreak never overrides a date or title difference.
     entries.sort_by(|a, b| {
         b.date
             .cmp(&a.date)
             .then_with(|| a.source_title.cmp(&b.source_title))
+            .then_with(|| a.line_start.cmp(&b.line_start))
     });
     skipped_blame.sort();
     Ok(JournalReport {
         entries,
         skipped_blame,
     })
+}
+
+/// Targets reachable from a paragraph's owning heading chain via
+/// `HeadingLink` edges — the set used to attribute `matched` for an
+/// expansion-only paragraph (one with no direct `ParagraphLink` to any
+/// target).
+///
+/// Walks from the paragraph's nearest `OwnsParagraph` container; if it
+/// is a `Heading`, climbs `OwnsHeading` ancestors to the note, collecting
+/// every `HeadingLink` destination (mapped to note identity through
+/// [`Graph::link_target_note`]) that is in `target_set`. Returns the empty
+/// set when the container is the note or no heading links a target.
+///
+/// Only `HeadingLink` edges count — a link written *inside* heading text
+/// is the expansion trigger. Anchored links *targeting* a heading from
+/// elsewhere are handled by the direct-match pass and do not contribute
+/// here.
+fn heading_chain_targets(
+    graph: &Graph,
+    paragraph_id: NoteId,
+    target_set: &HashSet<NoteId>,
+) -> HashSet<NoteId> {
+    // Find the nearest OwnsParagraph container of the paragraph.
+    let owner = graph
+        .incoming(paragraph_id)
+        .find(|(_, e)| matches!(e, EdgeKind::OwnsParagraph))
+        .map(|(src, _)| src);
+    let Some(owner) = owner else {
+        return HashSet::new();
+    };
+    if !matches!(graph.node(owner), NodeKind::Heading(_)) {
+        return HashSet::new(); // note-owned paragraph: no heading chain.
+    }
+
+    // Climb OwnsHeading from the owning heading to the note, collecting
+    // HeadingLink destinations at each heading along the way.
+    let mut out = HashSet::new();
+    let mut cur = Some(owner);
+    while let Some(h) = cur {
+        for (dst, edge) in graph.outgoing(h) {
+            if !matches!(edge, EdgeKind::HeadingLink(_)) {
+                continue;
+            }
+            if let Some(note_dst) = graph.link_target_note(dst) {
+                if target_set.contains(&note_dst) {
+                    out.insert(note_dst);
+                }
+            }
+        }
+        cur = graph
+            .incoming(h)
+            .find(|(_, e)| matches!(e, EdgeKind::OwnsHeading))
+            .map(|(src, _)| src);
+    }
+    out
 }
 
 /// Resolve the alias `NoteId`s declared in `note_id`'s `## Related`
@@ -307,6 +416,7 @@ fn find_related_range(headings: &[crate::markdown::Heading], content: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn find_related_range_no_related_heading() {
@@ -554,5 +664,434 @@ mod tests {
             .map(|e| e.source_title.as_str())
             .collect();
         assert!(titles.contains(&"Daily"), "got titles: {titles:?}");
+    }
+
+    // ── heading-section expansion ────────────────────────────────────
+    //
+    // The fixture style below uses `git commit` per paragraph-day so
+    // blame yields distinguishable per-paragraph dates. `run_git` and
+    // `commit_all` are local to each test that needs history; the
+    // heading-expansion cases that don't need date distinctions reuse
+    // a single commit.
+
+    fn init_git_repo(repo: &Path) {
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(repo)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        run_git(&["init", "-b", "main"]);
+        run_git(&["config", "user.name", "T"]);
+        run_git(&["config", "user.email", "t@e.com"]);
+        run_git(&["config", "commit.gpgsign", "false"]);
+    }
+
+    fn commit_all(repo: &Path, msg: &str) {
+        let out = Command::new("git")
+            .current_dir(repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(["add", "."])
+            .output()
+            .expect("git add");
+        assert!(out.status.success());
+        let out = Command::new("git")
+            .current_dir(repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(["commit", "-m", msg])
+            .output()
+            .expect("git commit");
+        assert!(out.status.success());
+    }
+
+    /// Heading link expands to all sibling paragraphs in the section.
+    /// `## Thoughts about [[Foo]]` followed by A/B/C under it and a
+    /// `## Next section` paragraph D: A, B, C included; D excluded.
+    #[test]
+    fn heading_link_expands_section_paragraphs() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        // Heading line begins paragraph A (Fork A2); blank-line-separated
+        // B and C follow under the same heading; D starts a new section.
+        tmp.child("Daily.md")
+            .write_str(
+                "# Day\n\n## Thoughts about [[Foo]]\nPara A.\n\nPara B.\n\nPara C.\n\n## Next section\n\nPara D.\n",
+            )
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        assert!(report.skipped_blame.is_empty());
+
+        // The three section paragraphs (A includes the heading line text
+        // per Fork A2) are present; the next-section paragraph is not.
+        let bodies: Vec<String> = report
+            .entries
+            .iter()
+            .map(|e| e.section_text.clone())
+            .collect();
+        assert_eq!(bodies.len(), 3, "got {bodies:?}");
+        assert!(bodies.iter().any(|t| t.contains("Para A")), "{bodies:?}");
+        assert!(bodies.iter().any(|t| t.contains("Para B")), "{bodies:?}");
+        assert!(bodies.iter().any(|t| t.contains("Para C")), "{bodies:?}");
+        assert!(!bodies.iter().any(|t| t.contains("Para D")), "{bodies:?}");
+        // Each is a separate entry (one paragraph per entry).
+        assert_eq!(report.entries.len(), 3);
+    }
+
+    /// Expansion includes paragraphs under nested sub-headings: A under
+    /// `## Thoughts about [[Foo]]`, B under `### Sub-point`, C under the
+    /// next `## Next section`. Only A and B are in the section.
+    #[test]
+    fn expansion_includes_nested_subheading_paragraphs() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        tmp.child("Daily.md")
+            .write_str(
+                "# Day\n\n## Thoughts about [[Foo]]\n\nPara A.\n\n### Sub-point\n\nPara B.\n\n## Next section\n\nPara C.\n",
+            )
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let bodies: Vec<String> = report
+            .entries
+            .iter()
+            .map(|e| e.section_text.clone())
+            .collect();
+        assert!(bodies.iter().any(|t| t.contains("Para A")), "{bodies:?}");
+        assert!(bodies.iter().any(|t| t.contains("Para B")), "{bodies:?}");
+        assert!(!bodies.iter().any(|t| t.contains("Para C")), "{bodies:?}");
+    }
+
+    /// Each expanded paragraph keeps its own per-paragraph blame date,
+    /// not a shared section date. Commits A, B, C on different days.
+    #[test]
+    fn expanded_paragraphs_keep_own_dates() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        // Day 1: heading + Para A (no blank line → Fork A2 merges them
+        // into one paragraph that carries the heading link).
+        tmp.child("Daily.md")
+            .write_str("# Day\n\n## Thoughts about [[Foo]]\nPara A.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        // Backdate commit 1 to a known older date.
+        let out = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-01-01T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-01-01T00:00:00")
+            .args(["add", "."])
+            .output()
+            .expect("git add");
+        assert!(out.status.success());
+        let out = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-01-01T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-01-01T00:00:00")
+            .args(["commit", "-m", "c1"])
+            .output()
+            .expect("git commit");
+        assert!(out.status.success());
+        // Day 2: append Para B.
+        tmp.child("Daily.md")
+            .write_str("# Day\n\n## Thoughts about [[Foo]]\nPara A.\n\nPara B.\n")
+            .unwrap();
+        let out = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-02-01T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-02-01T00:00:00")
+            .args(["add", "."])
+            .output()
+            .expect("git add");
+        assert!(out.status.success());
+        let out = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-02-01T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-02-01T00:00:00")
+            .args(["commit", "-m", "c2"])
+            .output()
+            .expect("git commit");
+        assert!(out.status.success());
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        assert_eq!(report.entries.len(), 2, "got {:?}", report.entries);
+        // Map text → date, then assert each paragraph's date is its own.
+        let by_text: std::collections::HashMap<&str, chrono::NaiveDate> = report
+            .entries
+            .iter()
+            .map(|e| {
+                let key = if e.section_text.contains("Para A") {
+                    "A"
+                } else {
+                    "B"
+                };
+                (key, e.date)
+            })
+            .collect();
+        assert_eq!(
+            by_text["A"],
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+        );
+        assert_eq!(
+            by_text["B"],
+            chrono::NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()
+        );
+    }
+
+    /// Multi-target: an expansion-only paragraph (no direct ParagraphLink)
+    /// under `## About [[Foo]]` gets matched == [Foo] (inherited from the
+    /// linking heading).
+    #[test]
+    fn expansion_matched_inherited_from_heading() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        tmp.child("Bar.md").write_str("# Bar\n").unwrap();
+        // Heading links Foo; Para B has no direct link.
+        tmp.child("Daily.md")
+            .write_str("# Day\n\n## About [[Foo]]\n\nPara A.\n\nPara B.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        // Para B: expansion-only, no direct link → matched should be [Foo].
+        let para_b = report
+            .entries
+            .iter()
+            .find(|e| e.section_text.contains("Para B"))
+            .expect("Para B present");
+        assert_eq!(para_b.matched, vec![foo], "got {:?}", para_b.matched);
+        // Para A: also expansion-only here (the heading link is the only
+        // link; Para A's body has no [[Foo]]) → also [Foo].
+        let para_a = report
+            .entries
+            .iter()
+            .find(|e| e.section_text.contains("Para A"))
+            .expect("Para A present");
+        assert_eq!(para_a.matched, vec![foo], "got {:?}", para_a.matched);
+    }
+
+    /// Direct- and expansion-matched paragraph appears once, with matched
+    /// derived from its own direct ParagraphLink (direct wins).
+    #[test]
+    fn direct_and_expansion_matched_appears_once_direct_wins() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        tmp.child("Bar.md").write_str("# Bar\n").unwrap();
+        // Heading links Foo; Para A ALSO directly links Bar in its body.
+        tmp.child("Daily.md")
+            .write_str("# Day\n\n## About [[Foo]]\n\nPara A about [[Bar]].\n\nPara B.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        // Para A appears exactly once.
+        let para_a: Vec<_> = report
+            .entries
+            .iter()
+            .filter(|e| e.section_text.contains("Para A"))
+            .collect();
+        assert_eq!(para_a.len(), 1, "got {:?}", para_a);
+        // Direct wins: matched is [Bar] (its own ParagraphLink), not [Foo]
+        // (the inherited heading-link target) — both are targets, direct
+        // is the only attribution source used.
+        assert_eq!(para_a[0].matched, vec![bar], "got {:?}", para_a[0].matched);
+    }
+
+    /// Single-target self-exclusion drops the target note's own paragraphs
+    /// even when reached via heading expansion.
+    #[test]
+    fn single_target_self_exclusion_drops_expanded_own_paragraphs() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // Foo links itself from a heading. Foo's own paragraphs must be
+        // excluded (self-exclusion), so an empty journal results.
+        tmp.child("Foo.md")
+            .write_str("# Foo\n\n## Notes about [[Foo]]\n\nSelf para A.\n\nSelf para B.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        assert!(
+            report.entries.is_empty(),
+            "self-exclusion should drop Foo's own paragraphs, got {:?}",
+            report.entries
+        );
+    }
+
+    /// Heading link to a ghost target expands its section.
+    #[test]
+    fn heading_link_to_ghost_expands_section() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // No Phantom.md exists — the heading links a ghost.
+        tmp.child("Daily.md")
+            .write_str("# Day\n\n## About [[Phantom]]\n\nPara A.\n\nPara B.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let phantom = graph
+            .ghost_by_raw("Phantom")
+            .expect("Phantom should be a ghost");
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[phantom], &vault, &mut cache).unwrap();
+        assert!(report.skipped_blame.is_empty());
+        let bodies: Vec<String> = report
+            .entries
+            .iter()
+            .map(|e| e.section_text.clone())
+            .collect();
+        assert!(bodies.iter().any(|t| t.contains("Para A")), "{bodies:?}");
+        assert!(bodies.iter().any(|t| t.contains("Para B")), "{bodies:?}");
+    }
+
+    /// Same-date same-title paragraphs sort by line_start ascending
+    /// (document order). All committed in one commit → same date.
+    #[test]
+    fn same_date_paragraphs_ordered_by_line_start() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        // Three sibling paragraphs under one heading, one commit → same date.
+        // No blank line after the heading so it merges with the first body
+        // (Fork A2); then two blank-line-separated paragraphs follow.
+        tmp.child("Daily.md")
+            .write_str(
+                "# Day\n\n## Thoughts about [[Foo]]\nFirst para.\n\nSecond para.\n\nThird para.\n",
+            )
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        assert_eq!(report.entries.len(), 3);
+        // Reverse-chrono by date (all equal) → title (all equal) → line_start asc.
+        let texts: Vec<&str> = report
+            .entries
+            .iter()
+            .map(|e| e.section_text.as_str())
+            .collect();
+        assert!(texts[0].contains("First para"), "got {texts:?}");
+        assert!(texts[1].contains("Second para"), "got {texts:?}");
+        assert!(texts[2].contains("Third para"), "got {texts:?}");
+        // line_start strictly ascending.
+        let starts: Vec<u32> = report.entries.iter().map(|e| e.line_start).collect();
+        assert!(
+            starts[0] < starts[1] && starts[1] < starts[2],
+            "got {starts:?}"
+        );
+    }
+
+    /// Anchored link targeting a heading (`[[Foo#Bar]]` in a body) includes
+    /// the body paragraph (direct match) but does NOT expand Foo's `## Bar`
+    /// section — only a HeadingLink *from* a heading triggers expansion.
+    #[test]
+    fn anchored_link_targeting_heading_does_not_expand() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // Foo has a `## Bar` heading with body paragraphs that do NOT link
+        // anything — they should NOT be pulled in.
+        tmp.child("Foo.md")
+            .write_str("# Foo\n\n## Bar\n\nFoo Bar body one.\n\nFoo Bar body two.\n")
+            .unwrap();
+        // Daily has a body paragraph with an anchored link to Foo#Bar.
+        tmp.child("Daily.md")
+            .write_str("# Day\n\nSee [[Foo#Bar]] for context.\n")
+            .unwrap();
+        let repo = tmp.path().to_path_buf();
+        init_git_repo(&repo);
+        commit_all(&repo, "c1");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
+        let mut cache = BlameCache::default();
+        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        // The Daily body paragraph is a direct match → included.
+        let daily_present = report
+            .entries
+            .iter()
+            .any(|e| e.section_text.contains("See [[Foo#Bar]]"));
+        assert!(
+            daily_present,
+            "direct anchored-link paragraph must be included"
+        );
+        // Foo's `## Bar` section paragraphs must NOT be expanded in.
+        let foo_bodies: Vec<_> = report
+            .entries
+            .iter()
+            .filter(|e| e.source_title == "Foo")
+            .collect();
+        assert!(
+            foo_bodies.is_empty(),
+            "anchored link must not expand Foo#Bar section, got {foo_bodies:?}"
+        );
     }
 }
