@@ -5,15 +5,15 @@ TBD - created by archiving change add-links-into-edge. Update Purpose after arch
 ## Requirements
 ### Requirement: LinksInto edge exists in the graph
 
-The graph SHALL support an `EdgeKind::LinksInto` variant representing "the source note links to one or more notes contained in the target directory."
+The graph SHALL support an `EdgeKind::LinksInto` variant representing "the source note links to one or more notes contained in the target directory." `LinksInto` is a derived edge: one per unique (source note, target note's parent directory) pair, computed from the resolved targets of the unified link kinds (`NoteLink`, `HeadingLink`, `ParagraphLink`).
 
 #### Scenario: EdgeKind variant exists
 - **WHEN** the graph is built
-- **THEN** `EdgeKind::LinksInto` is a defined variant alongside `Link`, `Embed`, `Contains`, and `HasTask`
+- **THEN** `EdgeKind::LinksInto` is a defined variant alongside `NoteLink`, `HeadingLink`, `ParagraphLink`, `Contains`, `OwnsHeading`, `OwnsParagraph`, `HasTask`, and `Subtask`
 
 ### Requirement: LinksInto edges created during graph build
 
-After all Link and Embed edges are inserted during `Graph::build()`, the system SHALL insert exactly one `LinksInto` edge per unique (source note, target note's parent directory) pair where the target is a resolved Note node.
+After all link edges (`NoteLink`, `HeadingLink`, `ParagraphLink`) are inserted during `Graph::build()`, the system SHALL insert exactly one `LinksInto` edge per unique (source note, target note's parent directory) pair where the target is a resolved Note node. Link edges whose target is a heading node (via anchor resolution) SHALL resolve to that heading's owning note for `LinksInto` derivation. Ghost (unresolved) targets produce no `LinksInto` edge.
 
 #### Scenario: Note links to a note in a subdirectory
 - **WHEN** note `a/b/foo.md` contains `[[Bar]]` that resolves to `c/d/e/Bar.md`
@@ -27,9 +27,13 @@ After all Link and Embed edges are inserted during `Graph::build()`, the system 
 - **WHEN** note `a/foo.md` contains `![[diagram.png]]` that resolves to `images/diagram.png`
 - **THEN** a `LinksInto` edge exists from the `a/foo.md` Note node to the `images` Directory node
 
+#### Scenario: Anchored link to a heading derives LinksInto from the heading's note
+- **WHEN** note `a/foo.md` contains `[[Bar#Section]]` that resolves to heading `Section` in `c/d/e/Bar.md`
+- **THEN** a `LinksInto` edge exists from `a/foo.md` to the `c/d/e` Directory node (derived from the heading's owning note `Bar.md`)
+
 ### Requirement: LinksInto edges are deduplicated per folder
 
-If a source note contains multiple links (Link or Embed) resolving to notes in the same target directory, the system SHALL create at most one `LinksInto` edge for that (source, directory) pair.
+If a source note contains multiple links (at any of the three levels: NoteLink, HeadingLink, ParagraphLink) resolving to notes in the same target directory, the system SHALL create at most one `LinksInto` edge for that (source, directory) pair.
 
 #### Scenario: Multiple links to same folder produce one edge
 - **WHEN** note `a/foo.md` contains `[[X]]` resolving to `d/X.md` and `[[Y]]` resolving to `d/Y.md`
@@ -57,11 +61,11 @@ When a note links to another note in the same directory, the system SHALL still 
 
 #### Scenario: Note links to sibling in same folder
 - **WHEN** note `a/b/foo.md` contains `[[Baz]]` that resolves to `a/b/Baz.md`
-- **THEN** a `LinksInto` edge exists from `a/b/foo.md` to the `a/b` Directory node
+- **THEN** a `LinksInto` edge exists from the `a/b/foo.md` Note node to the `a/b` Directory node
 
 ### Requirement: LinksInto edges survive refresh_note
 
-When `Graph::refresh_note` is called for a note, the system SHALL recompute `LinksInto` edges for that note based on its current resolved links: old `LinksInto` edges from that note are removed, and new ones are inserted for the current link set.
+When `Graph::refresh_note` is called for a note, the system SHALL recompute `LinksInto` edges for that note based on its current resolved links (across all three link kinds): old `LinksInto` edges from that note are removed, and new ones are inserted for the current link set.
 
 #### Scenario: Refresh recomputes LinksInto edges
 - **WHEN** note `a/foo.md` initially links to `d1/X.md` (producing a `LinksInto` edge to `d1`), then the file is edited to also link to `d2/Y.md` and `refresh_note` is called

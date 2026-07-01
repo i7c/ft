@@ -33,7 +33,7 @@ The system SHALL walk `Contains` edges from the directory node via BFS to collec
 
 ### Requirement: Directory rename updates all external references to contained files
 
-The system SHALL update every vault-wide reference (wikilink, markdown link, embed) that points to any note under the renamed directory. References that use path-form wikilinks (`[[old-dir/file]]`) SHALL be updated to the new path; bare wikilinks (`[[file]]`) SHALL remain unchanged since the title (stem) does not change.
+The system SHALL update every vault-wide reference (wikilink, markdown link, embed) that points to any note under the renamed directory. References that use path-form wikilinks (`[[old-dir/file]]`) SHALL be updated to the new path; bare wikilinks (`[[file]]`) SHALL remain unchanged since the title (stem) does not change. Reference discovery SHALL iterate the unified link kinds (`NoteLink`, and — for completeness of byte-precise rewriting — the per-occurrence `LinkEdge.byte_range` they carry). Embed references (`LinkEdge.is_embed = true`) SHALL be updated identically to non-embed references. Anchored references (`[[old-dir/file#Section]]`) SHALL have their target path updated while preserving the `#anchor` portion.
 
 #### Scenario: External note links to a file in the renamed directory
 
@@ -44,6 +44,16 @@ The system SHALL update every vault-wide reference (wikilink, markdown link, emb
 
 - **WHEN** renaming directory `docs/` to `reference/` and file `external.md` contains `[[guide]]` (the title of `docs/guide.md`)
 - **THEN** after the rename, `external.md` still contains `[[guide]]` (the title didn't change)
+
+#### Scenario: Anchored reference preserves the anchor
+
+- **WHEN** renaming directory `docs/` to `reference/` and file `external.md` contains `[[docs/guide#Section]]`
+- **THEN** after the rename, `external.md` contains `[[reference/guide#Section]]` (path updated, anchor preserved)
+
+#### Scenario: Embed reference updated
+
+- **WHEN** renaming directory `docs/` to `reference/` and file `external.md` contains `![[docs/guide]]`
+- **THEN** after the rename, `external.md` contains `![[reference/guide]]`
 
 ### Requirement: Directory rename handles cross-references within the renamed directory
 

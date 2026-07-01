@@ -92,7 +92,10 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 - **THEN** the command exits with a non-zero code and a clear "one of --link or --from is required" error
 
 ### Requirement: Scaffold content sourcing
+
 With `--link` flags, the scaffold SHALL be sourced from the multi-source journal for the selected links over the specified window. With `--in-window`, only paragraphs whose lines overlap added-lines in the window SHALL be included. With `--all` (the default) or no window flag, all-time matching paragraphs SHALL be included. With `--from <path>:<line>` (repeatable), the scaffold SHALL additionally include the specified source paragraphs (identified by the line in which they start). Sections in the resulting scaffold SHALL be ordered by journal date descending (newest first), preserving the journal's tiebreak (source title ascending) for equal dates.
+
+The scaffold's per-section body text SHALL be taken verbatim from `JournalEntry.section_text`, which derives from `ParagraphData.text`. Because the heading line remains part of the paragraph that begins at that line (Fork A2), `section_text` is unchanged in shape: a paragraph that begins at a heading line still includes the heading line verbatim.
 
 #### Scenario: --link sources from journal
 - **WHEN** `ft synth out.md --link "[[Foo]]" --link "[[Bar]]"` is run
@@ -109,6 +112,10 @@ With `--link` flags, the scaffold SHALL be sourced from the multi-source journal
 #### Scenario: Scaffold ordered newest first
 - **WHEN** the scaffold contains paragraphs dated 2026-03-01 and 2025-11-14
 - **THEN** the 2026-03-01 section appears before the 2025-11-14 section in the file
+
+#### Scenario: Paragraph beginning at a heading line includes the heading
+- **WHEN** a sourced paragraph begins at a `## Section` heading line
+- **THEN** the scaffolded callout body begins with `## Section` (the heading line is part of `ParagraphData.text`, per Fork A2)
 
 ### Requirement: Plan/apply split for synth mutations
 A pure planner `plan_synth_scaffold(graph, vault, repo, target, entries) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
@@ -135,3 +142,4 @@ The `Config` struct SHALL gain a `synth: Synth` sub-struct with two fields: `fol
 #### Scenario: Unknown key rejected
 - **WHEN** a config has `[synth] unknown_key = "x"`
 - **THEN** config load fails with a clear error naming the unknown key
+

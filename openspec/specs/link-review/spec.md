@@ -38,7 +38,8 @@ The command SHALL invoke `git log -p <X>..<Y>` (or the date-equivalent commit ra
 - **THEN** any `[[wikilink]]` on that line is NOT counted
 
 ### Requirement: Paragraph-level frequency dedup
-For each `[[Link]]` occurrence on an added line, the command SHALL map the line to its containing paragraph using the HEAD-state paragraph index of the post-commit path. It SHALL count distinct `(link, paragraph)` pairs. If the line cannot be mapped to a current paragraph (file deleted or paragraph rewritten such that no current paragraph contains the original added line), the command SHALL fall back to a synthetic key of `(path, original-added-line)` so the link is still counted but does not dedup against current paragraphs.
+
+For each `[[Link]]` or `[markdown link](path.md)` occurrence on an added line, the command SHALL map the line to its containing paragraph using the HEAD-state paragraph index of the post-commit path (enumerated via `Graph::note_paragraphs`). It SHALL count distinct `(link, paragraph)` pairs. If the line cannot be mapped to a current paragraph (file deleted or paragraph rewritten such that no current paragraph contains the original added line), the command SHALL fall back to a synthetic key of `(path, original-added-line)` so the link is still counted but does not dedup against current paragraphs. Both wikilink and markdown-link occurrences on added lines SHALL be counted (the unified link kinds include both forms).
 
 #### Scenario: Same link twice in one paragraph counts once
 - **WHEN** an added paragraph contains `[[Foo]] and again [[Foo]]`
@@ -51,6 +52,10 @@ For each `[[Link]]` occurrence on an added line, the command SHALL map the line 
 #### Scenario: Same link across multiple notes accumulates
 - **WHEN** notes A, B, and C each contribute one paragraph with `[[Foo]]` in the window
 - **THEN** the count for `[[Foo]]` is 3
+
+#### Scenario: Markdown link on an added line is counted
+- **WHEN** an added paragraph contains `[Foo](foo.md)` resolving to `Foo`
+- **THEN** the count for `Foo` from this paragraph is 1 (markdown links count via the unified link kinds)
 
 #### Scenario: Source file deleted after window
 - **WHEN** a commit in the window added `[[Foo]]` to a file that has since been deleted
@@ -121,3 +126,4 @@ When no commits in the window add any countable wikilinks, the command SHALL exi
 #### Scenario: No new wikilinks in window
 - **WHEN** commits exist in the window but none added a wikilink
 - **THEN** the command exits 0 and the table is empty (or `--json` emits `[]`)
+
