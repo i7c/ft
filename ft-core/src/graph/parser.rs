@@ -655,4 +655,76 @@ after [[D]]
         let targets: Vec<_> = links.iter().map(|l| l.target_text.as_str()).collect();
         assert_eq!(targets, vec!["Real"]);
     }
+
+    /// Generate content that frequently contains real link forms mixed with
+    /// noise (code spans, headings, blockquotes, callouts, rules, unmatched
+    /// brackets, unicode, CRLF) so the round-trip proptest exercises the
+    /// link-emission paths, not just the vacuous no-links case.
+    fn link_content() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        // Each arm is a `&'static str`, so the joined `String` borrows
+        // nothing and the strategy owns no non-static state.
+        let token = prop_oneof![
+            Just("[[Foo]]"),
+            Just("[[Foo|Bar]]"),
+            Just("[[Foo#Heading]]"),
+            Just("[[Sub/Foo]]"),
+            Just("![[image.png]]"),
+            Just("[t](target.md)"),
+            Just("[t](target.md#H)"),
+            Just("![alt](img.png)"),
+            Just("[t](http://external)"),
+            Just("[t](<a b.md>)"),
+            Just("`code`"),
+            Just("`` `[[nope]]` ``"),
+            Just("# Heading [[InHead]]"),
+            Just("## Sub"),
+            Just("> quote [[Q]]"),
+            Just("> [!note] callout\n> [[C]]"),
+            Just("--"),
+            Just("---"),
+            Just("\n"),
+            Just("\n\n"),
+            Just(" "),
+            Just("\t"),
+            Just("[unmatched"),
+            Just("(paren)"),
+            Just("]"),
+            Just(")"),
+            Just("!"),
+            Just("|"),
+            Just("plain text"),
+            Just("émoji 🚀"),
+            Just("\r\n"),
+        ];
+        proptest::collection::vec(token, 0..60).prop_map(|t| t.join(""))
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+
+        /// For any content, every link emitted by [`extract_links`] must
+        /// record a `byte_range` that slices back to exactly `raw_text`,
+        /// and ranges must come out in strictly increasing, non-overlapping
+        /// byte order. Holds for malformed links, embeds, anchors, code
+        /// spans, unicode, and CRLF — so a future change that confuses
+        /// byte/char offsets or miscomputes an `end` is caught. The slice
+        /// also panics (caught by the runner) if a range ever lands off a
+        /// char boundary, pinning the byte-not-char invariant.
+        #[test]
+        fn link_byte_ranges_round_trip(content in link_content()) {
+            let links = extract_links(&content);
+            let mut prev_end = 0usize;
+            for l in &links {
+                let got: &str = &content[l.byte_range.clone()];
+                proptest::prop_assert_eq!(got, l.raw_text.as_str());
+                proptest::prop_assert!(
+                    l.byte_range.start >= prev_end,
+                    "range {:?} does not follow prev_end {} (content={:?})",
+                    l.byte_range, prev_end, content
+                );
+                prev_end = l.byte_range.end;
+            }
+        }
+    }
 }
