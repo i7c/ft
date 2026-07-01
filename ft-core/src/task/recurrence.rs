@@ -3,7 +3,7 @@
 //! Patterns recognised (case-insensitive):
 //! - `every day` / `every N day[s]`
 //! - `every week` / `every N week[s]` / `every week on <weekday>`
-//! - `every month` / `every N month[s]` / `every month on the Nth`
+//! - `every month` / `every N month[s]` / `every month on [the] Nth`
 //!
 //! Anything outside that whitelist returns [`RecurrenceError::Unsupported`]
 //! naming the offending substring so users can see exactly what isn't handled.
@@ -125,21 +125,26 @@ fn parse_month_tail(
         return Err(unsupported(&tail.join(" ")));
     }
     if count != 1 {
+        // `every N months on the Xth` needs interval-aware month-on-day
+        // semantics (a `MonthOnDay { interval, day }` rule), which v1 defers.
         return Err(unsupported(&tail.join(" ")));
     }
-    // `on the Nth`
-    if tail.get(1).copied() != Some("the") {
-        return Err(unsupported(&tail[1..].join(" ")));
+    // `on [the] Nth` — `the` is optional, matching the Obsidian Tasks plugin
+    // (rrule's `parseText` accepts `on` and `the` independently), so both
+    // `on the 26th` and `on 26th` parse.
+    let mut idx = 1;
+    if tail.get(idx).copied() == Some("the") {
+        idx += 1;
     }
     let n_token = tail
-        .get(2)
+        .get(idx)
         .ok_or_else(|| malformed("missing day-of-month"))?;
     let n = parse_ordinal(n_token).ok_or_else(|| unsupported(n_token))?;
     if !(1..=31).contains(&n) {
         return Err(malformed("day-of-month must be 1..=31"));
     }
-    if tail.len() > 3 {
-        return Err(unsupported(&tail[3..].join(" ")));
+    if tail.len() > idx + 1 {
+        return Err(unsupported(&tail[idx + 1..].join(" ")));
     }
     Ok(Rule::MonthOnDay(n))
 }
@@ -333,6 +338,46 @@ mod tests {
         assert_eq!(
             parse_rule("every month on the 31").unwrap(),
             Rule::MonthOnDay(31)
+        );
+    }
+
+    #[test]
+    fn parse_every_month_on_nth_without_the() {
+        // `the` is optional — parity with the Obsidian Tasks plugin (rrule
+        // `parseText` accepts `on` and `the` independently).
+        assert_eq!(
+            parse_rule("every month on 26th").unwrap(),
+            Rule::MonthOnDay(26)
+        );
+        assert_eq!(
+            parse_rule("every month on the 26th").unwrap(),
+            Rule::MonthOnDay(26)
+        );
+        assert_eq!(
+            parse_rule("every month on 1st").unwrap(),
+            Rule::MonthOnDay(1)
+        );
+        assert_eq!(
+            parse_rule("Every Month On 18th").unwrap(),
+            Rule::MonthOnDay(18)
+        );
+    }
+
+    #[test]
+    fn parse_every_month_on_bare_number() {
+        // ft accepts a bare day-of-month (with or without `the`, with or
+        // without a `th/nd/rd/st` suffix) — consistent with the pre-existing
+        // `every month on the 31` handling. rrule's `nth` token requires a
+        // suffix and silently *ignores* a bare number (treating `on 26` as
+        // plain `every month`); ft deliberately does not replicate that
+        // footgun.
+        assert_eq!(
+            parse_rule("every month on 26").unwrap(),
+            Rule::MonthOnDay(26)
+        );
+        assert_eq!(
+            parse_rule("every month on the 26").unwrap(),
+            Rule::MonthOnDay(26)
         );
     }
 
