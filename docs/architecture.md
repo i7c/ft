@@ -40,7 +40,7 @@ ft/
         │                       #   preset, rename, delete
         ├── journal.rs          # multi-source git-blame feed (synthesis)
         ├── link_review.rs      # git-log wikilink scan (synthesis)
-        ├── synth/              # scaffold, verify, reslice, callout
+        ├── synth/              # scaffold, verify, repair, reslice, callout
         ├── notes.rs + notes/   # note ops, append, templates
         ├── markdown.rs         # heading/paragraph extractors, line utils
         ├── search.rs           # note/heading fuzzy search
@@ -243,6 +243,15 @@ pub fn ft_core::synth::verify::verify_synth_note(...)
     -> Vec<VerificationResult>;
 pub fn ft_core::synth::verify::verify_all(...)
     -> Vec<(PathBuf, Vec<VerificationResult>)>;
+
+// Plan/apply for repairing broken pins (`ft synth repair`): rehash
+// hash-only drift at the pin, re-pin stranded sections to HEAD by
+// locating the quoted body in the current blob, report the rest
+// unrecoverable. The body is the source of truth.
+pub fn ft_core::synth::repair::plan_synth_repair(...)
+    -> Result<SynthRepairPlan>;           // pure: no I/O writes
+pub fn ft_core::synth::repair::apply_synth_repair(...)
+    -> Result<usize>;                     // splices via fs::write_atomic
 ```
 
 A **protected section** is an Obsidian-style callout written verbatim

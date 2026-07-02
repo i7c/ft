@@ -1,6 +1,6 @@
 //! Synthesis-ritual support: callout grammar for protected sections,
-//! scaffold planner/applier for `ft synth`, and verifier for
-//! `ft synth verify`.
+//! scaffold planner/applier for `ft synth`, verifier for
+//! `ft synth verify`, and pin repairer for `ft synth repair`.
 //!
 //! A synth note is a regular `.md` file marked `ft-synth: true` in YAML
 //! frontmatter. It contains one or more **protected sections** —
@@ -19,6 +19,7 @@
 //! arbitrary markdown freely.
 
 pub mod callout;
+pub mod repair;
 pub mod reslice;
 pub mod scaffold;
 pub mod verify;

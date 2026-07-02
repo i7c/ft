@@ -385,3 +385,158 @@ fn reslice_ambiguous_without_at_errors() {
     .failure()
     .stderr(predicates::str::contains("--at"));
 }
+
+// ── repair ───────────────────────────────────────────────────────────────
+
+/// Scaffold a synth note, then mangle its pinned SHA so verify fails.
+/// Returns the vault tempdir; the note lives at `Synthesis/topic.md`.
+fn make_vault_with_stranded_pin() -> assert_fs::TempDir {
+    let tmp = make_source_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--link",
+        "[[Foo]]",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+    let note = tmp.path().join("Synthesis/topic.md");
+    let content = std::fs::read_to_string(&note).unwrap();
+    let mangled = regex_replace_all_sha(&content);
+    std::fs::write(&note, mangled).unwrap();
+    tmp
+}
+
+/// Replace every pinned `@<sha7>` with an unresolvable placeholder,
+/// simulating a rewritten/gc'd history.
+fn regex_replace_all_sha(content: &str) -> String {
+    let re = regex::Regex::new(r"@[0-9a-f]{7}").unwrap();
+    re.replace_all(content, "@deadbe1").into_owned()
+}
+
+#[test]
+fn repair_repins_stranded_sections_and_verify_passes() {
+    let tmp = make_vault_with_stranded_pin();
+    // Precondition: verify fails on the stranded pins.
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "verify",
+        "Synthesis/topic.md",
+    ])
+    .assert()
+    .failure();
+
+    let assert = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "synth",
+            "repair",
+            "Synthesis/topic.md",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("repinned"),
+        "repair should report repinned sections:\n{stdout}"
+    );
+
+    // Postcondition: verify is clean again.
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "verify",
+        "Synthesis/topic.md",
+    ])
+    .assert()
+    .success();
+}
+
+#[test]
+fn repair_dry_run_reports_but_writes_nothing() {
+    let tmp = make_vault_with_stranded_pin();
+    let note = tmp.path().join("Synthesis/topic.md");
+    let before = std::fs::read_to_string(&note).unwrap();
+
+    let assert = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "synth",
+            "repair",
+            "--all",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("would repair"),
+        "dry-run should announce itself:\n{stdout}"
+    );
+
+    let after = std::fs::read_to_string(&note).unwrap();
+    assert_eq!(before, after, "--dry-run must not write");
+
+    // Verify still fails — nothing was repaired.
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "synth",
+        "verify",
+        "--all",
+    ])
+    .assert()
+    .failure();
+}
+
+#[test]
+fn repair_unrecoverable_body_exits_failure_with_json_detail() {
+    let tmp = make_vault_with_stranded_pin();
+    // Also mangle the quoted body so it can't be found at HEAD.
+    let note = tmp.path().join("Synthesis/topic.md");
+    let content = std::fs::read_to_string(&note).unwrap();
+    let mangled = content.replace(
+        "> First paragraph mentions [[Foo]].",
+        "> Text that never existed in the source.",
+    );
+    assert_ne!(content, mangled);
+    std::fs::write(&note, mangled).unwrap();
+
+    let assert = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "synth",
+            "repair",
+            "Synthesis/topic.md",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let rows: Value = serde_json::from_str(&stdout).expect("repair --json emits JSON");
+    let actions: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["action"].as_str().unwrap())
+        .collect();
+    assert!(
+        actions.contains(&"unrecoverable"),
+        "mangled body must be unrecoverable: {actions:?}"
+    );
+    // The second, untouched section still repairs.
+    assert!(
+        actions.contains(&"repinned"),
+        "intact section must still repair: {actions:?}"
+    );
+}

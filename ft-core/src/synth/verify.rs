@@ -188,7 +188,8 @@ fn verify_one(repo: &git::RepoMap, note_path: &Path, c: &ParsedCallout) -> Verif
 
 /// Walk every `.md` file under `vault_root`, returning vault-relative
 /// paths. Skips dot-prefixed entries (`.obsidian/`, `.git/`, etc.).
-fn walk_markdown_files(vault_root: &Path) -> Vec<PathBuf> {
+/// Shared with [`crate::synth::repair`]'s all-notes sweep.
+pub(crate) fn walk_markdown_files(vault_root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     fn rec(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else {

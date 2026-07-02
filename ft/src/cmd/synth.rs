@@ -29,6 +29,9 @@ use ft_core::blame_cache::{paragraph_date, BlameCache};
 use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::journal::{build_journal, JournalEntry};
 use ft_core::link_review::{compute_link_review, WindowRange};
+use ft_core::synth::repair::{
+    apply_synth_repair, plan_repair_all, plan_synth_repair, RepairAction, SynthRepairPlan,
+};
 use ft_core::synth::reslice::{apply_reslice, plan_reslice, NewRange};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 use ft_core::synth::verify::{verify_all, verify_synth_note, SectionStatus, VerificationResult};
@@ -51,6 +54,10 @@ pub enum SynthCommand {
     Reslice(ResliceArgs),
     /// Verify on-disk synth notes against their pinned sources.
     Verify(VerifyArgs),
+    /// Repair broken [!ft-source] pins: rehash valid-but-mislabeled
+    /// sections and re-pin stranded ones to HEAD by locating the quoted
+    /// body in the current source.
+    Repair(RepairArgs),
 }
 
 pub fn run(args: SynthArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -58,6 +65,7 @@ pub fn run(args: SynthArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         SynthCommand::Scaffold(a) => run_scaffold(a, vault_flag),
         SynthCommand::Reslice(a) => run_reslice(a, vault_flag),
         SynthCommand::Verify(a) => run_verify(a, vault_flag),
+        SynthCommand::Repair(a) => run_repair(a, vault_flag),
     }
 }
 
@@ -592,6 +600,206 @@ fn render_verify_json(groups: &[(PathBuf, Vec<VerificationResult>)]) -> Result<(
         }
     }
     let s = serde_json::to_string_pretty(&rows).context("serialize verify json")?;
+    println!("{s}");
+    Ok(())
+}
+
+// ── repair ───────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct RepairArgs {
+    /// Repair a single synth note (vault-relative path).
+    #[arg(value_name = "NOTE.md", conflicts_with = "all")]
+    pub note: Option<PathBuf>,
+
+    /// Repair every `.md` marked `ft-synth: true` in the vault.
+    #[arg(long, conflicts_with = "note")]
+    pub all: bool,
+
+    /// Show what would change without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// JSON output.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Disable colored output.
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+fn run_repair(args: RepairArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    if args.note.is_none() && !args.all {
+        return Err(anyhow!("provide a NOTE.md path or pass --all"));
+    }
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!("vault is not inside a git repository — `ft synth repair` needs git history")
+    })?;
+
+    let plans: Vec<SynthRepairPlan> = if let Some(note) = args.note {
+        let plan = plan_synth_repair(&vault, &note)
+            .with_context(|| format!("planning repair of {}", note.display()))?;
+        vec![plan]
+    } else {
+        plan_repair_all(&vault).context("walking synth notes")?
+    };
+
+    if !args.dry_run {
+        for plan in &plans {
+            apply_synth_repair(&vault, plan)
+                .with_context(|| format!("repairing {}", plan.note.display()))?;
+        }
+    }
+
+    let any_unrecoverable = plans.iter().any(|p| p.unrecoverable().next().is_some());
+
+    if args.json {
+        render_repair_json(&plans, args.dry_run)?;
+    } else {
+        let use_color =
+            !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+        render_repair_text(&plans, args.dry_run, use_color);
+    }
+    // Mirror `verify`: broken provenance that remains broken is a
+    // failing exit so scripts can gate on it.
+    Ok(if any_unrecoverable {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn repair_action_tag(action: &RepairAction) -> &'static str {
+    match action {
+        RepairAction::AlreadyOk => "ok",
+        RepairAction::Rehashed => "rehashed",
+        RepairAction::Repinned { .. } => "repinned",
+        RepairAction::Unrecoverable { .. } => "unrecoverable",
+    }
+}
+
+fn render_repair_text(plans: &[SynthRepairPlan], dry_run: bool, use_color: bool) {
+    use owo_colors::OwoColorize;
+    if plans.is_empty() {
+        println!("no synth notes found");
+        return;
+    }
+    let verb = if dry_run { "would repair" } else { "repaired" };
+    let mut first = true;
+    for plan in plans {
+        if !first {
+            println!();
+        }
+        first = false;
+        let header = plan.note.display().to_string();
+        if use_color {
+            println!("{}", header.bold());
+        } else {
+            println!("{header}");
+        }
+        if plan.sections.is_empty() {
+            println!("  (no [!ft-source] callouts)");
+            continue;
+        }
+        for s in &plan.sections {
+            let tag = repair_action_tag(&s.action);
+            let mut line = format!(
+                "  {tag:14} | {}:{} → {} L{}-{} @{}",
+                plan.note.display(),
+                s.header_line,
+                s.old.source_path.display(),
+                s.old.line_start,
+                s.old.line_end,
+                s.old.commit_sha
+            );
+            if let Some(new) = &s.new {
+                line.push_str(&format!(
+                    " ⇒ L{}-{} @{} #{}",
+                    new.line_start, new.line_end, new.commit_sha, new.content_hash
+                ));
+            }
+            match &s.action {
+                RepairAction::AlreadyOk => println!("{line}"),
+                RepairAction::Unrecoverable { reason } => {
+                    if use_color {
+                        println!("{}", line.red());
+                    } else {
+                        println!("{line}");
+                    }
+                    println!("      {reason}");
+                }
+                RepairAction::Repinned { matches } => {
+                    if use_color {
+                        println!("{}", line.green());
+                    } else {
+                        println!("{line}");
+                    }
+                    if *matches > 1 {
+                        println!(
+                            "      {matches} candidate locations; nearest to the old range chosen"
+                        );
+                    }
+                }
+                RepairAction::Rehashed => {
+                    if use_color {
+                        println!("{}", line.green());
+                    } else {
+                        println!("{line}");
+                    }
+                }
+            }
+        }
+        let changed = plan.changed().count();
+        let broken = plan.unrecoverable().count();
+        let mut summary = format!("  {verb} {changed} section(s)");
+        if broken > 0 {
+            summary.push_str(&format!(", {broken} unrecoverable"));
+        }
+        println!("{summary}");
+    }
+}
+
+fn render_repair_json(plans: &[SynthRepairPlan], dry_run: bool) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Row {
+        note: String,
+        header_line: u32,
+        source_path: String,
+        action: &'static str,
+        old_range: [u32; 2],
+        old_sha: String,
+        new_range: Option<[u32; 2]>,
+        new_sha: Option<String>,
+        detail: String,
+        applied: bool,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for plan in plans {
+        for s in &plan.sections {
+            let detail = match &s.action {
+                RepairAction::Unrecoverable { reason } => reason.clone(),
+                RepairAction::Repinned { matches } if *matches > 1 => {
+                    format!("{matches} candidate locations; nearest chosen")
+                }
+                _ => String::new(),
+            };
+            rows.push(Row {
+                note: plan.note.display().to_string(),
+                header_line: s.header_line,
+                source_path: s.old.source_path.display().to_string(),
+                action: repair_action_tag(&s.action),
+                old_range: [s.old.line_start, s.old.line_end],
+                old_sha: s.old.commit_sha.clone(),
+                new_range: s.new.as_ref().map(|n| [n.line_start, n.line_end]),
+                new_sha: s.new.as_ref().map(|n| n.commit_sha.clone()),
+                detail,
+                applied: !dry_run && s.new.is_some(),
+            });
+        }
+    }
+    let s = serde_json::to_string_pretty(&rows).context("serialize repair json")?;
     println!("{s}");
     Ok(())
 }

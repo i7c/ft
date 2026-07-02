@@ -73,7 +73,7 @@ to `ft-core` first so the CLI benefits too.
 - **Synthesis ritual (`link_review` + `journal` + `synth`).** The
   post-connecting workflow: `ft_core::link_review::compute_link_review`
   (git-log wikilink scan), `ft_core::journal::build_journal` (multi-source
-  git-blame feed), and `ft_core::synth::{scaffold,verify,reslice,callout}`
+  git-blame feed), and `ft_core::synth::{scaffold,verify,repair,reslice,callout}`
   (plan/apply synth notes with `[!ft-source]` callouts pinned to git
   provenance). Synth notes carry an `ft-synth: true` frontmatter marker;
   callouts round-trip via `synth::callout::{serialize,parse,compute_section_hash}`.

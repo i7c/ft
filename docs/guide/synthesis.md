@@ -323,6 +323,49 @@ ft synth verify --all --json   # script-friendly
 Exit code is 0 when every section is `ok`, 1 otherwise — wire it into
 a pre-commit hook if you want to guard against accidental edits.
 
+## Repairing
+
+History rewrites (an interactive rebase, a squash-merge, an aggressive
+`git gc`) can strand a pin: the commit SHA in the header no longer
+resolves, and every affected section reports `source-missing` forever
+even though the quoted text is perfectly fine. `ft synth repair` closes
+that gap — the callout **body** is treated as the source of truth, and
+the provenance is rebuilt around it:
+
+```sh
+ft synth repair Synthesis/eigen-and-memo.md
+# Synthesis/eigen-and-memo.md
+#   repinned       | Synthesis/eigen-and-memo.md:5 → notes/spectral.md L42-44 @abc1234 ⇒ L42-44 @9f21c3a #7f3a91
+#   ok             | Synthesis/eigen-and-memo.md:13 → daily/2026-05-08.md L12-13 @def5678
+#   repaired 1 section(s)
+```
+
+Per-section outcomes:
+
+- **ok** — already verifies; untouched.
+- **rehashed** — the body still matches the pinned blob and only the
+  content hash was wrong (hand-mangled header). Hash recomputed, pin
+  kept.
+- **repinned** — the body was located in the source file at HEAD
+  (exact line match first, then trailing-whitespace-insensitive) and
+  the section now pins to HEAD's SHA at the matched range. If the
+  paragraph appears more than once, the location nearest the old range
+  wins and repair says so.
+- **unrecoverable** — the body doesn't appear in the source at HEAD
+  (or the file is gone). The section is left untouched; `ft synth
+  reslice` (restores the canonical text from a still-valid pin) or
+  re-scaffolding are the manual escape hatches.
+
+```sh
+ft synth repair --all            # sweep the whole vault
+ft synth repair --all --dry-run  # show what would change, write nothing
+ft synth repair --all --json     # script-friendly
+```
+
+Exit code is 0 when nothing is left broken, 1 when any section is
+unrecoverable — so `ft synth repair --all && ft synth verify --all` is
+the full recover-and-confirm loop after a history rewrite.
+
 ## Config
 
 A single `[synth]` table in `config.toml`:
