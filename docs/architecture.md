@@ -12,50 +12,50 @@ ft/
 ├── Cargo.toml                  # workspace manifest
 ├── rust-toolchain.toml         # MSRV pin
 ├── ft/                         # binary crate (thin)
-│   ├── Cargo.toml
 │   ├── src/main.rs             # clap dispatch only
-│   ├── src/cmd/                # one file per subcommand
-│   │   ├── tasks.rs            # list / create / complete / move
-│   │   ├── vault.rs            # vault info
-│   │   ├── git.rs              # `ft git sync`
-│   │   ├── graph.rs            # `ft graph query`
-│   │   ├── completions.rs      # `ft completions <shell>`
-│   │   └── man.rs              # `ft man [--out DIR]`
-│   ├── src/output/             # table/json/markdown/ndjson (Format variants) + links.rs, graph.rs (command renderers)
+│   ├── src/cmd/                # one file per subcommand: tasks, notes,
+│   │                           #   graph, timeblocks, review, synth, git,
+│   │                           #   vault, do, find, commands, completions, man
+│   ├── src/output/             # table/json/markdown/ndjson (Format variants)
+│   │                           #   + links.rs, graph.rs (command renderers)
+│   ├── src/tui/                # the TUI: app.rs (event loop + shared graph
+│   │   │                       #   snapshot), snapshot.rs, event.rs, jobs.rs,
+│   │   │                       #   tab.rs, modal.rs, command.rs, keymap.rs,
+│   │   │                       #   help.rs, ui.rs, palette.rs, editor.rs
+│   │   ├── tabs/               # graph, tasks/, notes/, timeblocks/,
+│   │   │                       #   journal, review
+│   │   ├── notes_actions/      # create/append/section-move/reslice flows
+│   │   └── widgets/            # picker, completion, edit buffer
 │   └── tests/                  # integration tests with assert_cmd
 └── ft-core/                    # library crate (the brain)
-    ├── Cargo.toml
     └── src/
-        ├── lib.rs
-        ├── vault.rs            # discovery + scan
+        ├── vault.rs            # discovery + single-pass scan (tasks +
+        │                       #   ParsedFile artifacts for the graph)
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
-        ├── git.rs              # discover_repo + status + upstream + sync
-        ├── graph/
-        │   ├── mod.rs          # Graph + NodeKind/EdgeKind/NoteId/LinkEdge
-        │   ├── parser.rs       # extract_links: wikilinks, md links, embeds
-        │   ├── resolve.rs      # Obsidian shortest-path resolution rules
-        │   ├── query.rs        # unified graph DSL (parse_with / select / expand / walk)
-        │   ├── preset.rs       # built-in graph presets
-        │   ├── rename.rs       # plan_rename / apply_rename_plan
-        │   ├── delete.rs       # plan_delete / apply_delete_plan
-        │   └── tests.rs
-        ├── markdown.rs         # heading extractor (used by search)
+        ├── git.rs              # discover_repo + status + sync + blame
+        ├── blame_cache.rs      # msgpack blame cache (journal)
+        ├── graph/              # mod (Graph/NodeKind/EdgeKind/NodeKey),
+        │                       #   parser, resolve, query (unified DSL),
+        │                       #   preset, rename, delete
+        ├── journal.rs          # multi-source git-blame feed (synthesis)
+        ├── link_review.rs      # git-log wikilink scan (synthesis)
+        ├── synth/              # scaffold, verify, reslice, callout
+        ├── notes.rs + notes/   # note ops, append, templates
+        ├── markdown.rs         # heading/paragraph extractors, line utils
+        ├── search.rs           # note/heading fuzzy search
+        ├── related.rs          # related-notes scoring
+        ├── recents.rs          # recently-opened log
         ├── dates.rs            # ISO / keyword / relative / NL parsing
         ├── fs.rs               # write_atomic
         ├── selector.rs         # id / file:line / fuzzy
         ├── error.rs
-        ├── task/
-        │   ├── mod.rs          # Task struct, Status / Priority enums
-        │   ├── format.rs       # TaskFormat trait
-        │   ├── emoji.rs        # emoji format impl
-        │   ├── hierarchy.rs    # parent-pointer resolution
-        │   ├── ops.rs          # create_task / complete_task / plan_move
-        │   └── recurrence.rs   # rule parser + next-instance engine
-        └── query/
-            ├── mod.rs          # re-exports; presets + sort helpers
-            ├── preset.rs       # built-in task presets (parsed under Profile::Tasks)
-            └── sort.rs         # sort_by_keys + SortKey / SortOrder
+        ├── task/               # mod (Task/Status/Priority), format
+        │                       #   (TaskFormat trait), emoji, hierarchy,
+        │                       #   ops (format-parametric mutations),
+        │                       #   recurrence, resolve
+        ├── timeblock/          # doc, ops, report (day-planner blocks)
+        └── query/              # task presets + sort helpers
 ```
 
 ## Key traits and seams
@@ -71,10 +71,15 @@ fn serialize_line(&self, task: &Task) -> String;
 ```
 
 The v1 implementation is `task::emoji::EmojiFormat`, matching the
-Obsidian Tasks plugin v7.22 canonical output. A dataview implementation
-is a future plug-in here — every consumer (scanner, ops layer, query
-engine) holds a `Task`, not a format-specific representation, so a new
-format only needs to plug into this trait.
+Obsidian Tasks plugin v7.22 canonical output. Every consumer (scanner,
+ops layer, query engine) holds a `Task`, not a format-specific
+representation. The ops layer is already format-parametric: every
+`task::ops` entry point takes a `format: &dyn TaskFormat`, and
+`Vault::task_format()` is the single place that picks the vault's
+format (always `EmojiFormat` today — this accessor is where
+config-driven detection will plug in). A new format therefore needs:
+the trait impl, detection in `vault::parse_file` (still hard-coded to
+`EmojiFormat`), and nothing else.
 
 ### Operations API (`task::ops`)
 
@@ -295,14 +300,22 @@ Journal, and Review (the last drives the synthesis ritual's
 link-pick → Journal handoff; see §"Synthesis ritual").
 
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
-   `App::new`. The default `help_sections()` returns nothing, which would
-   leave the `?` overlay showing only the shared global section — so:
-2. Override `Tab::help_sections(&self) -> Vec<HelpSection>` returning one
+   `App::new`. `Tab::kind() -> TabKind` is required — it's the typed
+   routing key for cross-tab requests (add a `TabKind` variant).
+2. Read graph/task data from `ctx.snapshot` (the App-owned
+   `Arc<GraphSnapshot>`) — never call `vault.scan()` or `Graph::build`.
+   Re-derive view state when the snapshot generation changes (in
+   `on_focus`, and override `on_graph_ready` if the tab should react
+   while active); raise `ctx.request_graph_refresh()` after mutations.
+   Render a loading line while `ctx.snapshot` is `None`.
+3. The default `help_sections()` returns nothing, which would leave the
+   `?` overlay showing only the shared global section — so override
+   `Tab::help_sections(&self) -> Vec<HelpSection>` returning one
    or more named [`HelpSection`]s (see `ft/src/tui/help.rs`) for your
    keymap. Group bindings the way users will look them up
    ("Navigation", "Mutations", "Modals"); keep key strings short
    (≤ 18 chars) so they fit alongside descriptions in the 80-col popup.
-3. Add a snapshot test in `ft/src/tui/tests.rs` that switches to the new
+4. Add a snapshot test in `ft/src/tui/tests.rs` that switches to the new
    tab, calls `app.enter_help()`, and renders to a `TestBackend` so the
    help inventory is locked against drift.
 

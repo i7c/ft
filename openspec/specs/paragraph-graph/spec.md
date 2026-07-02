@@ -67,7 +67,7 @@ The graph SHALL maintain a `paragraph_index: HashMap<(PathBuf, u32), NoteId>` ma
 - **THEN** the code block lines do not appear in any extracted paragraph
 
 ### Requirement: Graph build includes paragraph extraction
-`Graph::build` SHALL extract paragraphs for every markdown file in the parallel parse phase (alongside `extract_links`) and insert paragraph nodes and edges in the serial resolution phase. No additional file I/O SHALL be required beyond what the existing parse phase already performs.
+Paragraphs SHALL be extracted for every markdown file in `Vault::scan`'s single parallel read pass (alongside `extract_links` and `extract_headings`, into `Scan::files`); `Graph::build` SHALL insert paragraph nodes and edges in its serial resolution phase from those artifacts, performing no file I/O of its own.
 
 #### Scenario: Build produces paragraph nodes
 - **WHEN** `Graph::build` runs on a vault with markdown files containing prose paragraphs

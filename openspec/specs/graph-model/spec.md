@@ -185,15 +185,15 @@ A ghost SHALL be keyed by the unresolved note target (pre-pipe, pre-anchor targe
 
 ### Requirement: Build phase ordering
 
-`Graph::build` SHALL run its serial resolution phase in this order: (1) insert note nodes; (2) insert directory nodes and `Contains` edges; (3) insert `NoteLink` edges (resolving against the path/title indexes); (4) insert heading nodes and `OwnsHeading` edges (heading-stack); (5) insert paragraph nodes, `OwnsParagraph` edges (nearest-container), and `HeadingLink`/`ParagraphLink` edges (with anchor resolution against the now-populated heading index); (6) insert task nodes, `HasTask`, `Subtask`; (7) derive `LinksInto` edges from the unified link kinds. No additional file I/O SHALL be required beyond the single existing parallel parse phase (which extracts links, headings, and paragraphs together).
+`Graph::build` SHALL run its serial resolution phase in this order: (1) insert note nodes; (2) insert directory nodes and `Contains` edges; (3) insert `NoteLink` edges (resolving against the path/title indexes); (4) insert heading nodes and `OwnsHeading` edges (heading-stack); (5) insert paragraph nodes, `OwnsParagraph` edges (nearest-container), and `HeadingLink`/`ParagraphLink` edges (with anchor resolution against the now-populated heading index); (6) insert task nodes, `HasTask`, `Subtask`; (7) derive `LinksInto` edges from the unified link kinds. `Graph::build` SHALL perform no file I/O of its own: the single parallel parse pass (which extracts links, headings, paragraphs, and tasks together) lives in `Vault::scan`, and the build consumes its `Scan::files` artifacts.
 
 #### Scenario: Anchor resolution sees heading index
 - **WHEN** a paragraph contains `[[Foo#Bar]]` and `Foo.md` has heading `Bar`
 - **THEN** the `ParagraphLink` targets heading `Bar` (headings were inserted in step 4 before paragraph links in step 5)
 
 #### Scenario: Single parse pass
-- **WHEN** `Graph::build` runs
-- **THEN** each markdown file is read exactly once during the parallel parse phase, yielding links, headings, and paragraphs together
+- **WHEN** `Vault::scan` runs and `Graph::build` consumes the resulting scan
+- **THEN** each markdown file is read exactly once (during the scan's parallel parse pass), yielding tasks, links, headings, and paragraphs together, and the build itself reads nothing
 
 ### Requirement: refresh_note re-inserts headings and all link kinds
 

@@ -30,15 +30,15 @@ The graph SHALL support `EdgeKind::HasTask` as a new edge kind. For each task no
 - **THEN** the task node SHALL still be created in the graph, **AND** no `HasTask` edge SHALL terminate at that task node, **AND** the task SHALL still be returned by `node where kind = "Task"` queries
 
 ### Requirement: Graph build accepts scan data
-`Graph::build` SHALL accept a `&Scan` parameter containing task data alongside the existing `&Vault` parameter. The previous signature `Graph::build(&Vault)` SHALL be replaced with `Graph::build(&Vault, &Scan)`.
+`Graph::build` SHALL accept a `&Scan` parameter alongside the `&Vault` parameter. The scan carries both the task data and the per-file parse artifacts (`Scan::files`: links, paragraphs, headings) from `Vault::scan`'s single read pass; `Graph::build` SHALL construct the graph entirely from those artifacts, performing no file reads of its own (only the directory walk for `Directory` nodes).
 
 #### Scenario: Build with scan data
-- **WHEN** `Graph::build(&vault, &scan)` is called
+- **WHEN** `Graph::build(&vault, &vault.scan())` is called
 - **THEN** the resulting graph SHALL contain note, directory, ghost, and task nodes with appropriate edges including `HasTask` edges
 
 #### Scenario: Build with empty scan
-- **WHEN** `Graph::build(&vault, &Scan { tasks: vec![], errors: vec![] })` is called
-- **THEN** the graph SHALL behave identically to the pre-change `Graph::build(&vault)` (no task nodes, no HasTask edges)
+- **WHEN** `Graph::build(&vault, &Scan::default())` is called (no tasks and no parse artifacts)
+- **THEN** the graph SHALL contain no note or task nodes — note nodes come from `Scan::files`, not from a disk walk — and only the directory nodes the vault walk yields
 
 ### Requirement: Task kind in graph query DSL
 The graph query DSL SHALL recognize `"Task"` as a valid `kind` value for node conditions. `node_kind_str` SHALL return `"Task"` for `NodeKind::Task` nodes. Expansion blocks SHALL accept `"Task"` as a member of `to.kind` sets, and traversal across `EdgeKind::HasTask` SHALL include task nodes as expansion targets when the `to.kind` filter permits them.

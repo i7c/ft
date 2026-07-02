@@ -26,8 +26,14 @@ to `ft-core` first so the CLI benefits too.
   Never write directly — always go through `write_atomic`. Same-file edits
   apply in descending byte order so earlier ranges stay valid.
 - **Format trait seam.** `task::format::TaskFormat` is the only thing
-  consumers see; `EmojiFormat` is the v1 impl. A new wire format plugs in
-  here without touching the scanner, ops layer, or query engine.
+  consumers see; `EmojiFormat` is the v1 impl. The ops layer is
+  format-parametric (every `task::ops` entry point takes
+  `format: &dyn TaskFormat`); callers with a `Vault` pass
+  `vault.task_format()` — the future config-driven detection seam —
+  rather than naming a concrete format. Line-addressed mutations also
+  take an expected-`Task` guard and fail with `LineChanged` when the
+  line shifted on disk; pass the scanned task, `None` only when no
+  faithful `Task` is at hand.
 - **`FT_TODAY=YYYY-MM-DD`** overrides "today" for date parsing, query
   DSL keywords, and the TUI clock. Use it in tests and reproducible
   scripts. The intended seam is `ft_core::dates::today()` (and
@@ -131,7 +137,10 @@ committed reference: `cargo run --release -q -- commands docs > docs/keybindings
 - **New subcommand:** add `ft/src/cmd/<name>.rs`, register the module,
   add the variant to `Commands` in `ft/src/main.rs`, dispatch. Use
   `Vault::discover(vault_flag)?` + `vault.scan()` for vault data.
-- **New TUI tab:** implement `Tab` (in `ft/src/tui/tab.rs`), declare
+- **New TUI tab:** implement `Tab` (in `ft/src/tui/tab.rs`) including
+  the required `kind() -> TabKind` routing key; read graph/task data
+  from `ctx.snapshot` (never `vault.scan()`/`Graph::build`) and raise
+  `ctx.request_graph_refresh()` after mutations. Declare
   `<TAB>_COMMANDS` + `<TAB>_KEYMAP` static slices next to it, push it
   into `build_tabs_with_overlays` in `ft/src/tui/app.rs` wrapped as
   `Box::new(<Tab>::new().with_keymap_overlay(&<tab>_overlay))` — the
@@ -141,10 +150,12 @@ committed reference: `cargo run --release -q -- commands docs > docs/keybindings
   a `TestBackend` snapshot in `ft/src/tui/tests.rs`. Re-run
   `ft commands docs > docs/keybindings.md`.
 - **New task format:** new module under `ft-core/src/task/`, implement
-  `TaskFormat`, wire format detection in `vault::parse_file`, round-trip
-  property test (`serialize(parse(line)) == line`). (Today `parse_file`
-  hard-codes `EmojiFormat` with no priority loop; a config-driven
-  detection order is the future plug-in shape, not the current code.)
+  `TaskFormat`, wire format detection in `vault::parse_file` and
+  `Vault::task_format()`, round-trip property test
+  (`serialize(parse(line)) == line`). The ops layer needs no changes —
+  it already takes `&dyn TaskFormat`. (Today `parse_file` hard-codes
+  `EmojiFormat` with no priority loop; a config-driven detection order
+  is the future plug-in shape, not the current code.)
 - **New output format:** new module under `ft/src/output/`, variant on
   `output::Format`, wire it into `ft/src/cmd/tasks.rs::run_list`.
 - **New graph preset:** add entry to `ft_core::graph::preset::builtin()`
