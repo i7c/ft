@@ -10,6 +10,7 @@ mod modal;
 mod modal_commands;
 mod notes_actions;
 mod palette;
+mod snapshot;
 mod tab;
 mod tabs;
 #[cfg(test)]

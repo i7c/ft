@@ -44,6 +44,14 @@ to `ft-core` first so the CLI benefits too.
   No async runtime, no `Mutex<AppState>`. Workers own their inputs, post a
   `BgEvent::*` back, and exit. In-flight state lives on `App` as a typed
   `RefCell<Option<...>>` slot. The git-sync worker is the reference impl.
+- **Shared graph snapshot (TUI).** One App-owned `Arc<GraphSnapshot>`
+  (graph + scan + generation) is the only graph in the TUI; tabs read it
+  via `TabCtx::snapshot` and **never** run `vault.scan()`/`Graph::build`
+  themselves. After a mutation, raise `ctx.request_graph_refresh()` (and
+  store a pending cursor anchor if needed); a background worker rebuilds
+  and tabs re-derive on generation change (`on_graph_ready` / `on_focus`).
+  Tests pump with `App::pump_graph_rebuild_for_test()`. See
+  `docs/architecture.md` §"Shared graph snapshot".
 - **Unified query DSL with profiles.** One parser (`graph::query::parse_with`)
   drives both task and graph queries. `Profile::Tasks` prepends an
   implicit `node where kind = Task and …` block so users can keep

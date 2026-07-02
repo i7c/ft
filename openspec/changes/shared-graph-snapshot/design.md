@@ -93,10 +93,15 @@ spawn again. Any burst of mutations costs at most one extra rebuild.
   `BgEvent::GraphReady(Result<GraphSnapshot, String>)`, exits. Build
   errors surface as a toast and keep the previous snapshot.
 
-### 3. Rebuild triggers: one request, posted from every mutating flow
+### 3. Rebuild triggers: one request, raised from every mutating flow
 
-New `AppRequest::RefreshGraph`, one arm in `service_simple`, which calls
-`request_graph_rebuild()`. Posted by:
+Tabs and modals raise `TabCtx::request_graph_refresh()` — a dedicated
+`Cell<bool>` on the ctx, consumed at the App's drain points into one
+`request_graph_rebuild()` call. A flag rather than an `AppRequest`
+variant because `pending_request` is a single slot and mutation
+handlers usually occupy it with a toast in the same event. App-level
+flows (startup, sync/commit completion, editor return) call
+`request_graph_rebuild()` directly. Raised by:
 
 - startup (`run()` before the first focus — tabs render a loading state
   until the first snapshot lands);

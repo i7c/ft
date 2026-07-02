@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::{
     graph::{
         query::{parse_with as parse_query, GraphQuery, Profile},
-        Graph, NodeKind,
+        NodeKind,
     },
     query::sort::{sort_by_keys, SortKey, SortOrder},
     task::{
@@ -82,13 +82,18 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
 /// split into "overdue" and "upcoming" buckets. Quick mutations and editor
 /// handoff land in sessions 4–5 — this session lays the foundation.
 pub struct SearchView {
-    /// Loaded tasks. Empty until the first focus triggers a scan.
+    /// Tasks cloned from the last-adopted snapshot. Cloning keeps the
+    /// many `self.tasks[idx]` sites simple; the copy is refreshed only
+    /// when a new generation is adopted.
     tasks: Vec<Task>,
-    /// Graph derived from the last loaded scan. Used to evaluate the
-    /// Tasks-profile graph DSL query against this vault's task nodes.
-    /// `None` until the first scan; rebuilt on every reload.
-    graph: Option<Graph>,
-    /// Whether `tasks` reflects a real scan (vs. the initial empty state).
+    /// The App-owned snapshot this view last derived from (openspec:
+    /// shared-graph-snapshot). Supplies the graph for DSL evaluation;
+    /// its generation gates re-derivation. Never built here.
+    snapshot: Option<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>>,
+    /// Cursor targets to try (in order) after the next adoption —
+    /// e.g. `[new task, prior cursor]` after a create. First hit wins.
+    pending_anchors: Vec<(std::path::PathBuf, usize)>,
+    /// Whether `tasks` reflects an adopted snapshot (vs. initial empty).
     loaded: bool,
     /// Indices into `tasks` (sorted) that match the active query and pass
     /// the today-cutoff. Recomputed on load, on query apply, and on `R`.
@@ -178,7 +183,8 @@ impl SearchView {
     pub fn new() -> Self {
         Self {
             tasks: Vec::new(),
-            graph: None,
+            snapshot: None,
+            pending_anchors: Vec::new(),
             loaded: false,
             matches: Vec::new(),
             overdue_count: 0,
@@ -208,19 +214,38 @@ impl SearchView {
         )
     }
 
-    fn ensure_loaded(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        if self.loaded {
+    /// Adopt `ctx.snapshot` when it is newer than the one this view
+    /// last derived from (or on first load), then resolve any pending
+    /// cursor anchors. No-op while no snapshot is installed yet or the
+    /// generation is unchanged.
+    fn adopt_snapshot(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        let ctx_gen = ctx.snapshot.as_ref().map(|s| s.generation);
+        let seen = self.snapshot.as_ref().map(|s| s.generation);
+        if ctx_gen.is_none() || (self.loaded && ctx_gen == seen) {
             return Ok(());
         }
-        self.reload(ctx)
+        self.reload(ctx)?;
+        let anchors = std::mem::take(&mut self.pending_anchors);
+        for a in &anchors {
+            if self.select_display_row(a) {
+                return Ok(());
+            }
+        }
+        self.clamp_selection();
+        Ok(())
     }
 
+    /// Re-derive tasks + matches from the installed snapshot. The
+    /// graph and task list come from the same scan pass, so DSL node
+    /// results map back to `tasks` by `(path, line)`.
     fn reload(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        let scan = ctx.vault.scan();
-        // Build the graph from the same scan so node IDs in the query
-        // result map back to the cached `tasks` Vec by (path, line).
-        self.graph = Graph::build(ctx.vault, &scan).ok();
-        self.tasks = scan.tasks;
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            // Nothing installed yet — stay unloaded so the next focus
+            // or snapshot arrival retries.
+            return Ok(());
+        };
+        self.snapshot = Some(std::sync::Arc::clone(snap));
+        self.tasks = snap.scan.tasks.clone();
         self.loaded = true;
         if self.query_text.is_empty() {
             self.query_text = Self::default_query(ctx.today);
@@ -257,7 +282,7 @@ impl SearchView {
         // Membership: tasks the parsed query allows. With no graph (first
         // frame before reload) or no query, every task is admissible.
         let allowed: Option<std::collections::HashSet<(std::path::PathBuf, usize)>> =
-            match (query.as_ref(), self.graph.as_ref()) {
+            match (query.as_ref(), self.snapshot.as_ref().map(|s| &s.graph)) {
                 (Some(q), Some(g)) => {
                     let ids = q.select(g);
                     Some(
@@ -694,10 +719,14 @@ impl View for SearchView {
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        self.ensure_loaded(ctx)
+        self.adopt_snapshot(ctx)
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        // Pick up a newer snapshot before acting on the key so task
+        // line numbers come from the freshest installed build.
+        self.adopt_snapshot(ctx)?;
+
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
@@ -740,6 +769,10 @@ impl View for SearchView {
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
         SearchView::refresh(self, ctx)
     }
+
+    fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
+        let _ = self.adopt_snapshot(ctx);
+    }
 }
 
 impl SearchView {
@@ -768,7 +801,7 @@ impl SearchView {
                 Ok(CommandOutcome::Handled)
             }
             "tasks.reload" => {
-                self.reload(ctx)?;
+                ctx.request_graph_refresh();
                 Ok(CommandOutcome::Handled)
             }
             "tasks.due-next-day" => {
@@ -884,7 +917,11 @@ impl SearchView {
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        self.reload(ctx)
+        // Adopt anything newer already installed, then ask for a fresh
+        // build (post-editor / post-sync content may have changed).
+        self.adopt_snapshot(ctx)?;
+        ctx.request_graph_refresh();
+        Ok(())
     }
 }
 
@@ -918,13 +955,8 @@ impl SearchView {
         ctx: &mut TabCtx,
         anchor: Option<(std::path::PathBuf, usize)>,
     ) -> Result<()> {
-        self.reload(ctx)?;
-        if let Some(key) = anchor {
-            if self.select_display_row(&key) {
-                return Ok(());
-            }
-        }
-        self.clamp_selection();
+        self.pending_anchors = anchor.into_iter().collect();
+        ctx.request_graph_refresh();
         Ok(())
     }
 
@@ -959,20 +991,11 @@ impl SearchView {
         new: (std::path::PathBuf, usize),
         prior: Option<(std::path::PathBuf, usize)>,
     ) -> Result<()> {
-        self.reload(ctx)?;
-        // Try the new task first, then the prior cursor.
-        if self.select_display_row(&new) {
-            return Ok(());
-        }
-        if let Some(p) = prior {
-            if self.select_display_row(&p) {
-                return Ok(());
-            }
-        }
-        // Neither anchor still matches — leave selected at 0 (set by
-        // `reload`'s `recompute_matches`), but saturate if the list is
-        // empty / shorter than the previous cursor.
-        self.clamp_selection();
+        // Anchors are tried in order on the next snapshot adoption: the
+        // new task first, then the prior cursor; neither matching falls
+        // back to a clamped selection.
+        self.pending_anchors = std::iter::once(new).chain(prior).collect();
+        ctx.request_graph_refresh();
         Ok(())
     }
 
@@ -988,7 +1011,17 @@ impl SearchView {
         // need an absolute (or CWD-relative) path to read/write.
         let absolute = ctx.vault.path.join(&task.source_file);
         let anchor = Some((task.source_file.clone(), task.source_line));
-        op(&absolute, task, ctx.today)?;
+        if let Err(e) = op(&absolute, task, ctx.today) {
+            // Typically the expected-line guard: the file changed on
+            // disk since this snapshot was built. Surface the error and
+            // refresh so line numbers realign — never crash the loop.
+            *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                text: format!("{e}"),
+                style: ToastStyle::Error,
+            });
+            ctx.request_graph_refresh();
+            return Ok(EventOutcome::Consumed);
+        }
         self.refresh_after_mutation(ctx, anchor)?;
         Ok(EventOutcome::Consumed)
     }

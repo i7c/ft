@@ -377,7 +377,10 @@ extracting tasks, links, headings, and paragraphs together into
 `Scan::files` (headings already come from `extract_headings` in the
 same `LineSkipState`-aware scan). `Graph::build` consumes those
 artifacts and does no file I/O of its own — `scan → build` reads each
-vault file exactly once. The serial resolution phase, in order:
+vault file exactly once. In the TUI, this pass runs only on the
+background rebuild worker feeding the App-owned shared snapshot
+(`docs/architecture.md` §"Shared graph snapshot"); the CLI runs it once
+per invocation. The serial resolution phase, in order:
 
 1. Insert note nodes.
 2. Insert directory nodes + `Contains` edges.

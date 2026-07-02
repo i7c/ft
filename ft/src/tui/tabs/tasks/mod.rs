@@ -359,6 +359,12 @@ impl Tab for TasksTab {
         Ok(())
     }
 
+    fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
+        if let Some(v) = self.views.get_mut(self.active_view) {
+            v.on_graph_ready(ctx);
+        }
+    }
+
     fn help_sections(&self) -> Vec<HelpSection> {
         vec![
             HelpSection::new(

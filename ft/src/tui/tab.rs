@@ -521,6 +521,26 @@ pub struct TabCtx<'a> {
     /// should dismiss the popup (forward to the buffer) or close the
     /// modal (handle directly). `false` everywhere else.
     pub host_popup_open: bool,
+    /// The App-owned graph snapshot, if one has been installed yet (see
+    /// `crate::tui::snapshot`). `None` until the first background build
+    /// completes after startup — tabs render a loading state. Cheap
+    /// `Arc` clone per ctx; tabs may stash it across events.
+    pub snapshot: Option<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>>,
+    /// Set via [`TabCtx::request_graph_refresh`] after a vault mutation.
+    /// The App consumes it at its drain points and kicks one background
+    /// rebuild. A `Cell` flag rather than an [`AppRequest`] because
+    /// `pending_request` is a single slot and mutation handlers usually
+    /// occupy it with a toast in the same event.
+    pub graph_refresh: &'a Cell<bool>,
+}
+
+impl TabCtx<'_> {
+    /// Ask the App to rebuild the shared graph snapshot after this
+    /// event completes. Coalesces freely — any number of calls in one
+    /// event cost one rebuild request.
+    pub fn request_graph_refresh(&self) {
+        self.graph_refresh.set(true);
+    }
 }
 
 /// Typed identity of a tab, used by the App to route cross-tab
@@ -553,6 +573,13 @@ pub trait Tab {
     fn on_blur(&mut self, _ctx: &mut TabCtx) -> Result<()> {
         Ok(())
     }
+
+    /// Called on the **active** tab when a new graph snapshot installs
+    /// (`BgEvent::GraphReady`). Re-derive view state from
+    /// `ctx.snapshot` and resolve any pending cursor anchor here.
+    /// Background tabs are not called — they catch up by comparing
+    /// `ctx.snapshot` generation in `on_focus`. Default: no-op.
+    fn on_graph_ready(&mut self, _ctx: &mut TabCtx) {}
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome>;
 

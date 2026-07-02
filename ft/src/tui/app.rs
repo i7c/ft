@@ -24,12 +24,13 @@ use crate::tui::{
     app_commands::{APP_COMMANDS, APP_KEYMAP},
     command::{Command as TuiCommand, CommandRegistry},
     editor::{build_invocation, build_wait_for_invocation, unique_signal_name, EditorInvocation},
-    event::{BgEvent, CommitJobResult, Event, EventStream, SyncJobResult},
+    event::{BgEvent, CommitJobResult, Event, EventStream, GraphJobResult, SyncJobResult},
     help::{global_section, sections_from_keymap, HelpSection},
     jobs::{JobHandle, JobKind},
     keymap::KeyChord,
     modal::{ActiveModal, Modal, ModalOutcome},
     modal_commands,
+    snapshot::{build_graph_snapshot, GraphSnapshot},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
         graph::GraphTab, journal::JournalTab, notes::NotesTab, review::ReviewTab, tasks::TasksTab,
@@ -115,7 +116,38 @@ pub struct App {
     /// keys (`PageDown`/`PageUp`) advance by a real viewport size
     /// instead of a guessed constant.
     help_view_height: Cell<u16>,
+    /// The one graph snapshot every tab reads (openspec:
+    /// shared-graph-snapshot). `None` until the first background build
+    /// completes; replaced wholesale by `apply_graph_result`. Tabs get
+    /// an `Arc` clone via `TabCtx::snapshot`.
+    graph_snapshot: Option<Arc<GraphSnapshot>>,
+    /// Rebuild lifecycle: single-flight with dirty-flag coalescing. A
+    /// request during an in-flight build sets `dirty`; completion
+    /// spawns exactly one follow-up. Separate from `jobs` (git) so a
+    /// rebuild never blocks `g s`.
+    graph_job: GraphJob,
+    /// Clone of the event-loop sender, installed by `run()`. `None`
+    /// outside a live event loop (tests, pre-run) — then rebuild
+    /// requests set `graph_job.dirty` and the synchronous test pump
+    /// executes them.
+    bg_tx: Option<std::sync::mpsc::Sender<Event>>,
+    /// Set by tabs/modals via `TabCtx::request_graph_refresh` after a
+    /// vault mutation; consumed at the App's drain points into one
+    /// [`Self::request_graph_rebuild`] call.
+    graph_refresh: Cell<bool>,
     should_quit: bool,
+}
+
+/// Rebuild-lifecycle state for the shared graph snapshot.
+#[derive(Debug, Default)]
+struct GraphJob {
+    /// A worker thread is currently building.
+    in_flight: bool,
+    /// A rebuild was requested while one was in flight (or, with no
+    /// event loop attached, is pending for the test pump).
+    dirty: bool,
+    /// Generation handed to the next build; monotonic per App.
+    next_generation: u64,
 }
 
 impl App {
@@ -174,6 +206,10 @@ impl App {
             initial_action: RefCell::new(None),
             help_scroll: Cell::new(0),
             help_view_height: Cell::new(0),
+            graph_snapshot: None,
+            graph_job: GraphJob::default(),
+            bg_tx: None,
+            graph_refresh: Cell::new(false),
             should_quit: false,
         }
     }
@@ -231,6 +267,12 @@ impl App {
     pub fn run(&mut self, terminal: &mut Tui) -> Result<()> {
         let events = EventStream::new(Duration::from_secs(1));
 
+        // Attach the event-loop sender so rebuild requests spawn real
+        // workers, then kick the initial build — tabs render a loading
+        // state until the first snapshot lands.
+        self.bg_tx = Some(events.sender());
+        self.request_graph_rebuild();
+
         // Apply any startup action queued by the CLI entry point
         // before the first focus call (so the action can switch tabs
         // and the focus dispatch hits the right one).
@@ -246,6 +288,8 @@ impl App {
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
+                snapshot: self.graph_snapshot.clone(),
+                graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
         }
@@ -265,6 +309,7 @@ impl App {
             while let Some(req) = self.pending_request.take() {
                 self.service_request(terminal, &events, req)?;
             }
+            self.consume_graph_refresh_flag();
         }
     }
 
@@ -297,6 +342,8 @@ impl App {
             pending_request: &self.pending_request,
             active_modal_name: self.active_modal_name(),
             host_popup_open: false,
+            snapshot: self.graph_snapshot.clone(),
+            graph_refresh: &self.graph_refresh,
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
@@ -507,6 +554,8 @@ impl App {
                     pending_request: &self.pending_request,
                     active_modal_name,
                     host_popup_open,
+                    snapshot: self.graph_snapshot.clone(),
+                    graph_refresh: &self.graph_refresh,
                 };
                 Some(modal.handle_event(ev.clone(), &ctx))
             } else {
@@ -540,6 +589,8 @@ impl App {
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
+                snapshot: self.graph_snapshot.clone(),
+                graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
         };
@@ -633,6 +684,8 @@ impl App {
             pending_request: &self.pending_request,
             active_modal_name,
             host_popup_open: false,
+            snapshot: self.graph_snapshot.clone(),
+            graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
@@ -671,6 +724,8 @@ impl App {
             pending_request: &self.pending_request,
             active_modal_name,
             host_popup_open: false,
+            snapshot: self.graph_snapshot.clone(),
+            graph_refresh: &self.graph_refresh,
         };
         f(&mut self.tabs[idx], &mut ctx);
         true
@@ -902,6 +957,99 @@ impl App {
         match bg {
             BgEvent::SyncCompleted(result) => self.apply_sync_result(result),
             BgEvent::CommitCompleted(result) => self.apply_commit_result(result),
+            BgEvent::GraphReady(result) => self.apply_graph_result(result),
+        }
+    }
+
+    /// Request a rebuild of the shared graph snapshot. Single-flight:
+    /// while a build is running, further requests set the dirty flag
+    /// and coalesce into exactly one follow-up build. With no event
+    /// loop attached (tests, pre-`run`), the request is recorded on
+    /// the dirty flag for [`Self::pump_graph_rebuild_for_test`].
+    fn request_graph_rebuild(&mut self) {
+        if self.graph_job.in_flight {
+            self.graph_job.dirty = true;
+            return;
+        }
+        let Some(tx) = self.bg_tx.clone() else {
+            self.graph_job.dirty = true;
+            return;
+        };
+        self.spawn_graph_job(tx);
+    }
+
+    /// Turn a raised `TabCtx::request_graph_refresh` flag into one
+    /// rebuild request. Called at the App's drain points (run loop,
+    /// `service_pending_requests`, test pump) so any number of flag
+    /// raises within one event cost exactly one rebuild request.
+    fn consume_graph_refresh_flag(&mut self) {
+        if self.graph_refresh.replace(false) {
+            self.request_graph_rebuild();
+        }
+    }
+
+    fn spawn_graph_job(&mut self, tx: std::sync::mpsc::Sender<Event>) {
+        self.graph_job.in_flight = true;
+        self.graph_job.next_generation += 1;
+        let generation = self.graph_job.next_generation;
+        let vault = Arc::clone(&self.vault);
+        std::thread::spawn(move || run_graph_job(vault, generation, tx));
+    }
+
+    /// Install a finished graph build. On success the snapshot replaces
+    /// the previous one and the **active** tab's `on_graph_ready` hook
+    /// runs (background tabs catch up via the generation check in their
+    /// `on_focus`). On failure the previous snapshot stays and the
+    /// error surfaces as a toast. Either way, a dirty flag spawns the
+    /// coalesced follow-up build.
+    fn apply_graph_result(&mut self, result: GraphJobResult) -> Result<()> {
+        self.graph_job.in_flight = false;
+        match result.outcome {
+            Ok(snapshot) => {
+                self.graph_snapshot = Some(snapshot);
+                let mut ctx = TabCtx {
+                    vault: &self.vault,
+                    recents: &self.recents,
+                    today: self.today,
+                    last_refresh: &self.last_refresh,
+                    pending_request: &self.pending_request,
+                    active_modal_name: self.active_modal_name(),
+                    host_popup_open: false,
+                    snapshot: self.graph_snapshot.clone(),
+                    graph_refresh: &self.graph_refresh,
+                };
+                self.tabs[self.active].on_graph_ready(&mut ctx);
+            }
+            Err(e) => {
+                self.push_toast(format!("graph rebuild failed: {e}"), ToastStyle::Error);
+            }
+        }
+        if self.graph_job.dirty {
+            self.graph_job.dirty = false;
+            if let Some(tx) = self.bg_tx.clone() {
+                self.spawn_graph_job(tx);
+            }
+        }
+        Ok(())
+    }
+
+    /// Run any pending graph rebuild synchronously on the calling
+    /// thread and deliver it through the same [`Self::apply_graph_result`]
+    /// path as the worker. Keeps `TestBackend` tests deterministic:
+    /// dispatch a mutating key, pump, assert. No-op when nothing is
+    /// pending. Production never calls this — the worker thread is the
+    /// only other build site.
+    #[cfg(test)]
+    pub fn pump_graph_rebuild_for_test(&mut self) {
+        // Tests that drive tabs directly (no dispatch) may have raised
+        // the refresh flag without hitting a drain point.
+        self.consume_graph_refresh_flag();
+        while self.graph_job.dirty {
+            self.graph_job.dirty = false;
+            self.graph_job.next_generation += 1;
+            let generation = self.graph_job.next_generation;
+            let outcome = build_graph_snapshot(&self.vault, generation);
+            let _ = self.apply_graph_result(GraphJobResult { outcome });
         }
     }
 
@@ -925,9 +1073,15 @@ impl App {
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
+                snapshot: self.graph_snapshot.clone(),
+                graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
         }
+
+        // Sync/commit may have changed vault content (pull, merge) —
+        // rebuild the shared graph snapshot.
+        self.request_graph_rebuild();
 
         match result.outcome {
             Ok(SyncOutcome::Clean { pushed: false }) => {
@@ -1022,9 +1176,15 @@ impl App {
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
+                snapshot: self.graph_snapshot.clone(),
+                graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
         }
+
+        // Sync/commit may have changed vault content (pull, merge) —
+        // rebuild the shared graph snapshot.
+        self.request_graph_rebuild();
 
         match result.outcome {
             Ok(ft_core::git::CommitOutcome::Clean) => {
@@ -1135,9 +1295,14 @@ impl App {
                 pending_request: &self.pending_request,
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
+                snapshot: self.graph_snapshot.clone(),
+                graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].refresh(&mut ctx)?;
         }
+        // The user probably edited vault content — rebuild the shared
+        // snapshot so graph-backed tabs pick the changes up.
+        self.request_graph_rebuild();
         status?;
         Ok(())
     }
@@ -1421,6 +1586,28 @@ fn run_commit_job(
     )));
 }
 
+/// Body of the graph-rebuild worker thread (openspec:
+/// shared-graph-snapshot). Runs the single-pass `scan → build` via
+/// [`build_graph_snapshot`] — the same function the test pump calls —
+/// and posts exactly one [`BgEvent::GraphReady`] back into the main
+/// loop. Panics are caught and converted into `Err` payloads so a bug
+/// doesn't strand the in-flight flag forever.
+fn run_graph_job(vault: Arc<Vault>, generation: u64, tx: std::sync::mpsc::Sender<Event>) {
+    let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build_graph_snapshot(&vault, generation)
+    })) {
+        Ok(r) => r,
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            Err(format!("internal panic in graph worker: {msg}"))
+        }
+    };
+
+    let _ = tx.send(Event::Background(BgEvent::GraphReady(GraphJobResult {
+        outcome,
+    })));
+}
+
 /// Extract a human-readable message from `catch_unwind`'s payload.
 /// Panic payloads are typed `Box<dyn Any + Send>`; the standard payload
 /// from `panic!("...")` is either `&'static str` or `String`.
@@ -1491,7 +1678,7 @@ impl App {
     /// is itself a `TempDir` in tests, the log is cleaned up on drop.
     pub fn for_test(vault: Vault) -> Self {
         let recents = Self::test_recents_for(&vault);
-        Self::new_with_recents(Arc::new(vault), recents)
+        Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
     }
 
     /// Like [`for_test`], but injects a fixed clock and derives `today` from
@@ -1515,13 +1702,14 @@ impl App {
             crate::tui::app_commands::APP_KEYMAP.clone(),
             std::collections::HashMap::new(),
         )
+        .with_initial_snapshot_for_test()
     }
 
     /// Variant of [`for_test`] that lets the caller inspect / pre-seed the
     /// recents log via a shared `Arc`. Used by recents-aware behavior
     /// tests that need to assert on log writes.
     pub fn for_test_with_recents(vault: Vault, recents: Arc<RecentsLog>) -> Self {
-        Self::new_with_recents(Arc::new(vault), recents)
+        Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
     }
 
     /// Like [`for_test_with_clock`] but also takes an explicit recents
@@ -1550,6 +1738,17 @@ impl App {
             crate::tui::app_commands::APP_KEYMAP.clone(),
             std::collections::HashMap::new(),
         )
+        .with_initial_snapshot_for_test()
+    }
+
+    /// Build and install the first graph snapshot synchronously so
+    /// read-only tests see a ready graph without driving the rebuild
+    /// lifecycle. Mutating tests still call
+    /// [`Self::pump_graph_rebuild_for_test`] after dispatching.
+    fn with_initial_snapshot_for_test(mut self) -> Self {
+        self.request_graph_rebuild();
+        self.pump_graph_rebuild_for_test();
+        self
     }
 
     fn test_recents_for(vault: &Vault) -> Arc<RecentsLog> {
@@ -1569,6 +1768,12 @@ impl App {
     /// Test-only inspection of the App's current mode.
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Generation of the installed graph snapshot, `None` before the
+    /// first build. Test-only inspection of the rebuild lifecycle.
+    pub fn graph_generation_for_test(&self) -> Option<u64> {
+        self.graph_snapshot.as_ref().map(|s| s.generation)
     }
 
     pub fn switch_to(&mut self, idx: usize) -> Result<()> {
@@ -1593,6 +1798,8 @@ impl App {
             pending_request: &self.pending_request,
             active_modal_name: self.active_modal_name(),
             host_popup_open: false,
+            snapshot: self.graph_snapshot.clone(),
+            graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_focus(&mut ctx)?;
         self.service_pending_requests()?;
@@ -1631,13 +1838,15 @@ impl App {
     pub fn service_pending_requests(&mut self) -> Result<()> {
         loop {
             let Some(req) = self.pending_request.borrow_mut().take() else {
-                return Ok(());
+                break;
             };
             if let Some(deferred) = self.service_simple(req)? {
                 *self.pending_request.borrow_mut() = Some(deferred);
-                return Ok(());
+                break;
             }
         }
+        self.consume_graph_refresh_flag();
+        Ok(())
     }
 
     pub fn is_quit(&self) -> bool {

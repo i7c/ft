@@ -28,7 +28,7 @@ sessions B and C.
   selection, cursor anchors) keys off `NodeKey` — which was designed for
   exactly this — and re-derives when the generation changes.
 - Mutating flows (task edits, note create/rename/delete/move, editor
-  return, git sync completion) post one `AppRequest::RefreshGraph` instead
+  return, git sync completion) raise one graph-refresh request instead
   of rebuilding inline; until the fresh snapshot arrives, tabs render the
   previous one, and the expected-line guards from session A make stale
   mutations fail safe instead of corrupting.

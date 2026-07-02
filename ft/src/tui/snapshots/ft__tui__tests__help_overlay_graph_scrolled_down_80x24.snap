@@ -4,10 +4,10 @@ assertion_line: 3299
 expression: down
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
->         │  Tab            Switch to the next tab                  ║│          
- 1: (empty│  BackTab        Switch to the previous tab              █│          
-┌ (empty) │  1..9           Switch to the tab at the given 0-based i█│─────────┐
-│         │                                                         █│         │
+> node whe│  Tab            Switch to the next tab                  ║│ note-link
+ 1: node w│  BackTab        Switch to the previous tab              █│          
+┌ node whe│  1..9           Switch to the tab at the given 0-based i█│─────────┐
+│    D /  │                                                         █│         │
 │press / t│  Views                                                  █│         │
 │         │  Ctrl+n         Add a new view (pick preset or blank)   █│         │
 │         │  Ctrl+p         Load a preset into the active view      ║│         │

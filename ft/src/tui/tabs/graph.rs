@@ -1125,9 +1125,20 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
 });
 
 pub struct GraphTab {
-    graph: Option<Graph>,
+    /// The App-owned snapshot this tab last derived its views from
+    /// (openspec: shared-graph-snapshot). Adopted from `ctx.snapshot`
+    /// whenever the generation differs; never built here.
+    snapshot: Option<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>>,
     views: Vec<ExpandedView>,
     active: usize,
+    /// Cursor target waiting for the next snapshot adoption: a task's
+    /// `(vault-relative path, 1-indexed line)`. Set by mutation flows
+    /// whose result only exists in the *next* graph (create task, edit
+    /// task); resolved by `adopt_snapshot` via `restore_task_cursor`.
+    pending_task_anchor: Option<(PathBuf, usize)>,
+    /// Whether view 0 has been seeded with the default query on first
+    /// snapshot adoption.
+    seeded: bool,
     /// Vault-relative path of a note whose Related modal should open
     /// on the next focus once the graph is built. Set by
     /// [`crate::tui::App`] when the TUI was launched via
@@ -2303,12 +2314,83 @@ impl GraphMoveOuter {
 impl GraphTab {
     pub fn new() -> Self {
         Self {
-            graph: None,
+            snapshot: None,
             views: vec![ExpandedView::default()],
             active: 0,
+            pending_task_anchor: None,
+            seeded: false,
             queued_related_path: None,
             keymap: GRAPH_KEYMAP.clone(),
         }
+    }
+
+    /// The graph from the last-adopted App snapshot, if any.
+    fn graph(&self) -> Option<&Graph> {
+        Self::graph_of(&self.snapshot)
+    }
+
+    /// Field-precise form of [`Self::graph`]: borrows only the
+    /// `snapshot` field, so call sites can hold `&mut self.views` at
+    /// the same time (the method form borrows all of `self`).
+    fn graph_of(
+        snapshot: &Option<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>>,
+    ) -> Option<&Graph> {
+        snapshot.as_ref().map(|s| &s.graph)
+    }
+
+    /// Adopt `ctx.snapshot` when its generation differs from the one
+    /// this tab last derived views from: re-derive every view's tree
+    /// (expansion/selection survive via `NodeKey`) and resolve any
+    /// pending task-cursor anchor. Cheap no-op when the generation is
+    /// unchanged — safe to call from `on_focus`, `on_graph_ready`, and
+    /// the top of `handle_event`.
+    fn adopt_snapshot(&mut self, ctx: &TabCtx) {
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
+        };
+        if self.snapshot.as_ref().map(|s| s.generation) == Some(snap.generation) {
+            return;
+        }
+        self.snapshot = Some(std::sync::Arc::clone(snap));
+        if !self.seeded {
+            self.seeded = true;
+            // First snapshot: seed the FIRST view only — additional
+            // views (created later via Ctrl+N) start empty by design.
+            // Skip if a query is already present (test paths construct
+            // the tab with state pre-populated).
+            let v0 = &mut self.views[0];
+            if v0.query_buf.text.trim().is_empty() {
+                let seed = ctx
+                    .vault
+                    .config
+                    .config
+                    .graph
+                    .default_query
+                    .clone()
+                    .unwrap_or_else(|| BUILTIN_DEFAULT_QUERY.to_string());
+                v0.set_query_text(seed);
+                // Parse + materialize; `restore_all_views` below only
+                // re-derives views that already hold a parsed query.
+                v0.apply_query(Some(&snap.graph), ft_core::dates::today());
+            }
+        }
+        self.restore_all_views();
+        if let Some(anchor) = self.pending_task_anchor.take() {
+            self.restore_task_cursor(&anchor);
+        }
+    }
+
+    /// Test-only: install a pre-built graph as this tab's snapshot,
+    /// bypassing the App lifecycle. Unit tests for tree/view logic use
+    /// this; integration flows go through the App pump instead.
+    #[cfg(test)]
+    fn set_graph_for_test(&mut self, graph: Graph) {
+        self.snapshot = Some(std::sync::Arc::new(crate::tui::snapshot::GraphSnapshot {
+            generation: 1,
+            scan: ft_core::vault::Scan::default(),
+            graph,
+        }));
+        self.seeded = true;
     }
 
     /// Return a new `GraphTab` with the given keymap overlay applied.
@@ -2320,7 +2402,7 @@ impl GraphTab {
     /// Return the `NoteId` of the currently-selected Note row, or
     /// `None` for non-Note rows (directories, ghosts, paragraphs).
     fn selected_note_id(&self) -> Option<NoteId> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
         matches!(graph.node(row.note_id), NodeKind::Note(_)).then_some(row.note_id)
@@ -2332,7 +2414,7 @@ impl GraphTab {
     /// resolve to a real note. Caller is responsible for posting
     /// `AppRequest::OpenModal(Related(...))`.
     fn build_related_modal_for_path(&self, note_path: &Path, ctx: &TabCtx) -> Option<RelatedModal> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let note_id = graph.note_by_path(note_path)?;
         self.build_related_modal_for_id(note_id, ctx)
     }
@@ -2342,7 +2424,7 @@ impl GraphTab {
     /// rejected here — a ghost has no file to write, so the panel is
     /// Note-only; ghost reading is via `ft notes related`.
     fn build_related_modal_for_id(&self, note_id: NoteId, ctx: &TabCtx) -> Option<RelatedModal> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let NodeKind::Note(note_data) = graph.node(note_id) else {
             queue_toast(
                 ctx,
@@ -2416,7 +2498,7 @@ impl GraphTab {
     /// section-move flow can consume. Returns `None` for non-Note rows
     /// (directories, ghosts, empty selection).
     fn selected_note_hit(&self) -> Option<Hit> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
         let NodeKind::Note(n) = graph.node(row.note_id) else {
@@ -2545,7 +2627,7 @@ impl GraphTab {
     /// `MoveTargetFromTree` with `selected` intact so the user can navigate
     /// to a different row.
     fn confirm_move_target(&mut self, ctx: &TabCtx, selected: HashSet<NoteId>) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let v = self.active_view();
@@ -2579,7 +2661,7 @@ impl GraphTab {
     /// selected note to `target_dir/`, then refresh. Directory
     /// selections are expanded to their contained notes via BFS.
     fn execute_multi_move(&mut self, ctx: &TabCtx, selected: &HashSet<NoteId>, target_dir: &Path) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let vault_root = &ctx.vault.path;
@@ -2666,11 +2748,7 @@ impl GraphTab {
         };
         queue_toast(ctx, &msg, ToastStyle::Success);
 
-        let scan = ctx.vault.scan();
-        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
-            self.graph = Some(new_graph);
-            self.restore_all_views();
-        }
+        ctx.request_graph_refresh();
     }
 
     /// Consume one key while the periodic-leader chord is active.
@@ -2686,7 +2764,7 @@ impl GraphTab {
     ///   (bare wikilinks → vault root).
     /// - No selection / empty tree / no graph → vault root.
     fn create_folder_from_selection(&self) -> PathBuf {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return PathBuf::new();
         };
         let v = self.active_view();
@@ -2722,7 +2800,7 @@ impl GraphTab {
     /// `EventOutcome::NotHandled` if no create flow is active (the
     /// caller's normal keymap can run).
     fn selected_note_abs_path(&self, ctx: &TabCtx) -> Option<PathBuf> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let id = self.selected_note_id()?;
         match graph.node(id) {
             NodeKind::Note(n) => Some(ctx.vault.path.join(&n.path)),
@@ -2742,7 +2820,7 @@ impl GraphTab {
         source_rel: PathBuf,
         new_name: &str,
     ) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let vault_root = &ctx.vault.path;
@@ -2846,11 +2924,7 @@ impl GraphTab {
         }
 
         // Success: refresh the graph.
-        let scan = ctx.vault.scan();
-        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
-            self.graph = Some(new_graph);
-            self.restore_all_views();
-        }
+        ctx.request_graph_refresh();
     }
 
     fn active_view(&self) -> &ExpandedView {
@@ -2907,7 +2981,7 @@ impl GraphTab {
     /// by the `Tab::graph_apply_preset` hook when the preset-picker
     /// modal commits.
     fn apply_preset_to_active_view(&mut self, dsl: &str) {
-        let graph = self.graph.as_ref();
+        let graph = Self::graph_of(&self.snapshot);
         let v = &mut self.views[self.active];
         v.set_query_text(dsl);
         v.apply_query(graph, ft_core::dates::today());
@@ -2922,7 +2996,7 @@ impl GraphTab {
         if path.is_empty() {
             return;
         }
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let key_path: Vec<NodeKey> = path.iter().map(|id| graph.stable_key(*id)).collect();
@@ -2944,7 +3018,7 @@ impl GraphTab {
     fn find_node_path(&self, target: NoteId) -> Option<Vec<NoteId>> {
         use std::collections::VecDeque;
 
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let query = v.query.as_ref()?;
 
@@ -2984,7 +3058,7 @@ impl GraphTab {
     /// jumps the cursor via [`jump_to_path`] or queues a toast when
     /// the note is unreachable.
     fn navigate_periodic(&mut self, ctx: &TabCtx, period: Period) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let pn = &ctx.vault.config.config.periodic_notes;
@@ -3053,7 +3127,7 @@ impl GraphTab {
     /// Ghost and Task nodes are no-ops.
     fn rewrite_query_for_root(&mut self) {
         // Gather all needed data first, then mutate the view.
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let v = &self.views[self.active];
@@ -3139,7 +3213,7 @@ impl GraphTab {
     /// `multi_selected` keys whose underlying nodes have actually
     /// disappeared; existing marks survive a graph rebuild.
     fn restore_all_views(&mut self) {
-        let Some(g) = self.graph.as_ref() else {
+        let Some(g) = Self::graph_of(&self.snapshot) else {
             return;
         };
         for v in self.views.iter_mut() {
@@ -3149,7 +3223,7 @@ impl GraphTab {
     }
 
     fn request_open_selected_in_editor(&self, ctx: &TabCtx) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let v = self.active_view();
@@ -3200,7 +3274,7 @@ impl GraphTab {
         // Extract the focused task's identity up front so we drop the
         // immutable graph borrow before mutating `self` / refreshing.
         let (abs, anchor, today) = {
-            let Some(graph) = self.graph.as_ref() else {
+            let Some(graph) = Self::graph_of(&self.snapshot) else {
                 return false;
             };
             let v = self.active_view();
@@ -3224,20 +3298,17 @@ impl GraphTab {
                 return false;
             }
         }
-        // Refresh the graph and try to land back on the same task.
-        let scan = ctx.vault.scan();
-        if let Ok(new_graph) = Graph::build(ctx.vault, &scan) {
-            self.graph = Some(new_graph);
-            self.restore_all_views();
-            self.restore_task_cursor(&anchor);
-        }
+        // Refresh the graph and land back on the same task once the
+        // rebuilt snapshot arrives.
+        self.pending_task_anchor = Some(anchor);
+        ctx.request_graph_refresh();
         true
     }
 
     /// Move the cursor to the row whose task matches `(source_file,
     /// source_line)`, if present in the active view's tree.
     fn restore_task_cursor(&mut self, anchor: &(std::path::PathBuf, usize)) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         // Find the row index without a mutable borrow, then set it.
@@ -3255,7 +3326,7 @@ impl GraphTab {
     /// or task's source note's) task subtree (graph-task-edit-modal §5).
     /// Deduped by construction via the `HasTask`→top-level model fix.
     fn rewrite_view_to_note_tasks(&mut self, ctx: &mut TabCtx) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let v = self.active_view();
@@ -3280,7 +3351,7 @@ impl GraphTab {
                 path.display()
             )
         };
-        let graph = self.graph.as_ref();
+        let graph = Self::graph_of(&self.snapshot);
         let view = &mut self.views[self.active];
         view.set_query_text(&query);
         view.apply_query(graph, ft_core::dates::today());
@@ -3288,7 +3359,7 @@ impl GraphTab {
 
     /// The `(source_file, source_line)` of the focused Task row, if any.
     fn focused_task_anchor(&self) -> Option<(PathBuf, usize)> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
         match graph.node(row.note_id) {
@@ -3302,7 +3373,7 @@ impl GraphTab {
     /// (no concrete file) yields `None`, so the create popup falls back to
     /// the daily note.
     fn focused_seed_note(&self) -> Option<PathBuf> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
         match graph.node(row.note_id) {
@@ -3322,7 +3393,7 @@ impl GraphTab {
         PathBuf,
         usize,
     )> {
-        let graph = self.graph.as_ref()?;
+        let graph = Self::graph_of(&self.snapshot)?;
         let v = self.active_view();
         let row = v.tree.rows().get(v.selected)?;
         let NodeKind::Task(t) = graph.node(row.note_id) else {
@@ -3359,7 +3430,7 @@ impl GraphTab {
     }
 
     fn request_open_selected_in_obsidian(&self, ctx: &TabCtx) {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
         let v = self.active_view();
@@ -3398,6 +3469,10 @@ impl Tab for GraphTab {
             .unwrap_or(false)
     }
 
+    fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
+        self.adopt_snapshot(ctx);
+    }
+
     #[cfg(test)]
     fn set_focused_buffer_completion_for_test(
         &mut self,
@@ -3409,32 +3484,10 @@ impl Tab for GraphTab {
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        if self.graph.is_none() {
-            let scan = ctx.vault.scan();
-            self.graph = Some(Graph::build(ctx.vault, &scan)?);
-            // First focus: seed the FIRST view only — additional views
-            // (created later via Ctrl+N) start empty by design. Skip if
-            // a query is already present (test paths construct the tab
-            // with state pre-populated).
-            let v0 = &mut self.views[0];
-            if v0.query_buf.text.trim().is_empty() {
-                let seed = ctx
-                    .vault
-                    .config
-                    .config
-                    .graph
-                    .default_query
-                    .clone()
-                    .unwrap_or_else(|| BUILTIN_DEFAULT_QUERY.to_string());
-                v0.set_query_text(seed);
-                let graph = self.graph.as_ref();
-                v0.apply_query(graph, ft_core::dates::today());
-            } else {
-                // Re-derive every view's tree against the freshly-built
-                // graph so trees materialize on first focus.
-                self.restore_all_views();
-            }
-        }
+        // Seeding of view 0 with the default query happens inside
+        // `adopt_snapshot` on first adoption — the first snapshot may
+        // land via `on_graph_ready` before any focus, or via this call.
+        self.adopt_snapshot(ctx);
         // If a queued Related modal was requested before the graph
         // existed (e.g. `ft notes update-related <note>`), open it now.
         if let Some(path) = self.queued_related_path.take() {
@@ -3489,7 +3542,7 @@ impl Tab for GraphTab {
             return;
         }
         self.active = view_id;
-        let graph = self.graph.as_ref();
+        let graph = Self::graph_of(&self.snapshot);
         self.views[self.active].apply_query(graph, ft_core::dates::today());
     }
 
@@ -3555,11 +3608,7 @@ impl Tab for GraphTab {
 
         match apply_delete(vault_root, &plan) {
             Ok(()) => {
-                let scan = ctx.vault.scan();
-                if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                    self.graph = Some(g);
-                    self.restore_all_views();
-                }
+                ctx.request_graph_refresh();
                 if is_directory {
                     queue_toast(
                         ctx,
@@ -3616,11 +3665,7 @@ impl Tab for GraphTab {
                     format!("{}/{}/", parent.display(), trimmed)
                 };
                 // Refresh graph to pick up the new directory.
-                let scan = ctx.vault.scan();
-                if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                    self.graph = Some(g);
-                    self.restore_all_views();
-                }
+                ctx.request_graph_refresh();
                 queue_toast(ctx, &format!("created {}", display), ToastStyle::Success);
             }
             Err(e) => {
@@ -3652,12 +3697,8 @@ impl Tab for GraphTab {
             t.recurrence = recurrence;
         }) {
             Ok(_) => {
-                let scan = ctx.vault.scan();
-                if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                    self.graph = Some(g);
-                    self.restore_all_views();
-                    self.restore_task_cursor(&(path, line));
-                }
+                self.pending_task_anchor = Some((path, line));
+                ctx.request_graph_refresh();
                 queue_toast(ctx, "task updated", ToastStyle::Success);
             }
             Err(e) => queue_toast(ctx, &format!("edit failed: {e}"), ToastStyle::Error),
@@ -3741,15 +3782,11 @@ impl Tab for GraphTab {
         ) {
             Ok(outcome) => {
                 let rel = ctx.vault.relativize(&resolved).to_path_buf();
-                let scan = ctx.vault.scan();
-                if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                    self.graph = Some(g);
-                    self.restore_all_views();
-                    // Lands on the new task when it's already visible (a
-                    // top-level task in an expanded note, say); a subtask of
-                    // a collapsed parent stays hidden until the user expands.
-                    self.restore_task_cursor(&(rel.clone(), outcome.line));
-                }
+                // Lands on the new task when it's already visible (a
+                // top-level task in an expanded note, say); a subtask of
+                // a collapsed parent stays hidden until the user expands.
+                self.pending_task_anchor = Some((rel.clone(), outcome.line));
+                ctx.request_graph_refresh();
                 queue_toast(
                     ctx,
                     &format!("created {}:{}", rel.display(), outcome.line),
@@ -3818,7 +3855,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.journal" => {
-                let target = self.graph.as_ref().and_then(|graph| {
+                let target = Self::graph_of(&self.snapshot).and_then(|graph| {
                     let row = self
                         .active_view()
                         .tree
@@ -3846,37 +3883,38 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.add-to-journal-sources" => {
-                let targets: Vec<crate::tui::tab::JournalTarget> = match self.graph.as_ref() {
-                    Some(graph) => {
-                        let v = self.active_view();
-                        // Multi-selection drives the target list when
-                        // non-empty; otherwise fall back to the cursor row.
-                        let ids: Vec<ft_core::graph::NoteId> = if v.multi_selected.is_empty() {
-                            v.tree
-                                .rows()
-                                .get(v.selected)
-                                .map(|r| vec![r.note_id])
-                                .unwrap_or_default()
-                        } else {
-                            v.multi_selected
-                                .iter()
-                                .filter_map(|k| graph.id_for_key(k))
+                let targets: Vec<crate::tui::tab::JournalTarget> =
+                    match Self::graph_of(&self.snapshot) {
+                        Some(graph) => {
+                            let v = self.active_view();
+                            // Multi-selection drives the target list when
+                            // non-empty; otherwise fall back to the cursor row.
+                            let ids: Vec<ft_core::graph::NoteId> = if v.multi_selected.is_empty() {
+                                v.tree
+                                    .rows()
+                                    .get(v.selected)
+                                    .map(|r| vec![r.note_id])
+                                    .unwrap_or_default()
+                            } else {
+                                v.multi_selected
+                                    .iter()
+                                    .filter_map(|k| graph.id_for_key(k))
+                                    .collect()
+                            };
+                            ids.into_iter()
+                                .filter_map(|id| match graph.node(id) {
+                                    NodeKind::Note(n) => {
+                                        Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
+                                    }
+                                    NodeKind::Ghost(g) => {
+                                        Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
+                                    }
+                                    _ => None,
+                                })
                                 .collect()
-                        };
-                        ids.into_iter()
-                            .filter_map(|id| match graph.node(id) {
-                                NodeKind::Note(n) => {
-                                    Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
-                                }
-                                NodeKind::Ghost(g) => {
-                                    Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
-                                }
-                                _ => None,
-                            })
-                            .collect()
-                    }
-                    None => Vec::new(),
-                };
+                        }
+                        None => Vec::new(),
+                    };
                 if targets.is_empty() {
                     queue_toast(ctx, "no Note or Ghost rows selected", ToastStyle::Error);
                 } else {
@@ -3900,8 +3938,10 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.search" => {
-                if let (Some(g), Some(q)) = (self.graph.as_ref(), self.active_view().query.as_ref())
-                {
+                if let (Some(g), Some(q)) = (
+                    Self::graph_of(&self.snapshot),
+                    self.active_view().query.as_ref(),
+                ) {
                     let src = GraphSearchPickerSource::new(g, q, ctx.today);
                     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
                         ActiveModal::Search(SearchPickerModal::new(src)),
@@ -3911,7 +3951,7 @@ impl Tab for GraphTab {
             }
             // Navigation
             "graph.cursor-down" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -3921,7 +3961,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-up" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -3931,7 +3971,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.expand-or-collapse" => {
-                let graph = self.graph.as_ref();
+                let graph = Self::graph_of(&self.snapshot);
                 let v = &mut self.views[self.active];
                 if let (Some(g), Some(q)) = (graph, v.query.as_ref()) {
                     let path = v.path_to(v.selected, g);
@@ -3952,7 +3992,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.collapse-or-jump-parent" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -3981,7 +4021,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-first" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -3991,7 +4031,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-last" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -4001,7 +4041,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-half-page-down" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -4013,7 +4053,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.cursor-half-page-up" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = &mut self.views[self.active];
@@ -4139,7 +4179,7 @@ impl Tab for GraphTab {
             "graph.create-blank" => {
                 // Ghost shortcut: create the note instantly at the ghost's path.
                 if let (Some(graph), Some(row)) = (
-                    self.graph.as_ref(),
+                    Self::graph_of(&self.snapshot),
                     self.active_view()
                         .tree
                         .rows()
@@ -4157,11 +4197,7 @@ impl Tab for GraphTab {
                         let content = format!("# {title}\n");
                         if ft_core::fs::write_atomic(&abs_path, &content).is_ok() {
                             // Refresh graph to pick up the new note.
-                            let scan = ctx.vault.scan();
-                            if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                                self.graph = Some(g);
-                                self.restore_all_views();
-                            }
+                            ctx.request_graph_refresh();
                             let rel = abs_path
                                 .strip_prefix(&ctx.vault.path)
                                 .unwrap_or(&abs_path)
@@ -4191,7 +4227,7 @@ impl Tab for GraphTab {
             "graph.create-from-template" => {
                 // Ghost shortcut: open template picker, commit to ghost path.
                 if let (Some(graph), Some(row)) = (
-                    self.graph.as_ref(),
+                    Self::graph_of(&self.snapshot),
                     self.active_view()
                         .tree
                         .rows()
@@ -4255,11 +4291,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.refresh" => {
-                let scan = ctx.vault.scan();
-                if let Ok(g) = Graph::build(ctx.vault, &scan) {
-                    self.graph = Some(g);
-                    self.restore_all_views();
-                }
+                ctx.request_graph_refresh();
                 CommandOutcome::Handled
             }
             "graph.rename-or-multi-move" => {
@@ -4278,7 +4310,7 @@ impl Tab for GraphTab {
                     // Modal API speaks NoteIds (resolved against the
                     // current live graph); drop any keys whose nodes
                     // have already vanished.
-                    let graph = self.graph.as_ref();
+                    let graph = Self::graph_of(&self.snapshot);
                     let ids: HashSet<NoteId> = graph
                         .map(|g| keys.iter().filter_map(|k| g.id_for_key(k)).collect())
                         .unwrap_or_default();
@@ -4291,7 +4323,7 @@ impl Tab for GraphTab {
                         ))));
                     return CommandOutcome::Handled;
                 }
-                let graph = self.graph.as_ref();
+                let graph = Self::graph_of(&self.snapshot);
                 let v = self.active_view();
                 let Some(row) = v.tree.rows().get(v.selected) else {
                     return CommandOutcome::Handled;
@@ -4328,7 +4360,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.delete" => {
-                let graph = self.graph.as_ref();
+                let graph = Self::graph_of(&self.snapshot);
                 let v = self.active_view();
                 let Some(row) = v.tree.rows().get(v.selected) else {
                     return CommandOutcome::Handled;
@@ -4387,7 +4419,7 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.create-subdir" => {
-                let graph = self.graph.as_ref();
+                let graph = Self::graph_of(&self.snapshot);
                 let v = self.active_view();
                 let Some(row) = v.tree.rows().get(v.selected) else {
                     return CommandOutcome::Handled;
@@ -4420,7 +4452,7 @@ impl Tab for GraphTab {
             }
             // Multi-select
             "graph.toggle-multi-select" => {
-                let Some(g) = self.graph.as_ref() else {
+                let Some(g) = Self::graph_of(&self.snapshot) else {
                     return CommandOutcome::Handled;
                 };
                 let v = self.active_view();
@@ -4460,6 +4492,10 @@ impl Tab for GraphTab {
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        // Pick up a newer snapshot before acting on the key so line
+        // numbers and NoteIds come from the freshest installed build.
+        self.adopt_snapshot(ctx);
+
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
@@ -4479,7 +4515,7 @@ impl Tab for GraphTab {
         // still let view-management and the query-bar through so the
         // user can recover from an empty result (e.g. Ctrl+P to pick a
         // different preset, Ctrl+W to close the view).
-        let graph_missing = self.graph.is_none();
+        let graph_missing = Self::graph_of(&self.snapshot).is_none();
         let chord = KeyChord::from_key_event(k);
         let cmd = self.keymap.lookup(chord).cloned();
         if graph_missing || self.active_view().tree.is_empty() {
@@ -4500,6 +4536,17 @@ impl Tab for GraphTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
+        // Before the first snapshot lands there is nothing to derive a
+        // tree from — render a non-blocking loading line instead.
+        if self.snapshot.is_none() && ctx.snapshot.is_none() {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new("building graph…")
+                    .style(Style::default().fg(palette::DIM)),
+                area,
+            );
+            return;
+        }
+
         let [input_area, strip_area, tree_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -4582,9 +4629,7 @@ impl Tab for GraphTab {
                 } else {
                     ' '
                 };
-                let sel_marker = self
-                    .graph
-                    .as_ref()
+                let sel_marker = Self::graph_of(&self.snapshot)
                     .map(|g| v.multi_selected.contains(&g.stable_key(row.note_id)))
                     .unwrap_or(false);
                 let sel_marker = if sel_marker { '●' } else { ' ' };
@@ -4597,7 +4642,7 @@ impl Tab for GraphTab {
                 } else {
                     Style::default().fg(palette::WHITE)
                 };
-                let graph = self.graph.as_ref();
+                let graph = Self::graph_of(&self.snapshot);
                 let kind_color = graph
                     .map(|g| node_kind_color(g.node(row.note_id)))
                     .unwrap_or(palette::WHITE);
@@ -4660,9 +4705,10 @@ impl Tab for GraphTab {
     }
 
     fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        let scan = ctx.vault.scan();
-        self.graph = Some(Graph::build(ctx.vault, &scan)?);
-        self.restore_all_views();
+        // Adopt anything newer already installed, then ask for a fresh
+        // build (post-editor / post-sync content may have changed).
+        self.adopt_snapshot(ctx);
+        ctx.request_graph_refresh();
         Ok(())
     }
 
@@ -6185,6 +6231,7 @@ mod view_tests {
         let today = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
         let last_refresh = Cell::new(None);
         let pending_request = RefCell::new(None);
+        let graph_refresh = Cell::new(false);
 
         let ctx = TabCtx {
             vault: &vault,
@@ -6194,6 +6241,8 @@ mod view_tests {
             pending_request: &pending_request,
             active_modal_name: None,
             host_popup_open: false,
+            snapshot: None,
+            graph_refresh: &graph_refresh,
         };
 
         // Build graph so views can resolve queries.
@@ -6201,7 +6250,7 @@ mod view_tests {
         let graph = Graph::build(&vault, &scan).unwrap();
 
         let mut tab = GraphTab::new();
-        tab.graph = Some(graph);
+        tab.set_graph_for_test(graph);
         tab.views[0].query_buf.text = "node where kind = Note;".to_string();
 
         // Ctrl+P → tab posts OpenModal(PresetPicker(... for_active_view=true ...)).
@@ -6280,7 +6329,7 @@ mod view_tests {
             .expect("target row must be in tree");
         v.selected = sel;
         let mut tab = GraphTab::new();
-        tab.graph = Some(graph);
+        tab.set_graph_for_test(graph);
         tab.views[0] = v;
         tab
     }
@@ -6341,7 +6390,7 @@ mod view_tests {
         v.apply_query(Some(&graph), FT_TEST_TODAY);
         v.selected = 0;
         let mut tab = GraphTab::new();
-        tab.graph = Some(graph);
+        tab.set_graph_for_test(graph);
         tab.views[0] = v;
         let before = tab.views[0].query_buf.text.clone();
         tab.rewrite_query_for_root();
@@ -6372,7 +6421,7 @@ mod view_tests {
         v.apply_query(Some(&graph), FT_TEST_TODAY);
         v.selected = 0;
         let mut tab = GraphTab::new();
-        tab.graph = Some(graph);
+        tab.set_graph_for_test(graph);
         tab.views[0] = v;
         let before = tab.views[0].query_buf.text.clone();
         tab.rewrite_query_for_root();
@@ -6640,12 +6689,12 @@ mod search_tests {
             .unwrap();
 
         let mut tab = GraphTab::new();
-        tab.graph = Some(g);
+        tab.set_graph_for_test(g);
         tab.views[0].query_buf.text =
             "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;"
                 .to_string();
-        let graph_ref = tab.graph.as_ref().unwrap();
-        tab.views[0].apply_query(Some(graph_ref), FT_TEST_TODAY);
+        let snap = tab.snapshot.clone().unwrap();
+        tab.views[0].apply_query(Some(&snap.graph), FT_TEST_TODAY);
 
         let path = vec![root_id, areas_id, ops_id, shifts_id];
         tab.jump_to_path(path.clone());
@@ -6656,7 +6705,7 @@ mod search_tests {
         assert_eq!(row.depth, 3, "shifts.md is at depth 3");
         // The view stores paths as build-stable `NodeKey`s; rebuild
         // the expected key path the same way `jump_to_path` does.
-        let g_ref = tab.graph.as_ref().unwrap();
+        let g_ref = tab.graph().unwrap();
         let key_path: Vec<NodeKey> = path.iter().map(|id| g_ref.stable_key(*id)).collect();
         assert_eq!(v.selected_path.as_deref(), Some(key_path.as_slice()));
         // Ancestors are recorded in expanded_paths (closed under prefixes).
@@ -6703,13 +6752,10 @@ mod nav_tests {
             ..Default::default()
         };
         v.apply_query(Some(&graph), FT_TEST_TODAY);
-        GraphTab {
-            graph: Some(graph),
-            views: vec![v],
-            active: 0,
-            queued_related_path: None,
-            keymap: GRAPH_KEYMAP.clone(),
-        }
+        let mut tab = GraphTab::new();
+        tab.set_graph_for_test(graph);
+        tab.views = vec![v];
+        tab
     }
 
     // ── find_node_path ─────────────────────────────────────────────
@@ -6720,8 +6766,7 @@ mod nav_tests {
         let tab = tab_with_query(g, "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;");
 
         let target = tab
-            .graph
-            .as_ref()
+            .graph()
             .unwrap()
             .node_by_path(std::path::Path::new("Areas"))
             .unwrap();
@@ -6742,8 +6787,7 @@ mod nav_tests {
         // "Projects" is a different directory, not reachable via
         // directory-contains from just the "Areas" root with no expand.
         let target = tab
-            .graph
-            .as_ref()
+            .graph()
             .unwrap()
             .node_by_path(std::path::Path::new("Projects"))
             .unwrap();
@@ -6759,8 +6803,7 @@ mod nav_tests {
         let g = dirs_graph();
         let tab = tab_with_query(g, "node where kind = Directory and path = \"\"; expand where edge.kind = directory-contains;");
         let root = tab
-            .graph
-            .as_ref()
+            .graph()
             .unwrap()
             .node_by_path(std::path::Path::new(""))
             .unwrap();
@@ -6785,8 +6828,7 @@ mod nav_tests {
         // A links to C, and A links to D which links to C.
         // The BFS should find the shorter path A→C.
         let c_id = tab
-            .graph
-            .as_ref()
+            .graph()
             .unwrap()
             .node_by_path(std::path::Path::new("C.md"))
             .unwrap();
@@ -6797,8 +6839,7 @@ mod nav_tests {
         assert_eq!(path.len(), 2, "shortest path should be A→C (length 2)");
         // Verify path starts at A and ends at C.
         let a_id = tab
-            .graph
-            .as_ref()
+            .graph()
             .unwrap()
             .node_by_path(std::path::Path::new("A.md"))
             .unwrap();

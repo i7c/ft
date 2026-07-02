@@ -38,6 +38,15 @@ pub enum Event {
 pub enum BgEvent {
     SyncCompleted(SyncJobResult),
     CommitCompleted(CommitJobResult),
+    GraphReady(GraphJobResult),
+}
+
+/// Result of one background `scan → build` pass. The snapshot rides in
+/// an `Arc` so the event stays `Clone`; errors are stringified at the
+/// worker boundary like the git job results.
+#[derive(Debug, Clone)]
+pub struct GraphJobResult {
+    pub outcome: Result<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>, String>,
 }
 
 /// Result of a single `ft_core::git::sync` job spawned by the TUI.

@@ -165,28 +165,26 @@ impl ReviewTab {
             self.rows.clear();
             return;
         }
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(e) => {
-                self.last_error = Some(format!("graph build failed: {e}"));
-                return;
-            }
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            self.last_error =
+                Some("graph is still building — press R to retry in a moment".to_string());
+            return;
         };
+        let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
-        let review = match compute_link_review(&graph, ctx.vault, &self.window, &cfg) {
+        let review = match compute_link_review(graph, ctx.vault, &self.window, &cfg) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("compute_link_review failed: {e}"));
                 return;
             }
         };
-        self.apply_review(graph, review);
+        self.apply_review(review);
         self.last_error = None;
         self.loaded_once = true;
     }
 
-    fn apply_review(&mut self, _graph: Graph, review: LinkReview) {
+    fn apply_review(&mut self, review: LinkReview) {
         self.rows = review.rows;
         // Clamp cursor and clear selection.
         if self.cursor >= self.rows.len() {
@@ -225,23 +223,21 @@ impl ReviewTab {
             v.sort_unstable();
             v
         };
-        // Need a graph to convert each row's target name to a JournalTarget
-        // (Note vs Ghost). Re-build the graph at handoff time so the IDs
-        // we hand off are valid in the Journal tab's freshly-built graph.
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(e) => {
-                self.last_error = Some(format!("handoff graph build failed: {e}"));
-                return;
-            }
+        // Need a graph to convert each row's target name to a
+        // JournalTarget (Note vs Ghost). Both tabs read the same shared
+        // snapshot, so names resolve consistently across the handoff.
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            self.last_error =
+                Some("graph is still building — retry the handoff in a moment".to_string());
+            return;
         };
+        let graph = &snap.graph;
         let mut targets: Vec<JournalTarget> = Vec::new();
         for idx in row_indices {
             let row = &self.rows[idx];
             let target = if row.is_ghost {
                 JournalTarget::Ghost(row.target.clone())
-            } else if let Some(id) = note_id_by_title(&graph, &row.target) {
+            } else if let Some(id) = note_id_by_title(graph, &row.target) {
                 let NodeKind::Note(n) = graph.node(id) else {
                     continue;
                 };

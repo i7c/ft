@@ -1154,19 +1154,17 @@ impl JournalSourcesModal {
         }
     }
 
-    /// Open the inner add-source fuzzy picker. Builds a fresh graph
-    /// snapshot at open time so ghost rows reflect current vault
-    /// state (same pattern Journal's `load_for_multi` uses).
+    /// Open the inner add-source fuzzy picker against the App-owned
+    /// shared snapshot, so ghost rows match what every tab shows. Stays
+    /// closed (no-op) in the brief window before the first snapshot.
     fn open_picker(&mut self, ctx: &TabCtx) {
-        let scan = ctx.vault.scan();
-        let graph = match ft_core::graph::Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(_) => return,
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
         };
         let source = JournalSourcePickerSource::new(
             std::sync::Arc::clone(ctx.vault),
             std::sync::Arc::clone(ctx.recents),
-            &graph,
+            &snap.graph,
         );
         self.picker = Some(FuzzyPicker::new(source));
     }

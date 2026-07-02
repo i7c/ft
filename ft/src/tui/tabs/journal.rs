@@ -32,7 +32,7 @@ use ratatui::{
 
 use ft_core::blame_cache::BlameCache;
 use ft_core::git::discover_repo;
-use ft_core::graph::{Graph, NodeKind, NoteId};
+use ft_core::graph::{NodeKind, NoteId};
 use ft_core::journal::{build_journal, JournalEntry};
 use ft_core::link_review::compute_link_review;
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
@@ -369,19 +369,16 @@ impl JournalTab {
             return;
         }
 
-        // Build a fresh graph; the App-level graph belongs to the
-        // Graph tab and isn't easily reachable from here.
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(e) => {
-                self.last_error = Some(format!("graph build failed: {e}"));
-                self.entries.clear();
-                return;
-            }
+        // Resolve against the App-owned shared snapshot.
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            self.last_error =
+                Some("graph is still building — press R to retry in a moment".to_string());
+            self.entries.clear();
+            return;
         };
+        let graph = &snap.graph;
 
-        // Resolve every source to a NoteId in this fresh graph.
+        // Resolve every source to a NoteId in the snapshot's graph.
         let mut ids: Vec<NoteId> = Vec::with_capacity(self.sources.len());
         let mut unresolved: Vec<String> = Vec::new();
         for t in &self.sources {
@@ -408,7 +405,7 @@ impl JournalTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
 
-        let report = match build_journal(&graph, &ids, ctx.vault, cache) {
+        let report = match build_journal(graph, &ids, ctx.vault, cache) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("build_journal failed: {e}"));
@@ -493,14 +490,13 @@ impl JournalTab {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(_) => return,
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
         };
+        let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
         let core_window = window.to_core();
-        let review = match compute_link_review(&graph, ctx.vault, &core_window, &cfg) {
+        let review = match compute_link_review(graph, ctx.vault, &core_window, &cfg) {
             Ok(r) => r,
             Err(_) => return,
         };
@@ -780,25 +776,21 @@ impl JournalTab {
     }
 
     /// Open the Sources Manager modal pre-landed on its add-source
-    /// picker. Builds a fresh graph snapshot at open time so ghost
-    /// rows reflect current vault state.
+    /// picker. Reads the shared snapshot so ghost rows reflect the
+    /// latest installed vault state.
     fn open_sources_manager(&mut self, ctx: &TabCtx) {
-        let scan = ctx.vault.scan();
-        let graph = match Graph::build(ctx.vault, &scan) {
-            Ok(g) => g,
-            Err(e) => {
-                crate::tui::notes_actions::queue_toast(
-                    ctx,
-                    &format!("graph build failed: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
+        let Some(snap) = ctx.snapshot.clone() else {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                "graph is still building — retry in a moment",
+                ToastStyle::Error,
+            );
+            return;
         };
         let source = crate::tui::widgets::JournalSourcePickerSource::new(
             Arc::clone(ctx.vault),
             Arc::clone(ctx.recents),
-            &graph,
+            &snap.graph,
         );
         let modal = crate::tui::modal::JournalSourcesModal {
             sources: self.sources.clone(),

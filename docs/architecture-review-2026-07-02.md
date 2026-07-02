@@ -17,6 +17,12 @@ down.
 
 ## 1. The TUI has no shared data layer — every tab rebuilds the world, on the UI thread
 
+> **Fixed** by openspec change `shared-graph-snapshot` (2026-07-02):
+> one App-owned `Arc<GraphSnapshot>` rebuilt on a background worker,
+> tabs re-derive by generation. Findings 2–5 were fixed the same day
+> (single-pass scan+build, routing consolidation, format threading,
+> expected-line guards).
+
 The biggest structural problem. There are ~20 `Graph::build` call sites
 in the binary. Each tab owns a private `Graph`; the Journal tab says it
 outright:

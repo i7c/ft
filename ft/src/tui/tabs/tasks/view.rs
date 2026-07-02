@@ -21,6 +21,10 @@ pub trait View {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx);
 
+    /// Called (via the owning tab) when a new graph snapshot installs
+    /// while this tab is active. Default: no-op.
+    fn on_graph_ready(&mut self, _ctx: &mut TabCtx) {}
+
     fn refresh(&mut self, _ctx: &mut TabCtx) -> Result<()> {
         Ok(())
     }

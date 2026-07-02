@@ -45,9 +45,11 @@ many requests arrived meanwhile.
 ### Requirement: Mutations trigger rebuild via one request
 Every flow that mutates vault content (task create/complete/edit/cancel/
 move, note create/rename/delete/move, section move, capture, editor
-return, git sync or commit completion) SHALL post a single
-`RefreshGraph` request rather than rebuilding a graph inline. The
-request SHALL be serviced through the App's single routing table.
+return, git sync or commit completion) SHALL raise a single graph-
+refresh request (via the tab context's refresh flag, or the App's
+direct rebuild call for App-level flows) rather than rebuilding a graph
+inline. Any number of raises within one event SHALL cost one rebuild
+request, consumed at the App's drain points.
 
 #### Scenario: Task edit refreshes the shared snapshot
 - **WHEN** the user completes a task from the Tasks tab

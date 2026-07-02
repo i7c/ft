@@ -548,11 +548,12 @@ runtime — no tokio, no `async fn`. The main event loop blocks on
 1. **Crossterm input thread** (`ft/src/tui/event.rs::crossterm_loop`)
    reads stdin and sends `Event::{Key,Mouse,Resize,Tick}` onto a shared
    `mpsc::channel`. Owns no app state.
-2. **Background workers** (`ft/src/tui/app.rs::run_sync_job` and any
-   future siblings) own their inputs (`Arc<Vault>` clones, `PathBuf`,
-   options) moved into a `move ||` closure, do synchronous work, and
-   send exactly one `Event::Background(BgEvent)` back into the same
-   channel before exiting.
+2. **Background workers** (`ft/src/tui/app.rs::run_sync_job`,
+   `run_commit_job`, `run_graph_job`, and any future siblings) own
+   their inputs (`Arc<Vault>` clones, `PathBuf`, options) moved into a
+   `move ||` closure, do synchronous work, and send exactly one
+   `Event::Background(BgEvent)` back into the same channel before
+   exiting.
 
 The main loop is single-receiver: there is no `select!`, no second
 channel, no polling. Background completions are just another event
@@ -587,6 +588,28 @@ watching, fuzzy-index rebuilds, schedule-driven autosync, HTTP fetch):
 
 The plan-014 git-sync background worker is the reference
 implementation.
+
+### Shared graph snapshot
+
+The TUI holds exactly one graph: an App-owned
+`Option<Arc<GraphSnapshot>>` (`ft/src/tui/snapshot.rs` — the built
+`Graph`, the `Scan` it came from, and a monotonic generation), handed
+to every tab and modal via `TabCtx::snapshot`. **Tabs never call
+`vault.scan()` or `Graph::build`.** Rebuilds run on `run_graph_job`
+(a background worker like git sync) and are requested by raising
+`TabCtx::request_graph_refresh()` after any vault mutation — a
+`Cell<bool>` the App consumes at its drain points, single-flight with
+a dirty flag so bursts coalesce into at most one follow-up build.
+On `BgEvent::GraphReady` the App installs the snapshot and calls the
+active tab's `on_graph_ready`; background tabs catch up by comparing
+generations in `on_focus`/`handle_event`. Cross-rebuild UI state
+(expansion, selection, cursor anchors) keys off `NodeKey`; mutations
+that need read-after-write cursor placement store a pending anchor
+resolved on the next adoption. Until the first snapshot lands, tabs
+render a loading line. Tests drive the lifecycle deterministically via
+`App::pump_graph_rebuild_for_test()` (the `for_test` constructors
+install an eager first snapshot). See
+`openspec/changes/shared-graph-snapshot/`.
 
 ## Testing strategy
 
