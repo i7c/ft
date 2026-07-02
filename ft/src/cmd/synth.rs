@@ -32,7 +32,7 @@ use ft_core::link_review::{compute_link_review, WindowRange};
 use ft_core::synth::reslice::{apply_reslice, plan_reslice, NewRange};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 use ft_core::synth::verify::{verify_all, verify_synth_note, SectionStatus, VerificationResult};
-use ft_core::vault::{Scan, Vault};
+use ft_core::vault::Vault;
 
 #[derive(Args, Debug)]
 pub struct SynthArgs {
@@ -117,7 +117,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("vault is not inside a git repository — `ft synth` needs git history")
     })?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     let target = normalize_md_target(&args.target);
 
     let mut entries: Vec<JournalEntry> = Vec::new();

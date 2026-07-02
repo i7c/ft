@@ -106,7 +106,7 @@ fn real_vault_round_trip() {
 fn real_vault_link_review_runs() {
     use chrono::Duration;
     use ft_core::link_review::{compute_link_review, WindowRange};
-    use ft_core::vault::{Scan, Vault};
+    use ft_core::vault::Vault;
 
     if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
         return;
@@ -119,7 +119,7 @@ fn real_vault_link_review_runs() {
     if ft_core::git::discover_repo(&vault.path).is_none() {
         return;
     }
-    let scan = Scan::default();
+    let scan = vault.scan();
     let graph = ft_core::graph::Graph::build(&vault, &scan).expect("build graph");
     let cfg = vault.config.config.synth.clone();
     let window = WindowRange::Since(Duration::days(7));

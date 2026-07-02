@@ -77,7 +77,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            errors: vec![],
+            ..v.scan()
         };
         let g = Graph::build(&v, &scan).unwrap();
 
@@ -120,7 +120,7 @@ mod tests {
                 source_line: 1,
                 ..Default::default()
             }],
-            errors: vec![],
+            ..v.scan()
         };
         let g = Graph::build(&v, &scan).unwrap();
 
@@ -158,7 +158,7 @@ mod tests {
                 source_line: 1,
                 ..Default::default()
             }],
-            errors: vec![],
+            ..v.scan()
         };
         let g = Graph::build(&v, &scan).unwrap();
 

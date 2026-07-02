@@ -45,11 +45,10 @@ use std::path::{Path, PathBuf};
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use rayon::prelude::*;
 
 use crate::error::Result;
 use crate::task::Task;
-use crate::vault::{Scan, Vault};
+use crate::vault::{ParsedFile, Scan, Vault};
 
 /// Stable identity of a node within a single [`Graph`].
 ///
@@ -328,18 +327,6 @@ pub struct LinkEdge {
     pub display: Option<String>,
 }
 
-/// Result of the parallel parse phase of [`Graph::build`]: one per
-/// markdown file, bundling the vault-relative path, raw content, and the
-/// extracted links, paragraphs, and headings. Struct (not a tuple) so
-/// the field reads stay self-documenting and clippy's
-/// `type_complexity` lint stays quiet.
-pub(crate) struct ParsedFile {
-    pub rel: PathBuf,
-    pub links: Vec<parser::RawLink>,
-    pub paragraphs: Vec<crate::markdown::Paragraph>,
-    pub headings: Vec<crate::markdown::Heading>,
-}
-
 /// In-memory graph of notes and the links between them.
 ///
 /// Built up-front by [`Graph::build`] (parallel scan). Mutated
@@ -373,37 +360,18 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Build the graph from every markdown file in the vault.
+    /// Build the graph from the parse artifacts of a [`Vault::scan`].
     ///
-    /// Files are read and link-parsed in parallel; node insertion and
-    /// edge resolution happen on the main thread to keep the side-tables
-    /// consistent. Honors the same ignore rules as [`Vault::scan`]
-    /// (`.obsidian/`, `.git/`, `attachments/`, `.gitignore`,
-    /// `[ignored_paths]`).
+    /// Does no file I/O of its own: the scan already read every file once
+    /// and extracted links, paragraph ranges, and headings into
+    /// [`Scan::files`] (so `scan → build` touches each file exactly once).
+    /// The only vault access here is the directory walk for
+    /// [`NodeKind::Directory`] nodes.
     ///
     /// Task nodes are created from `scan.tasks` after the note nodes,
     /// and `HasTask` edges connect notes to their tasks.
     pub fn build(vault: &Vault, scan: &Scan) -> Result<Graph> {
-        let files = vault.markdown_files();
-
-        // Parse phase (parallel): read each file, extract raw links,
-        // paragraph ranges, and headings in the same pass.
-        let parsed: Vec<ParsedFile> = files
-            .par_iter()
-            .filter_map(|abs| {
-                let rel = abs.strip_prefix(&vault.path).ok()?.to_path_buf();
-                let content = std::fs::read_to_string(abs).ok()?;
-                let links = parser::extract_links(&content);
-                let paragraphs = crate::markdown::extract_paragraphs(&content);
-                let headings = crate::markdown::extract_headings(&content);
-                Some(ParsedFile {
-                    rel,
-                    links,
-                    paragraphs,
-                    headings,
-                })
-            })
-            .collect();
+        let parsed = &scan.files;
 
         let mut graph = Graph {
             g: StableDiGraph::new(),
@@ -417,7 +385,7 @@ impl Graph {
 
         // Insert all note nodes first so resolution can see the full
         // path/title indexes for any cross-reference.
-        for pf in &parsed {
+        for pf in parsed {
             graph.insert_note_node(pf.rel.clone());
         }
 
@@ -426,14 +394,14 @@ impl Graph {
         // union, so freshly created dirs not yet on disk at walk time
         // still get nodes).
         let dirs = vault.directories();
-        graph.insert_directory_nodes(&parsed, &dirs);
+        graph.insert_directory_nodes(parsed, &dirs);
 
         // Insert contains edges from each directory to its immediate
         // children (subdirectories and notes).
         graph.insert_contains_edges();
 
         // Now resolve and insert link edges.
-        for pf in &parsed {
+        for pf in parsed {
             let src = *graph
                 .path_index
                 .get(&pf.rel)
@@ -445,7 +413,7 @@ impl Graph {
         // algorithm). Done after note-link insertion so the path/title
         // indexes are populated, and before paragraphs so paragraph
         // ownership can resolve against the heading stack.
-        for pf in &parsed {
+        for pf in parsed {
             let src = *graph
                 .path_index
                 .get(&pf.rel)
@@ -456,7 +424,7 @@ impl Graph {
         // Insert paragraph nodes, OwnsParagraph edges (nearest-container),
         // and ParagraphLink edges. Done after heading insertion so the
         // heading stack is available for paragraph ownership.
-        for pf in &parsed {
+        for pf in parsed {
             let src = *graph
                 .path_index
                 .get(&pf.rel)

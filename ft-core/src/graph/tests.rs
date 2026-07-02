@@ -63,10 +63,36 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
         .collect()
 }
 
+/// `Graph::build` must work entirely from the scan's parse artifacts —
+/// no second read of the vault. Deleting a file between `scan` and
+/// `build` proves it: the note and its outgoing link still appear
+/// because they come from `scan.files`, not the disk.
+#[test]
+fn build_reads_nothing_from_disk() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md").write_str("links to [[b]]\n").unwrap();
+    tmp.child("b.md").write_str("target\n").unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+    let scan = v.scan();
+    std::fs::remove_file(tmp.path().join("a.md")).unwrap();
+
+    let g = Graph::build(&v, &scan).unwrap();
+    let a = g.note_by_path(Path::new("a.md")).expect("a.md from scan");
+    let b = g.note_by_path(Path::new("b.md")).expect("b.md from scan");
+    assert!(
+        g.outgoing(a)
+            .any(|(t, e)| t == b && matches!(e, EdgeKind::NoteLink(_))),
+        "link edge a→b must come from scan artifacts, not a re-read"
+    );
+}
+
 #[test]
 fn build_creates_one_node_per_markdown_file() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let note_count = g
         .nodes()
         .filter(|(_, k)| matches!(k, NodeKind::Note(_)))
@@ -79,7 +105,7 @@ fn build_creates_one_node_per_markdown_file() {
 #[test]
 fn hub_outgoing_covers_every_link_shape() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub = note(&g, "notes/hub.md");
     // Note-level links: one NoteLink per occurrence (the note level is the
     // multiset of all link occurrences in the note).
@@ -134,7 +160,7 @@ fn hub_outgoing_covers_every_link_shape() {
 #[test]
 fn fenced_and_indented_and_inline_code_are_skipped() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub = note(&g, "notes/hub.md");
     // The hub has fenced and indented code blocks containing fake links;
     // those should not contribute outgoing edges. Total checked above.
@@ -154,7 +180,7 @@ fn fenced_and_indented_and_inline_code_are_skipped() {
 #[test]
 fn frontmatter_links_are_skipped() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let alpha = note(&g, "notes/alpha.md");
     // alpha.md has a `[[Phantom]]` inside its frontmatter and a real
     // `[[hub]]` in the body. Only `hub` should appear.
@@ -170,7 +196,7 @@ fn ghost_node_is_shared_across_linkers() {
     // hub.md and (we'll add via mutation) another note both point at
     // [[Phantom]]; the ghost is shared.
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let phantom = g
         .ghost_by_raw("Phantom")
         .expect("Phantom ghost should exist");
@@ -186,7 +212,7 @@ fn ghost_node_is_shared_across_linkers() {
 #[test]
 fn shortest_path_tiebreak_resolves_collision_linker_to_top_level_index() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let linker = note(&g, "notes/collision-linker.md");
     let mut targets: Vec<PathBuf> = g
         .outgoing(linker)
@@ -202,7 +228,7 @@ fn shortest_path_tiebreak_resolves_collision_linker_to_top_level_index() {
 #[test]
 fn url_encoded_md_link_resolves() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub = note(&g, "notes/hub.md");
     // Look for the edge whose raw_text is the URL-encoded form.
     let resolved = g
@@ -222,7 +248,7 @@ fn url_encoded_md_link_resolves() {
 #[test]
 fn external_urls_do_not_become_edges() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub = note(&g, "notes/hub.md");
     for (_, e) in g.outgoing(hub) {
         let Some(l) = e.link() else { continue };
@@ -237,7 +263,7 @@ fn external_urls_do_not_become_edges() {
 #[test]
 fn byte_ranges_round_trip_against_source_files() {
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub_id = note(&g, "notes/hub.md");
     let abs = v.path.join("notes/hub.md");
     let content = std::fs::read_to_string(&abs).unwrap();
@@ -264,7 +290,7 @@ fn refresh_note_replaces_outgoing_edges_and_preserves_incoming() {
     tmp.child("c.md").write_str("[[a]]\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
 
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
@@ -327,7 +353,7 @@ fn heading_nodes_created_with_owns_heading_tree() {
         )
         .unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let n = note(&g, "note.md");
 
     // Three headings, each owned by the nearest shallower heading.
@@ -364,7 +390,7 @@ fn heading_sibling_closes_prior_section() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "# A\n## B\n## C\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let n = note(&g, "note.md");
     let a = g.heading_by_loc(Path::new("note.md"), 1).unwrap();
     let b = g.heading_by_loc(Path::new("note.md"), 2).unwrap();
@@ -381,7 +407,7 @@ fn heading_in_fenced_code_is_not_a_heading() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "```\n# Fake\n```\n# Real\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     assert!(g.heading_by_loc(Path::new("note.md"), 2).is_none());
     assert!(g.heading_by_loc(Path::new("note.md"), 4).is_some());
 }
@@ -391,7 +417,7 @@ fn paragraph_ownership_uses_nearest_container() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "intro\n\n# A\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let n = note(&g, "note.md");
     let a = g.heading_by_loc(Path::new("note.md"), 3).unwrap();
     let paras = g.note_paragraphs(n);
@@ -413,7 +439,7 @@ fn paragraph_at_heading_line_owned_by_that_heading() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "# A\n## B\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = g.heading_by_loc(Path::new("note.md"), 1).unwrap();
     let b = g.heading_by_loc(Path::new("note.md"), 2).unwrap();
     // The paragraph beginning at line 2 (## B) is owned by B, not A.
@@ -427,7 +453,7 @@ fn paragraph_ownership_is_exclusive() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "# A\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let body = g.paragraph_by_loc(Path::new("note.md"), 1).unwrap();
     let incoming_owners: Vec<_> = g
         .incoming(body)
@@ -445,7 +471,7 @@ fn note_headings_and_all_headings() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "# A\n## B\n### C\n# D\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let n = note(&g, "note.md");
     // Direct children: A and D (both top-level).
     let direct = g.note_headings(n);
@@ -460,7 +486,7 @@ fn note_paragraphs_recurses_through_nested_headings() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "intro\n# A\np1\n## B\np2\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let n = note(&g, "note.md");
     let paras = g.note_paragraphs(n);
     assert_eq!(paras.len(), 3, "intro + p1 + p2 across nested headings");
@@ -474,7 +500,7 @@ fn refresh_note_updates_heading_count_and_cleans_index() {
     tmp.child(".obsidian").create_dir_all().unwrap();
     tmp.child("note.md").write_str("# A\nbody\n").unwrap();
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
     assert!(g.heading_by_loc(Path::new("note.md"), 1).is_some());
     // Edit: replace # A with # B and add ## C.
     let mut f = std::fs::File::create(tmp.path().join("note.md")).unwrap();
@@ -497,10 +523,10 @@ fn stable_key_round_trips_for_heading() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("note.md"), "# A\n").unwrap();
     });
-    let g1 = Graph::build(&v, &Scan::default()).unwrap();
+    let g1 = Graph::build(&v, &v.scan()).unwrap();
     let h = g1.heading_by_loc(Path::new("note.md"), 1).unwrap();
     let key = g1.stable_key(h);
-    let g2 = Graph::build(&v, &Scan::default()).unwrap();
+    let g2 = Graph::build(&v, &v.scan()).unwrap();
     assert_eq!(g2.id_for_key(&key), Some(h));
 }
 
@@ -536,7 +562,7 @@ fn link_in_paragraph_body_produces_note_link_and_paragraph_link() {
         std::fs::write(root.join("a.md"), "body [[b]] here\n").unwrap();
         std::fs::write(root.join("b.md"), "# b\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
 
@@ -572,7 +598,7 @@ fn link_on_heading_line_produces_all_three_levels() {
         std::fs::write(root.join("a.md"), "# See [[b]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# b\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     let heading = g.heading_by_loc(Path::new("a.md"), 1).unwrap();
@@ -598,7 +624,7 @@ fn embed_links_carry_is_embed_flag() {
         std::fs::write(root.join("a.md"), "![[b]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# b\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let note_link = g
         .outgoing(a)
@@ -615,7 +641,7 @@ fn markdown_link_in_paragraph_produces_paragraph_link_with_full_data() {
         std::fs::write(root.join("a.md"), "see [b](b.md) here\n").unwrap();
         std::fs::write(root.join("b.md"), "# b\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     let para = g.note_paragraphs(a).pop().unwrap();
@@ -642,7 +668,7 @@ fn ghost_kept_alive_by_heading_link_is_garbage_collected() {
         .write_str("# Heading [[Phantom]]\n")
         .unwrap();
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
     assert!(g.ghost_by_raw("Phantom").is_some());
     // Rewrite a.md to drop the link.
     let mut f = std::fs::File::create(tmp.path().join("a.md")).unwrap();
@@ -661,7 +687,7 @@ fn resolvable_anchor_targets_heading_node() {
         std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     let section = g
@@ -687,7 +713,7 @@ fn unresolvable_anchor_targets_note() {
         std::fs::write(root.join("a.md"), "see [[b#Nope]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# Top\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     let para = g.note_paragraphs(a).pop().unwrap();
@@ -708,7 +734,7 @@ fn anchor_on_unresolved_note_targets_ghost() {
     let (v, _tmp) = temp_vault(|root| {
         std::fs::write(root.join("a.md"), "see [[Missing#Bar]]\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let ghost = g.ghost_by_raw("Missing").expect("ghost materialized");
     let para = g.note_paragraphs(a).pop().unwrap();
@@ -726,7 +752,7 @@ fn note_link_ignores_anchor_for_target() {
         std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = note(&g, "a.md");
     let b = note(&g, "b.md");
     // NoteLink targets the note b (not the heading), even with an anchor.
@@ -743,7 +769,7 @@ fn mentions_of_includes_heading_targeted_links() {
         std::fs::write(root.join("a.md"), "see [[b#Section]]\n").unwrap();
         std::fs::write(root.join("b.md"), "# Top\n\n## Section\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let b = note(&g, "b.md");
     // mentions_of(b) yields a's paragraph link (anchored to b's heading).
     let a_para = g.paragraph_by_loc(Path::new("a.md"), 1).unwrap();
@@ -761,7 +787,7 @@ fn anchor_match_normalizes_case_whitespace_trailing_hashes() {
         // Heading text "My Section" (trailing ### stripped by extract_headings).
         std::fs::write(root.join("b.md"), "# My Section ###\nbody\n").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let b = note(&g, "b.md");
     assert!(
         g.resolve_anchor(b, "my section").is_some(),
@@ -784,7 +810,7 @@ fn refresh_note_garbage_collects_orphaned_ghost() {
     tmp.child("a.md").write_str("[[Phantom]]\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
     assert!(g.ghost_by_raw("Phantom").is_some());
 
     // Remove the link from a.md.
@@ -810,7 +836,7 @@ fn refresh_note_keeps_ghost_when_other_linkers_remain() {
     tmp.child("b.md").write_str("[[Phantom]]\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
     let phantom = g.ghost_by_raw("Phantom").unwrap();
     // Two Link incoming edges (a.md, b.md). Paragraph nodes also link
     // via ParagraphLink — filter to Link-form edges for this assertion.
@@ -846,7 +872,7 @@ fn paragraph_nodes_inserted_for_each_paragraph_in_note() {
         .unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = g.note_by_path(Path::new("a.md")).unwrap();
 
     let owned: Vec<NoteId> = g
@@ -870,7 +896,7 @@ fn paragraph_link_edges_resolve_to_target_note() {
     tmp.child("b.md").write_str("hello\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let a = g.note_by_path(Path::new("a.md")).unwrap();
     let b = g.note_by_path(Path::new("b.md")).unwrap();
 
@@ -896,7 +922,7 @@ fn paragraph_link_to_unresolved_target_creates_ghost() {
     tmp.child("a.md").write_str("see [[Phantom]]\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let phantom = g.ghost_by_raw("Phantom").expect("ghost exists");
     let paragraph_link_in: usize = g
         .incoming(phantom)
@@ -916,7 +942,7 @@ fn paragraph_by_loc_lookup_returns_correct_id() {
         .unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let p1 = g.paragraph_by_loc(Path::new("a.md"), 1).unwrap();
     assert!(matches!(g.node(p1), NodeKind::Paragraph(p) if p.line_start == 1));
@@ -935,7 +961,7 @@ fn refresh_note_updates_paragraph_count() {
     tmp.child("a.md").write_str("only paragraph\n").unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
     let a = g.note_by_path(Path::new("a.md")).unwrap();
 
     let count = |g: &Graph| {
@@ -966,7 +992,7 @@ fn refresh_note_clears_stale_paragraph_index_entries() {
         .unwrap();
 
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
 
     // Original line_start for the third paragraph is 5; after rewrite
     // we drop the third, so paragraph_by_loc(a.md, 5) should be gone.
@@ -986,7 +1012,7 @@ fn empty_vault_builds_empty_graph() {
     use assert_fs::prelude::*;
     tmp.child(".obsidian").create_dir_all().unwrap();
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     assert_eq!(
         g.nodes().count(),
         1,
@@ -999,7 +1025,7 @@ fn outgoing_visible_via_str_helper_for_debugging() {
     // Sanity that the debug helper this file uses doesn't blow up on
     // any node kind. (Exercised through fixture_vault.)
     let v = fixture_vault();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let hub = note(&g, "notes/hub.md");
     let dump = outgoing_targets(&g, hub);
     assert!(!dump.is_empty());
@@ -1035,7 +1061,7 @@ fn note_in_dirs(graph: &Graph, rel: &str) -> NoteId {
 #[test]
 fn build_includes_directory_nodes() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let dir_count = g
         .nodes()
@@ -1083,7 +1109,7 @@ fn build_includes_directory_nodes() {
 #[test]
 fn contains_edges_connect_directories_to_immediate_children() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let root = dir_by_path(&g, "");
     let areas = dir_by_path(&g, "Areas");
@@ -1137,7 +1163,7 @@ fn contains_edges_connect_directories_to_immediate_children() {
 #[test]
 fn note_incoming_includes_containing_directory() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let finance = note_in_dirs(&g, "Areas/finance.md");
     let areas = dir_by_path(&g, "Areas");
@@ -1153,7 +1179,7 @@ fn note_incoming_includes_containing_directory() {
 #[test]
 fn note_by_path_does_not_return_directory_nodes() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     assert!(g.note_by_path(Path::new("Areas")).is_none());
     assert!(g.note_by_path(Path::new("")).is_none());
@@ -1163,7 +1189,7 @@ fn note_by_path_does_not_return_directory_nodes() {
 #[test]
 fn node_by_path_returns_directory_nodes() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let root_id = g.node_by_path(Path::new(""));
     assert!(root_id.is_some());
@@ -1180,7 +1206,7 @@ fn empty_vault_has_root_directory() {
     use assert_fs::prelude::*;
     tmp.child(".obsidian").create_dir_all().unwrap();
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     // Root directory node is always present, even without any notes.
     let ids: Vec<_> = g
@@ -1221,7 +1247,7 @@ fn empty_directory_appears_as_node() {
         std::fs::create_dir_all(root.join("Empty")).unwrap();
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let empty_id = g
         .node_by_path(Path::new("Empty"))
@@ -1245,7 +1271,7 @@ fn attachment_only_directory_appears_as_node() {
         std::fs::write(media.join("diagram.png"), b"\x89PNG").unwrap();
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let media_id = g
         .node_by_path(Path::new("media"))
@@ -1264,7 +1290,7 @@ fn default_ignored_dirs_stay_excluded_even_as_empty_dirs() {
         std::fs::create_dir_all(root.join(".ft")).unwrap();
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     assert!(
         g.node_by_path(Path::new("attachments")).is_none(),
@@ -1290,7 +1316,7 @@ fn nested_empty_directories_chain_to_root() {
         std::fs::create_dir_all(root.join("a/b/c")).unwrap();
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let a = g.node_by_path(Path::new("a")).expect("a must exist");
     let b = g.node_by_path(Path::new("a/b")).expect("a/b must exist");
@@ -1311,7 +1337,7 @@ fn refresh_note_wires_missing_parent_dir_chain() {
     let (v, tmp) = temp_vault(|root| {
         std::fs::write(root.join("root.md"), "# root").unwrap();
     });
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
 
     // No `fresh/` dir yet at build time.
     assert!(g.node_by_path(Path::new("fresh")).is_none());
@@ -1356,7 +1382,7 @@ fn refresh_note_wires_missing_parent_dir_chain() {
     );
 }
 
-fn dirs_fixture_scan_with_tasks() -> Scan {
+fn dirs_fixture_scan_with_tasks(v: &Vault) -> Scan {
     Scan {
         tasks: vec![
             Task {
@@ -1387,7 +1413,7 @@ fn dirs_fixture_scan_with_tasks() -> Scan {
                 ..Default::default()
             },
         ],
-        errors: vec![],
+        ..v.scan()
     }
 }
 
@@ -1419,7 +1445,7 @@ fn task_data_from_task_preserves_fields() {
     let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
     let scan = Scan {
         tasks: vec![task],
-        errors: vec![],
+        ..v.scan()
     };
     let g = Graph::build(&v, &scan).unwrap();
 
@@ -1448,7 +1474,7 @@ fn task_data_from_task_preserves_fields() {
 #[test]
 fn build_with_tasks_creates_task_nodes_and_edges() {
     let v = dirs_fixture();
-    let scan = dirs_fixture_scan_with_tasks();
+    let scan = dirs_fixture_scan_with_tasks(&v);
     let g = Graph::build(&v, &scan).unwrap();
 
     // Check task nodes exist
@@ -1520,7 +1546,7 @@ fn build_creates_subtask_edges_from_parent_pointers() {
     };
     let scan = Scan {
         tasks: vec![parent, walls, pipes],
-        errors: vec![],
+        ..v.scan()
     };
     let g = Graph::build(&v, &scan).unwrap();
 
@@ -1577,7 +1603,7 @@ fn hastask_edges_skip_subtasks() {
     };
     let scan = Scan {
         tasks: vec![parent, walls, pipes],
-        errors: vec![],
+        ..v.scan()
     };
     let g = Graph::build(&v, &scan).unwrap();
 
@@ -1620,7 +1646,7 @@ fn hastask_edges_skip_subtasks() {
 #[test]
 fn build_with_empty_scan_has_no_task_nodes() {
     let v = dirs_fixture();
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
 
     let task_nodes: Vec<_> = g
         .nodes()
@@ -1660,7 +1686,7 @@ fn task_node_deduplication_by_source() {
                 ..Default::default()
             },
         ],
-        errors: vec![],
+        ..v.scan()
     };
     let g = Graph::build(&v, &scan).unwrap();
 
@@ -1693,7 +1719,7 @@ fn task_with_no_matching_note() {
             source_line: 1,
             ..Default::default()
         }],
-        errors: vec![],
+        ..v.scan()
     };
     let g = Graph::build(&v, &scan).unwrap();
 
@@ -1770,7 +1796,7 @@ fn links_into_edges(graph: &Graph) -> Vec<(PathBuf, String, String)> {
 #[test]
 fn links_into_subdirectory() {
     let (_dir, v) = make_links_vault(&[("a/b/foo.md", "[[Bar]]"), ("c/d/e/Bar.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].0, PathBuf::from("a/b/foo.md"));
@@ -1782,7 +1808,7 @@ fn links_into_subdirectory() {
 #[test]
 fn links_into_root_level_target() {
     let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Index]]"), ("Index.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].0, PathBuf::from("a/foo.md"));
@@ -1793,7 +1819,7 @@ fn links_into_root_level_target() {
 #[test]
 fn links_into_from_embed() {
     let (_dir, v) = make_links_vault(&[("a/foo.md", "![[pic]]"), ("images/pic.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].0, PathBuf::from("a/foo.md"));
@@ -1806,7 +1832,7 @@ fn links_into_from_embed() {
 fn links_into_deduplicates_same_folder() {
     let (_dir, v) =
         make_links_vault(&[("a/foo.md", "[[X]]\n[[Y]]"), ("d/X.md", ""), ("d/Y.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(
         edges.len(),
@@ -1825,7 +1851,7 @@ fn links_into_different_folders() {
         ("d1/X.md", ""),
         ("d2/Y.md", ""),
     ]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(edges.len(), 2);
     let dirs: Vec<&str> = edges.iter().map(|e| e.2.as_str()).collect();
@@ -1837,7 +1863,7 @@ fn links_into_different_folders() {
 #[test]
 fn links_into_excludes_ghosts() {
     let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Phantom]]")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert!(
         edges.is_empty(),
@@ -1849,7 +1875,7 @@ fn links_into_excludes_ghosts() {
 #[test]
 fn links_into_mixed_resolved_and_ghost() {
     let (_dir, v) = make_links_vault(&[("a/foo.md", "[[Real]]\n[[Phantom]]"), ("d/Real.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     // Only one LinksInto edge (from Real), not from Phantom.
     assert_eq!(edges.len(), 1);
@@ -1860,7 +1886,7 @@ fn links_into_mixed_resolved_and_ghost() {
 #[test]
 fn links_into_self_folder() {
     let (_dir, v) = make_links_vault(&[("a/b/foo.md", "[[Baz]]"), ("a/b/Baz.md", "")]);
-    let g = Graph::build(&v, &Scan::default()).unwrap();
+    let g = Graph::build(&v, &v.scan()).unwrap();
     let edges = links_into_edges(&g);
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].2, "a/b");
@@ -1870,7 +1896,7 @@ fn links_into_self_folder() {
 #[test]
 fn links_into_refresh_note() {
     let (dir, v) = make_links_vault(&[("a/foo.md", "[[X]]"), ("d1/X.md", ""), ("d2/Y.md", "")]);
-    let mut g = Graph::build(&v, &Scan::default()).unwrap();
+    let mut g = Graph::build(&v, &v.scan()).unwrap();
 
     // Initially: one LinksInto edge to d1.
     let initial = links_into_edges(&g);

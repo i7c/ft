@@ -497,7 +497,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         (vault, graph)
     }
 
@@ -589,7 +589,7 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
 
         let phantom = graph
             .ghost_by_raw("Phantom")
@@ -649,7 +649,7 @@ mod tests {
         run_git(&repo_root, &["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(vault_dir.clone())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
@@ -728,7 +728,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
@@ -769,7 +769,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
@@ -841,7 +841,7 @@ mod tests {
         assert!(out.status.success());
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
@@ -888,7 +888,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
@@ -928,7 +928,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
@@ -963,7 +963,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
@@ -989,7 +989,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let phantom = graph
             .ghost_by_raw("Phantom")
             .expect("Phantom should be a ghost");
@@ -1026,7 +1026,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
@@ -1070,7 +1070,7 @@ mod tests {
         commit_all(&repo, "c1");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &crate::vault::Scan::default()).unwrap();
+        let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
         let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();

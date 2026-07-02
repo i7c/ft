@@ -25,7 +25,7 @@ use ft_core::notes::{
 use ft_core::periodic::{create_or_get_periodic_path, Period};
 use ft_core::recents::RecentsLog;
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
-use ft_core::vault::{Scan, Vault};
+use ft_core::vault::Vault;
 use regex::Regex;
 
 use crate::output::links::{
@@ -1160,7 +1160,7 @@ pub struct LinksArgs {
 
 fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
 
     let query = args.note.join(" ");
     let id = resolve_note_query(&graph, &vault, &query)?;
@@ -1268,7 +1268,7 @@ pub struct RelatedArgs {
 
 fn run_related(args: RelatedArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
 
     // Resolve a note *or* ghost target: unlike `backlinks`/`links`, a
     // phantom (unresolved `[[link]]`) is a first-class related-scoring
@@ -1328,7 +1328,7 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     // Validate the note resolves to a real note before tearing the
     // terminal apart for the TUI.
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     let query = args.note.join(" ");
     let note_id = resolve_note_query(&graph, &vault, &query)?;
     let note_path = match graph.node(note_id) {
@@ -1399,7 +1399,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     }
 
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     // Verify the vault is inside a git repo, but then run blame from
     // `vault.path` itself: paragraph `source_file` paths are
     // vault-relative, and `git -C <vault>` finds the enclosing repo
@@ -1752,7 +1752,7 @@ pub struct MoveArgs {
 
 fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
 
     let id = resolve_rename_source(&graph, &vault, &args.note)?;
 
@@ -1809,7 +1809,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
 fn run_mv(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
 
     // Resolve the target to a directory.
     let target_rel = Path::new(args.target.trim());

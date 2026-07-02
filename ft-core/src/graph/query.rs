@@ -2860,7 +2860,7 @@ mod tests {
         #[test]
         fn select_match_all() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node;").unwrap();
             let ids = q.select(&g);
             // 4 notes + 4 dirs + 4 paragraphs + 4 headings = 16
@@ -2870,7 +2870,7 @@ mod tests {
         #[test]
         fn select_all_notes() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Note;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4);
@@ -2879,7 +2879,7 @@ mod tests {
         #[test]
         fn select_all_directories() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Directory;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4);
@@ -2888,7 +2888,7 @@ mod tests {
         #[test]
         fn select_path_starts_with() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where path starts_with \"Areas\";").unwrap();
             let ids = q.select(&g);
             // Areas dir, Areas/finance.md, Areas/operations dir, Areas/operations/shifts.md
@@ -2900,7 +2900,7 @@ mod tests {
             // Substring would match Areas/old-Projects/ too if it existed;
             // starts_with rejects matches that aren't a true prefix.
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where path starts_with \"Projects/\";").unwrap();
             let ids = q.select(&g);
             // Only Projects/alpha.md (the directory itself is "Projects", not "Projects/")
@@ -2910,7 +2910,7 @@ mod tests {
         #[test]
         fn select_path_ends_with_md() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where path ends_with \".md\";").unwrap();
             let ids = q.select(&g);
             // All 4 notes end with .md; no directories should match.
@@ -2920,7 +2920,7 @@ mod tests {
         #[test]
         fn select_kind_in_set() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind in {Note, Directory};").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 8);
@@ -2930,7 +2930,7 @@ mod tests {
         fn select_indegree_zero() {
             // Only the vault root directory has no incoming edges.
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where indegree = 0;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 1);
@@ -2943,7 +2943,7 @@ mod tests {
         #[test]
         fn select_without_incoming_contains() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node where kind in {Note, Directory} without incoming(kind = directory-contains);",
             )
@@ -2959,7 +2959,7 @@ mod tests {
         #[test]
         fn select_two_blocks_union_deduped() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Directory; node where path starts_with \"Areas\";")
                 .unwrap();
             let ids = q.select(&g);
@@ -2971,7 +2971,7 @@ mod tests {
         #[test]
         fn expand_full_directory_tree() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};",
             )
@@ -2987,7 +2987,7 @@ mod tests {
         #[test]
         fn expand_notes_only() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
             )
@@ -3002,7 +3002,7 @@ mod tests {
         #[test]
         fn expand_none_when_no_policy() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Note;").unwrap();
             let any = q.select(&g)[0];
             assert!(q.expand(&g, any).is_none());
@@ -3013,7 +3013,7 @@ mod tests {
             // v2 behavior: parent that doesn't satisfy `from` conditions
             // returns Some(vec![]), not None.
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node; expand where from.kind = Directory and edge.kind = directory-contains;",
             )
@@ -3030,7 +3030,7 @@ mod tests {
         #[test]
         fn expand_on_links_vault() {
             let v = links_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node; expand where from.kind = Directory and edge.kind = directory-contains and to.kind in {Note, Directory};",
             )
@@ -3043,7 +3043,7 @@ mod tests {
         #[test]
         fn title_match_on_note() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             // `title` matches both the note `root` and its heading `root`.
             let q = parse("node where title = \"root\";").unwrap();
             let ids = q.select(&g);
@@ -3053,7 +3053,7 @@ mod tests {
         #[test]
         fn select_kind_paragraph_returns_only_paragraph_nodes() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Paragraph;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4, "one paragraph (heading) per note");
@@ -3072,7 +3072,7 @@ mod tests {
                 .write_str("first\n\nsecond paragraph\n")
                 .unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node where kind = Note; \
                  expand where from.kind = Note and edge.kind = owns-paragraph;",
@@ -3090,7 +3090,7 @@ mod tests {
         #[test]
         fn select_kind_heading_returns_only_heading_nodes() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Heading;").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 4, "one heading per note");
@@ -3102,7 +3102,7 @@ mod tests {
         #[test]
         fn heading_title_filter_matches_heading_text() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse("node where kind = Heading and title = \"root\";").unwrap();
             let ids = q.select(&g);
             assert_eq!(ids.len(), 1);
@@ -3117,7 +3117,7 @@ mod tests {
             tmp.child(".obsidian").create_dir_all().unwrap();
             tmp.child("note.md").write_str("# A\n## B\n## C\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             // Note -> direct headings A; then A -> B, A -> C via owns-heading.
             // The expand clause matches both hops (from Note and from Heading).
             let q = parse(
@@ -3158,7 +3158,7 @@ mod tests {
                 .unwrap();
             tmp.child("b.md").write_str("# b\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             // expand following only embed edges yields b (via ![[b]]) but
             // we ask for embed=true: both link occurrences to b exist, but
             // the embed-only filter yields exactly the embed occurrence.
@@ -3219,7 +3219,7 @@ mod tests {
             tmp.child("a.md").write_str("links to [[b]]\n").unwrap();
             tmp.child("b.md").write_str("hi\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q = parse(
                 "node where kind = Paragraph; \
                  expand where from.kind = Paragraph and edge.kind = paragraph-link;",
@@ -3239,7 +3239,7 @@ mod tests {
         #[test]
         fn outdegree_zero_excludes_root() {
             let v = dirs_vault();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             // Restrict to Note kind: notes now own paragraph nodes via
             // OwnsParagraph edges (outdegree > 0), so leaf notes can no
             // longer have outdegree = 0. Filter to Paragraph instead
@@ -3273,7 +3273,7 @@ mod tests {
                 .unwrap()
                 .join("tests/fixtures/dirs");
             let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-            Graph::build(&v, &Scan::default()).unwrap()
+            Graph::build(&v, &v.scan()).unwrap()
         }
 
         fn dirs_query() -> GraphQuery {
@@ -3389,7 +3389,7 @@ mod tests {
             tmp.child("a.md").write_str("[[b]]\n").unwrap();
             tmp.child("b.md").write_str("[[a]]\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             (tmp, g)
         }
 
@@ -3493,7 +3493,7 @@ mod tests {
             tmp.child("c.md").write_str("[[d]]\n").unwrap();
             tmp.child("d.md").write_str("no links\n").unwrap();
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             (tmp, g)
         }
 
@@ -3568,7 +3568,7 @@ mod tests {
                 tmp.child(format!("n{i}.md")).write_str(&body).unwrap();
             }
             let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-            let g = Graph::build(&v, &Scan::default()).unwrap();
+            let g = Graph::build(&v, &v.scan()).unwrap();
             let q =
                 parse("node where path = \"n0.md\"; expand where edge.kind = note-link;").unwrap();
             let tree = q.walk(&g, &WalkOptions::unlimited());
@@ -4096,6 +4096,8 @@ mod tests {
 
         fn vault_with_tasks() -> (assert_fs::TempDir, Scan) {
             let tmp = assert_fs::TempDir::new().unwrap();
+            // Vault is discovered here (not returned) only to build the
+            // single-pass scan the literal below overrides tasks on.
             tmp.child(".obsidian").create_dir_all().unwrap();
             tmp.child("root.md")
                 .write_str("- [ ] Fix login bug\n- [x] Review quarterly report\n")
@@ -4138,7 +4140,9 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                errors: vec![],
+                ..Vault::discover(Some(tmp.path().to_path_buf()))
+                    .unwrap()
+                    .scan()
             };
             (tmp, scan)
         }

@@ -362,7 +362,7 @@ mod tests {
         tmp.child(".obsidian").create_dir_all().unwrap();
         setup(&tmp);
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &crate::vault::Scan::default()).unwrap();
+        let g = Graph::build(&v, &v.scan()).unwrap();
         (tmp, v, g)
     }
 

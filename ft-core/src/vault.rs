@@ -7,6 +7,8 @@ use tracing::debug;
 use crate::{
     config::{self, LayeredConfig},
     error::{Error, Result, ScanError},
+    graph::parser::{extract_links, RawLink},
+    markdown::{extract_headings, extract_paragraphs, Heading, Paragraph},
     task::{
         emoji::EmojiFormat,
         format::{ParseContext, TaskFormat},
@@ -30,12 +32,32 @@ pub struct Vault {
     pub config: LayeredConfig,
 }
 
-/// Result of [`Vault::scan`]. Tasks across the vault, plus per-file errors
-/// collected non-fatally.
+/// Everything extracted from one markdown file in a single read during
+/// [`Vault::scan`]: the vault-relative path plus the raw links, paragraph
+/// ranges, and headings that [`crate::graph::Graph::build`] consumes.
+/// Struct (not a tuple) so the field reads stay self-documenting.
+#[derive(Debug)]
+pub struct ParsedFile {
+    /// Vault-relative path.
+    pub rel: PathBuf,
+    pub links: Vec<RawLink>,
+    pub paragraphs: Vec<Paragraph>,
+    pub headings: Vec<Heading>,
+}
+
+/// Result of [`Vault::scan`]. Tasks across the vault, the per-file parse
+/// artifacts the graph build consumes, plus per-file errors collected
+/// non-fatally.
+///
+/// One scan is one read of every vault file — [`crate::graph::Graph::build`]
+/// works entirely from `files` and does no I/O of its own, so
+/// `scan → build` touches each file exactly once.
 #[derive(Debug, Default)]
 pub struct Scan {
     pub tasks: Vec<Task>,
     pub errors: Vec<ScanError>,
+    /// Per-file parse artifacts, one entry per readable markdown file.
+    pub files: Vec<ParsedFile>,
 }
 
 impl Vault {
@@ -69,20 +91,29 @@ impl Vault {
     }
 
     /// Walk the vault, parse every markdown file in parallel, and return all
-    /// tasks plus per-file errors. Respects `.gitignore`, default exclusions
-    /// (`.obsidian/`, `.git/`, `attachments/`), and the `ignored_paths` config.
+    /// tasks, per-file graph parse artifacts, plus per-file errors. Respects
+    /// `.gitignore`, default exclusions (`.obsidian/`, `.git/`,
+    /// `attachments/`), and the `ignored_paths` config.
+    ///
+    /// This is the single read pass: each file's content is loaded once and
+    /// everything downstream needs — tasks, links, paragraphs, headings —
+    /// is extracted here. [`crate::graph::Graph::build`] consumes the
+    /// artifacts without re-reading anything.
     pub fn scan(&self) -> Scan {
         let files = self.markdown_files();
         debug!(file_count = files.len(), "starting parallel parse");
 
-        let results: Vec<(Vec<Task>, Option<ScanError>)> = files
+        let results: Vec<(Vec<Task>, Option<ParsedFile>, Option<ScanError>)> = files
             .par_iter()
             .map(|path| parse_file(&self.path, path))
             .collect();
 
         let mut scan = Scan::default();
-        for (tasks, err) in results {
+        for (tasks, parsed, err) in results {
             scan.tasks.extend(tasks);
+            if let Some(p) = parsed {
+                scan.files.push(p);
+            }
             if let Some(e) = err {
                 scan.errors.push(e);
             }
@@ -314,13 +345,17 @@ impl Vault {
     }
 }
 
-fn parse_file(vault_root: &Path, path: &Path) -> (Vec<Task>, Option<ScanError>) {
+fn parse_file(
+    vault_root: &Path,
+    path: &Path,
+) -> (Vec<Task>, Option<ParsedFile>, Option<ScanError>) {
     let rel = path.strip_prefix(vault_root).unwrap_or(path).to_path_buf();
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             return (
                 Vec::new(),
+                None,
                 Some(ScanError {
                     path: rel,
                     message: format!("read failed: {e}"),
@@ -340,7 +375,14 @@ fn parse_file(vault_root: &Path, path: &Path) -> (Vec<Task>, Option<ScanError>) 
         }
     }
     resolve_hierarchy(&mut tasks);
-    (tasks, None)
+
+    let parsed = ParsedFile {
+        rel,
+        links: extract_links(&content),
+        paragraphs: extract_paragraphs(&content),
+        headings: extract_headings(&content),
+    };
+    (tasks, Some(parsed), None)
 }
 
 fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {

@@ -5534,7 +5534,7 @@ mod tree_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &Scan::default()).unwrap()
+        Graph::build(&v, &v.scan()).unwrap()
     }
 
     fn dirs_query() -> GraphQuery {
@@ -5711,7 +5711,7 @@ mod tree_tests {
         tmp.child(".obsidian").create_dir_all().unwrap();
 
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &Scan::default()).unwrap();
+        let g = Graph::build(&v, &v.scan()).unwrap();
 
         let q = parse_query(
             "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
@@ -5795,7 +5795,7 @@ mod tree_tests {
                     ..Default::default()
                 },
             ],
-            errors: vec![],
+            ..v.scan()
         };
         let g = Graph::build(&v, &scan).unwrap();
 
@@ -5833,7 +5833,7 @@ mod view_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &Scan::default()).unwrap()
+        Graph::build(&v, &v.scan()).unwrap()
     }
 
     fn dirs_query_text() -> &'static str {
@@ -6358,7 +6358,7 @@ mod view_tests {
                 source_line: 1,
                 ..Default::default()
             }],
-            errors: vec![],
+            ..vault.scan()
         };
         let graph = Graph::build(&vault, &scan).unwrap();
         let mut v = ExpandedView {
@@ -6411,7 +6411,7 @@ mod search_tests {
     use assert_fs::prelude::*;
     use ft_core::graph::query::parse as parse_query;
     use ft_core::graph::Graph;
-    use ft_core::vault::{Scan, Vault};
+    use ft_core::vault::Vault;
 
     use super::*;
     use crate::tui::widgets::PickerSource;
@@ -6426,7 +6426,7 @@ mod search_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &Scan::default()).unwrap()
+        Graph::build(&v, &v.scan()).unwrap()
     }
 
     fn dirs_query() -> GraphQuery {
@@ -6484,7 +6484,7 @@ mod search_tests {
         tmp.child("a.md").write_str("[[b]]\n").unwrap();
         tmp.child("b.md").write_str("[[a]]\n").unwrap();
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&vault, &Scan::default()).unwrap();
+        let g = Graph::build(&vault, &vault.scan()).unwrap();
         let q = parse_query(
             "node where kind = Note and path = \"a.md\"; expand where edge.kind = note-link;",
         )
@@ -6550,7 +6550,7 @@ mod search_tests {
                 source_line: 1,
                 ..Default::default()
             }],
-            errors: vec![],
+            ..v.scan()
         };
         let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
         let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
@@ -6581,7 +6581,7 @@ mod search_tests {
                 source_line: 1,
                 ..Default::default()
             }],
-            errors: vec![],
+            ..v.scan()
         };
         let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
         let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
@@ -6676,7 +6676,7 @@ mod nav_tests {
 
     use assert_fs::prelude::*;
     use ft_core::graph::Graph;
-    use ft_core::vault::{Scan, Vault};
+    use ft_core::vault::Vault;
 
     use super::*;
 
@@ -6690,7 +6690,7 @@ mod nav_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &Scan::default()).unwrap()
+        Graph::build(&v, &v.scan()).unwrap()
     }
 
     fn tab_with_query(graph: Graph, query_text: &str) -> GraphTab {
@@ -6772,7 +6772,7 @@ mod nav_tests {
         // With a link-graph expand policy, a note reachable via
         // multiple paths should return the shortest (BFS).
         let (_dir, vault) = link_vault_for_shortest_path();
-        let g = Graph::build(&vault, &Scan::default()).unwrap();
+        let g = Graph::build(&vault, &vault.scan()).unwrap();
         let tab = tab_with_query(
             g,
             "node where kind = Note and path = \"A.md\"; expand where edge.kind in {links-into, note-link};",

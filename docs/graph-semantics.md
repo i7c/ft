@@ -372,10 +372,12 @@ Side tables on `Graph`: `path_index`, `title_index`, `ghost_index`,
 
 ## Build and refresh invariants
 
-`Graph::build` runs one parallel parse pass per file extracting links,
-headings, and paragraphs together (headings already come from
-`extract_headings` in the same `LineSkipState`-aware scan). The serial
-resolution phase, in order:
+The parse pass lives in `Vault::scan`: one parallel read per file
+extracting tasks, links, headings, and paragraphs together into
+`Scan::files` (headings already come from `extract_headings` in the
+same `LineSkipState`-aware scan). `Graph::build` consumes those
+artifacts and does no file I/O of its own — `scan → build` reads each
+vault file exactly once. The serial resolution phase, in order:
 
 1. Insert note nodes.
 2. Insert directory nodes + `Contains` edges.

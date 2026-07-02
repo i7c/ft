@@ -14,7 +14,6 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Duration;
 use clap::Args;
 use ft_core::link_review::{compute_link_review, LinkReview, LinkReviewRow, WindowRange};
-use ft_core::vault::Scan;
 
 #[derive(Args, Debug)]
 pub struct ReviewArgs {
@@ -47,7 +46,7 @@ pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     })?;
 
     let window = resolve_window(&args)?;
-    let graph = crate::cmd::common::build_graph(&vault, &Scan::default())?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     let cfg = vault.config.config.synth.clone();
     let review =
         compute_link_review(&graph, &vault, &window, &cfg).context("computing link review")?;
