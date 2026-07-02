@@ -999,9 +999,10 @@ impl SearchView {
         field: Field,
         delta_days: i64,
     ) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         self.with_selected_task(ctx, |path, task, today| {
             let line = task.source_line;
-            ops::update_task_line(path, line, move |t| {
+            ops::update_task_line(path, line, format, Some(task), move |t| {
                 let current = match field {
                     Field::Due => t.due,
                     Field::Scheduled => t.scheduled,
@@ -1018,9 +1019,10 @@ impl SearchView {
     }
 
     fn set_due_today(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         self.with_selected_task(ctx, |path, task, today| {
             let line = task.source_line;
-            ops::update_task_line(path, line, move |t| {
+            ops::update_task_line(path, line, format, Some(task), move |t| {
                 t.due = Some(today);
             })?;
             Ok(())
@@ -1028,9 +1030,10 @@ impl SearchView {
     }
 
     fn cycle_priority(&mut self, ctx: &mut TabCtx, direction: i64) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         self.with_selected_task(ctx, |path, task, _today| {
             let line = task.source_line;
-            ops::update_task_line(path, line, move |t| {
+            ops::update_task_line(path, line, format, Some(task), move |t| {
                 let pos = cycle_pos(t.priority) as i64;
                 let len = PRIORITY_CYCLE.len() as i64;
                 let next = ((pos + direction).rem_euclid(len)) as usize;
@@ -1041,10 +1044,17 @@ impl SearchView {
     }
 
     fn complete_selected(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         self.with_selected_task(ctx, |path, task, today| {
             // Already-done tasks are a no-op rather than an error so the user
             // can hammer `x` without ceremony.
-            match ops::complete_task(path, task.source_line, CompleteOptions { on: today }) {
+            match ops::complete_task(
+                path,
+                task.source_line,
+                format,
+                Some(task),
+                CompleteOptions { on: today },
+            ) {
                 Ok(_) => Ok(()),
                 Err(ops::CompleteError::AlreadyDone { .. }) => Ok(()),
                 Err(e) => Err(anyhow::Error::from(e)),
@@ -1053,8 +1063,9 @@ impl SearchView {
     }
 
     fn cancel_selected(&mut self, ctx: &mut TabCtx) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         self.with_selected_task(ctx, |path, task, today| {
-            match ops::cancel_task(path, task.source_line, today) {
+            match ops::cancel_task(path, task.source_line, format, Some(task), today) {
                 Ok(_) => Ok(()),
                 Err(ops::CancelError::AlreadyCancelled { .. }) => Ok(()),
                 Err(e) => Err(anyhow::Error::from(e)),
@@ -1190,9 +1201,10 @@ impl SearchView {
         ctx: &mut TabCtx,
         validated: PopupFields,
     ) -> Result<EventOutcome> {
+        let format = ctx.vault.task_format();
         let outcome = self.with_selected_task(ctx, |path, task, _today| {
             let (description, due, scheduled, priority, tags, recurrence) = validated;
-            ops::update_task_line(path, task.source_line, move |t| {
+            ops::update_task_line(path, task.source_line, format, Some(task), move |t| {
                 t.description = description;
                 t.due = due;
                 t.scheduled = scheduled;
@@ -1293,6 +1305,7 @@ impl SearchView {
 
         match ops::create_task(
             &resolved,
+            ctx.vault.task_format(),
             input,
             ops::CreateOptions {
                 position,
@@ -1461,6 +1474,7 @@ impl SearchView {
 
         match ops::create_task(
             &target,
+            ctx.vault.task_format(),
             input,
             ops::CreateOptions {
                 position,

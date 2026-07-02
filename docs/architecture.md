@@ -79,18 +79,32 @@ format only needs to plug into this trait.
 ### Operations API (`task::ops`)
 
 Mutation primitives. Each one reads a file, computes the new content,
-and writes via `crate::fs::write_atomic`:
+and writes via `crate::fs::write_atomic`. Every entry point takes a
+`format: &dyn TaskFormat` — callers with a `Vault` pass
+`vault.task_format()` (the config-driven detection seam; always
+`EmojiFormat` today) rather than naming a concrete format.
 
-- `create_task(path, input, opts)` — insert a new task at append /
+Line-addressed mutations also take an **expected-task guard**
+(`expected: Option<&Task>`, or `MoveSource::expected`): the task the
+caller saw at that line when it scanned. Both sides are canonicalized
+through `format.serialize_line` and compared before writing; a mismatch
+fails with `*Error::LineChanged` instead of silently mutating whatever
+shifted into the line (Obsidian edit, git pull, a recurring completion
+inserting its next instance above). Pass `None` only when no scanned
+`Task` is available (e.g. graph-tab sites that hold lossy `TaskData`).
+
+- `create_task(path, format, input, opts)` — insert a new task at append /
   under-heading / at-line position; refuses duplicates unless `--force`.
   When no explicit position is given, `auto_position(path, default)`
   resolves the target section: the note's `ft-tasks-section` frontmatter
   wins, then `[tasks] default_section` from config, else plain append.
   The CLI `--append` flag forces append, overriding any default section.
-- `complete_task(path, line, opts)` — mark a task done; if recurring,
-  insert the next instance above the now-completed line
-- `plan_move(sources, target)` — pure: produce a `MovePlan` of per-file
-  before/after edits without writing
+- `complete_task(path, line, format, expected, opts)` — mark a task done;
+  if recurring, insert the next instance above the now-completed line
+- `update_task_line(path, line, format, expected, mutate)` /
+  `cancel_task(path, line, format, expected, on)` — quick-key edits
+- `plan_move(sources, target, format)` — pure: produce a `MovePlan` of
+  per-file before/after edits without writing
 - `apply_move_plan(plan)` — write each non-no-op edit atomically
 
 The CLI binary calls these directly. The TUI (plan 002) will compose

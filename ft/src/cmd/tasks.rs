@@ -585,6 +585,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     let outcome = ops::create_task(
         &target,
+        vault.task_format(),
         input,
         CreateOptions {
             position,
@@ -706,7 +707,7 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
         let graph = crate::cmd::common::build_graph(&vault, &scan)?;
         let keys = resolve::by_query(&graph, &parsed);
-        let targets: Vec<&Task> = scan
+        let mut targets: Vec<&Task> = scan
             .tasks
             .iter()
             .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
@@ -717,11 +718,25 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         if !args.yes {
             confirm_bulk("complete", &targets, &vault.path)?;
         }
+        // Complete bottom-up per file: a recurring task's completion inserts
+        // its next instance above the completed line, which would shift every
+        // later target in the same file and stale their line numbers.
+        targets.sort_by(|a, b| {
+            a.source_file
+                .cmp(&b.source_file)
+                .then(b.source_line.cmp(&a.source_line))
+        });
         let mut completed = 0usize;
         let mut skipped = 0usize;
         for t in &targets {
             let abs = vault.path.join(&t.source_file);
-            match ops::complete_task(&abs, t.source_line, CompleteOptions { on }) {
+            match ops::complete_task(
+                &abs,
+                t.source_line,
+                vault.task_format(),
+                Some(t),
+                CompleteOptions { on },
+            ) {
                 Ok(_) => completed += 1,
                 Err(ops::CompleteError::AlreadyDone { .. }) => skipped += 1,
                 Err(e) => return Err(translate_complete_error(e, &vault.path)),
@@ -734,8 +749,14 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let chosen = pick_task(&args, &scan.tasks)?;
 
     let absolute_path = vault.path.join(&chosen.source_file);
-    let outcome = ops::complete_task(&absolute_path, chosen.source_line, CompleteOptions { on })
-        .map_err(|e| translate_complete_error(e, &vault.path))?;
+    let outcome = ops::complete_task(
+        &absolute_path,
+        chosen.source_line,
+        vault.task_format(),
+        Some(chosen),
+        CompleteOptions { on },
+    )
+    .map_err(|e| translate_complete_error(e, &vault.path))?;
 
     let rel = vault.relativize(&absolute_path);
     println!(
@@ -866,6 +887,18 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
                 "task at {}:{} is already done (on {done})",
                 rel.display(),
                 line
+            )
+        }
+        LineChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+                rel.display()
             )
         }
         other => anyhow!("{other}"),
@@ -1043,10 +1076,11 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         .map(|t| MoveSource {
             path: vault.path.join(&t.source_file),
             line: t.source_line,
+            expected: Some((*t).clone()),
         })
         .collect();
 
-    let plan = ops::plan_move(&sources, &target)?;
+    let plan = ops::plan_move(&sources, &target, vault.task_format())?;
 
     if args.dry_run {
         for edit in &plan.edits {
@@ -1156,7 +1190,7 @@ fn run_cancel(args: CancelArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     let mut skipped = 0usize;
     for t in &targets {
         let abs = vault.path.join(&t.source_file);
-        match ops::cancel_task(&abs, t.source_line, on) {
+        match ops::cancel_task(&abs, t.source_line, vault.task_format(), Some(t), on) {
             Ok(_) => cancelled += 1,
             Err(ops::CancelError::AlreadyCancelled { .. }) => skipped += 1,
             Err(e) => return Err(translate_cancel_error(e, &vault.path)),
@@ -1287,23 +1321,29 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         ));
     }
 
-    let updated = ops::update_task_line(&abs, t.source_line, move |task| {
-        if let Some(d) = due {
-            task.due = d;
-        }
-        if let Some(s) = scheduled {
-            task.scheduled = s;
-        }
-        if let Some(p) = priority {
-            task.priority = p;
-        }
-        if let Some(tags) = tags_override {
-            task.tags = tags;
-        }
-        if let Some(desc) = description {
-            task.description = desc;
-        }
-    })
+    let updated = ops::update_task_line(
+        &abs,
+        t.source_line,
+        vault.task_format(),
+        Some(t),
+        move |task| {
+            if let Some(d) = due {
+                task.due = d;
+            }
+            if let Some(s) = scheduled {
+                task.scheduled = s;
+            }
+            if let Some(p) = priority {
+                task.priority = p;
+            }
+            if let Some(tags) = tags_override {
+                task.tags = tags;
+            }
+            if let Some(desc) = description {
+                task.description = desc;
+            }
+        },
+    )
     .map_err(|e| translate_update_error(e, &vault.path))?;
 
     let rel = vault.relativize(&abs);
@@ -1358,6 +1398,18 @@ fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyho
         NotATask { path, line } => {
             let rel = path.strip_prefix(vault_root).unwrap_or(&path);
             anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        LineChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+                rel.display()
+            )
         }
         Write { source } => anyhow!("write failed: {source}"),
     }

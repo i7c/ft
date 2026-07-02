@@ -196,6 +196,14 @@ impl Vault {
         dirs
     }
 
+    /// The task wire format for this vault. Always [`EmojiFormat`] today;
+    /// this accessor is the seam where config-driven format detection
+    /// will plug in. Callers of `task::ops` should take their format from
+    /// here rather than naming `EmojiFormat` directly.
+    pub fn task_format(&self) -> &'static dyn TaskFormat {
+        &EmojiFormat
+    }
+
     /// Return `path` stripped of the vault root prefix, or `path`
     /// verbatim when it already is vault-relative (or sits outside the
     /// vault). The result borrows from `path`; clone if you need to

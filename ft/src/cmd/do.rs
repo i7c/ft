@@ -139,6 +139,8 @@ fn handle_tasks_complete_by_id(
     let outcome = ops::complete_task(
         &absolute_path,
         task.source_line,
+        vault.task_format(),
+        Some(task),
         CompleteOptions { on: today },
     )
     .map_err(|e| translate_complete_error(e, &vault.path))?;
@@ -215,6 +217,18 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
                 line
             )
         }
+        LineChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+                rel.display()
+            )
+        }
         other => anyhow!("{other}"),
     }
 }
@@ -254,7 +268,7 @@ fn handle_tasks_cancel_by_id(
     }
     let task = resolve_single_task_by_id(&scan.tasks, id)?;
     let abs = vault.path.join(&task.source_file);
-    let cancelled = ops::cancel_task(&abs, task.source_line, on)
+    let cancelled = ops::cancel_task(&abs, task.source_line, vault.task_format(), Some(task), on)
         .map_err(|e| translate_cancel_error(e, &vault.path))?;
     let rel = vault.relativize(&abs);
     if format == "json" {
@@ -313,20 +327,26 @@ fn handle_tasks_edit_by_id(
         anyhow::bail!("no fields given — pass --arg due=/scheduled=/priority=/description=");
     }
 
-    let updated = ops::update_task_line(&abs, task.source_line, |t| {
-        if let Some(d) = due {
-            t.due = d;
-        }
-        if let Some(s) = scheduled {
-            t.scheduled = s;
-        }
-        if let Some(p) = priority {
-            t.priority = p;
-        }
-        if let Some(desc) = description.clone() {
-            t.description = desc;
-        }
-    })
+    let updated = ops::update_task_line(
+        &abs,
+        task.source_line,
+        vault.task_format(),
+        Some(task),
+        |t| {
+            if let Some(d) = due {
+                t.due = d;
+            }
+            if let Some(s) = scheduled {
+                t.scheduled = s;
+            }
+            if let Some(p) = priority {
+                t.priority = p;
+            }
+            if let Some(desc) = description.clone() {
+                t.description = desc;
+            }
+        },
+    )
     .map_err(|e| translate_update_error(e, &vault.path))?;
 
     let rel = vault.relativize(&abs);
@@ -431,6 +451,18 @@ fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyho
         NotATask { path, line } => {
             let rel = path.strip_prefix(vault_root).unwrap_or(&path);
             anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        LineChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+                rel.display()
+            )
         }
         Write { source } => anyhow!("write failed: {source}"),
     }

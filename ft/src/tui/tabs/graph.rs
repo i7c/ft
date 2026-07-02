@@ -3184,9 +3184,18 @@ impl GraphTab {
     /// (graph-task-interaction §7.2). On a non-Task row it toasts and is a
     /// no-op. Returns `true` if the op ran.
     #[allow(clippy::too_many_lines)]
+    /// The closure receives the vault's task format alongside the task's
+    /// location. Ops are called without an `expected` guard here: the graph
+    /// node carries `TaskData` (string-typed, lossy), not a faithful `Task`
+    /// to compare against.
     fn with_focused_task<F>(&mut self, ctx: &mut TabCtx, verb: &str, op: F) -> bool
     where
-        F: FnOnce(&std::path::Path, usize, chrono::NaiveDate) -> anyhow::Result<()>,
+        F: FnOnce(
+            &std::path::Path,
+            usize,
+            chrono::NaiveDate,
+            &dyn ft_core::task::format::TaskFormat,
+        ) -> anyhow::Result<()>,
     {
         // Extract the focused task's identity up front so we drop the
         // immutable graph borrow before mutating `self` / refreshing.
@@ -3208,7 +3217,7 @@ impl GraphTab {
                 ctx.today,
             )
         };
-        match op(&abs, anchor.1, today) {
+        match op(&abs, anchor.1, today, ctx.vault.task_format()) {
             Ok(()) => {}
             Err(e) => {
                 queue_toast(ctx, &format!("{verb} failed: {e}"), ToastStyle::Error);
@@ -3628,7 +3637,9 @@ impl Tab for GraphTab {
     ) {
         let abs = ctx.vault.path.join(&path);
         let (description, due, scheduled, priority, tags, recurrence) = fields;
-        match ops::update_task_line(&abs, line, |t| {
+        // No `expected` guard: the graph node carries `TaskData`, not a
+        // faithful `Task`, so there is nothing to compare against yet.
+        match ops::update_task_line(&abs, line, ctx.vault.task_format(), None, |t| {
             t.description = description;
             t.due = due;
             t.scheduled = scheduled;
@@ -3717,6 +3728,7 @@ impl Tab for GraphTab {
 
         match ops::create_task(
             &resolved,
+            ctx.vault.task_format(),
             input,
             CreateOptions {
                 position,
@@ -4015,24 +4027,24 @@ impl Tab for GraphTab {
             }
             // Task interaction (graph-task-interaction §7.3).
             "graph.task-complete" => {
-                self.with_focused_task(
-                    ctx,
-                    "complete",
-                    |path, line, today| match ops::complete_task(
+                self.with_focused_task(ctx, "complete", |path, line, today, format| {
+                    match ops::complete_task(
                         path,
                         line,
+                        format,
+                        None,
                         CompleteOptions { on: today },
                     ) {
                         Ok(_) => Ok(()),
                         Err(ops::CompleteError::AlreadyDone { .. }) => Ok(()),
                         Err(e) => Err(e.into()),
-                    },
-                );
+                    }
+                });
                 CommandOutcome::Handled
             }
             "graph.task-cancel" => {
-                self.with_focused_task(ctx, "cancel", |path, line, today| {
-                    match ops::cancel_task(path, line, today) {
+                self.with_focused_task(ctx, "cancel", |path, line, today, format| {
+                    match ops::cancel_task(path, line, format, None, today) {
                         Ok(_) => Ok(()),
                         Err(ops::CancelError::AlreadyCancelled { .. }) => Ok(()),
                         Err(e) => Err(e.into()),
@@ -4041,44 +4053,44 @@ impl Tab for GraphTab {
                 CommandOutcome::Handled
             }
             "graph.task-due-next" => {
-                self.with_focused_task(ctx, "due+1", |path, line, today| {
-                    nudge_task_field(path, line, TaskField::Due, 1, today)
+                self.with_focused_task(ctx, "due+1", |path, line, today, format| {
+                    nudge_task_field(path, line, format, TaskField::Due, 1, today)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-due-prev" => {
-                self.with_focused_task(ctx, "due-1", |path, line, today| {
-                    nudge_task_field(path, line, TaskField::Due, -1, today)
+                self.with_focused_task(ctx, "due-1", |path, line, today, format| {
+                    nudge_task_field(path, line, format, TaskField::Due, -1, today)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-scheduled-next" => {
-                self.with_focused_task(ctx, "scheduled+1", |path, line, today| {
-                    nudge_task_field(path, line, TaskField::Scheduled, 1, today)
+                self.with_focused_task(ctx, "scheduled+1", |path, line, today, format| {
+                    nudge_task_field(path, line, format, TaskField::Scheduled, 1, today)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-scheduled-prev" => {
-                self.with_focused_task(ctx, "scheduled-1", |path, line, today| {
-                    nudge_task_field(path, line, TaskField::Scheduled, -1, today)
+                self.with_focused_task(ctx, "scheduled-1", |path, line, today, format| {
+                    nudge_task_field(path, line, format, TaskField::Scheduled, -1, today)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-priority-next" => {
-                self.with_focused_task(ctx, "priority+1", |path, line, _today| {
-                    cycle_task_priority(path, line, 1)
+                self.with_focused_task(ctx, "priority+1", |path, line, _today, format| {
+                    cycle_task_priority(path, line, format, 1)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-priority-prev" => {
-                self.with_focused_task(ctx, "priority-1", |path, line, _today| {
-                    cycle_task_priority(path, line, -1)
+                self.with_focused_task(ctx, "priority-1", |path, line, _today, format| {
+                    cycle_task_priority(path, line, format, -1)
                 });
                 CommandOutcome::Handled
             }
             "graph.task-due-today" => {
-                self.with_focused_task(ctx, "due=today", |path, line, today| {
-                    ops::update_task_line(path, line, |t| {
+                self.with_focused_task(ctx, "due=today", |path, line, today, format| {
+                    ops::update_task_line(path, line, format, None, |t| {
                         t.due = Some(today);
                     })
                     .map(|_| ())
@@ -5340,12 +5352,13 @@ enum TaskField {
 fn nudge_task_field(
     path: &std::path::Path,
     line: usize,
+    format: &dyn ft_core::task::format::TaskFormat,
     field: TaskField,
     delta_days: i64,
     today: chrono::NaiveDate,
 ) -> anyhow::Result<()> {
     use chrono::Duration;
-    ops::update_task_line(path, line, move |t| {
+    ops::update_task_line(path, line, format, None, move |t| {
         let current = match field {
             TaskField::Due => t.due,
             TaskField::Scheduled => t.scheduled,
@@ -5363,7 +5376,12 @@ fn nudge_task_field(
 
 /// Cycle a task's priority forward (`dir = 1`) or backward (`dir = -1`)
 /// through the priority cycle. Mirrors the Tasks-tab `cycle_priority`.
-fn cycle_task_priority(path: &std::path::Path, line: usize, dir: i64) -> anyhow::Result<()> {
+fn cycle_task_priority(
+    path: &std::path::Path,
+    line: usize,
+    format: &dyn ft_core::task::format::TaskFormat,
+    dir: i64,
+) -> anyhow::Result<()> {
     const CYCLE: [Option<Priority>; 6] = [
         None,
         Some(Priority::Lowest),
@@ -5372,7 +5390,7 @@ fn cycle_task_priority(path: &std::path::Path, line: usize, dir: i64) -> anyhow:
         Some(Priority::High),
         Some(Priority::Highest),
     ];
-    ops::update_task_line(path, line, move |t| {
+    ops::update_task_line(path, line, format, None, move |t| {
         let pos = CYCLE.iter().position(|p| *p == t.priority).unwrap_or(0) as i64;
         let len = CYCLE.len() as i64;
         let next = ((pos + dir).rem_euclid(len)) as usize;

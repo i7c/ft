@@ -8,7 +8,6 @@ use chrono::NaiveDate;
 use thiserror::Error;
 
 use super::{
-    emoji::EmojiFormat,
     format::{ParseContext, TaskFormat},
     recurrence::{self, RecurrenceError},
     Priority, Status, Task,
@@ -144,9 +143,12 @@ pub fn build_task(input: &CreateInput) -> Task {
 }
 
 /// Create a new task in `target_path`. The path must be absolute (the binary
-/// resolves it against the vault root before calling).
+/// resolves it against the vault root before calling). `format` is the
+/// vault's wire format — callers with a `Vault` at hand should pass
+/// `vault.task_format()`.
 pub fn create_task(
     target_path: &Path,
+    format: &dyn TaskFormat,
     input: CreateInput,
     opts: CreateOptions,
 ) -> Result<CreateOutcome, CreateError> {
@@ -158,14 +160,14 @@ pub fn create_task(
     let (serialized, position) = match &opts.position {
         Position::Subtask { parent_line } => {
             let (indent, line) = subtask_placement(&existing, *parent_line)?;
-            let serialized = format!("{indent}{}", EmojiFormat.serialize_line(&task));
+            let serialized = format!("{indent}{}", format.serialize_line(&task));
             (serialized, Position::AtLine(line))
         }
-        other => (EmojiFormat.serialize_line(&task), other.clone()),
+        other => (format.serialize_line(&task), other.clone()),
     };
 
     if !opts.force {
-        if let Some(line) = find_duplicate(&existing, &task) {
+        if let Some(line) = find_duplicate(&existing, &task, format) {
             return Err(CreateError::Duplicate {
                 path: target_path.to_path_buf(),
                 line,
@@ -189,13 +191,13 @@ fn read_or_empty(path: &Path) -> Result<String, CreateError> {
 /// Returns the 1-indexed line number of any existing task whose description,
 /// due, scheduled, and start dates all match `task`. The status is ignored
 /// (a done duplicate is still a duplicate).
-fn find_duplicate(content: &str, task: &Task) -> Option<usize> {
+fn find_duplicate(content: &str, task: &Task, format: &dyn TaskFormat) -> Option<usize> {
     for (idx, line) in content.lines().enumerate() {
         let ctx = ParseContext {
             source_file: PathBuf::new(),
             source_line: idx + 1,
         };
-        if let Some(existing) = EmojiFormat.parse_line(line, ctx) {
+        if let Some(existing) = format.parse_line(line, ctx) {
             if existing.description == task.description
                 && existing.due == task.due
                 && existing.scheduled == task.scheduled
@@ -252,6 +254,33 @@ fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), 
     Ok((md_lines::join_with_newline(&lines), inserted_at_idx + 1))
 }
 
+// ── line guard ───────────────────────────────────────────────────────────────
+
+/// Compare the task the caller expects at a line against the task actually
+/// parsed there. Both sides are canonicalized through `format.serialize_line`
+/// so context fields (source path/line, indent, parent) don't participate —
+/// only the wire content does. Returns `(expected, found)` serialized forms
+/// on mismatch so error variants can show the user both.
+///
+/// This is the defense against stale line numbers: callers hold `(path,
+/// line)` from a scan, and the file may have changed since (another `ft`
+/// mutation, Obsidian, a git pull). Without the guard, a shifted file makes
+/// line-addressed mutations silently hit whatever task now occupies the line.
+fn check_expected(
+    format: &dyn TaskFormat,
+    found: &Task,
+    expected: Option<&Task>,
+) -> Result<(), (String, String)> {
+    if let Some(exp) = expected {
+        let expected_ser = format.serialize_line(exp);
+        let found_ser = format.serialize_line(found);
+        if expected_ser != found_ser {
+            return Err((expected_ser, found_ser));
+        }
+    }
+    Ok(())
+}
+
 // ── complete_task ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -270,6 +299,17 @@ pub enum CompleteError {
     },
     #[error("line {line} in {} is not a task", .path.display())]
     NotATask { path: PathBuf, line: usize },
+    #[error(
+        "task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    LineChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
     #[error("task at {}:{} is already done (on {})", .path.display(), .line, .done)]
     AlreadyDone {
         path: PathBuf,
@@ -311,9 +351,16 @@ pub struct NextInstance {
 /// Mark the task at `target_path:line` complete. If the task is recurring,
 /// the next instance is inserted *above* the now-completed line (matching
 /// plugin behavior).
+///
+/// `expected` is the task the caller believes lives at `line` (from a scan).
+/// When provided and the line's current content doesn't match it, the call
+/// fails with [`CompleteError::LineChanged`] instead of completing whatever
+/// shifted into that slot. Pass `None` only when no scanned task is at hand.
 pub fn complete_task(
     target_path: &Path,
     line: usize,
+    format: &dyn TaskFormat,
+    expected: Option<&Task>,
     opts: CompleteOptions,
 ) -> Result<CompleteOutcome, CompleteError> {
     let content = std::fs::read_to_string(target_path).map_err(|e| CompleteError::Read {
@@ -337,12 +384,21 @@ pub fn complete_task(
         source_file: PathBuf::new(),
         source_line: line,
     };
-    let task = EmojiFormat
+    let task = format
         .parse_line(original, ctx)
         .ok_or_else(|| CompleteError::NotATask {
             path: target_path.to_path_buf(),
             line,
         })?;
+
+    check_expected(format, &task, expected).map_err(|(expected, found)| {
+        CompleteError::LineChanged {
+            path: target_path.to_path_buf(),
+            line,
+            expected,
+            found,
+        }
+    })?;
 
     if task.status == Status::Done {
         if let Some(done) = task.done {
@@ -372,11 +428,11 @@ pub fn complete_task(
     let mut completed = task;
     completed.status = Status::Done;
     completed.done = Some(opts.on);
-    let completed_line = EmojiFormat.serialize_line(&completed);
+    let completed_line = format.serialize_line(&completed);
 
     let mut next_instance: Option<NextInstance> = None;
     if let Some(t) = next_task {
-        let serialized = EmojiFormat.serialize_line(&t);
+        let serialized = format.serialize_line(&t);
         // Insert the new instance above the completed line.
         lines.insert(idx, serialized.clone());
         next_instance = Some(NextInstance {
@@ -424,6 +480,17 @@ pub enum UpdateError {
     },
     #[error("line {line} in {} is not a task", .path.display())]
     NotATask { path: PathBuf, line: usize },
+    #[error(
+        "task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    LineChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
     #[error("write failed: {source}")]
     Write {
         #[from]
@@ -436,9 +503,17 @@ pub enum UpdateError {
 /// task with `source_file` / `source_line` filled in. Used by both the CLI
 /// and the TUI for quick-key edits (date nudges, priority cycle, cancel).
 ///
+/// `expected` guards against stale line numbers — see [`complete_task`].
+///
 /// Does not handle recurrence — for completing recurring tasks, use
 /// [`complete_task`] which inserts the next instance.
-pub fn update_task_line<F>(target_path: &Path, line: usize, mutate: F) -> Result<Task, UpdateError>
+pub fn update_task_line<F>(
+    target_path: &Path,
+    line: usize,
+    format: &dyn TaskFormat,
+    expected: Option<&Task>,
+    mutate: F,
+) -> Result<Task, UpdateError>
 where
     F: FnOnce(&mut Task),
 {
@@ -462,17 +537,25 @@ where
         source_file: target_path.to_path_buf(),
         source_line: line,
     };
-    let mut task =
-        EmojiFormat
-            .parse_line(&lines[idx], ctx)
-            .ok_or_else(|| UpdateError::NotATask {
-                path: target_path.to_path_buf(),
-                line,
-            })?;
+    let mut task = format
+        .parse_line(&lines[idx], ctx)
+        .ok_or_else(|| UpdateError::NotATask {
+            path: target_path.to_path_buf(),
+            line,
+        })?;
+
+    check_expected(format, &task, expected).map_err(|(expected, found)| {
+        UpdateError::LineChanged {
+            path: target_path.to_path_buf(),
+            line,
+            expected,
+            found,
+        }
+    })?;
 
     mutate(&mut task);
 
-    let serialized = EmojiFormat.serialize_line(&task);
+    let serialized = format.serialize_line(&task);
     lines[idx] = serialized;
 
     let joined = crate::markdown::lines::join_with_newline(&lines);
@@ -496,10 +579,18 @@ pub enum CancelError {
 /// Mark the task at `target_path:line` cancelled, recording `on` as the
 /// cancellation date. Cancelled tasks do not recur (so unlike
 /// [`complete_task`] no next-instance is generated).
-pub fn cancel_task(target_path: &Path, line: usize, on: NaiveDate) -> Result<Task, CancelError> {
+///
+/// `expected` guards against stale line numbers — see [`complete_task`].
+pub fn cancel_task(
+    target_path: &Path,
+    line: usize,
+    format: &dyn TaskFormat,
+    expected: Option<&Task>,
+    on: NaiveDate,
+) -> Result<Task, CancelError> {
     // Snapshot the pre-state so we can detect "already cancelled" without
     // racing the write inside the mutate closure.
-    let pre = update_task_line(target_path, line, |_| {})?;
+    let pre = update_task_line(target_path, line, format, expected, |_| {})?;
     if pre.status == Status::Cancelled {
         if let Some(c) = pre.cancelled {
             return Err(CancelError::AlreadyCancelled {
@@ -510,7 +601,10 @@ pub fn cancel_task(target_path: &Path, line: usize, on: NaiveDate) -> Result<Tas
         }
     }
 
-    let task = update_task_line(target_path, line, |t| {
+    // Guard the second write against `pre` (not the caller's `expected`):
+    // the no-op pass above rewrote the line in canonical form, and `pre`
+    // is exactly what it left there.
+    let task = update_task_line(target_path, line, format, Some(&pre), |t| {
         t.status = Status::Cancelled;
         t.cancelled = Some(on);
     })?;
@@ -535,6 +629,17 @@ pub enum MoveError {
     },
     #[error("line {line} in {} is not a task", .path.display())]
     NotATask { path: PathBuf, line: usize },
+    #[error(
+        "task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    LineChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
     #[error("write failed: {source}")]
     Write {
         #[from]
@@ -562,10 +667,14 @@ impl MoveTarget {
 
 /// A single source identifier: absolute path + 1-indexed source line of the
 /// task to move. Children of the task come along automatically.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MoveSource {
     pub path: PathBuf,
     pub line: usize,
+    /// The task the caller believes lives at `line` (from a scan). When set,
+    /// `plan_move` fails with [`MoveError::LineChanged`] if the line's
+    /// current content doesn't match — see [`complete_task`].
+    pub expected: Option<Task>,
 }
 
 /// Per-file before/after content. The CLI uses these to render diffs and to
@@ -597,15 +706,22 @@ pub struct MovedBlock {
 /// Build a [`MovePlan`] for moving `sources` to `target`. Only reads files;
 /// never writes. Wikilink rewriting on cross-folder moves is deferred to
 /// plan 003 — see TODO in the body.
-pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan, MoveError> {
+pub fn plan_move(
+    sources: &[MoveSource],
+    target: &MoveTarget,
+    format: &dyn TaskFormat,
+) -> Result<MovePlan, MoveError> {
     // TODO(plan-003): rewrite [[wikilinks]] when the target file is in a
     // different folder than the source. Today we move the bytes verbatim and
     // rely on Obsidian's own rename-aware index for cross-folder cases.
 
     // Group sources by file so we read each only once.
-    let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    let mut by_file: BTreeMap<PathBuf, Vec<(usize, Option<&Task>)>> = BTreeMap::new();
     for s in sources {
-        by_file.entry(s.path.clone()).or_default().push(s.line);
+        by_file
+            .entry(s.path.clone())
+            .or_default()
+            .push((s.line, s.expected.as_ref()));
     }
 
     let target_path = target.path().to_path_buf();
@@ -626,11 +742,11 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
         let raw_lines: Vec<String> = crate::markdown::lines::split(&original);
 
         // Sort + dedupe + drop descendants of any other in-list line.
-        lines_to_move.sort_unstable();
-        lines_to_move.dedup();
+        lines_to_move.sort_unstable_by_key(|(line, _)| *line);
+        lines_to_move.dedup_by_key(|(line, _)| *line);
 
         let mut ranges: Vec<(usize, usize, String, usize)> = Vec::new(); // (start, end, description, head_indent)
-        for line in &lines_to_move {
+        for (line, expected) in &lines_to_move {
             let idx = line.checked_sub(1).ok_or_else(|| MoveError::LineMissing {
                 path: path.clone(),
                 line: *line,
@@ -648,12 +764,20 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
                 source_file: PathBuf::new(),
                 source_line: *line,
             };
-            let task = EmojiFormat
+            let task = format
                 .parse_line(raw, ctx)
                 .ok_or_else(|| MoveError::NotATask {
                     path: path.clone(),
                     line: *line,
                 })?;
+            check_expected(format, &task, *expected).map_err(|(expected, found)| {
+                MoveError::LineChanged {
+                    path: path.clone(),
+                    line: *line,
+                    expected,
+                    found,
+                }
+            })?;
             let end = block_end(&raw_lines, idx, task.indent_level);
             ranges.push((idx, end, task.description.clone(), task.indent_level));
         }
@@ -677,6 +801,7 @@ pub fn plan_move(sources: &[MoveSource], target: &MoveTarget) -> Result<MovePlan
                 source: MoveSource {
                     path: path.clone(),
                     line: start + 1,
+                    expected: None,
                 },
                 end_line: end + 1,
                 task_description: description.clone(),
@@ -867,6 +992,7 @@ fn splice_into_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::emoji::EmojiFormat;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -905,6 +1031,7 @@ mod tests {
         i.due = Some(d(2026, 5, 10));
         let outcome = create_task(
             &p,
+            &EmojiFormat,
             i,
             CreateOptions {
                 position: Position::Append,
@@ -965,6 +1092,7 @@ mod tests {
         let position = auto_position(&p, Some("Tasks"));
         create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position,
@@ -986,6 +1114,7 @@ mod tests {
         std::fs::write(&p, "# Notes\n\nSome prose.\n").unwrap();
         let outcome = create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position: Position::Append,
@@ -1005,6 +1134,7 @@ mod tests {
         std::fs::write(&p, "line1\nline2\nline3\n").unwrap();
         let outcome = create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position: Position::AtLine(2),
@@ -1020,6 +1150,7 @@ mod tests {
     fn create_subtask(p: &Path, desc: &str, parent_line: usize) -> CreateOutcome {
         create_task(
             p,
+            &EmojiFormat,
             input(desc),
             CreateOptions {
                 position: Position::Subtask { parent_line },
@@ -1089,6 +1220,7 @@ mod tests {
         std::fs::write(&p, "- [ ] parent\n").unwrap();
         let err = create_task(
             &p,
+            &EmojiFormat,
             input("child"),
             CreateOptions {
                 position: Position::Subtask { parent_line: 9 },
@@ -1106,6 +1238,7 @@ mod tests {
         std::fs::write(&p, "line1\n").unwrap();
         let err = create_task(
             &p,
+            &EmojiFormat,
             input("X"),
             CreateOptions {
                 position: Position::AtLine(0),
@@ -1123,6 +1256,7 @@ mod tests {
         std::fs::write(&p, "## Tasks\n- [ ] existing\n\n## Other\nstuff\n").unwrap();
         let outcome = create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position: Position::UnderHeading("Tasks".into()),
@@ -1147,6 +1281,7 @@ mod tests {
         std::fs::write(&p, "# Notes\n\nProse.\n").unwrap();
         create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position: Position::UnderHeading("Tasks".into()),
@@ -1164,6 +1299,7 @@ mod tests {
         let p = dir.path().join("notes.md");
         create_task(
             &p,
+            &EmojiFormat,
             input("Buy milk"),
             CreateOptions {
                 position: Position::UnderHeading("Tasks".into()),
@@ -1184,6 +1320,7 @@ mod tests {
         i.due = Some(d(2026, 5, 10));
         let err = create_task(
             &p,
+            &EmojiFormat,
             i,
             CreateOptions {
                 position: Position::Append,
@@ -1203,6 +1340,7 @@ mod tests {
         i.due = Some(d(2026, 5, 10));
         create_task(
             &p,
+            &EmojiFormat,
             i,
             CreateOptions {
                 position: Position::Append,
@@ -1225,6 +1363,7 @@ mod tests {
         i.due = Some(d(2026, 5, 11));
         create_task(
             &p,
+            &EmojiFormat,
             i,
             CreateOptions {
                 position: Position::Append,
@@ -1252,7 +1391,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "# Notes\n- [ ] Buy milk 📅 2026-05-10\n").unwrap();
-        let outcome = complete_task(&p, 2, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        let outcome = complete_task(
+            &p,
+            2,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap();
         assert_eq!(outcome.completed_line, 2);
         assert!(outcome.next_instance.is_none());
         let content = std::fs::read_to_string(&p).unwrap();
@@ -1267,7 +1413,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "- [x] task ✅ 2026-05-09\n").unwrap();
-        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
         assert!(matches!(err, CompleteError::AlreadyDone { .. }), "{err:?}");
     }
 
@@ -1276,7 +1429,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "# Heading\nProse\n").unwrap();
-        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
         assert!(matches!(err, CompleteError::NotATask { .. }), "{err:?}");
     }
 
@@ -1285,7 +1445,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "- [ ] x\n").unwrap();
-        let err = complete_task(&p, 5, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        let err = complete_task(
+            &p,
+            5,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
         assert!(matches!(err, CompleteError::LineMissing { .. }), "{err:?}");
     }
 
@@ -1298,7 +1465,14 @@ mod tests {
             "- [ ] Pay tax 🔁 every month on the 18th 📅 2026-05-18\n",
         )
         .unwrap();
-        let outcome = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 18) }).unwrap();
+        let outcome = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 18) },
+        )
+        .unwrap();
         // The next instance lives where the original task was; the completed
         // task moved down one line.
         assert_eq!(outcome.completed_line, 2);
@@ -1322,7 +1496,14 @@ mod tests {
             "- [ ] Standup 🔁 every week ⏳ 2026-05-08 📅 2026-05-10\n",
         )
         .unwrap();
-        complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         // delta = +7 days, so scheduled and due both shift by 7.
         assert_eq!(
@@ -1337,7 +1518,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "- [ ] Yearly thing 🔁 every year 📅 2026-05-10\n").unwrap();
-        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1355,7 +1543,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("notes.md");
         std::fs::write(&p, "- [ ] No-anchor 🔁 every day\n").unwrap();
-        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
         assert!(
             matches!(err, CompleteError::Recurrence(RecurrenceError::NoAnchor)),
             "{err:?}"
@@ -1371,7 +1566,14 @@ mod tests {
             "## Tasks\n- [ ] parent\n  - [ ] child to complete\n  - [ ] sibling\n",
         )
         .unwrap();
-        complete_task(&p, 3, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        complete_task(
+            &p,
+            3,
+            &EmojiFormat,
+            None,
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         assert_eq!(
             content,
@@ -1404,8 +1606,10 @@ mod tests {
             &[MoveSource {
                 path: src.clone(),
                 line: 2,
+                expected: None,
             }],
             &MoveTarget::Append(target.clone()),
+            &EmojiFormat,
         )
         .unwrap();
 
@@ -1436,8 +1640,10 @@ mod tests {
             &[MoveSource {
                 path: src.clone(),
                 line: 2,
+                expected: None,
             }],
             &MoveTarget::Append(target.clone()),
+            &EmojiFormat,
         )
         .unwrap();
 
@@ -1468,8 +1674,10 @@ mod tests {
             &[MoveSource {
                 path: src.clone(),
                 line: 2,
+                expected: None,
             }],
             &MoveTarget::Append(target.clone()),
+            &EmojiFormat,
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
@@ -1493,8 +1701,10 @@ mod tests {
             &[MoveSource {
                 path: src.clone(),
                 line: 1,
+                expected: None,
             }],
             &MoveTarget::UnderHeading(target.clone(), "Triage".into()),
+            &EmojiFormat,
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
@@ -1519,8 +1729,10 @@ mod tests {
             &[MoveSource {
                 path: src.clone(),
                 line: 1,
+                expected: None,
             }],
             &MoveTarget::UnderHeading(target.clone(), "Triage".into()),
+            &EmojiFormat,
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
@@ -1544,13 +1756,16 @@ mod tests {
                 MoveSource {
                     path: src.clone(),
                     line: 1,
+                    expected: None,
                 },
                 MoveSource {
                     path: src.clone(),
                     line: 2,
+                    expected: None,
                 },
             ],
             &MoveTarget::Append(target.clone()),
+            &EmojiFormat,
         )
         .unwrap();
 
@@ -1575,13 +1790,16 @@ mod tests {
                 MoveSource {
                     path: a.clone(),
                     line: 1,
+                    expected: None,
                 },
                 MoveSource {
                     path: b.clone(),
                     line: 2,
+                    expected: None,
                 },
             ],
             &MoveTarget::Append(target.clone()),
+            &EmojiFormat,
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
@@ -1602,8 +1820,10 @@ mod tests {
             &[MoveSource {
                 path: p.clone(),
                 line: 2,
+                expected: None,
             }],
             &MoveTarget::UnderHeading(p.clone(), "Done".into()),
+            &EmojiFormat,
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
@@ -1621,8 +1841,10 @@ mod tests {
             &[MoveSource {
                 path: p.clone(),
                 line: 1,
+                expected: None,
             }],
             &MoveTarget::Append(dir.path().join("out.md")),
+            &EmojiFormat,
         )
         .unwrap_err();
         assert!(matches!(err, MoveError::NotATask { .. }), "{err:?}");
@@ -1636,8 +1858,10 @@ mod tests {
             &[MoveSource {
                 path: p.clone(),
                 line: 5,
+                expected: None,
             }],
             &MoveTarget::Append(dir.path().join("out.md")),
+            &EmojiFormat,
         )
         .unwrap_err();
         assert!(matches!(err, MoveError::LineMissing { .. }), "{err:?}");
@@ -1647,9 +1871,164 @@ mod tests {
     fn plan_move_empty_input_yields_target_only_no_op() {
         let dir = tempfile::tempdir().unwrap();
         let target = write(&dir, "dst.md", "## Heading\n");
-        let plan = plan_move(&[], &MoveTarget::Append(target.clone())).unwrap();
+        let plan = plan_move(&[], &MoveTarget::Append(target.clone()), &EmojiFormat).unwrap();
         // The target edit should be a no-op (original == new).
         assert_eq!(plan.edits.len(), 1);
         assert_eq!(plan.edits[0].original, plan.edits[0].new);
+    }
+
+    // ── expected-line guard ───────────────────────────────────────────────────
+
+    /// Parse `line` as the caller (a scan) would see it.
+    fn parsed(line: &str) -> Task {
+        EmojiFormat
+            .parse_line(
+                line,
+                ParseContext {
+                    source_file: PathBuf::from("some/note.md"),
+                    source_line: 42,
+                },
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn complete_with_matching_expected_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, "- [ ] Buy milk 📅 2026-05-10\n").unwrap();
+        let expected = parsed("- [ ] Buy milk 📅 2026-05-10");
+        complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            Some(&expected),
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [x] Buy milk 📅 2026-05-10 ✅ 2026-05-10\n"
+        );
+    }
+
+    #[test]
+    fn complete_with_stale_expected_errors_and_leaves_file_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        // The caller scanned when "Buy milk" was at line 1, but the file
+        // shifted: a different task now sits there.
+        std::fs::write(&p, "- [ ] Call mom\n- [ ] Buy milk 📅 2026-05-10\n").unwrap();
+        let expected = parsed("- [ ] Buy milk 📅 2026-05-10");
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            Some(&expected),
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CompleteError::LineChanged { .. }), "{err:?}");
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] Call mom\n- [ ] Buy milk 📅 2026-05-10\n"
+        );
+    }
+
+    #[test]
+    fn guard_catches_recurring_next_instance_at_stale_line() {
+        // The flagship race: completing a recurring task inserts the next
+        // instance at the completed line's old slot. A second caller holding
+        // the pre-complete scan would re-complete "the same line" — which now
+        // holds the *new* instance (same description, shifted dates). The
+        // guard must catch this; a description-only comparison would not.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        let original = "- [ ] Pay tax 🔁 every month on the 18th 📅 2026-05-18";
+        std::fs::write(&p, format!("{original}\n")).unwrap();
+        let stale_expected = parsed(original);
+
+        complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            Some(&stale_expected),
+            CompleteOptions { on: d(2026, 5, 18) },
+        )
+        .unwrap();
+
+        let err = complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            Some(&stale_expected),
+            CompleteOptions { on: d(2026, 5, 18) },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CompleteError::LineChanged { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn guard_ignores_context_fields() {
+        // Two scans of the same content differ only in source_file /
+        // source_line / parent — the guard compares wire content, so a
+        // context mismatch must not trip it.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, "- [ ] task ⏫\n").unwrap();
+        let mut expected = parsed("- [ ] task ⏫");
+        expected.source_file = PathBuf::from("elsewhere.md");
+        expected.source_line = 999;
+        expected.parent = Some(3);
+        complete_task(
+            &p,
+            1,
+            &EmojiFormat,
+            Some(&expected),
+            CompleteOptions { on: d(2026, 5, 10) },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_with_stale_expected_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, "- [ ] other task\n").unwrap();
+        let expected = parsed("- [ ] Buy milk");
+        let err = update_task_line(&p, 1, &EmojiFormat, Some(&expected), |t| {
+            t.priority = Some(Priority::High);
+        })
+        .unwrap_err();
+        assert!(matches!(err, UpdateError::LineChanged { .. }), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "- [ ] other task\n");
+    }
+
+    #[test]
+    fn cancel_with_matching_expected_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, "- [ ] drop this\n").unwrap();
+        let expected = parsed("- [ ] drop this");
+        let t = cancel_task(&p, 1, &EmojiFormat, Some(&expected), d(2026, 5, 10)).unwrap();
+        assert_eq!(t.status, Status::Cancelled);
+    }
+
+    #[test]
+    fn plan_move_with_stale_expected_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = write(&dir, "src.md", "- [ ] other task\n");
+        let err = plan_move(
+            &[MoveSource {
+                path: src.clone(),
+                line: 1,
+                expected: Some(parsed("- [ ] move me")),
+            }],
+            &MoveTarget::Append(dir.path().join("dst.md")),
+            &EmojiFormat,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MoveError::LineChanged { .. }), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), "- [ ] other task\n");
     }
 }
