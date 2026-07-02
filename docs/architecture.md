@@ -292,6 +292,39 @@ Config: a new `[synth]` table with `folder` (default `"Synthesis/"`)
 and `exclude_prefixes` (default empty; users typically add their
 periodic-notes folder).
 
+### Accrete: grow, dedup-on-append, watermark, self-describing notes
+
+`ft synth grow` (and the Journal tab's `n` chord) accrete missing
+journal entries into an existing synth note. Two selection steps sit on
+top of the unchanged `build_journal` + `plan_synth_scaffold` machinery:
+
+- **Dedup-on-append invariant** (`ft_core::synth::accrete::filter_missing`):
+  the planner's append path drops entries whose `(source_path, body)`
+  is already pinned in the note, so re-running scaffold/grow with the
+  same target is idempotent across CLI and TUI. The count is surfaced as
+  `SynthScaffoldPlan::dedup_skipped`. The body is the stable identity;
+  `commit_sha` is deliberately not part of the key (same body at a newer
+  commit = unchanged paragraph, no reason to re-pin).
+- **Last-synth watermark** (`accrete::last_synth_watermark`): the
+  topological tip among the note's pinned `commit_sha` values, paired
+  with its committer date — the scope for `--new-only`. Computed via one
+  `git rev-list` + one `git log` call; unreachable SHAs (shallow clone,
+  branch switch) are skipped, and an all-unreachable note degrades
+  `--new-only` to "all missing" with a warning.
+
+A synth note MAY self-describe its journal target(s) in frontmatter via
+`ft-synth-targets: ["[[Foo]]", "[[Bar]]"]` (a YAML sequence; helpers
+`callout::parse_synth_targets` / `upsert_synth_frontmatter`). When
+`--link` is supplied, scaffold/grow write the key on create (or upsert
+when absent on append); when `--link`/`--from` are absent, `grow` reads
+targets from frontmatter — the "persisted journal note" UX. The key is
+optional and backward-compatible; verify/repair/reslice ignore it.
+
+CLI: `ft synth grow <note.md> [--link ...] [--new-only] [--limit N]
+[--since|--range [--in-window]] [--from path:line] [--no-edit]`.
+TUI: `n` (send-to-synth-new-only) on the Journal tab; `s` now dedups
+for free via the planner invariant.
+
 ## Adding things
 
 ### A new subcommand

@@ -55,6 +55,9 @@ pub enum Error {
 
     #[error("cannot resolve pinned source for reslice: {0}")]
     ResliceSourceMissing(String),
+
+    #[error("synth watermark could not resolve SHA `{sha}`: {detail}")]
+    SynthWatermark { sha: String, detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

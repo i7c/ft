@@ -18,6 +18,7 @@
 //! blake3 content-hash prefix. Between callouts, the user writes
 //! arbitrary markdown freely.
 
+pub mod accrete;
 pub mod callout;
 pub mod repair;
 pub mod reslice;

@@ -49,6 +49,11 @@ pub enum SynthCommand {
     /// it with `ft-synth: true` frontmatter if needed). Default action.
     #[command(name = "scaffold")]
     Scaffold(ScaffoldArgs),
+    /// Accrete missing journal entries into an existing synth note,
+    /// optionally scoped to entries newer than the note's last synth
+    /// watermark. See `ft synth grow --help`.
+    #[command(name = "grow")]
+    Grow(GrowArgs),
     /// Grow or shrink a protected section's line range, re-pinned at its
     /// existing commit.
     Reslice(ResliceArgs),
@@ -63,6 +68,7 @@ pub enum SynthCommand {
 pub fn run(args: SynthArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         SynthCommand::Scaffold(a) => run_scaffold(a, vault_flag),
+        SynthCommand::Grow(a) => run_grow(a, vault_flag),
         SynthCommand::Reslice(a) => run_reslice(a, vault_flag),
         SynthCommand::Verify(a) => run_verify(a, vault_flag),
         SynthCommand::Repair(a) => run_repair(a, vault_flag),
@@ -105,6 +111,56 @@ pub struct ScaffoldArgs {
     /// window. Requires `--since` or `--range`.
     #[arg(long)]
     pub in_window: bool,
+
+    /// Skip launching `$EDITOR` after writing.
+    #[arg(long)]
+    pub no_edit: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct GrowArgs {
+    /// Target synth note (vault-relative). MUST already exist — use
+    /// `ft synth scaffold` to create one.
+    #[arg(value_name = "TARGET.md")]
+    pub target: PathBuf,
+
+    /// A `[[wikilink]]` to source paragraphs from. Repeatable. When
+    /// omitted (along with `--from`), targets are read from the note's
+    /// `ft-synth-targets` frontmatter.
+    #[arg(long, value_name = "LINK")]
+    pub link: Vec<String>,
+
+    /// Explicit source paragraph: `<vault-relative-path>:<line>`.
+    /// Repeatable.
+    #[arg(long, value_name = "PATH:LINE")]
+    pub from: Vec<String>,
+
+    /// Scope to entries whose `date` is newer than the note's last-synth
+    /// watermark (the newest pinned commit SHA among its callouts).
+    /// Falls back to "all missing" with a warning when the watermark
+    /// is unavailable (no callouts or all SHAs unreachable).
+    #[arg(long)]
+    pub new_only: bool,
+
+    /// Duration window: `7d`, `24h`, `2w`, `1m`. Mutually exclusive
+    /// with `--range`. Only takes effect when combined with `--in-window`.
+    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
+    pub since: Option<String>,
+
+    /// Commit range `X..Y`. Mutually exclusive with `--since`. Same
+    /// semantics as `--since`.
+    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
+    pub range: Option<String>,
+
+    /// Restrict `--link`-sourced entries to paragraphs touched by the
+    /// window. Requires `--since` or `--range`.
+    #[arg(long)]
+    pub in_window: bool,
+
+    /// Cap the number of appended sections to the newest `N` (after
+    /// dedup and, if active, the new-only filter).
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
 
     /// Skip launching `$EDITOR` after writing.
     #[arg(long)]
@@ -184,9 +240,231 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let plan = plan_synth_scaffold(&vault, &target, &entries).context("planning synth scaffold")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth scaffold")?;
 
+    // When --link was supplied, persist the targets into frontmatter
+    // (write on create; upsert when the key is absent on append). This
+    // makes the note self-describing so future `ft synth grow` runs need
+    // no --link.
+    if !args.link.is_empty() {
+        ensure_synth_targets(&written, &args.link)?;
+    }
+
     let rel = vault.relativize(&written).display().to_string();
     if plan.create {
         println!("created {} with {} section(s)", rel, plan.sections.len());
+    } else if plan.dedup_skipped > 0 {
+        println!(
+            "appended {} section(s) to {} ({} already pinned, skipped)",
+            plan.sections.len(),
+            rel,
+            plan.dedup_skipped
+        );
+    } else {
+        println!("appended {} section(s) to {}", plan.sections.len(), rel);
+    }
+
+    if !args.no_edit {
+        open_editor(&written)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Idempotently ensure the synth note at `absolute_path` carries an
+/// `ft-synth-targets` frontmatter key matching `links`. Writes only when
+/// the on-disk key differs (create, or absent on an existing note).
+/// Existing keys are replaced so a re-run with different `--link` values
+/// updates the record. Best-effort: a write failure is surfaced as an
+/// error but does not undo the scaffold write that already landed.
+fn ensure_synth_targets(absolute_path: &Path, links: &[String]) -> Result<()> {
+    let content = std::fs::read_to_string(absolute_path)
+        .with_context(|| format!("reading {} for target upsert", absolute_path.display()))?;
+    let new_content = ft_core::synth::callout::upsert_synth_frontmatter(&content, Some(links));
+    if new_content != content {
+        ft_core::fs::write_atomic(absolute_path, &new_content)
+            .with_context(|| format!("writing targets to {}", absolute_path.display()))?;
+    }
+    Ok(())
+}
+
+/// `ft synth grow` — accrete missing journal entries into an existing
+/// synth note. Mirrors `run_scaffold`'s sourcing (multi-source journal +
+/// `--from` picks + `--in-window` filter) but adds two selection steps
+/// on top of the planner's dedup-on-append:
+///
+/// - `--new-only`: compute the note's last-synth watermark and keep only
+///   entries whose `date` is strictly newer. Falls back to "all missing"
+///   with a warning when the watermark is unavailable.
+/// - `--limit N`: cap the appended sections to the newest N.
+///
+/// Targets come from `--link`/`--from`, or — when both are absent — from
+/// the note's `ft-synth-targets` frontmatter.
+fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    if args.in_window && args.since.is_none() && args.range.is_none() {
+        return Err(anyhow!("--in-window requires --since or --range"));
+    }
+
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!("vault is not inside a git repository — `ft synth grow` needs git history")
+    })?;
+    let target = normalize_md_target(&args.target);
+    let target_abs = vault.path.join(&target);
+    if !target_abs.exists() {
+        return Err(anyhow!(
+            "target note does not exist: {} — use `ft synth scaffold` to create it",
+            target.display()
+        ));
+    }
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+
+    // Resolve targets: explicit --link / --from, else frontmatter.
+    let explicit_links = !args.link.is_empty();
+    let explicit_from = !args.from.is_empty();
+    if !explicit_links && !explicit_from {
+        // Read targets from the note's frontmatter.
+        let content = std::fs::read_to_string(&target_abs)
+            .with_context(|| format!("reading {} for targets", target.display()))?;
+        let fm_targets = ft_core::synth::callout::parse_synth_targets(&content).unwrap_or_default();
+        if fm_targets.is_empty() {
+            return Err(anyhow!(
+                "no targets: pass --link or add `ft-synth-targets` frontmatter to {}",
+                target.display()
+            ));
+        }
+        // Re-resolve frontmatter targets via the same path as --link.
+        return run_grow_with_targets(args, vault, graph, target, fm_targets, false);
+    }
+
+    let links: Vec<String> = if explicit_links {
+        args.link.clone()
+    } else {
+        Vec::new()
+    };
+    run_grow_with_targets(args, vault, graph, target, links, explicit_links)
+}
+
+/// Shared grow body: build the journal for `links` (if any), add `--from`
+/// picks, apply `--new-only` watermark + `--limit`, plan (dedup happens
+/// in the planner), apply, upsert frontmatter targets when `--link` was
+/// explicit, and hand off to the editor.
+#[allow(clippy::too_many_arguments)]
+fn run_grow_with_targets(
+    args: GrowArgs,
+    vault: Vault,
+    graph: Graph,
+    target: PathBuf,
+    links: Vec<String>,
+    links_were_explicit: bool,
+) -> Result<ExitCode> {
+    let mut entries: Vec<JournalEntry> = Vec::new();
+
+    if !links.is_empty() {
+        let targets: Vec<NoteId> = links
+            .iter()
+            .filter_map(|s| resolve_link_to_id(&graph, s))
+            .collect();
+        if targets.is_empty() {
+            return Err(anyhow!(
+                "none of the link values resolved to a note or ghost in the vault"
+            ));
+        }
+        let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
+        let report = build_journal(&graph, &targets, &vault, &mut cache)
+            .context("building multi-source journal")?;
+        let _ = cache.save(&vault.path);
+
+        let filtered = if args.in_window {
+            let window = resolve_window(&args.since, &args.range)?
+                .expect("validated above: in_window implies since/range");
+            let cfg = vault.config.config.synth.clone();
+            let review = compute_link_review(&graph, &vault, &window, &cfg)
+                .context("computing in-window filter")?;
+            report
+                .entries
+                .into_iter()
+                .filter(|e| entry_overlaps_window(e, &review.added_lines))
+                .collect()
+        } else {
+            report.entries
+        };
+        entries.extend(filtered);
+    }
+
+    for spec in &args.from {
+        let (path, line) = parse_from_spec(spec)?;
+        let entry = pick_paragraph(&graph, &vault, &path, line)?;
+        entries.push(entry);
+    }
+
+    if entries.is_empty() {
+        return Err(anyhow!(
+            "no entries to grow (multi-source journal was empty and no --from picks supplied)"
+        ));
+    }
+
+    // Within-run dedup by (source_path, line_start).
+    entries = dedup_entries(entries);
+
+    // --new-only: scope to entries newer than the note's last-synth
+    // watermark. The watermark is derived from the note's existing
+    // callouts; None degrades to "all missing" with a warning.
+    if args.new_only {
+        let target_abs = vault.path.join(&target);
+        let content = std::fs::read_to_string(&target_abs)
+            .with_context(|| format!("reading {} for watermark", target.display()))?;
+        let callouts = ft_core::synth::callout::parse(&content);
+        let repo = ft_core::git::RepoMap::discover(&vault.path)?;
+        match ft_core::synth::accrete::last_synth_watermark(repo.root(), &callouts)? {
+            Some((_sha, watermark_date)) => {
+                let before = entries.len();
+                entries.retain(|e| e.date > watermark_date);
+                let dropped = before.saturating_sub(entries.len());
+                if dropped > 0 {
+                    eprintln!(
+                        "--new-only: dropped {dropped} entr{} at or before the last-synth watermark ({watermark_date})",
+                        if dropped == 1 { "y" } else { "ies" }
+                    );
+                }
+            }
+            None => {
+                eprintln!(
+                    "warning: --new-only could not determine a last-synth watermark \
+                     (no callouts or all pinned SHAs unreachable) — falling back to all missing"
+                );
+            }
+        }
+    }
+
+    // --limit: cap to the newest N (entries are already date-desc from
+    // dedup_entries' sort).
+    if let Some(limit) = args.limit {
+        if entries.len() > limit {
+            entries.truncate(limit);
+        }
+    }
+
+    if entries.is_empty() {
+        eprintln!("nothing to grow: all entries already pinned or filtered out");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let plan = plan_synth_scaffold(&vault, &target, &entries).context("planning synth grow")?;
+    let written = apply_synth_scaffold(&vault, &plan).context("writing synth grow")?;
+
+    // Persist explicit --link targets into frontmatter (upsert when the
+    // key is absent). Frontmatter-derived targets are left untouched.
+    if links_were_explicit && !links.is_empty() {
+        ensure_synth_targets(&written, &links)?;
+    }
+
+    let rel = vault.relativize(&written).display().to_string();
+    if plan.dedup_skipped > 0 {
+        println!(
+            "appended {} section(s) to {} ({} already pinned, skipped)",
+            plan.sections.len(),
+            rel,
+            plan.dedup_skipped
+        );
     } else {
         println!("appended {} section(s) to {}", plan.sections.len(), rel);
     }

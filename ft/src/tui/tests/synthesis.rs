@@ -966,11 +966,16 @@ fn journal_tab_send_to_synth_new_opens_folder_picker_on_shift_s() -> Result<()> 
     Ok(())
 }
 
+// The pure `upsert_ft_synth_marker` transform has moved to
+// `ft_core::synth::callout::upsert_synth_frontmatter` (which also handles
+// the `ft-synth-targets` key). These three tests now exercise the core
+// helper to keep coverage of the marker-only behavior the TUI relied on.
+
 #[test]
 fn upsert_ft_synth_marker_inserts_into_existing_frontmatter() {
-    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    use ft_core::synth::callout::upsert_synth_frontmatter;
     let input = "---\ntitle: Foo\n---\n\nbody\n";
-    let out = upsert_ft_synth_marker(input);
+    let out = upsert_synth_frontmatter(input, None);
     assert!(out.contains("ft-synth: true"));
     assert!(out.contains("title: Foo"));
     assert!(out.contains("body"));
@@ -978,18 +983,18 @@ fn upsert_ft_synth_marker_inserts_into_existing_frontmatter() {
 
 #[test]
 fn upsert_ft_synth_marker_adds_fresh_frontmatter_when_missing() {
-    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    use ft_core::synth::callout::upsert_synth_frontmatter;
     let input = "# heading\n\nbody\n";
-    let out = upsert_ft_synth_marker(input);
+    let out = upsert_synth_frontmatter(input, None);
     assert!(out.starts_with("---\nft-synth: true\n---\n"));
     assert!(out.contains("# heading"));
 }
 
 #[test]
 fn upsert_ft_synth_marker_replaces_false_value() {
-    use crate::tui::tabs::journal::upsert_ft_synth_marker;
+    use ft_core::synth::callout::upsert_synth_frontmatter;
     let input = "---\nft-synth: false\n---\n";
-    let out = upsert_ft_synth_marker(input);
+    let out = upsert_synth_frontmatter(input, None);
     assert!(out.contains("ft-synth: true"));
     assert!(!out.contains("ft-synth: false"));
 }
@@ -1404,6 +1409,154 @@ fn notes_reslice_edit_enter_commits_and_writes() -> Result<()> {
     assert!(
         body.contains("> delta"),
         "the new line should be in the protected body:\n{body}"
+    );
+    Ok(())
+}
+
+// ── synth grow / new-only: dedup-on-append + watermark filter ────────
+
+/// Helper: drive the Journal tab's send-to-synth flow by typing a note
+/// name into the existing-note picker and pressing Enter to select the
+/// first match. Mirrors how a user appends to a specific synth note.
+fn select_existing_note_in_picker(app: &mut App, query: &str) -> Result<()> {
+    // The fuzzy picker filters on each keystroke.
+    for ch in query.chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(ch),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(())
+}
+
+#[test]
+fn journal_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let vault_path = vault.path.clone();
+
+    // Pre-create a synth note that already pins the DailyA paragraph
+    // (so the Foo journal has one entry already captured). We scaffold
+    // it via the core planner so the pin matches HEAD exactly.
+    let abs = vault_path.join("Synth/topic.md");
+    std::fs::create_dir_all(abs.parent().unwrap()).ok();
+    let graph = ft_core::graph::Graph::build(&vault, &vault.scan()).unwrap();
+    let foo = graph.ghost_by_raw("Foo").unwrap();
+    let mut cache = ft_core::blame_cache::BlameCache::default();
+    let report = ft_core::journal::build_journal(&graph, &[foo], &vault, &mut cache)?;
+    // Pin only the first entry (DailyA) — leave DailyB missing.
+    let first = vec![report.entries[0].clone()];
+    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
+        &vault,
+        std::path::Path::new("Synth/topic.md"),
+        &first,
+    )?;
+    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![JournalTarget::Ghost("Foo".into())],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    app.pump_graph_rebuild_for_test();
+
+    // `s` opens the existing-note picker; type "topic" + Enter.
+    app.dispatch(key('s'))?;
+    select_existing_note_in_picker(&mut app, "topic")?;
+    app.service_pending_requests()?;
+
+    let body = std::fs::read_to_string(&abs).unwrap();
+    let count = body.matches("[!ft-source]").count();
+    // DailyA was already pinned; only DailyB should be newly appended.
+    assert_eq!(
+        count, 2,
+        "dedup should keep the existing section and add only the missing one:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_send_to_synth_new_only_scopes_to_watermark() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let vault_path = vault.path.clone();
+
+    // Pre-create the synth note with BOTH paragraphs pinned at HEAD (so
+    // the watermark == today, and --new-only should find nothing newer).
+    let abs = vault_path.join("Synth/topic.md");
+    std::fs::create_dir_all(abs.parent().unwrap()).ok();
+    let graph = ft_core::graph::Graph::build(&vault, &vault.scan()).unwrap();
+    let foo = graph.ghost_by_raw("Foo").unwrap();
+    let mut cache = ft_core::blame_cache::BlameCache::default();
+    let report = ft_core::journal::build_journal(&graph, &[foo], &vault, &mut cache)?;
+    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
+        &vault,
+        std::path::Path::new("Synth/topic.md"),
+        &report.entries,
+    )?;
+    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![JournalTarget::Ghost("Foo".into())],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    app.pump_graph_rebuild_for_test();
+
+    // `n` opens the existing-note picker in new-only mode.
+    app.dispatch(key('n'))?;
+    select_existing_note_in_picker(&mut app, "topic")?;
+    app.service_pending_requests()?;
+
+    let body = std::fs::read_to_string(&abs).unwrap();
+    let count = body.matches("[!ft-source]").count();
+    // All entries are at-or-before the watermark (HEAD == watermark) →
+    // nothing new appended. Note keeps its two sections.
+    assert_eq!(
+        count, 2,
+        "new-only should append nothing when all entries are at the watermark:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_send_to_synth_new_only_empty_note_falls_back() -> Result<()> {
+    use crate::tui::tab::{JournalTarget, MultiTargetRequest};
+    let (_dir, vault) = multi_target_journal_vault();
+    let vault_path = vault.path.clone();
+
+    // An empty synth note (no callouts → no watermark).
+    let abs = vault_path.join("Synth/empty.md");
+    std::fs::create_dir_all(abs.parent().unwrap()).ok();
+    std::fs::write(&abs, "---\nft-synth: true\n---\n\n").unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let request = MultiTargetRequest {
+        targets: vec![JournalTarget::Ghost("Foo".into())],
+        window: None,
+    };
+    app.queue_journal_for_multi_tab_test(request);
+    app.switch_to(journal_tab_idx())?;
+    app.pump_graph_rebuild_for_test();
+
+    // `n` → pick the empty note → fallback to all missing.
+    app.dispatch(key('n'))?;
+    select_existing_note_in_picker(&mut app, "empty")?;
+    app.service_pending_requests()?;
+
+    let body = std::fs::read_to_string(&abs).unwrap();
+    let count = body.matches("[!ft-source]").count();
+    assert!(
+        count >= 1,
+        "empty-note new-only should fall back to shipping all missing entries:\n{body}"
     );
     Ok(())
 }

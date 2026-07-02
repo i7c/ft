@@ -550,6 +550,55 @@ pub fn show_file_at(repo: &Path, sha: &str, path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Check whether a commit object exists in the local repo (`git
+/// cat-file -e <sha>^{commit}`). Returns `false` (not an error) when the
+/// object is unreachable — e.g. a shallow clone or a branch switch that
+/// dropped the commit. Used by the synth accrete watermark to skip
+/// unreachable pinned SHAs.
+pub fn object_exists(repo: &Path, sha: &str) -> bool {
+    let spec = format!("{sha}^{{commit}}");
+    git(repo)
+        .args(["cat-file", "-e", &spec])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The topological tip among a set of commits — the descendant
+/// reachable from all of them — via `git rev-list --max-count=1 <sha...>`.
+/// Returns the full 40-char SHA. Errors when a SHA is ambiguous or no
+/// SHA resolves. Used by the synth accrete last-synth watermark.
+pub fn rev_list_tip(repo: &Path, shas: &[&str]) -> Result<String> {
+    let mut cmd = git(repo);
+    cmd.args(["rev-list", "--max-count=1"]);
+    for s in shas {
+        cmd.arg(s);
+    }
+    let out = cmd.output().map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err("rev-list --max-count=1", &out.stderr));
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        return Err(Error::Git(format!("rev-list produced no tip for {shas:?}")));
+    }
+    Ok(sha)
+}
+
+/// The committer date (ISO 8601, e.g. `2026-06-01T12:34:56+00:00`) of a
+/// single commit via `git log -1 --format=%cI <sha>`. Used by the synth
+/// accrete watermark to scope `--new-only` entries.
+pub fn commit_committer_date_iso(repo: &Path, sha: &str) -> Result<String> {
+    let out = git(repo)
+        .args(["log", "-1", "--format=%cI", sha])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(cmd_err(&format!("log -1 --format=%cI {sha}"), &out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 // ── Sync ─────────────────────────────────────────────────────────────────
 
 /// Orchestrate the full sync sequence. See the module docs for the

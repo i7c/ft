@@ -175,6 +175,15 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "journal.send-to-synth-new-only",
+        description: "Append to an existing note only entries newer than its last synth watermark",
+        scope: CommandScope::Tab("journal"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "journal.send-to-synth-new",
         description: "Create a new synth note for the selected (or all) entries",
         scope: CommandScope::Tab("journal"),
@@ -211,25 +220,35 @@ pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Space", "journal.toggle-entry-selection")
         .bind("w", "journal.toggle-in-window")
         .bind("s", "journal.send-to-synth-existing")
+        .bind("n", "journal.send-to-synth-new-only")
         .bind("S", "journal.send-to-synth-new")
 });
 
 /// Send-to-synth multi-step flow state. Active only when the user has
-/// pressed `s` (append-to-existing) or `S` (create-new); when `None`
-/// the tab handles keys normally.
+/// pressed `s` (append-to-existing), `S` (create-new), or `n`
+/// (new-only append-to-existing); when `None` the tab handles keys
+/// normally.
 ///
-/// Both branches converge to a `(target_path, plan_create)` decision
-/// that drives `plan_synth_scaffold` / `apply_synth_scaffold` and the
-/// editor handoff.
+/// Both `s` and `n` converge on `PickExisting`; the `new_only` flag
+/// distinguishes them — `n` filters `entries_to_send()` to entries
+/// newer than the picked note's last-synth watermark before planning.
+/// `S` flows through the folder + title prompts to a create.
 pub enum SynthSendState {
-    /// `s` — fuzzy picker over every `.md` in the vault.
-    PickExisting(FuzzyPicker<VaultFilePickerSource>),
+    /// `s` / `n` — fuzzy picker over every `.md` in the vault. `new_only`
+    /// records which command opened this picker so the on-pick handler
+    /// knows whether to apply the watermark filter.
+    PickExisting {
+        picker: FuzzyPicker<VaultFilePickerSource>,
+        new_only: bool,
+    },
     /// User picked a real note but its frontmatter lacks
     /// `ft-synth: true`. Inline 3-way prompt: append anyway, mark and
-    /// append, or cancel.
+    /// append, or cancel. `new_only` is carried through so the `n` flow
+    /// still filters after the mark/append decision.
     NonSynthPrompt {
         path: PathBuf,
         focus: NonSynthChoice,
+        new_only: bool,
     },
     /// `S` — fuzzy picker over every vault folder. `.` selects the
     /// vault root.
@@ -556,24 +575,41 @@ impl JournalTab {
             return EventOutcome::NotHandled;
         };
         match state {
-            SynthSendState::PickExisting(mut picker) => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, hit.path),
+            SynthSendState::PickExisting {
+                mut picker,
+                new_only,
+            } => match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, hit.path, new_only),
                 PickerOutcome::Cancelled => {}
                 PickerOutcome::StillOpen => {
-                    self.synth_send = Some(SynthSendState::PickExisting(picker));
+                    self.synth_send = Some(SynthSendState::PickExisting { picker, new_only });
                 }
                 PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickExisting(picker));
+                    self.synth_send = Some(SynthSendState::PickExisting { picker, new_only });
                 }
             },
-            SynthSendState::NonSynthPrompt { path, focus } => match k.code {
+            SynthSendState::NonSynthPrompt {
+                path,
+                focus,
+                new_only,
+            } => match k.code {
                 KeyCode::Esc => {}
-                KeyCode::Enter => self.commit_non_synth_choice(ctx, &path, focus),
+                KeyCode::Enter => self.commit_non_synth_choice(ctx, &path, focus, new_only),
                 KeyCode::Char('a') | KeyCode::Char('A') => {
-                    self.commit_non_synth_choice(ctx, &path, NonSynthChoice::AppendAnyway);
+                    self.commit_non_synth_choice(
+                        ctx,
+                        &path,
+                        NonSynthChoice::AppendAnyway,
+                        new_only,
+                    );
                 }
                 KeyCode::Char('m') | KeyCode::Char('M') => {
-                    self.commit_non_synth_choice(ctx, &path, NonSynthChoice::MarkAndAppend);
+                    self.commit_non_synth_choice(
+                        ctx,
+                        &path,
+                        NonSynthChoice::MarkAndAppend,
+                        new_only,
+                    );
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {}
                 KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
@@ -581,10 +617,18 @@ impl JournalTab {
                         NonSynthChoice::AppendAnyway => NonSynthChoice::MarkAndAppend,
                         NonSynthChoice::MarkAndAppend => NonSynthChoice::AppendAnyway,
                     };
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt { path, focus: next });
+                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
+                        path,
+                        focus: next,
+                        new_only,
+                    });
                 }
                 _ => {
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt { path, focus });
+                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
+                        path,
+                        focus,
+                        new_only,
+                    });
                 }
             },
             SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
@@ -635,7 +679,7 @@ impl JournalTab {
                         };
                         // Create-new: `apply_synth_scaffold` will write
                         // frontmatter and content. No need to mark.
-                        self.commit_send(ctx, &target, false);
+                        self.commit_send(ctx, &target, false, false);
                     }
                 }
                 // All text edits + cursor moves + readline chords go
@@ -655,34 +699,60 @@ impl JournalTab {
     }
 
     /// Existing note picked → check its frontmatter and either send
-    /// directly (synth-marked) or open the NonSynthPrompt.
-    fn on_existing_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
+    /// directly (synth-marked) or open the NonSynthPrompt. `new_only`
+    /// carries the `n`-command's watermark-filter intent through to
+    /// [`commit_send`].
+    fn on_existing_picked(&mut self, ctx: &mut TabCtx, path: PathBuf, new_only: bool) {
         let abs = ctx.vault.path.join(&path);
         let is_synth = std::fs::read_to_string(&abs)
             .map(|c| ft_core::synth::callout::is_synth_note(&c))
             .unwrap_or(false);
         if is_synth {
-            self.commit_send(ctx, &path, false);
+            self.commit_send(ctx, &path, false, new_only);
         } else {
             self.synth_send = Some(SynthSendState::NonSynthPrompt {
                 path,
                 focus: NonSynthChoice::MarkAndAppend,
+                new_only,
             });
         }
     }
 
-    fn commit_non_synth_choice(&mut self, ctx: &mut TabCtx, path: &Path, choice: NonSynthChoice) {
+    fn commit_non_synth_choice(
+        &mut self,
+        ctx: &mut TabCtx,
+        path: &Path,
+        choice: NonSynthChoice,
+        new_only: bool,
+    ) {
         let mark = matches!(choice, NonSynthChoice::MarkAndAppend);
-        self.commit_send(ctx, path, mark);
+        self.commit_send(ctx, path, mark, new_only);
     }
 
-    /// `s` — open the existing-note fuzzy picker.
+    /// `s` — open the existing-note fuzzy picker (append, all entries).
     fn open_send_to_existing(&mut self, ctx: &TabCtx) {
         if self.entries.is_empty() {
             return;
         }
         let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
-        self.synth_send = Some(SynthSendState::PickExisting(FuzzyPicker::new(source)));
+        self.synth_send = Some(SynthSendState::PickExisting {
+            picker: FuzzyPicker::new(source),
+            new_only: false,
+        });
+    }
+
+    /// `n` — open the existing-note fuzzy picker (append, only entries
+    /// newer than the picked note's last-synth watermark). The filter
+    /// is applied in [`commit_send`] after the note is picked.
+    fn open_send_to_new_only(&mut self, ctx: &TabCtx) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
+        self.synth_send = Some(SynthSendState::PickExisting {
+            picker: FuzzyPicker::new(source),
+            new_only: true,
+        });
     }
 
     /// `S` — open the folder fuzzy picker for the create-new flow.
@@ -714,9 +784,20 @@ impl JournalTab {
     /// vault-relative target; `mark_synth` ensures the on-disk file's
     /// frontmatter includes `ft-synth: true` before the scaffold is
     /// applied (no-op when the file already has the marker or is being
-    /// created — `apply_synth_scaffold` writes the marker fresh).
-    fn commit_send(&mut self, ctx: &mut TabCtx, vault_rel_path: &Path, mark_synth: bool) {
-        let entries = self.entries_to_send();
+    /// created — `apply_synth_scaffold` writes the marker fresh). When
+    /// `new_only` is set, entries whose `date` is at or before the note's
+    /// last-synth watermark are dropped before planning (mirrors `ft synth
+    /// grow --new-only`); the watermark is derived from the note's
+    /// existing callouts, and an unavailable watermark falls back to
+    /// shipping all missing entries with an informational toast.
+    fn commit_send(
+        &mut self,
+        ctx: &mut TabCtx,
+        vault_rel_path: &Path,
+        mark_synth: bool,
+        new_only: bool,
+    ) {
+        let mut entries = self.entries_to_send();
         if entries.is_empty() {
             crate::tui::notes_actions::queue_toast(
                 ctx,
@@ -732,6 +813,65 @@ impl JournalTab {
                     ctx,
                     &format!("could not add ft-synth marker: {e}"),
                     ToastStyle::Error,
+                );
+                return;
+            }
+        }
+
+        // `n` (new-only): filter to entries newer than the note's
+        // last-synth watermark before planning. The planner's
+        // dedup-on-append runs after this, so the two filters compose.
+        if new_only {
+            let abs = ctx.vault.path.join(vault_rel_path);
+            let content = match std::fs::read_to_string(&abs) {
+                Ok(c) => c,
+                Err(e) => {
+                    crate::tui::notes_actions::queue_toast(
+                        ctx,
+                        &format!("send-to-synth-new-only: could not read note: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            };
+            let callouts = ft_core::synth::callout::parse(&content);
+            match ft_core::git::RepoMap::discover(&ctx.vault.path) {
+                Ok(repo) => {
+                    match ft_core::synth::accrete::last_synth_watermark(repo.root(), &callouts) {
+                        Ok(Some((_sha, watermark_date))) => {
+                            entries.retain(|e| e.date > watermark_date);
+                        }
+                        Ok(None) => {
+                            crate::tui::notes_actions::queue_toast(
+                                ctx,
+                                "new-only: no last-synth watermark — shipping all missing entries",
+                                ToastStyle::Info,
+                            );
+                        }
+                        Err(e) => {
+                            crate::tui::notes_actions::queue_toast(
+                                ctx,
+                                &format!("new-only watermark failed: {e}"),
+                                ToastStyle::Error,
+                            );
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::tui::notes_actions::queue_toast(
+                        ctx,
+                        &format!("new-only: could not find git repo: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            }
+            if entries.is_empty() {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    "new-only: no entries newer than the watermark",
+                    ToastStyle::Info,
                 );
                 return;
             }
@@ -981,6 +1121,10 @@ impl Tab for JournalTab {
                 self.open_send_to_existing(ctx);
                 CommandOutcome::Handled
             }
+            "journal.send-to-synth-new-only" => {
+                self.open_send_to_new_only(ctx);
+                CommandOutcome::Handled
+            }
             "journal.send-to-synth-new" => {
                 self.open_send_to_new(ctx);
                 CommandOutcome::Handled
@@ -1061,6 +1205,10 @@ impl Tab for JournalTab {
                     ("Space", "toggle multi-select on the current entry"),
                     ("w", "toggle in-window-only filter (multi-target + window)"),
                     ("s", "pick an existing note to append the scaffold to"),
+                    (
+                        "n",
+                        "append only entries newer than the picked note's last synth",
+                    ),
                     ("Shift+s", "create a new synth note (folder + title)"),
                 ],
             ),
@@ -1607,61 +1755,31 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
 }
 
 /// Insert `ft-synth: true` into the YAML frontmatter of the file at
-/// `absolute_path`. If a frontmatter block is already present, the
-/// existing `ft-synth: ...` line is replaced (or added if missing); if
-/// no frontmatter exists, a fresh `---\nft-synth: true\n---\n\n` block
-/// is prepended.
+/// `absolute_path`. Delegates to [`ft_core::synth::callout::upsert_synth_frontmatter`]
+/// (the core pure transform) so the marker and the `ft-synth-targets` key
+/// compose without clobbering each other. This thin wrapper handles the
+/// I/O (read + atomic write).
 fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
     let content = std::fs::read_to_string(absolute_path)?;
-    let new_content = upsert_ft_synth_marker(&content);
+    let new_content = ft_core::synth::callout::upsert_synth_frontmatter(&content, None);
     if new_content == content {
         return Ok(());
     }
     ft_core::fs::write_atomic(absolute_path, &new_content).map_err(std::io::Error::other)
 }
 
-/// Pure transform: ensure the result has `ft-synth: true` in YAML
-/// frontmatter. Idempotent.
-pub fn upsert_ft_synth_marker(content: &str) -> String {
-    let lines: Vec<&str> = content.split('\n').collect();
-    let has_fm = lines.first() == Some(&"---");
-    if !has_fm {
-        let mut out = String::from("---\nft-synth: true\n---\n");
-        if !content.starts_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(content);
-        return out;
-    }
-    let end_idx = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, l)| **l == "---")
-        .map(|(i, _)| i);
-    let Some(end_idx) = end_idx else {
-        // Unterminated frontmatter — bail and just prepend a fresh block.
-        return format!("---\nft-synth: true\n---\n\n{content}");
-    };
-    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-    let mut found = false;
-    for line in new_lines.iter_mut().take(end_idx).skip(1) {
-        if line.trim_start().starts_with("ft-synth:") {
-            *line = "ft-synth: true".to_string();
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        new_lines.insert(end_idx, "ft-synth: true".to_string());
-    }
-    new_lines.join("\n")
-}
+// `upsert_ft_synth_marker` (the pure marker-only transform) has moved
+// to `ft_core::synth::callout::upsert_synth_frontmatter`, which also
+// handles the optional `ft-synth-targets` key. The TUI layer no longer
+// keeps its own copy; callers use the core helper directly.
+//
+// The three unit tests below (`upsert_ft_synth_marker_*`) now exercise
+// the core helper to keep coverage of the TUI-layer behavior it backs.
 
 /// Render whichever step of the send-to-synth flow is active.
 fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) {
     match state {
-        SynthSendState::PickExisting(picker) => {
+        SynthSendState::PickExisting { picker, .. } => {
             let popup = centered_rect(70, 70, area);
             frame.render_widget(Clear, popup);
             picker.render(frame, popup);
@@ -1671,7 +1789,7 @@ fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) 
             frame.render_widget(Clear, popup);
             picker.render(frame, popup);
         }
-        SynthSendState::NonSynthPrompt { path, focus } => {
+        SynthSendState::NonSynthPrompt { path, focus, .. } => {
             let height = 5.min(area.height);
             let y = area.y + area.height.saturating_sub(height);
             let prompt_area = Rect {
