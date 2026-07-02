@@ -1,7 +1,7 @@
 # Migrating task queries
 
 `ft` used to ship two query DSLs: one for tasks (`ft-core/src/query/dsl.rs`)
-and one for the graph tab (`ft-core/src/graph/query.rs`). The task DSL has
+and one for the graph tab (`ft-core/src/graph/query/`). The task DSL has
 been removed; task queries now run the **graph DSL** under
 `Profile::Tasks`, which gives you the same short syntax (`priority = high`,
 `due < today`) backed by a single engine.

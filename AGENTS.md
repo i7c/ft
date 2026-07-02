@@ -147,7 +147,7 @@ committed reference: `cargo run --release -q -- commands docs > docs/keybindings
   overlay line is mandatory or user `[keymap]` overrides / `ft commands
   check-keymap` silently miss your tab. Override `help_sections()` so the
   `?` overlay shows your keymap, add a `dispatch_command` arm, and add
-  a `TestBackend` snapshot in `ft/src/tui/tests.rs`. Re-run
+  a `TestBackend` snapshot under `ft/src/tui/tests/`. Re-run
   `ft commands docs > docs/keybindings.md`.
 - **New task format:** new module under `ft-core/src/task/`, implement
   `TaskFormat`, wire format detection in `vault::parse_file` and

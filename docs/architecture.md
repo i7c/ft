@@ -182,7 +182,7 @@ returns the children for one hop; `GraphQuery::walk(&graph,
 &WalkOptions)` materializes the full reachable subtree as
 `Vec<WalkNode>` with depth + cycle bounds (Stop emits a cycle marker
 and halts that branch; Allow needs `max_depth`). Consumers compose
-these to taste: the TUI graph tab (`ft/src/tui/tabs/graph.rs`) drives
+these to taste: the TUI graph tab (`ft/src/tui/tabs/graph/`) drives
 `select` + `expand` one hop per keystroke; the CLI subcommand `ft
 graph query` (`ft/src/cmd/graph.rs` + `ft/src/output/graph.rs`) calls
 `walk` once and renders the result in tree/json/ndjson/edges/markdown.
@@ -324,7 +324,7 @@ link-pick → Journal handoff; see §"Synthesis ritual").
    keymap. Group bindings the way users will look them up
    ("Navigation", "Mutations", "Modals"); keep key strings short
    (≤ 18 chars) so they fit alongside descriptions in the 80-col popup.
-4. Add a snapshot test in `ft/src/tui/tests.rs` that switches to the new
+4. Add a snapshot test under `ft/src/tui/tests/` that switches to the new
    tab, calls `app.enter_help()`, and renders to a `TestBackend` so the
    help inventory is locked against drift.
 
@@ -418,10 +418,10 @@ indicator and tests.
   `PickerOutcome::Selected(item)`, the modal posts a tab-specific
   `AppRequest::Graph*` (e.g. `GraphJumpToNodes`,
   `GraphApplyPreset`, `RunCapturePreset`) with the typed payload.
-  The newtypes live in `tabs/graph.rs` so they can reach
+  The newtypes live in `tabs/graph/modals.rs` so they can reach
   graph-internal types.
 - **Tab-resident state** (`GraphRenameState`, `RelatedModal`,
-  `GraphMoveOuter`): state types stay in `tabs/graph.rs`; their
+  `GraphMoveOuter`): state types stay in `tabs/graph/modals.rs`; their
   `Modal` impls live there too. Commits post tab-specific
   `AppRequest::Graph*` variants (e.g. `GraphCommitRename`,
   `GraphConfirmRelated`) so the host can plan/apply against
