@@ -48,4 +48,4 @@
 - [x] 6.4 `cargo fmt --check` clean.
 - [x] 6.5 `cargo run --release -q -- commands docs --check` clean.
 - [x] 6.6 Update `docs/architecture.md` §"Synthesis ritual" to mention `grow`, the dedup-on-append invariant, the watermark primitive, and `ft-synth-targets`. Keep it brief — point to `openspec/changes/synth-grow-accrete/` for detail.
-- [ ] 6.7 Run the openspec archive flow (`.pi/skills/openspec-archive-change`) once all tasks are complete and invariants are green.
+- [x] 6.7 Run the openspec archive flow (`.pi/skills/openspec-archive-change`) once all tasks are complete and invariants are green.
