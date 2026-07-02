@@ -60,7 +60,7 @@ use crate::tui::{
         },
     },
     palette,
-    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::notes::view as notes_view,
     tabs::tasks::edit_popup::EditPopup,
     widgets::{
@@ -3383,6 +3383,10 @@ impl GraphTab {
 impl Tab for GraphTab {
     fn title(&self) -> &str {
         "Graph"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Graph
     }
 
     fn host_popup_open(&self) -> bool {

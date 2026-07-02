@@ -612,7 +612,7 @@ fn timeblocks_tab_close_bracket_extends_end_by_5m() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key(']'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:00 - 10:05 a"), "got: {body}");
     Ok(())
@@ -626,7 +626,7 @@ fn timeblocks_tab_open_bracket_shrinks_end_by_5m() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key('['))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:00 - 09:55 a"), "got: {body}");
     Ok(())
@@ -640,7 +640,7 @@ fn timeblocks_tab_close_brace_shifts_start_by_5m() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key('}'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:05 - 10:00 a"), "got: {body}");
     Ok(())
@@ -654,7 +654,7 @@ fn timeblocks_tab_gt_shifts_block_5m_later_preserving_duration() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key('>'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:05 - 10:05 a"), "got: {body}");
     Ok(())
@@ -668,7 +668,7 @@ fn timeblocks_tab_lt_shifts_block_5m_earlier_preserving_duration() -> Result<()>
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key('<'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 08:55 - 09:55 a"), "got: {body}");
     Ok(())
@@ -688,7 +688,7 @@ fn timeblocks_tab_gt_keeps_cursor_on_shifted_block_after_resort() -> Result<()> 
     // second (09:10) comes first; cursor should follow "first" to idx 1.
     for _ in 0..3 {
         app.dispatch(key('>'))?;
-        app.service_pending_for_test()?;
+        app.service_pending_requests()?;
     }
     let frame = render(&mut app, 100, 24);
     assert!(
@@ -708,7 +708,7 @@ fn timeblocks_tab_open_brace_pulls_start_5m_earlier() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(3)?;
     app.dispatch(key('{'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 08:55 - 10:00 a"), "got: {body}");
     Ok(())
@@ -727,14 +727,14 @@ fn timeblocks_tab_dd_deletes_focused_block() -> Result<()> {
     app.switch_to(3)?;
     // First `d` arms the chord; second `d` commits.
     app.dispatch(key('d'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let after_first = render(&mut app, 100, 24);
     assert!(
         after_first.contains("d again = delete"),
         "armed-state indicator missing"
     );
     app.dispatch(key('d'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(!body.contains("- 09:00 - 10:00 a"), "deleted: {body}");
     assert!(body.contains("- 10:00 - 11:00 b"));
@@ -770,7 +770,7 @@ fn timeblocks_tab_quickline_a_adds_block() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:00 - 10:00 standup"), "got: {body}");
     Ok(())
@@ -849,7 +849,7 @@ fn timeblocks_tab_form_capital_a_commits_on_desc_enter() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("from form"), "got: {body}");
     Ok(())
@@ -874,7 +874,7 @@ fn timeblocks_tab_time_chord_keeps_selection_on_non_first_block() -> Result<()> 
     app.dispatch(key('j'))?;
     for _ in 0..3 {
         app.dispatch(key(']'))?;
-        app.service_pending_for_test()?;
+        app.service_pending_requests()?;
     }
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     // First block unchanged, second block's end shifted by 3*5 = 15m.
@@ -909,7 +909,7 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
 
     // Time-shift on the first block (line 1, 09:00 - 10:00).
     app.dispatch(key(']'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(body.contains("- 09:00 - 10:05 first"), "got: {body}");
     assert!(
@@ -920,7 +920,7 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
     // Time-shift on the second block (line 2).
     app.dispatch(key('j'))?;
     app.dispatch(key(']'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(
         body.contains("- 09:00 - 10:05 first"),
@@ -953,9 +953,9 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
     // Delete the first block (move cursor up and run `d d`).
     app.dispatch(key('k'))?;
     app.dispatch(key('d'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     app.dispatch(key('d'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     assert!(!body.contains("first"), "first deleted: {body}");
     assert!(body.contains("- 09:00 - 10:35 renamed"));
@@ -1218,7 +1218,7 @@ fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let initial = render(&mut app, 100, 24);
     assert!(initial.contains("no daily note yet"));
     app.dispatch(key('c'))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
     // Template's title + Notes section must be present.
     assert!(body.contains("# 2026-05-10"), "title missing: {body}");
@@ -2605,7 +2605,7 @@ fn quickline_success_raises_green_toast_request() -> Result<()> {
     )))?;
     // Service the queued AppRequest::Toast so the App's toast slot
     // becomes populated (the run-loop does this between iterations).
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let toast = app
         .current_toast()
         .expect("a toast should be active after a successful create");
@@ -2631,7 +2631,7 @@ fn quickline_success_renders_toast_in_status_bar_center_cell() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let frame = render(&mut app, 120, 24);
     let status = frame.lines().last().expect("status bar row");
     assert!(
@@ -2687,7 +2687,7 @@ fn quickline_duplicate_does_not_raise_toast() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     assert!(
         app.current_toast().is_none(),
         "duplicate should stay inline, not fire a toast"
@@ -2979,7 +2979,7 @@ fn quickline_toast_success_snapshot_80x24() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("quickline_toast_success_80x24", frame);
     Ok(())
@@ -3816,18 +3816,14 @@ fn notes_move_compose_enter_commits_and_writes_files() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("commit should queue a success toast");
-    match req {
-        AppRequest::Toast { text, .. } => {
-            assert!(
-                text.starts_with("Moved 1 section(s):"),
-                "success toast text: {text}"
-            );
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("commit should surface a success toast");
+    assert!(
+        toast.text.starts_with("Moved 1 section(s):"),
+        "success toast text: {}",
+        toast.text
+    );
     let new_source = std::fs::read_to_string(vault_path.join("project.md"))?;
     let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
     assert!(
@@ -3962,16 +3958,11 @@ fn notes_move_compose_rename_empty_keeps_buffer_open_with_toast() -> Result<()> 
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("empty rename should queue a toast");
-    match req {
-        AppRequest::Toast { text, style } => {
-            assert_eq!(text, "rename cannot be empty");
-            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("empty rename should surface a toast");
+    assert_eq!(toast.text, "rename cannot be empty");
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Error);
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("rename → "),
@@ -3997,15 +3988,10 @@ fn notes_move_compose_rename_whitespace_only_keeps_buffer_open_with_toast() -> R
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("whitespace-only rename should queue a toast");
-    match req {
-        AppRequest::Toast { text, .. } => {
-            assert_eq!(text, "rename cannot be empty");
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("whitespace-only rename should surface a toast");
+    assert_eq!(toast.text, "rename cannot be empty");
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("rename → "),
@@ -4143,18 +4129,14 @@ fn notes_move_compose_rename_writes_renamed_heading_to_disk() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("commit should queue a success toast");
-    match req {
-        AppRequest::Toast { text, .. } => {
-            assert!(
-                text.starts_with("Moved 1 section(s):"),
-                "success toast: {text}"
-            );
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("commit should surface a success toast");
+    assert!(
+        toast.text.starts_with("Moved 1 section(s):"),
+        "success toast: {}",
+        toast.text
+    );
     let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
     assert!(
         new_target.contains("# Renamed Project"),
@@ -4238,18 +4220,14 @@ fn notes_move_compose_rename_e2e_two_h2_picks() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    let req = app
-        .take_pending_request()
-        .expect("commit should queue a success toast");
-    match req {
-        AppRequest::Toast { text, .. } => {
-            assert!(
-                text.starts_with("Moved 2 section(s):"),
-                "success toast: {text}"
-            );
-        }
-        other => panic!("expected Toast, got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("commit should surface a success toast");
+    assert!(
+        toast.text.starts_with("Moved 2 section(s):"),
+        "success toast: {}",
+        toast.text
+    );
     let new_source = std::fs::read_to_string(vault_path.join("project.md"))?;
     let new_target = std::fs::read_to_string(vault_path.join("archive.md"))?;
     // Source loses both moved sections.
@@ -5528,19 +5506,15 @@ fn notes_tab_t_emits_error_toast_when_daily_unconfigured() -> Result<()> {
     app.switch_to(NOTES_TAB_INDEX)?;
     app.dispatch(key('t'))?;
 
-    let req = app
-        .take_pending_request()
-        .expect("`t` should queue a Toast when daily isn't configured");
-    match req {
-        AppRequest::Toast { text, style } => {
-            assert!(
-                text.contains("daily not configured"),
-                "toast should call out the missing period: {text:?}"
-            );
-            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
-        }
-        other => panic!("expected Toast(error), got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("`t` should surface a Toast when daily isn't configured");
+    assert!(
+        toast.text.contains("daily not configured"),
+        "toast should call out the missing period: {:?}",
+        toast.text
+    );
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Error);
     Ok(())
 }
 
@@ -5791,19 +5765,15 @@ fn notes_tab_p_then_w_emits_toast_when_weekly_unconfigured() -> Result<()> {
     app.dispatch(key('p'))?;
     app.dispatch(key('w'))?;
 
-    let req = app
-        .take_pending_request()
-        .expect("p,w with no weekly config should queue an error toast");
-    match req {
-        AppRequest::Toast { text, style } => {
-            assert!(
-                text.contains("weekly not configured"),
-                "toast should name the unconfigured period: {text:?}"
-            );
-            assert_eq!(style, crate::tui::tab::ToastStyle::Error);
-        }
-        other => panic!("expected Toast(error), got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("p,w with no weekly config should surface an error toast");
+    assert!(
+        toast.text.contains("weekly not configured"),
+        "toast should name the unconfigured period: {:?}",
+        toast.text
+    );
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Error);
     Ok(())
 }
 
@@ -6991,7 +6961,7 @@ fn graph_tab_e_edits_focused_task_due_date() -> Result<()> {
         KeyModifiers::CONTROL,
     )))?; // Ctrl+S save
           // Disk-mutating requests go through service_request, not drain_simple.
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
     let _ = app.take_pending_request();
 
     let content = std::fs::read_to_string(vault_path.join("root.md"))?;
@@ -7072,7 +7042,7 @@ fn graph_tab_a_c_creates_top_level_task() -> Result<()> {
         KeyCode::Char('s'),
         KeyModifiers::CONTROL,
     )))?;
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
     let _ = app.take_pending_request();
 
     let content = std::fs::read_to_string(vault_path.join("root.md"))?;
@@ -7101,7 +7071,7 @@ fn graph_tab_a_s_creates_subtask() -> Result<()> {
         KeyCode::Char('s'),
         KeyModifiers::CONTROL,
     )))?;
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
     let _ = app.take_pending_request();
 
     let content = std::fs::read_to_string(vault_path.join("root.md"))?;
@@ -7120,7 +7090,7 @@ fn graph_tab_a_s_on_non_task_toasts() -> Result<()> {
     app.dispatch(key('k'))?;
     app.dispatch(key('a'))?;
     app.dispatch(key('s'))?;
-    app.service_pending_for_test()?; // flush the toast request
+    app.service_pending_requests()?; // flush the toast request
     let frame = render(&mut app, 80, 24);
     assert!(
         !frame.contains("new task"),
@@ -7605,23 +7575,20 @@ fn graph_t_queues_toast_when_daily_unreachable() -> Result<()> {
     app.switch_to(1)?;
     app.switch_to(0)?;
     app.dispatch(key('t'))?;
-    let req = app
-        .take_pending_request()
-        .expect("`t` should queue a Toast when daily is unreachable");
-    match req {
-        AppRequest::Toast { text, style } => {
-            assert!(
-                text.contains("daily"),
-                "toast should mention daily: {text:?}",
-            );
-            assert!(
-                text.contains("not in the current graph results"),
-                "toast should explain the note isn't reachable: {text:?}",
-            );
-            assert_eq!(style, crate::tui::tab::ToastStyle::Info);
-        }
-        other => panic!("expected Toast(Info), got {other:?}"),
-    }
+    let toast = app
+        .current_toast()
+        .expect("`t` should surface a Toast when daily is unreachable");
+    assert!(
+        toast.text.contains("daily"),
+        "toast should mention daily: {:?}",
+        toast.text
+    );
+    assert!(
+        toast.text.contains("not in the current graph results"),
+        "toast should explain the note isn't reachable: {:?}",
+        toast.text
+    );
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Info);
     Ok(())
 }
 
@@ -7656,9 +7623,9 @@ fn graph_p_then_d_navigates_or_toasts() -> Result<()> {
     app.dispatch(key('p'))?;
     app.dispatch(key('d'))?;
     // The modal posts GraphNavigatePeriodic; service it to trigger the tab's handler.
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
     // The handler queues a Toast in pending_request; service that too.
-    app.service_pending_for_test()?;
+    app.service_pending_requests()?;
     // Result: toast indicating the daily note is not in graph results.
     let req = app.take_pending_request();
     assert!(
@@ -7816,7 +7783,7 @@ fn graph_p_then_d_navigates_to_daily_when_reachable() -> Result<()> {
     app.dispatch(key('p'))?;
     app.dispatch(key('d'))?;
     // Service the GraphNavigatePeriodic request.
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("2026-05-10"),
@@ -8978,7 +8945,7 @@ fn graph_shift_j_jumps_to_journal_tab_for_selected_note() -> Result<()> {
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
-    app.service_request_for_test()?;
+    app.service_pending_requests()?;
 
     assert_eq!(app.active_title(), "Journal");
     Ok(())
@@ -8995,17 +8962,14 @@ fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()>
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
-    // The pending request should be a Toast (error guidance), NOT a
-    // JournalForNote jump. Servicing it leaves the active tab on Graph.
-    match app.take_pending_request() {
-        Some(AppRequest::Toast { text, .. }) => {
-            assert!(
-                text.to_lowercase().contains("note"),
-                "toast text must hint at the Note-row requirement: {text}"
-            );
-        }
-        other => panic!("expected a Toast pending request, got {other:?}"),
-    }
+    // The routed outcome is a Toast (error guidance), NOT a
+    // JournalForNote jump — the active tab stays on Graph.
+    let toast = app.current_toast().expect("expected an error toast");
+    assert!(
+        toast.text.to_lowercase().contains("note"),
+        "toast text must hint at the Note-row requirement: {}",
+        toast.text
+    );
     assert_eq!(app.active_title(), "Graph");
     Ok(())
 }
@@ -9033,15 +8997,19 @@ fn graph_shift_j_on_ghost_row_queues_journal_for_ghost() -> Result<()> {
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
-    match app.take_pending_request() {
-        Some(AppRequest::JournalFor {
-            target: crate::tui::tab::JournalTarget::Ghost(raw),
-        }) => assert_eq!(raw, "Phantom"),
-        other => panic!(
-            "expected JournalFor {{ Ghost(\"Phantom\") }}, got {other:?}\nframe:\n{}",
-            render(&mut app, 100, 24)
-        ),
-    }
+    // The JournalFor request is serviced through the real routing
+    // path: the app switches to the Journal tab with the ghost queued
+    // as its target.
+    let frame = render(&mut app, 100, 24);
+    assert_eq!(
+        app.active_title(),
+        "Journal",
+        "Shift+J on a ghost row must land on the Journal tab\nframe:\n{frame}"
+    );
+    assert!(
+        frame.contains("Phantom"),
+        "Journal tab must show the ghost target:\n{frame}"
+    );
     let _ = dir;
     Ok(())
 }

@@ -523,10 +523,28 @@ pub struct TabCtx<'a> {
     pub host_popup_open: bool,
 }
 
+/// Typed identity of a tab, used by the App to route cross-tab
+/// [`AppRequest`]s to their target (e.g. `Graph*` actions to the Graph
+/// tab, `Journal*` queues to the Journal tab) without matching on the
+/// display string from [`Tab::title`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabKind {
+    Graph,
+    Tasks,
+    Notes,
+    Timeblocks,
+    Journal,
+    Review,
+}
+
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
 /// the App's tab list — no surgery on the core loop.
 pub trait Tab {
     fn title(&self) -> &str;
+
+    /// Typed identity for request routing. Unlike [`Self::title`] (display
+    /// text, free to change), this is the stable routing key.
+    fn kind(&self) -> TabKind;
 
     fn on_focus(&mut self, _ctx: &mut TabCtx) -> Result<()> {
         Ok(())

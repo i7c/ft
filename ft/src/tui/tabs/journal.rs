@@ -45,7 +45,7 @@ use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::palette;
 use crate::tui::tab::{
     AppRequest, AppendOrReplaceMode, EventOutcome, JournalTarget, JournalWindow,
-    MultiTargetRequest, Tab, TabCtx, ToastStyle,
+    MultiTargetRequest, Tab, TabCtx, TabKind, ToastStyle,
 };
 use crate::tui::widgets::{
     EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
@@ -848,6 +848,10 @@ impl JournalTab {
 impl Tab for JournalTab {
     fn title(&self) -> &str {
         "Journal"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Journal
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {

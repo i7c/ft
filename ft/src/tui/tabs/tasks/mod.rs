@@ -13,7 +13,7 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     keymap::KeyMap,
-    tab::{EventOutcome, Tab, TabCtx},
+    tab::{EventOutcome, Tab, TabCtx, TabKind},
 };
 
 /// Empty tab-level keymap (sidebar removed). Kept as a named static so
@@ -310,6 +310,10 @@ impl TasksTab {
 impl Tab for TasksTab {
     fn title(&self) -> &str {
         "Tasks"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Tasks
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {

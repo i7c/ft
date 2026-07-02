@@ -30,7 +30,7 @@ use crate::tui::{
     keymap::KeyChord,
     modal::{ActiveModal, Modal, ModalOutcome},
     modal_commands,
-    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
         graph::GraphTab, journal::JournalTab, notes::NotesTab, review::ReviewTab, tasks::TasksTab,
         timeblocks::TimeblocksTab,
@@ -259,7 +259,10 @@ impl App {
             }
             // Service any side-effect requests the view raised. Done outside
             // `handle_event` so the App owns the Terminal during suspend.
-            if let Some(req) = self.pending_request.take() {
+            // Loops because servicing one request can queue another (e.g.
+            // a Journal switch whose on_focus posts a toast) — chained
+            // requests shouldn't wait for the next tick.
+            while let Some(req) = self.pending_request.take() {
                 self.service_request(terminal, &events, req)?;
             }
         }
@@ -648,11 +651,15 @@ impl App {
     /// is always `false` for routed cross-tab actions — only the
     /// per-event dispatch in `dispatch` knows whether the active
     /// tab's focused buffer has a popup up.
-    fn with_named_tab<F>(&mut self, title: &str, f: F) -> bool
+    fn tab_index(&self, kind: TabKind) -> Option<usize> {
+        self.tabs.iter().position(|t| t.kind() == kind)
+    }
+
+    fn with_tab<F>(&mut self, kind: TabKind, f: F) -> bool
     where
         F: FnOnce(&mut Box<dyn Tab>, &mut TabCtx<'_>),
     {
-        let Some(idx) = self.tabs.iter().position(|t| t.title() == title) else {
+        let Some(idx) = self.tab_index(kind) else {
             return false;
         };
         let active_modal_name = self.active_modal_name();
@@ -669,73 +676,80 @@ impl App {
         true
     }
 
+    /// Service one [`AppRequest`]. Every request goes through
+    /// [`Self::service_simple`] — the single routing table — and the
+    /// four variants that need the terminal or the event stream come
+    /// back here to be dispatched.
     fn service_request(
         &mut self,
         terminal: &mut Tui,
         events: &EventStream,
         req: AppRequest,
     ) -> Result<()> {
-        match req {
-            AppRequest::OpenInEditor { path, line } => {
-                self.dispatch_open_in_editor(terminal, events, &path, line)?;
-                Ok(())
+        match self.service_simple(req)? {
+            None => Ok(()),
+            Some(AppRequest::OpenInEditor { path, line }) => {
+                self.dispatch_open_in_editor(terminal, events, &path, line)
             }
-            AppRequest::OpenInObsidian { url } => {
+            Some(AppRequest::OpenInObsidian { url }) => {
                 spawn_url_opener(&url)
                     .with_context(|| format!("could not launch URL handler for {url}"))?;
                 Ok(())
             }
+            Some(AppRequest::SyncGit { message }) => self.dispatch_sync_git(events, message),
+            Some(AppRequest::CommitGit { message }) => self.dispatch_commit_git(events, message),
+            Some(_) => unreachable!("service_simple defers only terminal-touching variants"),
+        }
+    }
+
+    /// The single routing table for [`AppRequest`]s. Services every
+    /// variant that doesn't need the terminal or the event stream;
+    /// returns `Some(req)` untouched for the four that do
+    /// (`OpenInEditor`, `OpenInObsidian`, `SyncGit`, `CommitGit`) so
+    /// [`Self::service_request`] (real event loop) can dispatch them
+    /// and [`Self::service_pending_requests`] (tests, focus/switch
+    /// paths) can leave them queued.
+    fn service_simple(&mut self, req: AppRequest) -> Result<Option<AppRequest>> {
+        match req {
+            deferred @ (AppRequest::OpenInEditor { .. }
+            | AppRequest::OpenInObsidian { .. }
+            | AppRequest::SyncGit { .. }
+            | AppRequest::CommitGit { .. }) => return Ok(Some(deferred)),
             AppRequest::Toast { text, style } => {
-                *self.toast.borrow_mut() = Some(Toast {
-                    text,
-                    style,
-                    deadline: std::time::Instant::now() + TOAST_DURATION,
-                });
-                Ok(())
-            }
-            AppRequest::SyncGit { message } => {
-                self.dispatch_sync_git(events, message)?;
-                Ok(())
-            }
-            AppRequest::CommitGit { message } => {
-                self.dispatch_commit_git(events, message)?;
-                Ok(())
+                self.push_toast(text, style);
             }
             AppRequest::JournalFor { target } => {
-                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for(&target));
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                self.with_tab(TabKind::Journal, |tab, _| tab.queue_journal_for(&target));
+                if let Some(idx) = self.tab_index(TabKind::Journal) {
                     self.switch_tab(idx)?;
                 }
-                Ok(())
             }
             AppRequest::JournalForMulti { request } => {
-                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for_multi(&request));
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                self.with_tab(TabKind::Journal, |tab, _| {
+                    tab.queue_journal_for_multi(&request)
+                });
+                if let Some(idx) = self.tab_index(TabKind::Journal) {
                     self.switch_tab(idx)?;
                 }
-                Ok(())
             }
             AppRequest::JournalAddSources {
                 targets,
                 default_mode,
             } => {
-                self.with_named_tab("Journal", |tab, _| {
+                self.with_tab(TabKind::Journal, |tab, _| {
                     tab.queue_journal_add_sources(targets, default_mode)
                 });
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+                if let Some(idx) = self.tab_index(TabKind::Journal) {
                     self.switch_tab(idx)?;
                 }
-                Ok(())
             }
             AppRequest::JournalCommitSources { sources, window } => {
-                self.with_named_tab("Journal", |tab, ctx| {
+                self.with_tab(TabKind::Journal, |tab, ctx| {
                     tab.queue_journal_commit_sources(ctx, sources, window)
                 });
-                Ok(())
             }
             AppRequest::OpenModal(modal) => {
                 self.open_modal(*modal);
-                Ok(())
             }
             AppRequest::OpenModalWithToast {
                 modal,
@@ -744,19 +758,15 @@ impl App {
             } => {
                 self.open_modal(*modal);
                 self.push_toast(toast_text, toast_style);
-                Ok(())
             }
             AppRequest::GraphJumpToNodes(path) => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, _| tab.graph_jump_to_nodes(path));
             }
             AppRequest::GraphApplyPreset(dsl) => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, _| tab.graph_apply_preset(dsl));
             }
             AppRequest::GraphFocusQueryBar => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, ctx| tab.graph_focus_query_bar(ctx));
             }
             AppRequest::GraphCommitRename {
                 note_id,
@@ -764,88 +774,80 @@ impl App {
                 source_rel,
                 new_name,
             } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
                 });
-                Ok(())
             }
             AppRequest::GraphConfirmRelated {
                 target_path,
                 selected_titles,
             } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_confirm_related(ctx, target_path, selected_titles)
                 });
-                Ok(())
             }
             AppRequest::GraphQueryBarKey { view_id, key } => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, _| {
+                    tab.graph_query_bar_key(view_id, key)
+                });
             }
             AppRequest::GraphApplyQueryBar { view_id } => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, _| tab.graph_apply_query_bar(view_id));
             }
             AppRequest::GraphMoveConfirmSourceFromTree => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_move_confirm_source_from_tree(ctx)
                 });
-                Ok(())
             }
             AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_move_confirm_target_from_tree(ctx, *carry)
                 });
-                Ok(())
             }
             AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_move_confirm_move_target(ctx, selected)
                 });
-                Ok(())
             }
             AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_move_execute_multi_move(ctx, selected, dir_path)
                 });
-                Ok(())
             }
             AppRequest::GraphNavigatePeriodic(period) => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_navigate_periodic(ctx, period));
-                Ok(())
+                self.with_tab(TabKind::Graph, |tab, ctx| {
+                    tab.graph_navigate_periodic(ctx, period)
+                });
             }
             AppRequest::GraphConfirmDelete {
                 target,
                 is_directory,
             } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_confirm_delete(ctx, target, is_directory)
                 });
-                Ok(())
             }
             AppRequest::GraphCreateSubdir { parent, name } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_create_subdir(ctx, parent, name)
                 });
-                Ok(())
             }
             AppRequest::GraphTaskEdit { path, line, fields } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_task_edit(ctx, path, line, fields)
                 });
-                Ok(())
             }
             AppRequest::GraphTaskCommitCreate {
                 fields,
                 target,
                 subtask_parent,
             } => {
-                self.with_named_tab("Graph", |tab, ctx| {
+                self.with_tab(TabKind::Graph, |tab, ctx| {
                     tab.graph_task_commit_create(ctx, fields, target, subtask_parent)
                 });
-                Ok(())
             }
         }
+        Ok(None)
     }
 
     /// Submit a git sync to a background worker thread. Returns
@@ -1571,7 +1573,7 @@ impl App {
 
     pub fn switch_to(&mut self, idx: usize) -> Result<()> {
         self.switch_tab(idx)?;
-        self.drain_simple_requests();
+        self.service_pending_requests()?;
         Ok(())
     }
 
@@ -1593,7 +1595,7 @@ impl App {
             host_popup_open: false,
         };
         self.tabs[self.active].on_focus(&mut ctx)?;
-        self.drain_simple_requests();
+        self.service_pending_requests()?;
         Ok(())
     }
 
@@ -1614,94 +1616,26 @@ impl App {
 
     pub fn dispatch(&mut self, ev: Event) -> Result<()> {
         self.handle_event(ev)?;
-        self.drain_simple_requests();
+        self.service_pending_requests()?;
         Ok(())
     }
 
-    /// Drain `OpenModal` and graph-routed back-action requests from
-    /// `pending_request`. Used by `dispatch` and by the
-    /// `apply_initial_action_for_test` / `switch_to` test helpers so
-    /// modal-opens posted from `on_focus` and queued requests are
-    /// serviced without a full event loop. Terminal-touching variants
-    /// (`OpenInEditor`, `SyncGit`, `CommitGit`, …) stay in the slot.
-    fn drain_simple_requests(&mut self) {
+    /// Drain queued [`AppRequest`]s through [`Self::service_simple`] —
+    /// the same routing table the real event loop uses. Used by
+    /// `dispatch` and the focus/switch helpers so requests posted from
+    /// `on_focus` / key handlers are serviced without a full event
+    /// loop. The four terminal-touching variants (`OpenInEditor`,
+    /// `OpenInObsidian`, `SyncGit`, `CommitGit`) stay in the slot for
+    /// the caller (the real loop dispatches them; tests assert on
+    /// them).
+    pub fn service_pending_requests(&mut self) -> Result<()> {
         loop {
-            let req = self.pending_request.borrow_mut().take();
-            match req {
-                Some(AppRequest::OpenModal(m)) => {
-                    self.open_modal(*m);
-                }
-                Some(AppRequest::OpenModalWithToast {
-                    modal,
-                    toast_text,
-                    toast_style,
-                }) => {
-                    self.open_modal(*modal);
-                    self.push_toast(toast_text, toast_style);
-                }
-                Some(AppRequest::GraphJumpToNodes(path)) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
-                }
-                Some(AppRequest::GraphApplyPreset(dsl)) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
-                }
-                Some(AppRequest::GraphFocusQueryBar) => {
-                    self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
-                }
-                Some(AppRequest::GraphCommitRename {
-                    note_id,
-                    is_directory,
-                    source_rel,
-                    new_name,
-                }) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
-                    });
-                }
-                Some(AppRequest::GraphConfirmRelated {
-                    target_path,
-                    selected_titles,
-                }) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_confirm_related(ctx, target_path, selected_titles)
-                    });
-                }
-                Some(AppRequest::GraphQueryBarKey { view_id, key }) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
-                }
-                Some(AppRequest::GraphApplyQueryBar { view_id }) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
-                }
-                Some(AppRequest::GraphMoveConfirmSourceFromTree) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_source_from_tree(ctx)
-                    });
-                }
-                Some(AppRequest::GraphMoveConfirmTargetFromTree { carry }) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_target_from_tree(ctx, *carry)
-                    });
-                }
-                Some(AppRequest::GraphMoveConfirmMoveTarget { selected }) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_move_target(ctx, selected)
-                    });
-                }
-                Some(AppRequest::GraphMoveExecuteMultiMove { selected, dir_path }) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_execute_multi_move(ctx, selected, dir_path)
-                    });
-                }
-                Some(AppRequest::GraphNavigatePeriodic(period)) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_navigate_periodic(ctx, period)
-                    });
-                }
-                Some(other) => {
-                    *self.pending_request.borrow_mut() = Some(other);
-                    break;
-                }
-                None => break,
+            let Some(req) = self.pending_request.borrow_mut().take() else {
+                return Ok(());
+            };
+            if let Some(deferred) = self.service_simple(req)? {
+                *self.pending_request.borrow_mut() = Some(deferred);
+                return Ok(());
             }
         }
     }
@@ -1716,264 +1650,6 @@ impl App {
         self.pending_request.borrow_mut().take()
     }
 
-    /// Service whatever pending `AppRequest` is queued (or do nothing if
-    /// none). Mirrors what `run` does between iterations — tests use this
-    /// to drive the toast / refresh side-effects without spinning up a
-    /// real event loop.
-    pub fn service_pending_for_test(&mut self) -> Result<()> {
-        let pending = self.pending_request.borrow_mut().take();
-        if let Some(req) = pending {
-            match req {
-                AppRequest::Toast { text, style } => {
-                    *self.toast.borrow_mut() = Some(Toast {
-                        text,
-                        style,
-                        deadline: std::time::Instant::now() + TOAST_DURATION,
-                    });
-                }
-                AppRequest::OpenModal(modal) => {
-                    self.open_modal(*modal);
-                }
-                AppRequest::GraphJumpToNodes(path) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
-                }
-                AppRequest::GraphApplyPreset(dsl) => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
-                }
-                AppRequest::GraphFocusQueryBar => {
-                    self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
-                }
-                AppRequest::GraphCommitRename {
-                    note_id,
-                    is_directory,
-                    source_rel,
-                    new_name,
-                } => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
-                    });
-                }
-                AppRequest::GraphConfirmRelated {
-                    target_path,
-                    selected_titles,
-                } => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_confirm_related(ctx, target_path, selected_titles)
-                    });
-                }
-                AppRequest::GraphQueryBarKey { view_id, key } => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
-                }
-                AppRequest::GraphApplyQueryBar { view_id } => {
-                    self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
-                }
-                AppRequest::GraphMoveConfirmSourceFromTree => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_source_from_tree(ctx)
-                    });
-                }
-                AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_target_from_tree(ctx, *carry)
-                    });
-                }
-                AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_confirm_move_target(ctx, selected)
-                    });
-                }
-                AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_move_execute_multi_move(ctx, selected, dir_path)
-                    });
-                }
-                AppRequest::GraphNavigatePeriodic(period) => {
-                    self.with_named_tab("Graph", |tab, ctx| {
-                        tab.graph_navigate_periodic(ctx, period)
-                    });
-                }
-                // Other variants need terminal state; tests that exercise
-                // them go through the real `service_request` path.
-                other => {
-                    *self.pending_request.borrow_mut() = Some(other);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Service a pending `AppRequest::JournalFor` (or other simple
-    /// requests that don't touch the terminal). Lets tests exercise the
-    /// graph→Journal cross-tab jump without driving the real event
-    /// loop. Returns Ok with no effect when nothing is pending.
-    #[cfg(test)]
-    pub fn service_request_for_test(&mut self) -> Result<()> {
-        let req = match self.pending_request.borrow_mut().take() {
-            Some(r) => r,
-            None => return Ok(()),
-        };
-        match req {
-            AppRequest::JournalFor { target } => {
-                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for(&target));
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.switch_tab(idx)?;
-                }
-                Ok(())
-            }
-            AppRequest::JournalForMulti { request } => {
-                self.with_named_tab("Journal", |tab, _| tab.queue_journal_for_multi(&request));
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.switch_tab(idx)?;
-                }
-                Ok(())
-            }
-            AppRequest::JournalAddSources {
-                targets,
-                default_mode,
-            } => {
-                self.with_named_tab("Journal", |tab, _| {
-                    tab.queue_journal_add_sources(targets, default_mode)
-                });
-                if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
-                    self.switch_tab(idx)?;
-                }
-                Ok(())
-            }
-            AppRequest::JournalCommitSources { sources, window } => {
-                self.with_named_tab("Journal", |tab, ctx| {
-                    tab.queue_journal_commit_sources(ctx, sources, window)
-                });
-                Ok(())
-            }
-            AppRequest::Toast { text, style } => {
-                *self.toast.borrow_mut() = Some(Toast {
-                    text,
-                    style,
-                    deadline: std::time::Instant::now() + TOAST_DURATION,
-                });
-                Ok(())
-            }
-            AppRequest::OpenModal(modal) => {
-                self.open_modal(*modal);
-                Ok(())
-            }
-            AppRequest::OpenModalWithToast {
-                modal,
-                toast_text,
-                toast_style,
-            } => {
-                self.open_modal(*modal);
-                self.push_toast(toast_text, toast_style);
-                Ok(())
-            }
-            AppRequest::GraphJumpToNodes(path) => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_jump_to_nodes(path));
-                Ok(())
-            }
-            AppRequest::GraphApplyPreset(dsl) => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_apply_preset(dsl));
-                Ok(())
-            }
-            AppRequest::GraphFocusQueryBar => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_focus_query_bar(ctx));
-                Ok(())
-            }
-            AppRequest::GraphCommitRename {
-                note_id,
-                is_directory,
-                source_rel,
-                new_name,
-            } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
-                });
-                Ok(())
-            }
-            AppRequest::GraphConfirmRelated {
-                target_path,
-                selected_titles,
-            } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_confirm_related(ctx, target_path, selected_titles)
-                });
-                Ok(())
-            }
-            AppRequest::GraphQueryBarKey { view_id, key } => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_query_bar_key(view_id, key));
-                Ok(())
-            }
-            AppRequest::GraphApplyQueryBar { view_id } => {
-                self.with_named_tab("Graph", |tab, _| tab.graph_apply_query_bar(view_id));
-                Ok(())
-            }
-            AppRequest::GraphMoveConfirmSourceFromTree => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_move_confirm_source_from_tree(ctx)
-                });
-                Ok(())
-            }
-            AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_move_confirm_target_from_tree(ctx, *carry)
-                });
-                Ok(())
-            }
-            AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_move_confirm_move_target(ctx, selected)
-                });
-                Ok(())
-            }
-            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_move_execute_multi_move(ctx, selected, dir_path)
-                });
-                Ok(())
-            }
-            AppRequest::GraphNavigatePeriodic(period) => {
-                self.with_named_tab("Graph", |tab, ctx| tab.graph_navigate_periodic(ctx, period));
-                Ok(())
-            }
-            AppRequest::GraphConfirmDelete {
-                target,
-                is_directory,
-            } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_confirm_delete(ctx, target, is_directory)
-                });
-                Ok(())
-            }
-            AppRequest::GraphCreateSubdir { parent, name } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_create_subdir(ctx, parent, name)
-                });
-                Ok(())
-            }
-            AppRequest::GraphTaskEdit { path, line, fields } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_task_edit(ctx, path, line, fields)
-                });
-                Ok(())
-            }
-            AppRequest::GraphTaskCommitCreate {
-                fields,
-                target,
-                subtask_parent,
-            } => {
-                self.with_named_tab("Graph", |tab, ctx| {
-                    tab.graph_task_commit_create(ctx, fields, target, subtask_parent)
-                });
-                Ok(())
-            }
-            other => {
-                // Restore for caller — terminal-touching requests need
-                // the real service_request path.
-                *self.pending_request.borrow_mut() = Some(other);
-                Ok(())
-            }
-        }
-    }
-
     /// Forward a vault-relative note path to the Journal tab's queue.
     /// Equivalent to the App servicing `AppRequest::JournalFor` with a
     /// `JournalTarget::Note` without going through the request channel —
@@ -1982,7 +1658,7 @@ impl App {
     #[cfg(test)]
     pub fn queue_journal_for_tab_test(&mut self, path: &str) {
         let target = crate::tui::tab::JournalTarget::Note(std::path::PathBuf::from(path));
-        if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+        if let Some(idx) = self.tab_index(TabKind::Journal) {
             self.tabs[idx].queue_journal_for(&target);
         }
     }
@@ -1994,7 +1670,7 @@ impl App {
         &mut self,
         request: crate::tui::tab::MultiTargetRequest,
     ) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.title() == "Journal") {
+        if let Some(idx) = self.tab_index(TabKind::Journal) {
             self.tabs[idx].queue_journal_for_multi(&request);
         }
     }
@@ -2021,7 +1697,7 @@ impl App {
     pub fn graph_tab_selected_is_note_for_test(&self) -> bool {
         self.tabs
             .iter()
-            .find(|t| t.title() == "Graph")
+            .find(|t| t.kind() == TabKind::Graph)
             .map(|t| t.selected_is_note_for_test())
             .unwrap_or(false)
     }

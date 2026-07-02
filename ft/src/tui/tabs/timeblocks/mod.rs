@@ -51,7 +51,7 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     keymap::{KeyChord, KeyMap},
-    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     widgets::EditBuffer,
 };
 
@@ -1295,6 +1295,10 @@ impl Default for TimeblocksTab {
 impl Tab for TimeblocksTab {
     fn title(&self) -> &str {
         "Timeblocks"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Timeblocks
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {

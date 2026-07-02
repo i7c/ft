@@ -29,7 +29,7 @@ use crate::tui::{
         reslice::{self, ResliceState, ResliceStep},
         section_move::{self, MoveStep, SectionMoveState},
     },
-    tab::{AppRequest, EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind},
     widgets::{FuzzyPicker, PickerOutcome, VaultFilePickerSource},
 };
 
@@ -430,6 +430,10 @@ impl NotesTab {
 impl Tab for NotesTab {
     fn title(&self) -> &str {
         "Notes"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Notes
     }
 
     fn commands(&self) -> &'static [CommandDef] {

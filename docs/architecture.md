@@ -409,18 +409,23 @@ indicator and tests.
 ### App ↔ Tab routing
 
 Tab-specific actions raised by modals route through `AppRequest`
-variants. `App::service_request` (and `drain_simple_requests` for
-the test path) looks up the active tab by `title()` and calls a
-typed `Tab::graph_*` hook. This is the same shape as the existing
-`Tab::queue_journal_for` precedent — typed hooks per action, default
-no-op, host overrides. The recipe for adding a new modal action:
+variants. There is exactly one routing table: `App::service_simple`.
+It services every variant that doesn't need the terminal or the event
+stream, looking the target tab up by its typed `Tab::kind()`
+(`TabKind::Graph`, `TabKind::Journal`, …) and calling a typed
+`Tab::graph_*` hook — same shape as the `Tab::queue_journal_for`
+precedent (typed hooks per action, default no-op, host overrides).
+The four terminal-touching variants (`OpenInEditor`, `OpenInObsidian`,
+`SyncGit`, `CommitGit`) are deferred back to `App::service_request`,
+which the real event loop calls; `App::service_pending_requests`
+drains through the same table for the focus/switch paths and tests,
+leaving deferred variants in the slot so tests can assert on them.
+The recipe for adding a new modal action:
 
 1. Add `AppRequest::Graph<Action> { … }`.
 2. Add `Tab::graph_<action>(&mut self, …)` default no-op.
 3. Override on `GraphTab` (or wherever the modal is hosted).
-4. Service the variant in `App::service_request`,
-   `service_pending_for_test`, `service_request_for_test`, and
-   `drain_simple_requests`.
+4. Add one arm to `App::service_simple`.
 
 ### TabCtx exposes modal state for render cues
 

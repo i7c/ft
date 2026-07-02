@@ -33,6 +33,7 @@ use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
 use crate::tui::tab::{
     AppRequest, EventOutcome, JournalTarget, JournalWindow, MultiTargetRequest, Tab, TabCtx,
+    TabKind,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -321,6 +322,10 @@ fn window_label(w: &WindowRange) -> String {
 impl Tab for ReviewTab {
     fn title(&self) -> &str {
         "Review"
+    }
+
+    fn kind(&self) -> TabKind {
+        TabKind::Review
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
