@@ -95,6 +95,98 @@ pub enum AppendOrReplaceMode {
     Replace,
 }
 
+/// Every cross-tab / modal-raised request that the Graph tab (and only the
+/// Graph tab) services. Carried as the single payload of
+/// [`AppRequest::Graph`] and dispatched through the single
+/// [`Tab::handle_graph_request`] hook — replaces what used to be one
+/// dedicated `AppRequest::Graph*` variant + one dedicated `Tab::graph_*`
+/// method per action (tui-tab-request-routing).
+#[derive(Debug)]
+pub enum GraphRequest {
+    /// Jump the cursor to a node by path (auto-expanding ancestors).
+    /// Raised by the search-picker modal on Enter.
+    JumpToNodes(Vec<ft_core::graph::NoteId>),
+    /// Apply a preset DSL string to the currently-active view's query.
+    /// Raised by the preset-picker modal on Enter.
+    ApplyPreset(String),
+    /// Open the `QueryBar` modal on the active view. Raised by the
+    /// preset-picker modal when the user cancels a "new view with
+    /// presets" flow (`Ctrl+N`) so the freshly-pushed blank view drops
+    /// into edit mode.
+    FocusQueryBar,
+    /// Commit a rename for the given node. Raised by the rename modal
+    /// on Enter.
+    CommitRename {
+        note_id: ft_core::graph::NoteId,
+        is_directory: bool,
+        source_rel: PathBuf,
+        new_name: String,
+    },
+    /// Apply a `## Related` section update to the target note. Raised
+    /// by the Related modal on Enter.
+    ConfirmRelated {
+        target_path: PathBuf,
+        selected_titles: Vec<String>,
+    },
+    /// Forward a single key event to the view's query buffer (printable
+    /// chars, Backspace, Delete, arrows, Home/End). Raised by the
+    /// `QueryBar` modal on each editing keystroke.
+    QueryBarKey {
+        view_id: usize,
+        key: crossterm::event::KeyEvent,
+    },
+    /// Parse and apply the active view's query buffer (Enter from the
+    /// `QueryBar` modal).
+    ApplyQueryBar { view_id: usize },
+    /// Confirm the currently-selected tree row as the move-section
+    /// source. Raised by the `MoveOuter::SourceFromTree` modal on `m`.
+    MoveConfirmSourceFromTree,
+    /// Confirm the currently-selected tree row as the move-section
+    /// target. Raised by the `MoveOuter::TargetFromTree` modal on `m`.
+    MoveConfirmTargetFromTree {
+        carry: Box<crate::tui::notes_actions::section_move::MoveCarry>,
+    },
+    /// Confirm the currently-selected directory row as the Flow A move
+    /// target. Raised by the `MoveOuter::MoveTargetFromTree` modal on
+    /// `m`/Enter.
+    MoveConfirmMoveTarget {
+        selected: HashSet<ft_core::graph::NoteId>,
+    },
+    /// Execute a Flow A multi-move against an explicit target directory
+    /// chosen via the fuzzy picker. Raised by the
+    /// `MoveOuter::MoveTargetPicker` modal on `PickerOutcome::Selected`.
+    MoveExecuteMultiMove {
+        selected: HashSet<ft_core::graph::NoteId>,
+        dir_path: PathBuf,
+    },
+    /// Navigate within the active view's tree to the periodic note for
+    /// the given period. Raised by the `PeriodicLeader` modal on
+    /// period-letter keypress.
+    NavigatePeriodic(ft_core::periodic::Period),
+    /// Execute a confirmed delete of the given target path. Raised by
+    /// the `ConfirmDelete` modal on Yes.
+    ConfirmDelete { target: PathBuf, is_directory: bool },
+    /// Create a subdirectory under the given parent path with the given
+    /// name. Raised by the `CreateSubdir` modal on Enter.
+    CreateSubdir { parent: PathBuf, name: String },
+    /// Apply validated popup fields to a task at `(path, line)` via
+    /// `ops::update_task_line` (graph-task-edit-modal §3).
+    TaskEdit {
+        path: PathBuf,
+        line: usize,
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+    },
+    /// Create a new task from the Graph-tab `TaskCreate` popup via
+    /// `ops::create_task` (graph-task-edit-modal §4). `target` is the raw
+    /// target-field text (`Path` or `Path#heading`); `subtask_parent`,
+    /// when set, nests the new task under that `(file, line)`.
+    TaskCommitCreate {
+        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
+        target: String,
+        subtask_parent: Option<(PathBuf, usize)>,
+    },
+}
+
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
 /// a status-bar toast) without each tab reaching for terminal state.
@@ -185,123 +277,12 @@ pub enum AppRequest {
         toast_text: String,
         toast_style: ToastStyle,
     },
-    /// Routed back to the Graph tab: jump the cursor to a node by path
-    /// (auto-expanding ancestors). Raised by the search-picker modal
-    /// on Enter; the App finds the Graph tab and calls
-    /// [`Tab::graph_jump_to_nodes`].
-    GraphJumpToNodes(Vec<ft_core::graph::NoteId>),
-    /// Routed back to the Graph tab: apply a preset DSL string to the
-    /// currently-active view's query. Raised by the preset-picker
-    /// modal on Enter; the App calls [`Tab::graph_apply_preset`].
-    GraphApplyPreset(String),
-    /// Routed back to the Graph tab: open the `QueryBar` modal on the
-    /// active view. Raised by the preset-picker modal when the user
-    /// cancels a "new view with presets" flow (`Ctrl+N`) so the
-    /// freshly-pushed blank view drops into edit mode.
-    GraphFocusQueryBar,
-    /// Routed back to the Graph tab: commit a rename for the given
-    /// node. Raised by the rename modal on Enter. The host runs
-    /// `plan_rename` / `plan_multi_rename` against its in-memory
-    /// graph, applies the plan, and refreshes the graph on success
-    /// (or queues a toast on failure).
-    GraphCommitRename {
-        note_id: ft_core::graph::NoteId,
-        is_directory: bool,
-        source_rel: PathBuf,
-        new_name: String,
-    },
-    /// Routed back to the Graph tab: apply a `## Related` section
-    /// update to the target note. Raised by the Related modal on
-    /// Enter; the host reads the file, runs
-    /// `ft_core::related::plan_related_update` + `apply_related_update`,
-    /// and toasts the outcome.
-    GraphConfirmRelated {
-        target_path: PathBuf,
-        selected_titles: Vec<String>,
-    },
-    /// Routed back to the Graph tab: forward a single key event to
-    /// the view's query buffer (printable chars, Backspace, Delete,
-    /// arrows, Home/End). Raised by the `QueryBar` modal on each
-    /// editing keystroke.
-    GraphQueryBarKey {
-        view_id: usize,
-        key: crossterm::event::KeyEvent,
-    },
-    /// Routed back to the Graph tab: parse and apply the active
-    /// view's query buffer (Enter from the `QueryBar` modal).
-    GraphApplyQueryBar {
-        view_id: usize,
-    },
-    /// Routed back to the Graph tab: confirm the currently-selected
-    /// tree row as the move-section source. Raised by the
-    /// `MoveOuter::SourceFromTree` modal on `m`. The host calls
-    /// `selected_note_hit` + `advance_to_multiselect` and, on success,
-    /// posts a follow-up `OpenModal(MoveOuter(Inner(...)))`. On
-    /// non-Note selection it toasts and re-opens
-    /// `MoveOuter(SourceFromTree)` so the user can navigate and retry.
-    GraphMoveConfirmSourceFromTree,
-    /// Routed back to the Graph tab: confirm the currently-selected
-    /// tree row as the move-section target. Raised by the
-    /// `MoveOuter::TargetFromTree` modal on `m`. Carries the carry
-    /// state through the round-trip so the modal can be reopened on
-    /// a recoverable error (same-file, non-Note selection).
-    GraphMoveConfirmTargetFromTree {
-        carry: Box<crate::tui::notes_actions::section_move::MoveCarry>,
-    },
-    /// Routed back to the Graph tab: confirm the currently-selected
-    /// directory row as the Flow A move target. Raised by the
-    /// `MoveOuter::MoveTargetFromTree` modal on `m`/Enter. The host
-    /// plans + applies a multi-rename and refreshes the graph; on a
-    /// validation failure it re-opens `MoveTargetFromTree` so the
-    /// user can navigate to a different row and retry.
-    GraphMoveConfirmMoveTarget {
-        selected: HashSet<ft_core::graph::NoteId>,
-    },
-    /// Routed back to the Graph tab: execute a Flow A multi-move
-    /// against an explicit target directory (chosen from the fuzzy
-    /// picker rather than the tree). Raised by the
-    /// `MoveOuter::MoveTargetPicker` modal on `PickerOutcome::Selected`.
-    GraphMoveExecuteMultiMove {
-        selected: HashSet<ft_core::graph::NoteId>,
-        dir_path: PathBuf,
-    },
-    /// Routed back to the Graph tab: navigate within the active
-    /// view's tree to the periodic note for the given period.
-    /// Raised by the `PeriodicLeader` modal on period-letter keypress.
-    /// The App calls [`Tab::graph_navigate_periodic`].
-    GraphNavigatePeriodic(ft_core::periodic::Period),
-    /// Routed back to the Graph tab: execute a confirmed delete of
-    /// the given target path. Raised by the `ConfirmDelete` modal
-    /// on Yes. The host calls `plan_delete` + `apply_delete`,
-    /// refreshes the graph, and toasts the outcome.
-    GraphConfirmDelete {
-        target: PathBuf,
-        is_directory: bool,
-    },
-    /// Routed back to the Graph tab: create a subdirectory under
-    /// the given parent path with the given name. Raised by the
-    /// `CreateSubdir` modal on Enter. The host creates the
-    /// directory, refreshes the graph, and toasts.
-    GraphCreateSubdir {
-        parent: PathBuf,
-        name: String,
-    },
-    /// Apply validated popup fields to a task at `(path, line)` via
-    /// `ops::update_task_line` (graph-task-edit-modal §3).
-    GraphTaskEdit {
-        path: PathBuf,
-        line: usize,
-        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
-    },
-    /// Create a new task from the Graph-tab `TaskCreate` popup via
-    /// `ops::create_task` (graph-task-edit-modal §4). `target` is the raw
-    /// target-field text (`Path` or `Path#heading`); `subtask_parent`, when
-    /// set, nests the new task under that `(file, line)`.
-    GraphTaskCommitCreate {
-        fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
-        target: String,
-        subtask_parent: Option<(PathBuf, usize)>,
-    },
+    /// Routed to the Graph tab: the App looks the tab up by
+    /// `TabKind::Graph` and calls `Tab::handle_graph_request` with the
+    /// carried [`GraphRequest`] (tui-tab-request-routing). Replaces what
+    /// used to be sixteen dedicated `AppRequest::Graph*` variants, one
+    /// per action.
+    Graph(GraphRequest),
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -363,90 +344,7 @@ impl std::fmt::Debug for AppRequest {
                 .field("toast_text", toast_text)
                 .field("toast_style", toast_style)
                 .finish(),
-            AppRequest::GraphJumpToNodes(path) => f
-                .debug_tuple("GraphJumpToNodes")
-                .field(&path.len())
-                .finish(),
-            AppRequest::GraphApplyPreset(dsl) => {
-                f.debug_tuple("GraphApplyPreset").field(dsl).finish()
-            }
-            AppRequest::GraphFocusQueryBar => f.write_str("GraphFocusQueryBar"),
-            AppRequest::GraphCommitRename {
-                note_id,
-                is_directory,
-                source_rel,
-                new_name,
-            } => f
-                .debug_struct("GraphCommitRename")
-                .field("note_id", note_id)
-                .field("is_directory", is_directory)
-                .field("source_rel", source_rel)
-                .field("new_name", new_name)
-                .finish(),
-            AppRequest::GraphConfirmRelated {
-                target_path,
-                selected_titles,
-            } => f
-                .debug_struct("GraphConfirmRelated")
-                .field("target_path", target_path)
-                .field("selected_titles", selected_titles)
-                .finish(),
-            AppRequest::GraphQueryBarKey { view_id, key } => f
-                .debug_struct("GraphQueryBarKey")
-                .field("view_id", view_id)
-                .field("key", key)
-                .finish(),
-            AppRequest::GraphApplyQueryBar { view_id } => f
-                .debug_struct("GraphApplyQueryBar")
-                .field("view_id", view_id)
-                .finish(),
-            AppRequest::GraphMoveConfirmSourceFromTree => {
-                f.write_str("GraphMoveConfirmSourceFromTree")
-            }
-            AppRequest::GraphMoveConfirmTargetFromTree { carry } => f
-                .debug_struct("GraphMoveConfirmTargetFromTree")
-                .field("source_rel", &carry.source_rel)
-                .finish(),
-            AppRequest::GraphMoveConfirmMoveTarget { selected } => f
-                .debug_struct("GraphMoveConfirmMoveTarget")
-                .field("selected_count", &selected.len())
-                .finish(),
-            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => f
-                .debug_struct("GraphMoveExecuteMultiMove")
-                .field("selected_count", &selected.len())
-                .field("dir_path", dir_path)
-                .finish(),
-            AppRequest::GraphNavigatePeriodic(period) => f
-                .debug_tuple("GraphNavigatePeriodic")
-                .field(period)
-                .finish(),
-            AppRequest::GraphConfirmDelete {
-                target,
-                is_directory,
-            } => f
-                .debug_struct("GraphConfirmDelete")
-                .field("target", target)
-                .field("is_directory", is_directory)
-                .finish(),
-            AppRequest::GraphCreateSubdir { parent, name } => f
-                .debug_struct("GraphCreateSubdir")
-                .field("parent", parent)
-                .field("name", name)
-                .finish(),
-            AppRequest::GraphTaskEdit { path, line, .. } => f
-                .debug_struct("GraphTaskEdit")
-                .field("path", path)
-                .field("line", line)
-                .finish_non_exhaustive(),
-            AppRequest::GraphTaskCommitCreate {
-                target,
-                subtask_parent,
-                ..
-            } => f
-                .debug_struct("GraphTaskCommitCreate")
-                .field("target", target)
-                .field("subtask_parent", subtask_parent)
-                .finish_non_exhaustive(),
+            AppRequest::Graph(req) => f.debug_tuple("Graph").field(req).finish(),
         }
     }
 }
@@ -670,144 +568,13 @@ pub trait Tab {
     ) {
     }
 
-    /// Hook for the in-tree search picker (see
-    /// [`AppRequest::GraphJumpToNodes`]). The Graph tab overrides
-    /// this to call its own `jump_to_path` helper, materialising the
-    /// ancestor chain and landing the cursor on the leaf. Other tabs
-    /// ignore the request.
-    fn graph_jump_to_nodes(&mut self, _path: Vec<ft_core::graph::NoteId>) {}
-
-    /// Hook for the preset picker (see [`AppRequest::GraphApplyPreset`]).
-    /// The Graph tab overrides this to apply the preset DSL string to
-    /// the active view. Other tabs ignore.
-    fn graph_apply_preset(&mut self, _dsl: String) {}
-
-    /// Hook for the preset picker's cancel-from-new-view path (see
-    /// [`AppRequest::GraphFocusQueryBar`]). The Graph tab overrides
-    /// this to open the `QueryBar` modal on the freshly-pushed view
-    /// (extract-modal-driver §5).
-    fn graph_focus_query_bar(&mut self, _ctx: &TabCtx) {}
-
-    /// Hook for the rename modal commit (see
-    /// [`AppRequest::GraphCommitRename`]). The Graph tab overrides
-    /// this to plan + apply a rename via its in-memory graph and
-    /// refresh on success. Other tabs ignore.
-    fn graph_commit_rename(
-        &mut self,
-        _ctx: &TabCtx,
-        _note_id: ft_core::graph::NoteId,
-        _is_directory: bool,
-        _source_rel: PathBuf,
-        _new_name: String,
-    ) {
-    }
-
-    /// Hook for the Related modal commit (see
-    /// [`AppRequest::GraphConfirmRelated`]). The Graph tab overrides
-    /// this to apply the related-section update on disk and toast.
-    fn graph_confirm_related(
-        &mut self,
-        _ctx: &TabCtx,
-        _target_path: PathBuf,
-        _selected_titles: Vec<String>,
-    ) {
-    }
-
-    /// Hook for the QueryBar modal's per-key forwarding (see
-    /// [`AppRequest::GraphQueryBarKey`]). The Graph tab overrides
-    /// this to mutate the view's query buffer (insert / backspace /
-    /// arrows / etc.).
-    fn graph_query_bar_key(&mut self, _view_id: usize, _key: crossterm::event::KeyEvent) {}
-
-    /// Hook for the QueryBar modal's commit (see
-    /// [`AppRequest::GraphApplyQueryBar`]). The Graph tab overrides
-    /// this to parse and apply the view's current query buffer.
-    fn graph_apply_query_bar(&mut self, _view_id: usize) {}
-
-    /// Hook for the move-section `SourceFromTree` confirm (see
-    /// [`AppRequest::GraphMoveConfirmSourceFromTree`]). The Graph tab
-    /// overrides this to advance the flow to the shared
-    /// heading-multi-select step (or toast + re-open the source modal
-    /// if the selection isn't a valid Note row).
-    fn graph_move_confirm_source_from_tree(&mut self, _ctx: &TabCtx) {}
-
-    /// Hook for the move-section `TargetFromTree` confirm (see
-    /// [`AppRequest::GraphMoveConfirmTargetFromTree`]). The Graph tab
-    /// overrides this to validate the selection against the carry's
-    /// source and either compose the existing-target flow or re-open
-    /// `TargetFromTree` with the carry intact for retry.
-    fn graph_move_confirm_target_from_tree(
-        &mut self,
-        _ctx: &TabCtx,
-        _carry: crate::tui::notes_actions::section_move::MoveCarry,
-    ) {
-    }
-
-    /// Hook for the move-section Flow A target-dir confirm (see
-    /// [`AppRequest::GraphMoveConfirmMoveTarget`]). The Graph tab
-    /// overrides this to plan + apply the multi-rename and refresh,
-    /// or re-open `MoveTargetFromTree` with `selected` preserved.
-    fn graph_move_confirm_move_target(
-        &mut self,
-        _ctx: &TabCtx,
-        _selected: HashSet<ft_core::graph::NoteId>,
-    ) {
-    }
-
-    /// Hook for the Flow A fuzzy-picker variant (see
-    /// [`AppRequest::GraphMoveExecuteMultiMove`]). The Graph tab
-    /// overrides this to execute the multi-rename to an explicit
-    /// `dir_path` chosen via the picker (no tree-row lookup).
-    fn graph_move_execute_multi_move(
-        &mut self,
-        _ctx: &TabCtx,
-        _selected: HashSet<ft_core::graph::NoteId>,
-        _dir_path: PathBuf,
-    ) {
-    }
-
-    /// Hook for the periodic-note navigation flow (see
-    /// [`AppRequest::GraphNavigatePeriodic`]). The Graph tab
-    /// overrides this to resolve the periodic note path, find the
-    /// shortest BFS path from the active query's roots, and jump
-    /// the tree cursor to it. Other tabs ignore.
-    fn graph_navigate_periodic(&mut self, _ctx: &TabCtx, _period: ft_core::periodic::Period) {}
-
-    /// Hook for the confirmation-delete flow (see
-    /// [`AppRequest::GraphConfirmDelete`]). The Graph tab overrides
-    /// this to plan + apply deletion, refresh the graph, and toast
-    /// the outcome.
-    fn graph_confirm_delete(&mut self, _ctx: &TabCtx, _target: PathBuf, _is_directory: bool) {}
-
-    /// Hook for the create-subdirectory flow (see
-    /// [`AppRequest::GraphCreateSubdir`]). The Graph tab overrides
-    /// this to create the directory, refresh the graph, and toast.
-    fn graph_create_subdir(&mut self, _ctx: &TabCtx, _parent: PathBuf, _name: String) {}
-
-    /// Hook for the task-edit popup commit (see [`AppRequest::GraphTaskEdit`]).
-    /// The Graph tab overrides this to apply the fields via
-    /// `ops::update_task_line`, refresh the graph, and restore the cursor.
-    fn graph_task_edit(
-        &mut self,
-        _ctx: &TabCtx,
-        _path: PathBuf,
-        _line: usize,
-        _fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
-    ) {
-    }
-
-    /// Hook for the task-create popup commit (see
-    /// [`AppRequest::GraphTaskCommitCreate`]). The Graph tab overrides this
-    /// to resolve the target file/position, write via `ops::create_task`,
-    /// refresh the graph, and land the cursor on the new task.
-    fn graph_task_commit_create(
-        &mut self,
-        _ctx: &TabCtx,
-        _fields: crate::tui::tabs::tasks::edit_popup::PopupFields,
-        _target: String,
-        _subtask_parent: Option<(PathBuf, usize)>,
-    ) {
-    }
+    /// Single hook for every cross-tab / modal-raised request targeting
+    /// the Graph tab (see [`GraphRequest`] and [`AppRequest::Graph`]).
+    /// The App looks the tab up by `TabKind::Graph` and calls this once
+    /// per request — replaces what used to be sixteen dedicated
+    /// `graph_*` methods, one per action. Default is a no-op; only
+    /// `GraphTab` overrides it.
+    fn handle_graph_request(&mut self, _req: GraphRequest, _ctx: &mut TabCtx) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

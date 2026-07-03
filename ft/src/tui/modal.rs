@@ -53,7 +53,8 @@ use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
 use crate::tui::tab::{
-    empty_keymap, AppRequest, AppendOrReplaceMode, JournalTarget, JournalWindow, TabCtx,
+    empty_keymap, AppRequest, AppendOrReplaceMode, GraphRequest, JournalTarget, JournalWindow,
+    TabCtx,
 };
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
@@ -654,10 +655,11 @@ impl Modal for CreateSubdirState {
         match k.code {
             KeyCode::Esc => ModalOutcome::Closed,
             KeyCode::Enter => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphCreateSubdir {
-                    parent: self.parent.clone(),
-                    name: self.buf.text.clone(),
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::CreateSubdir {
+                        parent: self.parent.clone(),
+                        name: self.buf.text.clone(),
+                    }));
                 ModalOutcome::Closed
             }
             _ => {
@@ -773,10 +775,11 @@ impl Modal for ConfirmDeleteState {
         match (k.code, k.modifiers) {
             (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) => {
                 self.focus = ConfirmChoice::Yes;
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmDelete {
-                    target: self.target.clone(),
-                    is_directory: self.is_directory,
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::ConfirmDelete {
+                        target: self.target.clone(),
+                        is_directory: self.is_directory,
+                    }));
                 ModalOutcome::Closed
             }
             (KeyCode::Char('n'), _)
@@ -785,10 +788,11 @@ impl Modal for ConfirmDeleteState {
             | (KeyCode::Char('q'), _) => ModalOutcome::Closed,
             (KeyCode::Enter, _) => {
                 if self.focus == ConfirmChoice::Yes {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmDelete {
-                        target: self.target.clone(),
-                        is_directory: self.is_directory,
-                    });
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::Graph(GraphRequest::ConfirmDelete {
+                            target: self.target.clone(),
+                            is_directory: self.is_directory,
+                        }));
                 }
                 ModalOutcome::Closed
             }
@@ -926,7 +930,8 @@ impl Modal for PeriodicLeader {
             _ => None,
         };
         if let Some(p) = period {
-            *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphNavigatePeriodic(p));
+            *ctx.pending_request.borrow_mut() =
+                Some(AppRequest::Graph(GraphRequest::NavigatePeriodic(p)));
         }
         // Any key (period letter, Esc, or anything else) closes the
         // leader modal — matches the pre-migration "any key clears"
@@ -965,7 +970,7 @@ impl Modal for PeriodicLeader {
 /// Marker modal: the active view's query bar owns the keyboard. The
 /// actual buffer state stays on the view; this modal just owns the
 /// keyboard and forwards each editing keystroke back to the host tab
-/// via `AppRequest::GraphQueryBarKey`. Render is a no-op — the host
+/// via `AppRequest::Graph(GraphRequest::QueryBarKey)`. Render is a no-op — the host
 /// tab renders the prompt cell and cursor (the host checks
 /// `ctx.active_modal_name == Some("query-bar")` to apply input-mode
 /// styling).
@@ -985,18 +990,20 @@ impl Modal for QueryBar {
         // this branch the modal would close on Esc before the popup
         // ever saw it.
         if ctx.host_popup_open {
-            *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphQueryBarKey {
-                view_id: self.view_id,
-                key: k,
-            });
+            *ctx.pending_request.borrow_mut() =
+                Some(AppRequest::Graph(GraphRequest::QueryBarKey {
+                    view_id: self.view_id,
+                    key: k,
+                }));
             return ModalOutcome::Consumed;
         }
         match k.code {
             KeyCode::Esc => ModalOutcome::Closed,
             KeyCode::Enter => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphApplyQueryBar {
-                    view_id: self.view_id,
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::ApplyQueryBar {
+                        view_id: self.view_id,
+                    }));
                 ModalOutcome::Closed
             }
             // Forward every other key — including chords with `Ctrl` or
@@ -1007,10 +1014,11 @@ impl Modal for QueryBar {
             // unconditionally so the modal swallows the chord and it
             // never falls through to tab- or global-level shortcuts.
             _ => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphQueryBarKey {
-                    view_id: self.view_id,
-                    key: k,
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::QueryBarKey {
+                        view_id: self.view_id,
+                        key: k,
+                    }));
                 ModalOutcome::Consumed
             }
         }

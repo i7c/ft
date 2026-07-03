@@ -353,10 +353,10 @@ impl Modal for CapturePickerModal {
 /// `for_active_view = true` (applies to existing active view).
 ///
 /// On `Enter`: resolve the picked preset name to its DSL string, post
-/// `AppRequest::GraphApplyPreset(dsl)` and return `Closed`.
+/// `AppRequest::Graph(GraphRequest::ApplyPreset(dsl))` and return `Closed`.
 ///
 /// On `Esc` with `for_active_view = false`: the pre-pushed blank view
-/// drops into edit mode via `AppRequest::GraphFocusQueryBar`. With
+/// drops into edit mode via `AppRequest::Graph(GraphRequest::FocusQueryBar)`. With
 /// `for_active_view = true`: no action — just close.
 pub struct PresetPickerModal {
     inner: FuzzyPicker<PresetPickerSource>,
@@ -389,13 +389,15 @@ impl Modal for PresetPickerModal {
                     .cloned()
                     .or_else(|| preset::builtin(&name).map(|s| s.to_string()));
                 if let Some(dsl) = dsl {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphApplyPreset(dsl));
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::Graph(GraphRequest::ApplyPreset(dsl)));
                 }
                 ModalOutcome::Closed
             }
             PickerOutcome::Cancelled => {
                 if !self.for_active_view {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphFocusQueryBar);
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::Graph(GraphRequest::FocusQueryBar));
                 }
                 ModalOutcome::Closed
             }
@@ -440,7 +442,7 @@ impl Modal for PresetPickerModal {
 /// Modal wrapper around the in-tree fuzzy search picker
 /// (extract-modal-driver §4). Owns the [`FuzzyPicker`] for the
 /// duration of the modal's lifetime; on `Enter` posts
-/// [`AppRequest::GraphJumpToNodes`] back to the Graph tab so the
+/// `AppRequest::Graph(GraphRequest::JumpToNodes)` back to the Graph tab so the
 /// cursor jumps to the chosen node, auto-expanding ancestors.
 pub struct SearchPickerModal {
     inner: FuzzyPicker<GraphSearchPickerSource>,
@@ -461,7 +463,8 @@ impl Modal for SearchPickerModal {
         };
         match self.inner.handle_key(k) {
             PickerOutcome::Selected(path) => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphJumpToNodes(path));
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::JumpToNodes(path)));
                 ModalOutcome::Closed
             }
             PickerOutcome::Cancelled => ModalOutcome::Closed,
@@ -514,8 +517,9 @@ impl Modal for SearchPickerModal {
 
 /// Inline rename-in-place state — the modal owns its edit buffer and
 /// the node identity. Migrated through `ActiveModal` in
-/// extract-modal-driver §4; commits via `AppRequest::GraphCommitRename`
-/// so the host can plan/apply/refresh against the in-memory graph.
+/// extract-modal-driver §4; commits via
+/// `AppRequest::Graph(GraphRequest::CommitRename)` so the host can
+/// plan/apply/refresh against the in-memory graph.
 #[derive(Debug)]
 pub struct GraphRenameState {
     note_id: NoteId,
@@ -565,12 +569,13 @@ impl Modal for GraphRenameState {
                     );
                     return ModalOutcome::Consumed;
                 }
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphCommitRename {
-                    note_id: self.note_id,
-                    is_directory: self.is_directory,
-                    source_rel: self.source_rel.clone(),
-                    new_name,
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::CommitRename {
+                        note_id: self.note_id,
+                        is_directory: self.is_directory,
+                        source_rel: self.source_rel.clone(),
+                        new_name,
+                    }));
                 // The modal closes here; if the host's commit hits a
                 // recoverable error (target exists, plan failure, etc.)
                 // it re-opens the modal via OpenModal so the user can
@@ -664,7 +669,7 @@ impl Modal for GraphRenameState {
 
 /// Full-form task edit popup hosted on the Graph tab. Wraps the shared
 /// [`EditPopup`] in edit mode plus the task's `(path, line)` identity so
-/// the commit can post `AppRequest::GraphTaskEdit`. Render + validation
+/// the commit can post `AppRequest::Graph(GraphRequest::TaskEdit)`. Render + validation
 /// reuse the Tasks-tab helpers lifted into `edit_popup`.
 pub struct TaskEditState {
     pub popup: crate::tui::tabs::tasks::edit_popup::EditPopup,
@@ -784,11 +789,11 @@ impl TaskEditState {
             self.popup.focus = EditField::Description;
             return ModalOutcome::Consumed;
         }
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskEdit {
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::Graph(GraphRequest::TaskEdit {
             path: self.path.clone(),
             line: self.line,
             fields: (description, due, scheduled, priority, tags, recurrence),
-        });
+        }));
         ModalOutcome::Closed
     }
 }
@@ -888,7 +893,7 @@ impl Modal for TaskLeader {
 /// Full-form task *create* popup hosted on the Graph tab. Wraps the
 /// shared [`EditPopup`] in New mode plus an optional subtask parent.
 /// Render + validation reuse the Tasks-tab helpers; on `Ctrl+S` it posts
-/// `AppRequest::GraphTaskCommitCreate`, which the Graph tab services via
+/// `AppRequest::Graph(GraphRequest::TaskCommitCreate)`, which the Graph tab services via
 /// `ops::create_task`. `Enter` on the `target` field opens the file
 /// picker (matching the Tasks-tab create flow), so only `Ctrl+S` submits.
 pub struct TaskCreateState {
@@ -1028,11 +1033,12 @@ impl TaskCreateState {
             self.popup.focus = EditField::Description;
             return ModalOutcome::Consumed;
         }
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphTaskCommitCreate {
-            fields: (description, due, scheduled, priority, tags, recurrence),
-            target: self.popup.target.text.trim().to_string(),
-            subtask_parent: self.subtask_parent.clone(),
-        });
+        *ctx.pending_request.borrow_mut() =
+            Some(AppRequest::Graph(GraphRequest::TaskCommitCreate {
+                fields: (description, due, scheduled, priority, tags, recurrence),
+                target: self.popup.target.text.trim().to_string(),
+                subtask_parent: self.subtask_parent.clone(),
+            }));
         ModalOutcome::Closed
     }
 }
@@ -1107,10 +1113,11 @@ impl Modal for RelatedModal {
             (KeyCode::Enter, _) => {
                 let titles = self.selected_titles();
                 if !titles.is_empty() {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphConfirmRelated {
-                        target_path: self.target_path.clone(),
-                        selected_titles: titles,
-                    });
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::Graph(GraphRequest::ConfirmRelated {
+                            target_path: self.target_path.clone(),
+                            selected_titles: titles,
+                        }));
                 }
                 ModalOutcome::Closed
             }
@@ -1396,7 +1403,7 @@ impl GraphMoveOuter {
         match (k.code, k.modifiers) {
             (KeyCode::Char('m'), KeyModifiers::NONE) => {
                 *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::GraphMoveConfirmSourceFromTree);
+                    Some(AppRequest::Graph(GraphRequest::MoveConfirmSourceFromTree));
                 // The host hook re-opens SourceFromTree on a toast
                 // path or advances to `Inner(...)` on success.
                 ModalOutcome::Closed
@@ -1512,9 +1519,9 @@ impl GraphMoveOuter {
         match (k.code, k.modifiers) {
             (KeyCode::Char('m'), KeyModifiers::NONE) => {
                 *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::GraphMoveConfirmTargetFromTree {
+                    Some(AppRequest::Graph(GraphRequest::MoveConfirmTargetFromTree {
                         carry: Box::new(carry),
-                    });
+                    }));
                 ModalOutcome::Closed
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => ModalOutcome::OpenSibling(Box::new(
@@ -1532,7 +1539,8 @@ impl GraphMoveOuter {
                 // expressible — the carry is dropped here. The host
                 // hook picks the correct `view_id`.
                 let _ = carry;
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphFocusQueryBar);
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::FocusQueryBar));
                 ModalOutcome::Closed
             }
             (KeyCode::Esc, _) => {
@@ -1621,7 +1629,9 @@ impl GraphMoveOuter {
         match (k.code, k.modifiers) {
             (KeyCode::Enter, _) | (KeyCode::Char('m'), KeyModifiers::NONE) => {
                 *ctx.pending_request.borrow_mut() =
-                    Some(AppRequest::GraphMoveConfirmMoveTarget { selected });
+                    Some(AppRequest::Graph(GraphRequest::MoveConfirmMoveTarget {
+                        selected,
+                    }));
                 ModalOutcome::Closed
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => ModalOutcome::OpenSibling(Box::new(
@@ -1654,10 +1664,11 @@ impl GraphMoveOuter {
             PickerOutcome::Selected(hit) => {
                 // Hand off to the host so it can plan + apply the
                 // multi-rename to the chosen directory.
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GraphMoveExecuteMultiMove {
-                    selected,
-                    dir_path: hit.path,
-                });
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Graph(GraphRequest::MoveExecuteMultiMove {
+                        selected,
+                        dir_path: hit.path,
+                    }));
                 ModalOutcome::Closed
             }
             PickerOutcome::Cancelled => ModalOutcome::OpenSibling(Box::new(

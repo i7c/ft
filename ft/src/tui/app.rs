@@ -814,91 +814,9 @@ impl App {
                 self.open_modal(*modal);
                 self.push_toast(toast_text, toast_style);
             }
-            AppRequest::GraphJumpToNodes(path) => {
-                self.with_tab(TabKind::Graph, |tab, _| tab.graph_jump_to_nodes(path));
-            }
-            AppRequest::GraphApplyPreset(dsl) => {
-                self.with_tab(TabKind::Graph, |tab, _| tab.graph_apply_preset(dsl));
-            }
-            AppRequest::GraphFocusQueryBar => {
-                self.with_tab(TabKind::Graph, |tab, ctx| tab.graph_focus_query_bar(ctx));
-            }
-            AppRequest::GraphCommitRename {
-                note_id,
-                is_directory,
-                source_rel,
-                new_name,
-            } => {
+            AppRequest::Graph(req) => {
                 self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_commit_rename(ctx, note_id, is_directory, source_rel, new_name)
-                });
-            }
-            AppRequest::GraphConfirmRelated {
-                target_path,
-                selected_titles,
-            } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_confirm_related(ctx, target_path, selected_titles)
-                });
-            }
-            AppRequest::GraphQueryBarKey { view_id, key } => {
-                self.with_tab(TabKind::Graph, |tab, _| {
-                    tab.graph_query_bar_key(view_id, key)
-                });
-            }
-            AppRequest::GraphApplyQueryBar { view_id } => {
-                self.with_tab(TabKind::Graph, |tab, _| tab.graph_apply_query_bar(view_id));
-            }
-            AppRequest::GraphMoveConfirmSourceFromTree => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_move_confirm_source_from_tree(ctx)
-                });
-            }
-            AppRequest::GraphMoveConfirmTargetFromTree { carry } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_move_confirm_target_from_tree(ctx, *carry)
-                });
-            }
-            AppRequest::GraphMoveConfirmMoveTarget { selected } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_move_confirm_move_target(ctx, selected)
-                });
-            }
-            AppRequest::GraphMoveExecuteMultiMove { selected, dir_path } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_move_execute_multi_move(ctx, selected, dir_path)
-                });
-            }
-            AppRequest::GraphNavigatePeriodic(period) => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_navigate_periodic(ctx, period)
-                });
-            }
-            AppRequest::GraphConfirmDelete {
-                target,
-                is_directory,
-            } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_confirm_delete(ctx, target, is_directory)
-                });
-            }
-            AppRequest::GraphCreateSubdir { parent, name } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_create_subdir(ctx, parent, name)
-                });
-            }
-            AppRequest::GraphTaskEdit { path, line, fields } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_task_edit(ctx, path, line, fields)
-                });
-            }
-            AppRequest::GraphTaskCommitCreate {
-                fields,
-                target,
-                subtask_parent,
-            } => {
-                self.with_tab(TabKind::Graph, |tab, ctx| {
-                    tab.graph_task_commit_create(ctx, fields, target, subtask_parent)
+                    tab.handle_graph_request(req, ctx)
                 });
             }
         }

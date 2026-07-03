@@ -653,7 +653,7 @@ mod view_tests {
     /// Ctrl+P opens the preset picker for the active view; selecting
     /// a preset replaces the active view's query in-place. Updated
     /// for extract-modal-driver §4: the picker is now an `ActiveModal`
-    /// variant and commits via `AppRequest::GraphApplyPreset`.
+    /// variant and commits via `AppRequest::Graph(GraphRequest::ApplyPreset)`.
     #[test]
     fn ctrl_p_preset_replaces_active_view_query() {
         use chrono::NaiveDate;
@@ -671,7 +671,7 @@ mod view_tests {
         let pending_request = RefCell::new(None);
         let graph_refresh = Cell::new(false);
 
-        let ctx = TabCtx {
+        let mut ctx = TabCtx {
             vault: &vault,
             recents: &recents,
             today,
@@ -713,14 +713,16 @@ mod view_tests {
             "Enter on a selected row must close the modal"
         );
 
-        // The modal queued GraphApplyPreset(dsl). Apply it via the tab hook.
+        // The modal queued Graph(ApplyPreset(dsl)). Apply it via the tab hook.
         let req = pending_request
             .borrow_mut()
             .take()
-            .expect("Enter must queue GraphApplyPreset");
+            .expect("Enter must queue Graph(ApplyPreset)");
         match req {
-            AppRequest::GraphApplyPreset(dsl) => tab.graph_apply_preset(dsl),
-            other => panic!("expected GraphApplyPreset, got {other:?}"),
+            AppRequest::Graph(req @ GraphRequest::ApplyPreset(_)) => {
+                tab.handle_graph_request(req, &mut ctx)
+            }
+            other => panic!("expected Graph(ApplyPreset), got {other:?}"),
         }
 
         // The active view's query is replaced with the preset DSL.
