@@ -16,8 +16,8 @@
 
 ## 3. Seeded section-move entry point
 
-- [ ] 3.1 Add `section_move::begin_for_source(ctx, source_rel) -> SectionMoveState` reusing `advance_to_multiselect` so the modal opens at heading multi-select for a known note (no source picker).
-- [ ] 3.2 Unit/snapshot test that `begin_for_source` yields a `HeadingMultiSelect` state scoped to the given note's headings.
+- [x] 3.1 Add `section_move::begin_for_source(ctx, source_rel) -> Option<SectionMoveState>` (the shared primitive; `advance_to_multiselect` now delegates to it) so the modal opens at heading multi-select for a known note (no source picker).
+- [x] 3.2 Unit tests: `begin_for_source` yields a `HeadingMultiSelect` scoped to the note's headings, and `None` when the note has no headings.
 
 ## 4. TUI History tab
 

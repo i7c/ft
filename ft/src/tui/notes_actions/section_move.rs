@@ -508,7 +508,22 @@ fn handle_target_picker_key(
 }
 
 pub fn advance_to_multiselect(ctx: &TabCtx, hit: Hit) -> MoveStep {
-    let abs = ctx.vault.path.join(&hit.path);
+    match begin_for_source(ctx, hit.path) {
+        Some(state) => MoveStep::Transition(state),
+        // `begin_for_source` already queued the toast on failure.
+        None => MoveStep::Finished,
+    }
+}
+
+/// Begin the section-move flow seeded to a known source note, skipping the
+/// source picker and opening directly at heading multi-select. Returns
+/// `None` — after queuing an error toast — when the source can't be read
+/// or has no headings, so the caller simply declines to open the modal.
+///
+/// This is the shared primitive behind [`advance_to_multiselect`] (the
+/// source-picker path) and the History tab's row-seeded move.
+pub fn begin_for_source(ctx: &TabCtx, source_rel: PathBuf) -> Option<SectionMoveState> {
+    let abs = ctx.vault.path.join(&source_rel);
     let content = match std::fs::read_to_string(&abs) {
         Ok(s) => s,
         Err(e) => {
@@ -517,16 +532,16 @@ pub fn advance_to_multiselect(ctx: &TabCtx, hit: Hit) -> MoveStep {
                 &format!("could not read source: {e}"),
                 ToastStyle::Error,
             );
-            return MoveStep::Finished;
+            return None;
         }
     };
     let headings = extract_headings(&content);
     if headings.is_empty() {
         queue_toast(ctx, "source has no headings to move", ToastStyle::Error);
-        return MoveStep::Finished;
+        return None;
     }
-    MoveStep::Transition(SectionMoveState::HeadingMultiSelect {
-        source_rel: hit.path,
+    Some(SectionMoveState::HeadingMultiSelect {
+        source_rel,
         source_abs: abs,
         source_content: content,
         headings,
@@ -1673,4 +1688,97 @@ fn take_carry(carry: &mut MoveCarry) -> MoveCarry {
             clipboard: Vec::new(),
         },
     )
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn discover(tmp: &assert_fs::TempDir) -> Arc<ft_core::vault::Vault> {
+        Arc::new(ft_core::vault::Vault::discover(Some(tmp.path().to_path_buf())).unwrap())
+    }
+
+    /// `begin_for_source` on a note with headings opens the multi-select
+    /// step seeded to that note — no source-picker round-trip.
+    #[test]
+    fn begin_for_source_opens_multiselect_scoped_to_note() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Note.md")
+            .write_str("# Note\n\n## Alpha\n\nBody a.\n\n## Beta\n\nBody b.\n")
+            .unwrap();
+        let vault = discover(&tmp);
+        let recents = Arc::new(ft_core::recents::RecentsLog::with_log_path(
+            vault.path.clone(),
+            vault.path.join("recents.jsonl"),
+        ));
+        let last_refresh = std::cell::Cell::new(None);
+        let pending = std::cell::RefCell::new(None);
+        let graph_refresh = std::cell::Cell::new(false);
+        let ctx = crate::tui::tab::TabCtx {
+            vault: &vault,
+            recents: &recents,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 7, 4).unwrap(),
+            last_refresh: &last_refresh,
+            pending_request: &pending,
+            active_modal_name: None,
+            host_popup_open: false,
+            snapshot: None,
+            graph_refresh: &graph_refresh,
+        };
+
+        let state =
+            begin_for_source(&ctx, PathBuf::from("Note.md")).expect("note has headings → Some");
+        match state {
+            SectionMoveState::HeadingMultiSelect {
+                source_rel,
+                headings,
+                selected,
+                focus,
+                ..
+            } => {
+                assert_eq!(source_rel, PathBuf::from("Note.md"));
+                let texts: Vec<&str> = headings.iter().map(|h| h.text.as_str()).collect();
+                assert_eq!(texts, vec!["Note", "Alpha", "Beta"]);
+                assert!(selected.is_empty());
+                assert_eq!(focus, 0);
+            }
+            _ => panic!("expected HeadingMultiSelect, seeded to the note"),
+        }
+    }
+
+    /// A note with no headings yields `None` (nothing to move).
+    #[test]
+    fn begin_for_source_none_when_no_headings() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Flat.md")
+            .write_str("Just body, no headings.\n")
+            .unwrap();
+        let vault = discover(&tmp);
+        let recents = Arc::new(ft_core::recents::RecentsLog::with_log_path(
+            vault.path.clone(),
+            vault.path.join("recents.jsonl"),
+        ));
+        let last_refresh = std::cell::Cell::new(None);
+        let pending = std::cell::RefCell::new(None);
+        let graph_refresh = std::cell::Cell::new(false);
+        let ctx = crate::tui::tab::TabCtx {
+            vault: &vault,
+            recents: &recents,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 7, 4).unwrap(),
+            last_refresh: &last_refresh,
+            pending_request: &pending,
+            active_modal_name: None,
+            host_popup_open: false,
+            snapshot: None,
+            graph_refresh: &graph_refresh,
+        };
+        assert!(begin_for_source(&ctx, PathBuf::from("Flat.md")).is_none());
+    }
 }
