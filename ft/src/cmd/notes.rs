@@ -71,6 +71,10 @@ pub enum NotesCommand {
     /// note (and its Related-section aliases) across the vault. Dates
     /// come from `git blame`.
     Journal(JournalArgs),
+    /// Reverse-chronological feed of every paragraph edited within a
+    /// time window, across the whole vault — the untargeted, time-shaped
+    /// sibling of `journal`. Dates come from `git blame`.
+    History(HistoryArgs),
     /// Print the graph-derived co-occurrence suggestions for a note
     /// (or a `[[ghost]]` target) — the same scored concept list the
     /// `update-related` modal shows, as a read-only CLI surface.
@@ -98,6 +102,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
         NotesCommand::Move(a) => run_mv(a, vault_flag),
         NotesCommand::Journal(a) => run_journal(a, vault_flag),
+        NotesCommand::History(a) => run_history(a, vault_flag),
         NotesCommand::Related(a) => run_related(a, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
@@ -1529,68 +1534,128 @@ fn resolve_journal_window(
     Ok(None)
 }
 
+/// Build the shared `FeedRow`s for a journal entry slice, resolving each
+/// entry's matched-target titles for the badge / JSON field.
+fn journal_feed_rows<'a>(
+    entries: &'a [ft_core::journal::JournalEntry],
+    resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+) -> Vec<crate::output::feed::FeedRow<'a>> {
+    entries
+        .iter()
+        .map(|e| crate::output::feed::FeedRow {
+            date: e.date.to_string(),
+            source_title: &e.source_title,
+            source_path: e.source_path.as_path(),
+            section: &e.section_text,
+            matched: resolve_titles(&e.matched),
+        })
+        .collect()
+}
+
 fn render_journal_table(
     entries: &[ft_core::journal::JournalEntry],
     use_color: bool,
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
 ) {
-    if entries.is_empty() {
-        println!("no journal entries");
-        return;
-    }
-    use owo_colors::OwoColorize;
-    let mut first = true;
-    for e in entries {
-        if !first {
-            println!();
-        }
-        first = false;
-        let header = format!("{}  {}", e.date, e.source_title);
-        if use_color {
-            println!("{}", header.bold().cyan());
-        } else {
-            println!("{header}");
-        }
-        if e.matched.len() > 1 {
-            let titles = resolve_titles(&e.matched);
-            let badge = format!("matched: {}", titles.join(", "));
-            if use_color {
-                println!("{}", badge.dimmed());
-            } else {
-                println!("{badge}");
-            }
-        }
-        let sep_len = header.chars().count().clamp(20, 72);
-        println!("{}", "─".repeat(sep_len));
-        println!("{}", e.section_text);
-    }
+    let rows = journal_feed_rows(entries, resolve_titles);
+    crate::output::feed::render_table(&rows, use_color, "no journal entries");
 }
 
 fn render_journal_json(
     entries: &[ft_core::journal::JournalEntry],
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
 ) -> Result<()> {
-    #[derive(serde::Serialize)]
-    struct Row<'a> {
-        date: String,
-        source_title: &'a str,
-        source_path: String,
-        section: &'a str,
-        matched: Vec<String>,
+    let rows = journal_feed_rows(entries, resolve_titles);
+    crate::output::feed::render_json(&rows)
+}
+
+// ── ft notes history ─────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct HistoryArgs {
+    /// Duration window: `7d`, `24h`, `2w`, `1m`. Defaults to `7d`.
+    /// Mutually exclusive with `--range`.
+    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
+    pub since: Option<String>,
+
+    /// Commit range `X..Y` for the window. Mutually exclusive with
+    /// `--since`.
+    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
+    pub range: Option<String>,
+
+    /// Include paragraphs from synth notes (`ft-synth: true`), which are
+    /// excluded by default.
+    #[arg(long)]
+    pub include_synth: bool,
+
+    /// Output as a JSON array instead of the human-readable table form.
+    /// Each entry includes `date`, `source_title`, `source_path`, and
+    /// `section`.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+fn run_history(args: HistoryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    // Blame runs from `vault.path`; `git -C <vault>` finds the enclosing
+    // repo whether the vault is the repo root or a subdir.
+    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
+        anyhow!("the vault is not inside a git repository — `ft notes history` needs git history for section dates")
+    })?;
+
+    // Default to a 7-day window when no window flag is given.
+    let window = resolve_journal_window(&args.since, &args.range)?.unwrap_or(
+        ft_core::link_review::WindowRange::Since(chrono::Duration::days(7)),
+    );
+
+    let cfg = vault.config.config.synth.clone();
+    let opts = ft_core::history::HistoryOptions {
+        include_synth: args.include_synth,
+    };
+    let mut cache =
+        ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
+    let report = ft_core::history::build_history(&graph, &vault, &window, &cfg, &opts, &mut cache)
+        .context("building history")?;
+    let _ = cache.save(&vault.path);
+
+    if !report.skipped_blame.is_empty() {
+        eprintln!(
+            "warning: dropped paragraphs from {} file(s) because `git blame` failed (untracked or path lookup failed):",
+            report.skipped_blame.len()
+        );
+        for p in report.skipped_blame.iter().take(5) {
+            eprintln!("  - {}", p.display());
+        }
+        if report.skipped_blame.len() > 5 {
+            eprintln!("  …and {} more", report.skipped_blame.len() - 5);
+        }
     }
-    let rows: Vec<Row> = entries
+
+    let rows: Vec<crate::output::feed::FeedRow> = report
+        .entries
         .iter()
-        .map(|e| Row {
+        .map(|e| crate::output::feed::FeedRow {
             date: e.date.to_string(),
             source_title: &e.source_title,
-            source_path: e.source_path.to_string_lossy().into_owned(),
+            source_path: e.source_path.as_path(),
             section: &e.section_text,
-            matched: resolve_titles(&e.matched),
+            matched: Vec::new(),
         })
         .collect();
-    let s = serde_json::to_string_pretty(&rows).context("serialize journal json")?;
-    println!("{s}");
-    Ok(())
+
+    if args.json {
+        crate::output::feed::render_json(&rows)?;
+    } else {
+        let use_color =
+            !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+        crate::output::feed::render_table(&rows, use_color, "no history entries");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Resolve a `<note>` argument to a [`NoteId`] in the graph.

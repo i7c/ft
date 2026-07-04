@@ -9,10 +9,10 @@
 
 ## 2. CLI `ft notes history`
 
-- [ ] 2.1 Extract the journal table + JSON renderers into a shared helper (in `ft/src/output/`) that both journal and history call; keep journal output byte-identical (existing `insta` snapshots are the guard).
-- [ ] 2.2 Add `HistoryArgs` and a `History` variant to `NotesCommand` in `ft/src/cmd/notes.rs`: `--since`/`--range` (mutually exclusive, default `7d`), `--include-synth`, `--json`, `--no-color`; dispatch in `run`.
-- [ ] 2.3 Implement `run_history`: discover vault, require a git repo (clear error otherwise), build graph, load `BlameCache`, resolve window (default `7d`), call `build_history`, render, and warn on `skipped_blame`.
-- [ ] 2.4 Integration tests under `ft/tests/` (assert_cmd + git fixture): default run, `--since`/`--range`, mutual exclusion error, `--json` shape, `--include-synth`, non-git error, `NO_COLOR`.
+- [x] 2.1 Extract the journal table + JSON renderers into a shared `ft/src/output/feed.rs` (`FeedRow` + `render_table`/`render_json`) that both journal and history call; journal output byte-identical (`matched` via `skip_serializing_if`), guarded by existing journal integration tests.
+- [x] 2.2 Add `HistoryArgs` and a `History` variant to `NotesCommand` in `ft/src/cmd/notes.rs`: `--since`/`--range` (mutually exclusive, default `7d`), `--include-synth`, `--json`, `--no-color`; dispatch in `run`.
+- [x] 2.3 Implement `run_history`: discover vault, require a git repo (clear error otherwise), build graph, load `BlameCache`, resolve window (default `7d`), call `build_history`, render, and warn on `skipped_blame`.
+- [x] 2.4 Integration tests in `ft/tests/notes_history.rs` (assert_cmd + git fixture): default window, `--range` `--json` shape (no `matched`), mutual-exclusion error, `--include-synth`, non-git error, `NO_COLOR`.
 
 ## 3. Seeded section-move entry point
 
