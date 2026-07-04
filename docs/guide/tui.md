@@ -24,12 +24,12 @@ other subcommand (see
 [vault-and-config.md](vault-and-config.md#vault-discovery-in-order)),
 so just running `ft tui` from any directory inside a vault works.
 
-## The five tabs
+## The seven tabs
 
-Across the top: **Graph**, **Tasks**, **Notes**, **Timeblocks**, and
-**Journal**. Each has its own keymap; the active tab decides which
-chords are bound. The Graph tab is the most powerful — most "what's
-related to what" workflows start there.
+Across the top: **Graph**, **Tasks**, **Notes**, **Timeblocks**,
+**Journal**, **History**, and **Review**. Each has its own keymap; the
+active tab decides which chords are bound. The Graph tab is the most
+powerful — most "what's related to what" workflows start there.
 
 | Index | Tab        | What it's for                                                                  |
 |-------|------------|--------------------------------------------------------------------------------|
@@ -38,6 +38,8 @@ related to what" workflows start there.
 | `3`   | Notes      | Fuzzy note picker, section operations, template creation, quick capture.       |
 | `4`   | Timeblocks | Day-planner editor with split today + tomorrow view.                           |
 | `5`   | Journal    | Reverse-chronological feed of paragraph-level mentions of a note.              |
+| `6`   | History    | Whole-vault feed of recently-edited paragraphs (windowed, default 7d).         |
+| `7`   | Review     | Link-review window; hand picks off to the Journal tab for synthesis.           |
 
 ## Global chords
 

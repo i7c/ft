@@ -232,6 +232,16 @@ pub fn ft_core::journal::build_journal(
     vault: &Vault, repo: &Path, cache: &mut BlameCache,
 ) -> Result<JournalReport>;
 
+// Engine 1's untargeted, time-shaped sibling: every vault paragraph
+// edited within a window, recency-ordered. Selects by window-edit
+// (link_review added-lines overlap) instead of by link target; shares
+// the journal's blame dates and sort. Drives `ft notes history` + the
+// History tab.
+pub fn ft_core::history::build_history(
+    graph: &Graph, vault: &Vault, window: &WindowRange,
+    cfg: &Synth, opts: &HistoryOptions, cache: &mut BlameCache,
+) -> Result<HistoryReport>;
+
 // Plan/apply for synth-note scaffolding.
 pub fn ft_core::synth::scaffold::plan_synth_scaffold(...)
     -> Result<SynthScaffoldPlan>;          // pure: no I/O writes
@@ -337,9 +347,13 @@ for free via the planner invariant.
 
 ### A new TUI tab
 
-The TUI ships six tabs today: Graph, Tasks, Notes, Timeblocks,
-Journal, and Review (the last drives the synthesis ritual's
-link-pick → Journal handoff; see §"Synthesis ritual").
+The TUI ships seven tabs today: Graph, Tasks, Notes, Timeblocks,
+Journal, History, and Review. Review drives the synthesis ritual's
+link-pick → Journal handoff (see §"Synthesis ritual"). History is the
+untargeted, time-shaped sibling of Journal: it renders `build_history`
+(recently-edited paragraphs, windowed, default 7d) and reuses Journal's
+row renderer + send-to-synth overlay and the shared section-move modal
+(seeded via `section_move::begin_for_source`).
 
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
    `App::new`. `Tab::kind() -> TabKind` is required — it's the typed

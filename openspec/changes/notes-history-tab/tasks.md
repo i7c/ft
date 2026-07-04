@@ -30,6 +30,6 @@
 
 ## 5. Registry, docs, and build invariants
 
-- [ ] 5.1 Regenerate `docs/keybindings.md` (`cargo run --release -q -- commands docs > docs/keybindings.md`) and confirm `commands docs --check` passes.
-- [ ] 5.2 Update `docs/commands.md` / `docs/architecture.md` (Synthesis ritual + tabs sections) and `README.md`/CLI help to mention `ft notes history` and the History tab.
-- [ ] 5.3 Run the five build invariants clean: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `commands docs --check`.
+- [x] 5.1 Regenerated `docs/keybindings.md` via `ft commands docs` (added the `tab/history` section); `commands docs --check` passes.
+- [x] 5.2 Updated `docs/architecture.md` (Synthesis ritual `build_history` + seven-tabs section), `docs/guide/notes.md` (new "The History feed" section), `docs/guide/tui.md` (seven-tabs table, incl. the previously-missing Review row), and `README.md`. CLI help is auto-generated from the `History` clap doc comments. (`docs/commands.md` needs no edit — it documents the command system generally; per-tab commands live in the generated keybindings.md.)
+- [x] 5.3 Five build invariants clean: `cargo build --release`, `cargo test --workspace` (35 binaries ok), `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `commands docs --check`.

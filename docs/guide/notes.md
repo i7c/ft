@@ -219,6 +219,30 @@ own journal.
 The TUI's Journal tab is the same feed with a fuzzy picker on top —
 press `5` in the TUI and pick a note. See [tui.md](tui.md).
 
+## The History feed
+
+Where the journal is *target-shaped* ("what mentions this note?"),
+`ft notes history` is *time-shaped*: a whole-vault, reverse-chronological
+feed of every paragraph edited within a window — "what did I actually
+write or change lately, everywhere?" It takes the same `--since` / `--range`
+window arguments as the journal (defaulting to `7d`) and, like the journal,
+needs a git-backed vault.
+
+```sh
+ft notes history                      # last 7 days, human-readable
+ft notes history --since 2w --json    # last two weeks, machine-readable
+ft notes history --range v1.0..HEAD   # a commit range
+```
+
+Synth notes (`ft-synth: true`) are excluded by default; pass
+`--include-synth` to include them. Periodic/daily notes are included.
+
+The TUI's History tab (press `6`) renders the same feed and adds the
+synthesis actions: select one/several/all rows and `s` / `S` them into a
+synth note as protected `[!ft-source]` sections, or press `m` to move the
+selected row's section into another note (the section-move flow, seeded to
+that note). See [tui.md](tui.md).
+
 ## Updating the Related section
 
 `ft notes update-related <note>` launches the TUI graph tab on top of

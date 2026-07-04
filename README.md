@@ -171,7 +171,7 @@ feature, common workflows, and the design philosophy:
 | [install.md](docs/guide/install.md)                      | Build from source, completions, man pages, first run.      |
 | [vault-and-config.md](docs/guide/vault-and-config.md)    | Vault discovery, the two config layers, periodic notes.    |
 | [tasks.md](docs/guide/tasks.md)                          | List / filter / create / complete / move, CLI + TUI.       |
-| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, journal.        |
+| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, journal, history. |
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |
@@ -212,5 +212,5 @@ depth.
   exhaustive reference for append-with-template and quick capture
 - [docs/architecture.md#synthesis-ritual-link_review--synth](docs/architecture.md#synthesis-ritual-link_review--synth)
   — the post-connecting ritual (`ft review`, `ft notes journal --link`,
-  `ft synth scaffold` / `verify`), the `[!ft-source]` callout grammar
-  used in synth notes, and the new `[synth]` config table
+  `ft notes history`, `ft synth scaffold` / `verify`), the `[!ft-source]`
+  callout grammar used in synth notes, and the new `[synth]` config table
