@@ -69,6 +69,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Journal");
     app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "History");
+    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Review");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Graph");

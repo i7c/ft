@@ -957,6 +957,8 @@ fn commit_move(
         ),
         ToastStyle::Success,
     );
+    // A move rewrites two files; the shared graph snapshot is now stale.
+    ctx.request_graph_refresh();
 }
 
 /// Walk the layout in order, emitting one `SectionPick` per `Pending`

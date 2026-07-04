@@ -1560,7 +1560,7 @@ fn render_journal(
 /// Applied AFTER wrap, so a token split across wrap boundaries
 /// degrades to plain text on both fragments. Acceptable for a feed of
 /// short paragraphs.
-fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
+pub(crate) fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     let bytes = line.as_bytes();
     let mut i = 0usize;
@@ -1663,7 +1663,7 @@ fn find_md_link(line: &str, start: usize) -> Option<usize> {
     Some(close_url + 1)
 }
 
-fn wrap_line(line: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![line.to_string()];
     }
@@ -1726,7 +1726,7 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
 /// span fills the full row width (giving the header band a solid
 /// background). Over-long input is truncated to `width`. A `width` of 0
 /// returns the string unchanged.
-fn pad_to_width(s: &str, width: usize) -> String {
+pub(crate) fn pad_to_width(s: &str, width: usize) -> String {
     if width == 0 {
         return s.to_string();
     }
@@ -1759,7 +1759,7 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
 /// (the core pure transform) so the marker and the `ft-synth-targets` key
 /// compose without clobbering each other. This thin wrapper handles the
 /// I/O (read + atomic write).
-fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
+pub(crate) fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
     let content = std::fs::read_to_string(absolute_path)?;
     let new_content = ft_core::synth::callout::upsert_synth_frontmatter(&content, None);
     if new_content == content {
@@ -1777,7 +1777,7 @@ fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
 // the core helper to keep coverage of the TUI-layer behavior it backs.
 
 /// Render whichever step of the send-to-synth flow is active.
-fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) {
+pub(crate) fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) {
     match state {
         SynthSendState::PickExisting { picker, .. } => {
             let popup = centered_rect(70, 70, area);

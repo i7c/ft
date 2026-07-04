@@ -452,6 +452,7 @@ pub enum TabKind {
     Notes,
     Timeblocks,
     Journal,
+    History,
     Review,
 }
 

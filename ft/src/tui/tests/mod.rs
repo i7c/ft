@@ -546,6 +546,7 @@ fn populated_tasks_path(dir: &TempDir) -> std::path::PathBuf {
 
 mod git;
 mod graph;
+mod history;
 mod notes;
 mod snapshot_lifecycle;
 mod synthesis;

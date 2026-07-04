@@ -21,12 +21,12 @@
 
 ## 4. TUI History tab
 
-- [ ] 4.1 Add `ft/src/tui/tabs/history.rs` implementing `Tab` (with `kind() -> TabKind::History`), holding a session `BlameCache`, current window (default `7d`), and the derived feed; read data from `ctx.snapshot` only.
-- [ ] 4.2 Declare `HISTORY_COMMANDS` + `HISTORY_KEYMAP`; implement `help_sections()` and a `dispatch_command` arm; re-derive feed on `on_graph_ready`/`on_focus`; add empty-state and reload.
-- [ ] 4.3 Register the tab in `build_tabs_with_overlays` wrapped with `.with_keymap_overlay(...)`; add the `TabKind` variant and routing.
-- [ ] 4.4 Row selection (one/many/all) → hand selected paragraphs to the synth scaffold flow targeting a chosen note; ensure no `ft-synth-target` frontmatter is written and no synth-grow step is offered.
-- [ ] 4.5 Move action on the focused row → open `ActiveModal::SectionMove` via `begin_for_source(ctx, row.source_path)`; raise `ctx.request_graph_refresh()` after a completed move.
-- [ ] 4.6 `TestBackend` snapshot tests under `ft/src/tui/tests/`: feed render, empty-window state, select→synth scaffold, seeded move opens at heading select.
+- [x] 4.1 Add `ft/src/tui/tabs/history.rs` implementing `Tab` (with `kind() -> TabKind::History`), holding a session `BlameCache`, current window (default `7d`), and the derived feed; read data from `ctx.snapshot` only.
+- [x] 4.2 Declare `HISTORY_COMMANDS` + `HISTORY_KEYMAP`; implement a `dispatch_command` arm; re-derive feed on `on_graph_ready`/`on_focus` (generation-tracked catch-up); empty-state + reload. (Help overlay is registry-generated; no `help_sections()` override needed.)
+- [x] 4.3 Register the tab in `build_tabs_with_overlays` + `for_test` wrapped with `.with_keymap_overlay(...)`; add the `TabKind::History` variant and the `registry::build()` command slice.
+- [x] 4.4 Row selection (one/many/all) → synth scaffold flow (reuses journal's `SynthSendState` overlay + core `plan/apply_synth_scaffold`); no `ft-synth-target` frontmatter, no synth-grow/new-only step.
+- [x] 4.5 Move action → open `ActiveModal::SectionMove` via `begin_for_source(ctx, row.source_path)`; refresh raised inside the shared `commit_move` so any completed move refreshes the snapshot.
+- [x] 4.6 `TestBackend` tests in `ft/src/tui/tests/history.rs`: feed render (windowed), empty-window state, seeded section-move modal opens, send-to-synth opens the existing-note picker.
 
 ## 5. Registry, docs, and build invariants
 

@@ -52,6 +52,7 @@ pub mod registry {
             crate::tui::tabs::notes::NOTES_COMMANDS,
             crate::tui::tabs::timeblocks::TIMEBLOCKS_COMMANDS,
             crate::tui::tabs::journal::JOURNAL_COMMANDS,
+            crate::tui::tabs::history::HISTORY_COMMANDS,
         ];
         let modal_slices: &[&'static [CommandDef]] = &[
             modal_commands::CREATE_COMMANDS,

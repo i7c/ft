@@ -33,8 +33,8 @@ use crate::tui::{
     snapshot::{build_graph_snapshot, GraphSnapshot},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
-        graph::GraphTab, journal::JournalTab, notes::NotesTab, review::ReviewTab, tasks::TasksTab,
-        timeblocks::TimeblocksTab,
+        graph::GraphTab, history::HistoryTab, journal::JournalTab, notes::NotesTab,
+        review::ReviewTab, tasks::TasksTab, timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
@@ -1309,8 +1309,9 @@ fn build_tabs_with_overlays(
     use crate::tui::{
         keymap::KeymapOverlay,
         tabs::{
-            graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
-            review::REVIEW_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+            graph::GRAPH_KEYMAP, history::HISTORY_KEYMAP, journal::JOURNAL_KEYMAP,
+            notes::NOTES_KEYMAP, review::REVIEW_KEYMAP, tasks::TASKS_KEYMAP,
+            timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1351,6 +1352,7 @@ fn build_tabs_with_overlays(
     let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
     let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
     let journal_overlay = build_overlay("tab/journal", &JOURNAL_KEYMAP);
+    let history_overlay = build_overlay("tab/history", &HISTORY_KEYMAP);
     let review_overlay = build_overlay("tab/review", &REVIEW_KEYMAP);
 
     let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
@@ -1418,6 +1420,7 @@ fn build_tabs_with_overlays(
         Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
         Box::new(TimeblocksTab::new().with_keymap_overlay(&timeblocks_overlay)),
         Box::new(JournalTab::new().with_keymap_overlay(&journal_overlay)),
+        Box::new(HistoryTab::new().with_keymap_overlay(&history_overlay)),
         Box::new(ReviewTab::new().with_keymap_overlay(&review_overlay)),
     ];
 
