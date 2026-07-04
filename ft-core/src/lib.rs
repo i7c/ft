@@ -5,6 +5,7 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod graph;
+pub mod history;
 pub mod journal;
 pub mod link_review;
 pub mod markdown;

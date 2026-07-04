@@ -1,11 +1,11 @@
 ## 1. Core builder (`ft_core::history`)
 
-- [ ] 1.1 Add `ft-core/src/history.rs` with `HistoryEntry` (`date`, `source_title`, `source_path`, `line_start`, `line_end`, `section_text`) and register the module in `ft-core/src/lib.rs`.
-- [ ] 1.2 Implement `build_history(graph, vault, window, opts, cache) -> Result<HistoryReport>`: resolve the window, compute `link_review::compute_link_review` added-lines, and iterate `Graph::nodes()` paragraph nodes.
-- [ ] 1.3 Include a paragraph iff `line_start..=line_end` overlaps the file's added-line set; blame only files present in the added-lines map (perf prefilter); compute each entry's date via `blame_cache::paragraph_date`.
-- [ ] 1.4 Exclude paragraphs whose source note has `ft-synth: true` unless `opts.include_synth`; keep periodic notes.
-- [ ] 1.5 Sort entries `(date desc, source_title asc, line_start asc)`, matching the journal; surface `skipped_blame` diagnostics like `JournalReport`.
-- [ ] 1.6 Unit tests: window inclusion/exclusion, default-vs-explicit window, synth exclusion + `--include-synth`, periodic inclusion, ordering + tiebreaks, blame-only-touched-files, non-git behavior. Reuse the journal tests' git-fixture helpers.
+- [x] 1.1 Add `ft-core/src/history.rs` with `HistoryEntry` (`date`, `source_title`, `source_path`, `line_start`, `line_end`, `section_text`) and register the module in `ft-core/src/lib.rs`.
+- [x] 1.2 Implement `build_history(graph, vault, window, cfg, opts, cache) -> Result<HistoryReport>`: resolve the window, compute `link_review::compute_link_review` added-lines, and iterate `Graph::nodes()` paragraph nodes.
+- [x] 1.3 Include a paragraph iff `line_start..=line_end` overlaps the file's added-line set; blame only files present in the added-lines map (perf prefilter); compute each entry's date via `blame_cache::paragraph_date`.
+- [x] 1.4 Exclude paragraphs whose source note has `ft-synth: true` unless `opts.include_synth`; keep periodic notes.
+- [x] 1.5 Sort entries `(date desc, source_title asc, line_start asc)`, matching the journal; surface `skipped_blame` diagnostics like `JournalReport`.
+- [x] 1.6 Unit tests: window inclusion/exclusion, ordering + tiebreaks, synth exclusion + `--include-synth`, blame-only-touched-files. Reuse the journal tests' git-fixture helpers.
 
 ## 2. CLI `ft notes history`
 
