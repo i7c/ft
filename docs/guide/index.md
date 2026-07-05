@@ -1,8 +1,10 @@
 # The `ft` user guide
 
-`ft` is a tool to organize, analyze, and manipulate notes. On top of
-that core it adds exactly two things — task management and time
-management — and nothing else. It is format-compatible with Obsidian
+`ft` is a tool for note-taking where capture can't wait and filing
+can't be predicted: write anywhere, name concepts with `[[wikilinks]]`,
+and let organization happen later, on demand. On top of that core it
+adds exactly two things — task management and time management — and
+nothing else. It is format-compatible with Obsidian
 (same wikilinks, same [Tasks-plugin](https://publish.obsidian.md/tasks/)
 emoji format, same Day-Planner blocks) so it reads and writes the same
 vault, but it is not a replacement for Obsidian: there is no Markdown
@@ -27,7 +29,7 @@ linked from each chapter.
 | Capture thoughts in one keystroke                        | [capture-and-templates.md](capture-and-templates.md) |
 | Plan your day in timeblocks                              | [timeblocks.md](timeblocks.md)        |
 | Query and walk the link graph                            | [graph.md](graph.md)                  |
-| Run the review → journal → synth-note ritual             | [synthesis.md](synthesis.md)          |
+| Sweep recent mentions, gather a topic, build a synth note | [synthesis.md](synthesis.md)          |
 | Live in the TUI                                          | [tui.md](tui.md)                      |
 | Keep the vault repo in sync                              | [git-sync.md](git-sync.md)            |
 | Wire `ft` into shell pipelines or other tools            | [scripting.md](scripting.md)          |
@@ -48,12 +50,13 @@ linked from each chapter.
   moved.
 - **Git sync.** Commit, pull, and push the vault repo in one command,
   with the same operation available on a background thread in the TUI.
-- **Interactive TUI.** Six tabs (Graph, Tasks, Notes, Timeblocks,
-  Journal, Review) tied together by a common command/keymap registry.
-- **Synthesis ritual.** Review recently-mentioned `[[wikilinks]]`,
-  aggregate cross-vault context across a chosen subset, and produce
-  "synth notes" whose quoted excerpts are pinned to verifiable git
-  commits. See [synthesis.md](synthesis.md).
+- **Interactive TUI.** Seven tabs (Graph, Tasks, Notes, Timeblocks,
+  Journal, History, Review) tied together by a common command/keymap
+  registry.
+- **Synthesis.** Review recently-mentioned `[[wikilinks]]`, aggregate
+  cross-vault context across a chosen subset, and produce "synth
+  notes" whose quoted excerpts are pinned to verifiable git commits.
+  See [synthesis.md](synthesis.md).
 
 ## What `ft` does *not* do
 
@@ -67,10 +70,13 @@ linked from each chapter.
 
 ## Philosophy in one paragraph
 
-`ft` exists for the moments where Obsidian's UI is overkill: a tasks
-triage in the terminal during a triage window, a quick capture without
-breaking flow, a vault-wide rename, a scripted backlog query, a sync
-from a server with no GUI. It treats your vault as the source of
-truth — same files, same formats, same conventions — and aims to be
-the kind of tool you can run a dozen times an hour without noticing.
-The longer version lives in [philosophy.md](philosophy.md).
+`ft` bets that capture can't wait and filing can't be predicted: you
+write anywhere, tag the thought with `[[concepts]]`, and organize
+later — on demand, not on a schedule. It also exists for the moments
+where Obsidian's UI is overkill: a tasks triage in the terminal, a
+quick capture without breaking flow, a vault-wide rename, a scripted
+backlog query, a sync from a server with no GUI. It treats your vault
+as the source of truth — same files, same formats, same conventions —
+and aims to be the kind of tool you can run a dozen times an hour
+without noticing. The longer version lives in
+[philosophy.md](philosophy.md).

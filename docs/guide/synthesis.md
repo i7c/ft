@@ -1,8 +1,10 @@
 # Synthesis
 
-`ft` has a three-step "post-connecting" ritual designed for quick-capture
-note-taking: write freely with `[[wikilinks]]`, file nothing, then once
-in a while sit down and connect dots. The ritual:
+`ft` has a three-step consolidation flow designed for quick-capture
+note-taking: write freely with `[[wikilinks]]`, file nothing, then —
+when the accumulated material warrants it — sit down and connect dots.
+The session is deferrable without penalty: the links were captured
+with the thoughts, so nothing rots while you wait. The steps:
 
 1. **Review** — see which `[[wikilinks]]` have been on your mind
    recently (`ft review`, or the Review tab).
@@ -65,7 +67,7 @@ Paragraph-level dedup: mentioning `[[Foo]]` three times in one
 paragraph counts once; in three separate paragraphs, three times.
 Wikilinks inside fenced code blocks are skipped. So are wikilinks
 quoted inside `[!ft-source]` callouts in a synth note (more on those
-below) — recycled material doesn't double-count next ritual.
+below) — recycled material doesn't double-count in the next review.
 
 Add a `[synth].exclude_prefixes` line to your config to filter out
 folders that produce noise. The conventional choice is your periodic
@@ -152,7 +154,7 @@ will tell you it drifted.
 
 Synth notes live wherever you want them in the vault. They participate
 in the link graph normally — backlinks work, the regular `[[wikilinks]]`
-you write in the prose between callouts count for next ritual's
+you write in the prose between callouts count toward the next
 review. The link-review just knows to skip the quoted material in
 `[!ft-source]` blocks so it doesn't show you yesterday's synthesis
 back as today's recent thoughts.
