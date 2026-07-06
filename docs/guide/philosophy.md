@@ -158,6 +158,10 @@ names, and every tool that counts references undercounts by three.
 3. **Merge when one name should win.** `ft notes rename` renames a
    note *or a ghost* and rewrites every reference in the vault — a
    drifted sibling is one command away from being folded in.
+4. **Detection when you didn't notice.** `ft notes drift` reports
+   likely splits — similar names whose mentions share the same
+   co-occurrence neighborhoods — ranked by how many mentions the
+   split distorts, each with its merge or alias fix ready to paste.
 
 ## Where notes actually live
 

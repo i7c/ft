@@ -226,6 +226,34 @@ Promotion — giving the concept its page — happens where the ghost is:
   `ft synth scaffold <path>.md --link "[[ghost]]"` — see
   [synthesis.md](synthesis.md).
 
+## Drift: one concept, several spellings
+
+The recurring cost of a link-based vault is vocabulary:
+`[[onboarding]]`, `[[onboarding-flow]]`, and `[[new user onboarding]]`
+silently split one concept across three names, and everything that
+counts references undercounts. `ft notes drift` finds the likely
+splits:
+
+```sh
+ft notes drift
+# [[onboarding]] (31) ↔ [[onboarding-flow]]? (4)
+#   merge: ft notes rename "[[onboarding-flow]]" "onboarding"
+```
+
+Pairs are gated by name similarity (compound names and typos), then
+confirmed by shared co-occurrence neighborhoods — and *penalized* when
+the two names appear together in the same paragraph, because you never
+write both spellings in one sentence: co-occurring concepts are
+related, not drifted. Ranking weighs in the combined mention count, so
+the splits that distort your vault most come first. `?` marks ghost
+sides; `--limit` and `--json` behave as everywhere else.
+
+The report is read-only — each pair just carries its fix, ready to
+paste. A ghost folds into its sibling with `ft notes rename` (all
+links rewritten vault-wide); when both sides are real notes the
+suggestion is a `## Related` alias, since two files' *content* can
+only be merged by hand.
+
 ## The Journal
 
 `ft notes journal <note>` is a reverse-chronological feed of

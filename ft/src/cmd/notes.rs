@@ -84,6 +84,10 @@ pub enum NotesCommand {
     /// no backing note — by distinct-paragraph mentions. The concepts
     /// that have earned a note of their own. Pure graph; no git needed.
     Ghosts(GhostsArgs),
+    /// Report likely concept-name drift — one idea split across several
+    /// `[[spellings]]` — ranked by stakes, each pair with a
+    /// ready-to-paste merge or alias resolution. Read-only; pure graph.
+    Drift(DriftArgs),
     /// Interactively update a note's `## Related` section. Launches
     /// the TUI graph tab with a co-occurrence-scoring modal for the
     /// target note.
@@ -109,6 +113,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::History(a) => run_history(a, vault_flag),
         NotesCommand::Related(a) => run_related(a, vault_flag),
         NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
+        NotesCommand::Drift(a) => run_drift(a, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
     }
@@ -1383,6 +1388,104 @@ fn run_ghosts(args: GhostsArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
             println!("{}", line.cyan());
         } else {
             println!("{line}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── ft notes drift ───────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct DriftArgs {
+    /// Truncate the ranked report to the first N pairs
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Output a JSON array of pair objects (both sides, signal values,
+    /// score, suggestion) instead of the table
+    #[arg(long)]
+    pub json: bool,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+fn run_drift(args: DriftArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+
+    let mut candidates = ft_core::graph::drift::detect_drift(&graph, &vault);
+    if let Some(n) = args.limit {
+        candidates.truncate(n);
+    }
+
+    if args.json {
+        #[derive(serde::Serialize)]
+        struct Side<'a> {
+            target: &'a str,
+            is_ghost: bool,
+            mentions: usize,
+        }
+        #[derive(serde::Serialize)]
+        struct Row<'a> {
+            keeper: Side<'a>,
+            lesser: Side<'a>,
+            name_similarity: f64,
+            neighborhood_overlap: f64,
+            direct_cooccurrence: usize,
+            score: f64,
+            suggestion: &'a str,
+        }
+        let rows: Vec<Row> = candidates
+            .iter()
+            .map(|c| Row {
+                keeper: Side {
+                    target: &c.keeper.target,
+                    is_ghost: c.keeper.is_ghost,
+                    mentions: c.keeper.mentions,
+                },
+                lesser: Side {
+                    target: &c.lesser.target,
+                    is_ghost: c.lesser.is_ghost,
+                    mentions: c.lesser.mentions,
+                },
+                name_similarity: c.name_similarity,
+                neighborhood_overlap: c.neighborhood_overlap,
+                direct_cooccurrence: c.direct_cooccurrence,
+                score: c.score,
+                suggestion: &c.suggestion,
+            })
+            .collect();
+        let s = serde_json::to_string_pretty(&rows).context("serialize drift json")?;
+        println!("{s}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if candidates.is_empty() {
+        println!("no drift candidates found");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let use_color =
+        !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    use owo_colors::OwoColorize;
+    let ghost_mark = |is_ghost: bool| if is_ghost { "?" } else { "" };
+    for c in &candidates {
+        let header = format!(
+            "[[{}]]{} ({}) ↔ [[{}]]{} ({})",
+            c.keeper.target,
+            ghost_mark(c.keeper.is_ghost),
+            c.keeper.mentions,
+            c.lesser.target,
+            ghost_mark(c.lesser.is_ghost),
+            c.lesser.mentions,
+        );
+        if use_color {
+            println!("{}", header.cyan());
+            println!("  {}", c.suggestion.dimmed());
+        } else {
+            println!("{header}");
+            println!("  {}", c.suggestion);
         }
     }
     Ok(ExitCode::SUCCESS)

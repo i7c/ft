@@ -60,7 +60,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 | 1 | Story rewrite (README + philosophy)         | done (change: `note-flow-story-rewrite`) | — |
 | 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
 | 3 | Ghost promotion                             | done (change: `ghost-promotion`) | — |
-| 4 | Concept drift: detect + merge               | proposed (change: `drift-detection`) | — |
+| 4 | Concept drift: detect + merge               | implemented (change: `drift-detection`) | — |
 | 5 | Renames + TUI reshape (tab order)           | planned | 1–4 (last) |
 
 Session 5 is deliberately last: the right names fall out of the
@@ -235,6 +235,14 @@ siblings.
 - Surface: a read-only "possible duplicates" report first (CLI), with
   merge/alias as the offered actions. Whether it lives under `review`,
   `related`, or its own verb is a session-5 naming question.
+
+**Decisions taken (2026-07-06, change `drift-detection`):** all pair
+kinds covered (ghost↔ghost, ghost↔note merge via `notes rename` —
+verified pre-existing; note↔note gets alias-only advice); CLI-only v1
+(`ft notes drift`, name provisional); signals = name-similarity gate
+(0.55 — strictly above the 0.5 a single shared generic token scores)
++ neighborhood-overlap confirmation via `related` profiles + direct
+co-occurrence penalty, ranked by combined mention weight.
 
 ---
 

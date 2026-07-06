@@ -30,6 +30,7 @@
 //! which is what enables "rename a not-yet-created note" in session 3.
 
 pub mod delete;
+pub mod drift;
 pub mod ghosts;
 pub mod parser;
 pub mod preset;
