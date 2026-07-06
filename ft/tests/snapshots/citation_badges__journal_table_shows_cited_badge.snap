@@ -1,0 +1,13 @@
+---
+source: ft/tests/citation_badges.rs
+assertion_line: 139
+expression: text
+---
+2025-01-01  a
+cited: topic
+────────────────────
+Alpha paragraph about [[Topic]].
+
+2025-01-01  a
+────────────────────
+Beta paragraph about [[Topic]].

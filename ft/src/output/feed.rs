@@ -3,11 +3,22 @@
 //! `ft notes history`. Journal rows carry a non-empty `matched` list
 //! (rendered as a `matched: …` badge when it has more than one target and
 //! always serialized in JSON); history rows leave `matched` empty, which
-//! suppresses the badge and omits the field from JSON.
+//! suppresses the badge and omits the field from JSON. Both feeds carry
+//! citation state (`cited_in`): a `cited:` / `cited*:` badge line in the
+//! table form, always serialized (possibly empty) in JSON.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
+
+/// One synth note citing a row's paragraph. `note` is the vault-relative
+/// path; `stale` marks an edited-since-cited (line-overlap) match rather
+/// than a byte-identical one.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CitedIn {
+    pub note: String,
+    pub stale: bool,
+}
 
 /// One rendered feed row, borrowed from the caller's entry type.
 pub struct FeedRow<'a> {
@@ -18,6 +29,8 @@ pub struct FeedRow<'a> {
     /// Display titles of the targets this row matched. Empty for history;
     /// one or more for journal (badge shown only when `len() > 1`).
     pub matched: Vec<String>,
+    /// Synth notes citing this paragraph; empty when uncited.
+    pub cited_in: Vec<CitedIn>,
 }
 
 /// Render the default (table) form. `empty_msg` is printed when there are
@@ -48,14 +61,38 @@ pub fn render_table(rows: &[FeedRow], use_color: bool, empty_msg: &str) {
                 println!("{badge}");
             }
         }
+        if let Some(badge) = cited_badge(&r.cited_in) {
+            if use_color {
+                println!("{}", badge.dimmed());
+            } else {
+                println!("{badge}");
+            }
+        }
         let sep_len = header.chars().count().clamp(20, 72);
         println!("{}", "─".repeat(sep_len));
         println!("{}", r.section);
     }
 }
 
+/// Badge text for a row's citation state: `cited: <first note stem>`
+/// (`cited*:` when stale), with a `+N` overflow when more than one synth
+/// note cites the paragraph. `None` when uncited.
+pub fn cited_badge(cited_in: &[CitedIn]) -> Option<String> {
+    let first = cited_in.first()?;
+    let stem = Path::new(&first.note)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| first.note.clone());
+    let label = if first.stale { "cited*" } else { "cited" };
+    let overflow = match cited_in.len() {
+        0 | 1 => String::new(),
+        n => format!(" +{}", n - 1),
+    };
+    Some(format!("{label}: {stem}{overflow}"))
+}
+
 /// Render a JSON array. Each element has `date`, `source_title`,
-/// `source_path`, `section`, and — when non-empty — `matched`.
+/// `source_path`, `section`, `cited_in`, and — when non-empty — `matched`.
 pub fn render_json(rows: &[FeedRow]) -> Result<()> {
     #[derive(serde::Serialize)]
     struct Row<'a> {
@@ -65,6 +102,7 @@ pub fn render_json(rows: &[FeedRow]) -> Result<()> {
         section: &'a str,
         #[serde(skip_serializing_if = "<[String]>::is_empty")]
         matched: &'a [String],
+        cited_in: &'a [CitedIn],
     }
     let out: Vec<Row> = rows
         .iter()
@@ -74,6 +112,7 @@ pub fn render_json(rows: &[FeedRow]) -> Result<()> {
             source_path: r.source_path.to_string_lossy().into_owned(),
             section: r.section,
             matched: &r.matched,
+            cited_in: &r.cited_in,
         })
         .collect();
     let s = serde_json::to_string_pretty(&out).context("serialize feed json")?;

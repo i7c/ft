@@ -83,14 +83,20 @@ commands `journal.toggle-uncited` / `history.toggle-uncited` bound to
 declared in the tabs' `*_COMMANDS`/`*_KEYMAP` statics; regenerate
 `docs/keybindings.md`.
 
-**D6 — note-context mode is a badge re-scope, not a new flow.** The
-existing flows already put a target note in play: the `s`
-append-to-existing picker on Journal/History, and `synth grow`'s
-frontmatter-targets path. When a target is set, row badges recompute
-against that note only (`in note` / `missing`; same matching rule),
-so the user sees live exactly what plan-time dedup would drop. Leaving
-the flow reverts to global badges. No new modal; this is row-render
-state on the tab plus a status-line indicator.
+**D6 — note-context mode is a persistent context note, not a flow
+stage.** (Amended during implementation: the `s` flow appends
+immediately after picking, so a badge scoped to "while the flow is
+active" would never be seen.) The Journal tab holds a
+`context_note: Option<PathBuf>`: set when the user picks a target in
+the `s`/`n` flow (and kept after the append, so entries visibly flip
+to *in note* when the graph refresh lands), or by a new
+`journal.open-for-synth-note` command — the TUI grow entry point —
+which fuzzy-picks a synth note, loads its `ft-synth-targets` as the
+source set, and sets the context. While set, row badges recompute
+against that note only (`in note` / `missing`; same matching rule)
+and the sources strip names the context note. Cleared by
+`journal.clear` and when a handoff/sources-manager load replaces the
+source set.
 
 **D7 — dismiss stays out, on record.** The deferral and its trigger
 condition ("uncited feeds still haystack-shaped after badges land")

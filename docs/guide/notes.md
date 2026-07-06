@@ -216,8 +216,24 @@ update, to see every paragraph (across daily notes, area notes,
 meeting notes) that touched it. The note itself is excluded from its
 own journal.
 
+Entries already woven into a synth note carry a citation badge:
+`cited: <note>` when the paragraph is pinned byte-identically in a
+`[!ft-source]` callout, `cited*: <note>` when it was edited *after*
+being cited (the pin is stale). `--json` carries the same data as a
+`cited_in` array of `{note, stale}` objects. Pass `--uncited` to keep
+only entries not yet cited — stale entries stay, since they still need
+attention — which turns a long feed into "what haven't I dealt with":
+
+```sh
+ft notes journal finance --uncited    # only the unsynthesized mentions
+```
+
 The TUI's Journal tab is the same feed with a fuzzy picker on top —
-press `5` in the TUI and pick a note. See [tui.md](tui.md).
+press `5` in the TUI and pick a note. It shows the same badges, `u`
+toggles the uncited-only filter, and `o` picks a synth note to work
+*toward*: its `ft-synth-targets` load as the sources and every entry
+badges as `in note` / `missing` relative to that note. See
+[tui.md](tui.md) and [synthesis.md](synthesis.md).
 
 ## The History feed
 
@@ -237,11 +253,16 @@ ft notes history --range v1.0..HEAD   # a commit range
 Synth notes (`ft-synth: true`) are excluded by default; pass
 `--include-synth` to include them. Periodic/daily notes are included.
 
+History carries the same citation badges and `--uncited` filter as the
+journal (`cited:` / `cited*:` lines, `cited_in` in `--json`), so a
+sweep can be incremental: `ft notes history --since 7d --uncited`
+shows only the paragraphs from the window you haven't synthesized yet.
+
 The TUI's History tab (press `6`) renders the same feed and adds the
 synthesis actions: select one/several/all rows and `s` / `S` them into a
 synth note as protected `[!ft-source]` sections, or press `m` to move the
 selected row's section into another note (the section-move flow, seeded to
-that note). See [tui.md](tui.md).
+that note). `u` toggles the uncited-only filter. See [tui.md](tui.md).
 
 ## Updating the Related section
 

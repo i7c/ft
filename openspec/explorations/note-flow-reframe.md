@@ -58,7 +58,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 | # | Session                                     | Status  | Depends on |
 |---|---------------------------------------------|---------|------------|
 | 1 | Story rewrite (README + philosophy)         | done (change: `note-flow-story-rewrite`) | — |
-| 2 | Close the loop: cited/processed state       | proposed (change: `citation-visibility`; dismiss deferred, three-state badges) | — |
+| 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
 | 3 | Ghost promotion                             | planned | —          |
 | 4 | Concept drift: detect + merge               | planned | —          |
 | 5 | Renames + TUI reshape (tab order)           | planned | 1–4 (last) |
@@ -150,6 +150,14 @@ observe/act grid has an empty cell — time-shaped surfaces (history,
 journal feeds) are read-only; consolidation verbs (move-section, synth
 grow) should be launchable *from* feed entries. Badges and actions on
 feeds are the same surface work.
+
+**Decisions taken (2026-07-06, change `citation-visibility`):**
+three-state badges shipped (cited / cited-stale / uncited;
+content-identity matching consistent with `filter_missing`); dismiss
+("seen, irrelevant") **deferred** — it is the only piece requiring
+durable non-derivative state. Revisit trigger: uncited feeds still
+feel haystack-shaped in practice after living with badges +
+`--uncited` + the Journal tab's context-note mode (`o`).
 
 ---
 

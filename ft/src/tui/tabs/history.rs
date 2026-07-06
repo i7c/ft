@@ -136,6 +136,15 @@ pub(crate) static HISTORY_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "history.toggle-uncited",
+        description: "Filter to entries not yet cited in any synth note",
+        scope: CommandScope::Tab("history"),
+        group: "Filter",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "history.send-to-synth-existing",
         description: "Pick an existing note to append the selected (or all) entries to",
         scope: CommandScope::Tab("history"),
@@ -177,6 +186,7 @@ pub(crate) static HISTORY_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Ctrl+u", "history.cursor-half-page-up")
         .bind("Enter", "history.open-selected")
         .bind("Space", "history.toggle-entry-selection")
+        .bind("u", "history.toggle-uncited")
         .bind("s", "history.send-to-synth-existing")
         .bind("S", "history.send-to-synth-new")
         .bind("m", "history.move-section")
@@ -185,6 +195,10 @@ pub(crate) static HISTORY_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
 pub struct HistoryTab {
     /// Window the feed is built for. Defaults to the last 7 days.
     window: WindowRange,
+    /// When `true`, the feed keeps only entries not yet cited
+    /// byte-identically in any synth note (stale citations stay).
+    /// Mirrors the CLI's `--uncited`.
+    uncited_only: bool,
     /// The currently-displayed feed.
     entries: Vec<HistoryEntry>,
     /// Per-entry multi-selection (indices into `entries`).
@@ -216,6 +230,7 @@ impl HistoryTab {
     pub fn new() -> Self {
         Self {
             window: WindowRange::Since(Duration::days(7)),
+            uncited_only: false,
             entries: Vec::new(),
             entry_selected: HashSet::new(),
             selected: 0,
@@ -291,10 +306,23 @@ impl HistoryTab {
 
         self.last_error = None;
         self.entries = report.entries;
+        if self.uncited_only {
+            let citations = &ctx.snapshot.as_ref().expect("checked above").citations;
+            self.entries.retain(|e| {
+                !citations
+                    .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
+                    .is_cited()
+            });
+        }
         self.entry_selected.clear();
         self.selected = 0;
         self.scroll_offset = 0;
         self.built_generation = Some(generation);
+    }
+
+    fn toggle_uncited(&mut self, ctx: &mut TabCtx) {
+        self.uncited_only = !self.uncited_only;
+        self.rebuild(ctx);
     }
 
     /// Re-derive the feed when the installed snapshot's generation has
@@ -455,6 +483,9 @@ impl HistoryTab {
                     });
                 }
             },
+            // The context-note picker is a Journal-tab flow; History
+            // never constructs it.
+            SynthSendState::PickContextNote(_) => {}
             SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
                 PickerOutcome::Selected(folder) => {
                     let folder = if folder == Path::new(".") {
@@ -649,6 +680,10 @@ impl Tab for HistoryTab {
                 self.toggle_entry_selection();
                 CommandOutcome::Handled
             }
+            "history.toggle-uncited" => {
+                self.toggle_uncited(ctx);
+                CommandOutcome::Handled
+            }
             "history.send-to-synth-existing" => {
                 self.open_send_to_existing(ctx);
                 CommandOutcome::Handled
@@ -682,11 +717,13 @@ impl Tab for HistoryTab {
         })
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
         render_history(
             frame,
             area,
             &self.entries,
+            self.uncited_only,
+            ctx.snapshot.as_ref().map(|s| &s.citations),
             self.selected,
             &self.entry_selected,
             &mut self.scroll_offset,
@@ -703,12 +740,18 @@ fn render_history(
     frame: &mut Frame,
     area: Rect,
     entries: &[HistoryEntry],
+    uncited_only: bool,
+    citations: Option<&ft_core::synth::citations::CitationIndex>,
     selected: usize,
     entry_selected: &HashSet<usize>,
     scroll_offset: &mut usize,
     last_error: Option<&str>,
 ) {
-    let title = format!(" History ({} entries) ", entries.len());
+    let title = if uncited_only {
+        format!(" History ({} entries) [filter: uncited] ", entries.len())
+    } else {
+        format!(" History ({} entries) ", entries.len())
+    };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -760,6 +803,12 @@ fn render_history(
             ),
             header_style,
         )));
+        if let Some(index) = citations {
+            let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
+            if let Some((badge, style)) = super::journal::citation_badge_line(&state, None) {
+                lines.push(Line::from(Span::styled(format!("    ↳ {badge}"), style)));
+            }
+        }
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
                 lines.push(Line::from(inline_markdown_spans(&wrapped)));

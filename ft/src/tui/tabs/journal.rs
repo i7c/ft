@@ -166,6 +166,24 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "journal.toggle-uncited",
+        description: "Filter to entries not yet cited in any synth note",
+        scope: CommandScope::Tab("journal"),
+        group: "Filter",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "journal.open-for-synth-note",
+        description: "Load a synth note's targets as sources and badge entries against it",
+        scope: CommandScope::Tab("journal"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "journal.send-to-synth-existing",
         description: "Pick an existing note to append the selected (or all) entries to",
         scope: CommandScope::Tab("journal"),
@@ -219,6 +237,8 @@ pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Multi-target + synth
         .bind("Space", "journal.toggle-entry-selection")
         .bind("w", "journal.toggle-in-window")
+        .bind("u", "journal.toggle-uncited")
+        .bind("o", "journal.open-for-synth-note")
         .bind("s", "journal.send-to-synth-existing")
         .bind("n", "journal.send-to-synth-new-only")
         .bind("S", "journal.send-to-synth-new")
@@ -250,6 +270,10 @@ pub enum SynthSendState {
         focus: NonSynthChoice,
         new_only: bool,
     },
+    /// `o` — fuzzy picker over the vault's synth notes. Picking one
+    /// loads its `ft-synth-targets` as the source set and installs it
+    /// as the badge context note.
+    PickContextNote(FuzzyPicker<PathListPickerSource>),
     /// `S` — fuzzy picker over every vault folder. `.` selects the
     /// vault root.
     PickFolder(FuzzyPicker<PathListPickerSource>),
@@ -284,6 +308,18 @@ pub struct JournalTab {
     /// down to entries whose paragraph lines overlap an added-line in
     /// the window.
     in_window_only: bool,
+    /// When `true`, the feed keeps only entries not yet cited
+    /// byte-identically in any synth note (stale citations stay — they
+    /// still need attention). Mirrors the CLI's `--uncited`.
+    uncited_only: bool,
+    /// The badge context note: while set, entry badges re-scope from
+    /// global (`cited:` / `cited*:`) to note-local (`in note` /
+    /// `missing`) against this synth note. Set by picking a target in
+    /// the `s`/`n` flow (and kept after the append so entries visibly
+    /// flip once the graph refresh lands) or by `o`
+    /// (open-for-synth-note). Cleared with the journal or when a
+    /// handoff replaces the source set.
+    context_note: Option<PathBuf>,
     /// The currently-displayed feed.
     entries: Vec<JournalEntry>,
     /// Per-entry display titles for the matched badge, parallel to
@@ -335,6 +371,8 @@ impl JournalTab {
             sources: Vec::new(),
             window: None,
             in_window_only: false,
+            uncited_only: false,
+            context_note: None,
             entries: Vec::new(),
             entry_matched_titles: Vec::new(),
             entry_selected: std::collections::HashSet::new(),
@@ -371,8 +409,10 @@ impl JournalTab {
             self.selected = 0;
             self.scroll_offset = 0;
             self.last_error = None;
-            // The in-window filter is meaningless with zero sources.
+            // The in-window/uncited filters are meaningless with zero
+            // sources.
             self.in_window_only = false;
+            self.uncited_only = false;
             return;
         }
 
@@ -492,6 +532,9 @@ impl JournalTab {
         if self.in_window_only {
             self.apply_in_window_filter(ctx);
         }
+        if self.uncited_only {
+            self.apply_uncited_filter(ctx);
+        }
     }
 
     /// Recompute and apply the in-window filter against the current
@@ -555,6 +598,134 @@ impl JournalTab {
         }
         self.in_window_only = !self.in_window_only;
         self.refresh_after_filter_toggle(ctx);
+    }
+
+    /// Drop entries already cited byte-identically in some synth note
+    /// (stale citations stay). Keeps `entry_matched_titles` parallel.
+    /// No-op when the snapshot isn't installed yet.
+    fn apply_uncited_filter(&mut self, ctx: &mut TabCtx) {
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
+        };
+        let keep: Vec<bool> = self
+            .entries
+            .iter()
+            .map(|e| {
+                !snap
+                    .citations
+                    .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
+                    .is_cited()
+            })
+            .collect();
+        let mut idx = 0;
+        self.entries.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        let mut idx = 0;
+        self.entry_matched_titles.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        self.entry_selected.clear();
+        if self.selected >= self.entries.len() {
+            self.selected = self.entries.len().saturating_sub(1);
+        }
+    }
+
+    fn toggle_uncited(&mut self, ctx: &mut TabCtx) {
+        if self.sources.is_empty() {
+            return;
+        }
+        self.uncited_only = !self.uncited_only;
+        self.refresh_after_filter_toggle(ctx);
+    }
+
+    /// `o` — open the synth-note picker for the context-note flow.
+    fn open_for_synth_note(&mut self, ctx: &TabCtx) {
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                "graph is still building — retry in a moment",
+                ToastStyle::Error,
+            );
+            return;
+        };
+        let notes = snap.citations.synth_notes.clone();
+        if notes.is_empty() {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                "no synth notes in the vault — create one with S first",
+                ToastStyle::Info,
+            );
+            return;
+        }
+        let source = PathListPickerSource::new(notes);
+        self.synth_send = Some(SynthSendState::PickContextNote(FuzzyPicker::new(source)));
+    }
+
+    /// Context note picked: load its `ft-synth-targets` as the source
+    /// set and install it as the badge context.
+    fn on_context_note_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
+        let abs = ctx.vault.path.join(&path);
+        let content = match std::fs::read_to_string(&abs) {
+            Ok(c) => c,
+            Err(e) => {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    &format!("could not read {}: {e}", path.display()),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        let Some(raw_targets) = ft_core::synth::callout::parse_synth_targets(&content) else {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                &format!(
+                    "{} has no ft-synth-targets frontmatter — load sources manually with /",
+                    path.display()
+                ),
+                ToastStyle::Info,
+            );
+            return;
+        };
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
+        };
+        let graph = &snap.graph;
+        let targets: Vec<JournalTarget> = raw_targets
+            .iter()
+            .map(|raw| {
+                let trimmed = raw
+                    .trim()
+                    .trim_start_matches("[[")
+                    .trim_end_matches("]]")
+                    .trim();
+                match note_id_by_title(graph, trimmed) {
+                    Some(id) => match graph.node(id) {
+                        NodeKind::Note(n) => JournalTarget::Note(n.path.clone()),
+                        _ => JournalTarget::Ghost(trimmed.to_string()),
+                    },
+                    None => JournalTarget::Ghost(trimmed.to_string()),
+                }
+            })
+            .collect();
+        if targets.is_empty() {
+            crate::tui::notes_actions::queue_toast(
+                ctx,
+                &format!("{}: ft-synth-targets is empty", path.display()),
+                ToastStyle::Info,
+            );
+            return;
+        }
+        self.sources = targets;
+        self.window = None;
+        self.in_window_only = false;
+        self.context_note = Some(path);
+        self.rebuild_journal(ctx);
     }
 
     fn toggle_entry_selection(&mut self) {
@@ -629,6 +800,13 @@ impl JournalTab {
                         focus,
                         new_only,
                     });
+                }
+            },
+            SynthSendState::PickContextNote(mut picker) => match picker.handle_key(k) {
+                PickerOutcome::Selected(path) => self.on_context_note_picked(ctx, path),
+                PickerOutcome::Cancelled => {}
+                PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
+                    self.synth_send = Some(SynthSendState::PickContextNote(picker));
                 }
             },
             SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
@@ -909,6 +1087,9 @@ impl JournalTab {
             ),
             ToastStyle::Success,
         );
+        // The sent-to note becomes the badge context: after the graph
+        // refresh lands, the shipped entries visibly flip to `in note`.
+        self.context_note = Some(vault_rel_path.to_path_buf());
         *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
             path: written,
             line: 1,
@@ -997,12 +1178,14 @@ impl Tab for JournalTab {
             self.sources = request.targets;
             self.window = request.window;
             self.in_window_only = false;
+            self.context_note = None;
             self.rebuild_journal(ctx);
         } else if let Some(target) = self.queued_for.take() {
             self.queued_add_sources = None;
             self.sources = vec![target];
             self.window = None;
             self.in_window_only = false;
+            self.context_note = None;
             self.rebuild_journal(ctx);
         } else if let Some((targets, default_mode)) = self.queued_add_sources.take() {
             // Raise the Append/Replace prompt; don't mutate sources
@@ -1046,6 +1229,7 @@ impl Tab for JournalTab {
         self.sources = sources;
         self.window = window;
         self.in_window_only = false;
+        self.context_note = None;
         self.rebuild_journal(ctx);
     }
 
@@ -1073,6 +1257,8 @@ impl Tab for JournalTab {
                 self.sources.clear();
                 self.window = None;
                 self.in_window_only = false;
+                self.uncited_only = false;
+                self.context_note = None;
                 self.entries.clear();
                 self.entry_matched_titles.clear();
                 self.entry_selected.clear();
@@ -1117,6 +1303,14 @@ impl Tab for JournalTab {
                 self.toggle_in_window(ctx);
                 CommandOutcome::Handled
             }
+            "journal.toggle-uncited" => {
+                self.toggle_uncited(ctx);
+                CommandOutcome::Handled
+            }
+            "journal.open-for-synth-note" => {
+                self.open_for_synth_note(ctx);
+                CommandOutcome::Handled
+            }
             "journal.send-to-synth-existing" => {
                 self.open_send_to_existing(ctx);
                 CommandOutcome::Handled
@@ -1156,13 +1350,16 @@ impl Tab for JournalTab {
         })
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
         render_journal(
             frame,
             area,
             &self.sources,
             self.window.as_ref(),
             self.in_window_only,
+            self.uncited_only,
+            self.context_note.as_deref(),
+            ctx.snapshot.as_ref().map(|s| &s.citations),
             &self.entries,
             &self.entry_matched_titles,
             self.selected,
@@ -1204,6 +1401,8 @@ impl Tab for JournalTab {
                 &[
                     ("Space", "toggle multi-select on the current entry"),
                     ("w", "toggle in-window-only filter (multi-target + window)"),
+                    ("u", "toggle uncited-only filter"),
+                    ("o", "load a synth note's targets + badge against it"),
                     ("s", "pick an existing note to append the scaffold to"),
                     (
                         "n",
@@ -1219,12 +1418,71 @@ impl Tab for JournalTab {
 /// Render the always-visible Sources strip (exactly 2 rows). Empty
 /// state, single-source, multi-source — all share the same shape so
 /// the entry-list scroll math stays stable across state transitions.
+/// Badge text + style for one entry's citation state. `None` when the
+/// entry needs no badge (uncited in global mode). In note-context mode
+/// every entry gets a badge — the whole point is seeing `in note` vs
+/// `missing` at a glance.
+pub(crate) fn citation_badge_line(
+    state: &ft_core::synth::citations::CitationState,
+    context_note: Option<&Path>,
+) -> Option<(String, Style)> {
+    use ft_core::synth::citations::CitationState;
+    if let Some(note) = context_note {
+        return if state.cited_in(note) {
+            Some(("in note".to_string(), Style::default().fg(palette::DIM)))
+        } else {
+            Some((
+                "missing".to_string(),
+                Style::default().fg(palette::SECONDARY),
+            ))
+        };
+    }
+    let stem = |notes: &[PathBuf]| -> String {
+        let first = notes
+            .first()
+            .map(|n| {
+                n.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| n.display().to_string())
+            })
+            .unwrap_or_default();
+        match notes.len() {
+            0 | 1 => first,
+            n => format!("{first} +{}", n - 1),
+        }
+    };
+    match state {
+        CitationState::Cited { notes } => Some((
+            format!("cited: {}", stem(notes)),
+            Style::default().fg(palette::DIM),
+        )),
+        CitationState::CitedStale { notes } => Some((
+            format!("cited*: {}", stem(notes)),
+            Style::default().fg(palette::TERTIARY),
+        )),
+        CitationState::Uncited => None,
+    }
+}
+
+fn note_id_by_title(graph: &ft_core::graph::Graph, title: &str) -> Option<NoteId> {
+    for (id, node) in graph.nodes() {
+        if let NodeKind::Note(n) = node {
+            if n.title.eq_ignore_ascii_case(title) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 fn render_sources_strip(
     frame: &mut Frame,
     area: Rect,
     sources: &[JournalTarget],
     window: Option<&JournalWindow>,
     in_window_only: bool,
+    uncited_only: bool,
+    context_note: Option<&Path>,
 ) {
     if area.height < 2 {
         return;
@@ -1235,6 +1493,16 @@ fn render_sources_strip(
     }
     if in_window_only {
         header.push_str(" [filter: in-window]");
+    }
+    if uncited_only {
+        header.push_str(" [filter: uncited]");
+    }
+    if let Some(note) = context_note {
+        let stem = note
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| note.display().to_string());
+        header.push_str(&format!(" [context: {stem}]"));
     }
     let header_area = Rect {
         x: area.x,
@@ -1356,6 +1624,9 @@ fn render_journal(
     sources: &[JournalTarget],
     window: Option<&JournalWindow>,
     in_window_only: bool,
+    uncited_only: bool,
+    context_note: Option<&Path>,
+    citations: Option<&ft_core::synth::citations::CitationIndex>,
     entries: &[JournalEntry],
     entry_matched_titles: &[Vec<String>],
     selected: usize,
@@ -1400,7 +1671,15 @@ fn render_journal(
         width: inner.width,
         height: inner.height.saturating_sub(2),
     };
-    render_sources_strip(frame, strip_area, sources, window, in_window_only);
+    render_sources_strip(
+        frame,
+        strip_area,
+        sources,
+        window,
+        in_window_only,
+        uncited_only,
+        context_note,
+    );
 
     if sources.is_empty() {
         // Empty-state body: just the error banner if any (the strip
@@ -1486,6 +1765,14 @@ fn render_journal(
                 badge,
                 Style::default().fg(palette::SECONDARY),
             )));
+        }
+        // Citation badge: note-local (`in note` / `missing`) when a
+        // context note is set, global (`cited:` / `cited*:`) otherwise.
+        if let Some(index) = citations {
+            let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
+            if let Some((badge, style)) = citation_badge_line(&state, context_note) {
+                lines.push(Line::from(Span::styled(format!("    ↳ {badge}"), style)));
+            }
         }
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
@@ -1784,7 +2071,7 @@ pub(crate) fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut Synth
             frame.render_widget(Clear, popup);
             picker.render(frame, popup);
         }
-        SynthSendState::PickFolder(picker) => {
+        SynthSendState::PickContextNote(picker) | SynthSendState::PickFolder(picker) => {
             let popup = centered_rect(70, 70, area);
             frame.render_widget(Clear, popup);
             picker.render(frame, popup);

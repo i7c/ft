@@ -1384,9 +1384,15 @@ pub struct JournalArgs {
 
     /// Output as a JSON array instead of the default human-readable
     /// table form. Each entry includes `date`, `source_title`,
-    /// `source_path`, `section`, and `matched` fields.
+    /// `source_path`, `section`, `cited_in`, and `matched` fields.
     #[arg(long)]
     pub json: bool,
+
+    /// Keep only entries not yet cited byte-identically in any synth
+    /// note. Entries whose paragraph was edited *after* being cited
+    /// (stale citations) are kept — they still need attention.
+    #[arg(long)]
+    pub uncited: bool,
 
     /// Disable colored output (also honored: `NO_COLOR` env var).
     #[arg(long)]
@@ -1464,6 +1470,15 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         });
     }
 
+    let citations = ft_core::synth::citations::CitationIndex::build(&vault);
+    if args.uncited {
+        entries.retain(|e| {
+            !citations
+                .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
+                .is_cited()
+        });
+    }
+
     // Map matched NoteIds → display titles for output.
     let resolve_titles = |ids: &[NoteId]| -> Vec<String> {
         ids.iter()
@@ -1477,13 +1492,33 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     };
 
     if args.json {
-        render_journal_json(&entries, &resolve_titles)?;
+        render_journal_json(&entries, &resolve_titles, &citations)?;
     } else {
         let use_color =
             !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
-        render_journal_table(&entries, use_color, &resolve_titles);
+        render_journal_table(&entries, use_color, &resolve_titles, &citations);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Citation annotations for one feed entry, in the shared renderer's
+/// form. Empty when uncited.
+fn cited_in_of(
+    citations: &ft_core::synth::citations::CitationIndex,
+    source_path: &std::path::Path,
+    lines: (u32, u32),
+    body: &str,
+) -> Vec<crate::output::feed::CitedIn> {
+    let state = citations.lookup(source_path, lines, body);
+    let stale = state.is_stale();
+    state
+        .notes()
+        .iter()
+        .map(|n| crate::output::feed::CitedIn {
+            note: n.to_string_lossy().into_owned(),
+            stale,
+        })
+        .collect()
 }
 
 /// Resolve a `--link` argument (`"[[Foo]]"` or `"Foo"`) to a graph
@@ -1539,6 +1574,7 @@ fn resolve_journal_window(
 fn journal_feed_rows<'a>(
     entries: &'a [ft_core::journal::JournalEntry],
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+    citations: &ft_core::synth::citations::CitationIndex,
 ) -> Vec<crate::output::feed::FeedRow<'a>> {
     entries
         .iter()
@@ -1548,6 +1584,12 @@ fn journal_feed_rows<'a>(
             source_path: e.source_path.as_path(),
             section: &e.section_text,
             matched: resolve_titles(&e.matched),
+            cited_in: cited_in_of(
+                citations,
+                &e.source_path,
+                (e.line_start, e.line_end),
+                &e.section_text,
+            ),
         })
         .collect()
 }
@@ -1556,16 +1598,18 @@ fn render_journal_table(
     entries: &[ft_core::journal::JournalEntry],
     use_color: bool,
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+    citations: &ft_core::synth::citations::CitationIndex,
 ) {
-    let rows = journal_feed_rows(entries, resolve_titles);
+    let rows = journal_feed_rows(entries, resolve_titles, citations);
     crate::output::feed::render_table(&rows, use_color, "no journal entries");
 }
 
 fn render_journal_json(
     entries: &[ft_core::journal::JournalEntry],
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
+    citations: &ft_core::synth::citations::CitationIndex,
 ) -> Result<()> {
-    let rows = journal_feed_rows(entries, resolve_titles);
+    let rows = journal_feed_rows(entries, resolve_titles, citations);
     crate::output::feed::render_json(&rows)
 }
 
@@ -1589,10 +1633,16 @@ pub struct HistoryArgs {
     pub include_synth: bool,
 
     /// Output as a JSON array instead of the human-readable table form.
-    /// Each entry includes `date`, `source_title`, `source_path`, and
-    /// `section`.
+    /// Each entry includes `date`, `source_title`, `source_path`,
+    /// `section`, and `cited_in`.
     #[arg(long)]
     pub json: bool,
+
+    /// Keep only entries not yet cited byte-identically in any synth
+    /// note. Entries whose paragraph was edited *after* being cited
+    /// (stale citations) are kept — they still need attention.
+    #[arg(long)]
+    pub uncited: bool,
 
     /// Disable colored output (also honored: `NO_COLOR` env var).
     #[arg(long)]
@@ -1636,8 +1686,17 @@ fn run_history(args: HistoryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         }
     }
 
-    let rows: Vec<crate::output::feed::FeedRow> = report
-        .entries
+    let citations = ft_core::synth::citations::CitationIndex::build(&vault);
+    let mut entries = report.entries;
+    if args.uncited {
+        entries.retain(|e| {
+            !citations
+                .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
+                .is_cited()
+        });
+    }
+
+    let rows: Vec<crate::output::feed::FeedRow> = entries
         .iter()
         .map(|e| crate::output::feed::FeedRow {
             date: e.date.to_string(),
@@ -1645,6 +1704,12 @@ fn run_history(args: HistoryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
             source_path: e.source_path.as_path(),
             section: &e.section_text,
             matched: Vec::new(),
+            cited_in: cited_in_of(
+                &citations,
+                &e.source_path,
+                (e.line_start, e.line_end),
+                &e.section_text,
+            ),
         })
         .collect();
 

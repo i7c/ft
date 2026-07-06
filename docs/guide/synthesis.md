@@ -112,6 +112,44 @@ when you specifically want "what was written this week."
 The TUI Journal tab gains the same `--link`-style multi-target mode
 when you hand off from the Review tab (more below).
 
+### Knowing what's already synthesized
+
+Both feeds (`ft notes journal` and `ft notes history`) badge entries
+with their **citation state**, so a session is incremental instead of
+re-triaging the same paragraphs forever:
+
+- `cited: <note>` — the paragraph is pinned byte-identically in that
+  synth note's `[!ft-source]` callouts. The matching rule is exactly
+  the scaffold's append-dedup, so a `cited` entry is precisely one
+  that `scaffold`/`grow` would skip.
+- `cited*: <note>` — a callout pins the same source lines but the
+  paragraph text has changed since: it was edited *after* being
+  cited. The new form hasn't been synthesized.
+- no badge — never cited anywhere.
+
+`--uncited` filters the feed to what still needs attention (the
+no-badge and `cited*` entries):
+
+```sh
+ft notes journal --link "[[Foo]]" --uncited
+ft notes history --since 7d --uncited
+```
+
+`--json` carries the same data as a `cited_in` array of
+`{note, stale}` objects on every entry.
+
+In the TUI, the Journal and History tabs show the same badges and
+toggle the uncited-only filter with `u`. The Journal tab additionally
+has a **context-note mode**: press `o` and pick a synth note — its
+`ft-synth-targets` frontmatter loads as the source set, the sources
+strip shows `[context: <note>]`, and every entry badges as `in note`
+or `missing` *relative to that note*. That is the "grow" workflow
+made visible: you see exactly which material the note already holds
+and which is still missing before you send anything. Sending entries
+to a note with `s`/`n`/`S` also installs it as the context, so after
+the background graph refresh the shipped entries visibly flip to
+`in note`.
+
 ## Step 3: synthesis
 
 A **synth note** is a regular `.md` file with `ft-synth: true` in its

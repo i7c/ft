@@ -1560,3 +1560,134 @@ fn journal_send_to_synth_new_only_empty_note_falls_back() -> Result<()> {
     );
     Ok(())
 }
+
+// ── Citation badges + context-note mode ──────────────────────────────
+
+/// Vault with two paragraphs mentioning `[[Target]]` and a synth note
+/// citing the first one byte-identically. The callout is hand-built
+/// with a genuine content hash; its pinned SHA is never dereferenced
+/// by the citation index. Commit dates are pinned so blame dates in
+/// frames are deterministic.
+fn citation_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+
+    let dir = TempDir::new().unwrap();
+    let vp = dir.path().join("vault");
+    std::fs::create_dir_all(vp.join(".obsidian")).unwrap();
+    std::fs::write(vp.join("Target.md"), "# Target\n").unwrap();
+    std::fs::write(vp.join("DailyA.md"), "Alpha mentions [[Target]].\n").unwrap();
+    std::fs::write(vp.join("DailyB.md"), "Beta mentions [[Target]].\n").unwrap();
+    let body = "Alpha mentions [[Target]].";
+    let hash = ft_core::synth::callout::compute_section_hash(body);
+    std::fs::write(
+        vp.join("Synth.md"),
+        format!(
+            "---\nft-synth: true\nft-synth-targets: [\"[[Target]]\"]\n---\n\n\
+             > [!ft-source] \"DailyA.md\" L1-1 @abc1234 #{hash}\n> {body}\n"
+        ),
+    )
+    .unwrap();
+
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vp)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-01-02T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-01-02T00:00:00")
+            .args(args)
+            .output()
+            .expect("git binary on PATH");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+
+    let vault = Vault::discover(Some(vp)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn journal_rows_show_citation_badges() -> Result<()> {
+    let (_dir, vault) = citation_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.queue_journal_for_tab_test("Target.md");
+    app.switch_to(journal_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("cited: Synth"),
+        "cited entry missing badge:\n{frame}"
+    );
+    assert_eq!(
+        frame.matches("cited: Synth").count(),
+        1,
+        "uncited entry must carry no badge:\n{frame}"
+    );
+    insta::assert_snapshot!(frame);
+    Ok(())
+}
+
+#[test]
+fn journal_uncited_toggle_filters_cited_entries() -> Result<()> {
+    let (_dir, vault) = citation_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.queue_journal_for_tab_test("Target.md");
+    app.switch_to(journal_tab_idx())?;
+
+    app.dispatch(key('u'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("[filter: uncited]"),
+        "strip missing filter flag:\n{frame}"
+    );
+    assert!(
+        !frame.contains("Alpha mentions"),
+        "cited entry should be filtered:\n{frame}"
+    );
+    assert!(
+        frame.contains("Beta mentions"),
+        "uncited entry should remain:\n{frame}"
+    );
+
+    app.dispatch(key('u'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Alpha mentions"),
+        "toggle off should restore the full feed:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn journal_context_note_flow_badges_in_note_vs_missing() -> Result<()> {
+    let (_dir, vault) = citation_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(journal_tab_idx())?;
+
+    // `o` opens the synth-note picker; Enter takes the only hit
+    // (Synth.md), which loads its ft-synth-targets ([[Target]]) as the
+    // source set and installs it as the badge context.
+    app.dispatch(key('o'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("[context: Synth]"),
+        "strip missing context indicator:\n{frame}"
+    );
+    assert!(
+        frame.contains("in note"),
+        "cited-in-context entry missing `in note` badge:\n{frame}"
+    );
+    assert!(
+        frame.contains("missing"),
+        "entry absent from the context note must show `missing`:\n{frame}"
+    );
+    insta::assert_snapshot!(frame);
+    Ok(())
+}

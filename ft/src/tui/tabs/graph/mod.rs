@@ -194,6 +194,7 @@ impl GraphTab {
             generation: 1,
             scan: ft_core::vault::Scan::default(),
             graph,
+            citations: ft_core::synth::citations::CitationIndex::default(),
         }));
         self.seeded = true;
     }

@@ -154,3 +154,56 @@ fn history_send_to_synth_opens_existing_picker() -> Result<()> {
     );
     Ok(())
 }
+
+/// `recent_edit_vault` plus an (untracked) synth note citing the recent
+/// paragraph byte-identically. Untracked is fine: the citation index
+/// reads the working tree, and synth notes are excluded from the feed
+/// itself by default.
+fn cited_recent_vault() -> (TempDir, Vault) {
+    let (dir, vault) = recent_edit_vault();
+    let body = "Fixed the parser bug today.";
+    let hash = ft_core::synth::callout::compute_section_hash(body);
+    std::fs::write(
+        vault.path.join("Synth.md"),
+        format!(
+            "---\nft-synth: true\n---\n\n\
+             > [!ft-source] \"Daily.md\" L5-5 @abc1234 #{hash}\n> {body}\n"
+        ),
+    )
+    .unwrap();
+    // Re-discover so the App's initial snapshot sees the synth note.
+    let vp = vault.path.clone();
+    let vault = Vault::discover(Some(vp)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn history_rows_show_citation_badge_and_uncited_toggle() -> Result<()> {
+    let (_dir, vault) = cited_recent_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(history_tab_idx())?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("cited: Synth"),
+        "cited paragraph missing badge:\n{frame}"
+    );
+
+    app.dispatch(key('u'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("[filter: uncited]"),
+        "title missing filter flag:\n{frame}"
+    );
+    assert!(
+        !frame.contains("Fixed the parser bug"),
+        "cited paragraph should be filtered:\n{frame}"
+    );
+
+    app.dispatch(key('u'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Fixed the parser bug"),
+        "toggle off should restore the feed:\n{frame}"
+    );
+    Ok(())
+}

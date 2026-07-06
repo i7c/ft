@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests/synthesis.rs
+assertion_line: 1691
+expression: frame
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+┌ Journal — Target.md (2 entries) ─────────────────────────────────────────────┐
+│Sources (1) [context: Synth]                                                  │
+│Target.md                                                                     │
+│  2025-01-02  DailyA                                                          │
+│    ↳ in note                                                                 │
+│Alpha mentions [[Target]].                                                    │
+│                                                                              │
+│  2025-01-02  DailyB                                                          │
+│    ↳ missing                                                                 │
+│Beta mentions [[Target]].                                                     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: vault  ·  tab: Journal              not yet refreshed      mode: normal
