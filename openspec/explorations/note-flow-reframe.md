@@ -58,7 +58,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 | # | Session                                     | Status  | Depends on |
 |---|---------------------------------------------|---------|------------|
 | 1 | Story rewrite (README + philosophy)         | done (change: `note-flow-story-rewrite`) | — |
-| 2 | Close the loop: cited/processed state       | planned | —          |
+| 2 | Close the loop: cited/processed state       | proposed (change: `citation-visibility`; dismiss deferred, three-state badges) | — |
 | 3 | Ghost promotion                             | planned | —          |
 | 4 | Concept drift: detect + merge               | planned | —          |
 | 5 | Renames + TUI reshape (tab order)           | planned | 1–4 (last) |
