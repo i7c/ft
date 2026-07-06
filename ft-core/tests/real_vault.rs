@@ -100,12 +100,12 @@ fn real_vault_round_trip() {
     println!("real_vault_round_trip: {parsed} tasks OK, {skipped} skipped, 0 mismatches");
 }
 
-// ── ft-core synth ritual against the real vault ─────────────────────────
+// ── ft-core synthesis against the real vault ────────────────────────────
 
 #[test]
 fn real_vault_link_review_runs() {
     use chrono::Duration;
-    use ft_core::link_review::{compute_link_review, WindowRange};
+    use ft_core::pulse::{compute_pulse, WindowRange};
     use ft_core::vault::Vault;
 
     if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
@@ -123,8 +123,7 @@ fn real_vault_link_review_runs() {
     let graph = ft_core::graph::Graph::build(&vault, &scan).expect("build graph");
     let cfg = vault.config.config.synth.clone();
     let window = WindowRange::Since(Duration::days(7));
-    let review = compute_link_review(&graph, &vault, &window, &cfg)
-        .expect("compute_link_review on real vault");
+    let review = compute_pulse(&graph, &vault, &window, &cfg).expect("compute_pulse on real vault");
     // Sanity: rows are sorted by count desc, alphabetical tiebreak.
     for w in review.rows.windows(2) {
         assert!(

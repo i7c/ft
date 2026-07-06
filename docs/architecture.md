@@ -14,7 +14,7 @@ ft/
 ├── ft/                         # binary crate (thin)
 │   ├── src/main.rs             # clap dispatch only
 │   ├── src/cmd/                # one file per subcommand: tasks, notes,
-│   │                           #   graph, timeblocks, review, synth, git,
+│   │                           #   graph, timeblocks, pulse, synth, git,
 │   │                           #   vault, do, find, commands, completions, man
 │   ├── src/output/             # table/json/markdown/ndjson (Format variants)
 │   │                           #   + links.rs, graph.rs (command renderers)
@@ -23,7 +23,7 @@ ft/
 │   │   │                       #   tab.rs, modal.rs, command.rs, keymap.rs,
 │   │   │                       #   help.rs, ui.rs, palette.rs, editor.rs
 │   │   ├── tabs/               # graph, tasks/, notes/, timeblocks/,
-│   │   │                       #   journal, review
+│   │   │                       #   gather, pulse
 │   │   ├── notes_actions/      # create/append/section-move/reslice flows
 │   │   └── widgets/            # picker, completion, edit buffer
 │   └── tests/                  # integration tests with assert_cmd
@@ -34,12 +34,12 @@ ft/
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
         ├── git.rs              # discover_repo + status + sync + blame
-        ├── blame_cache.rs      # msgpack blame cache (journal)
+        ├── blame_cache.rs      # msgpack blame cache (gather)
         ├── graph/              # mod (Graph/NodeKind/EdgeKind/NodeKey),
         │                       #   parser, resolve, query (unified DSL),
         │                       #   preset, rename, delete
-        ├── journal.rs          # multi-source git-blame feed (synthesis)
-        ├── link_review.rs      # git-log wikilink scan (synthesis)
+        ├── gather.rs           # multi-source git-blame feed (synthesis)
+        ├── pulse.rs            # git-log wikilink scan (synthesis)
         ├── synth/              # scaffold, verify, repair, reslice, callout
         ├── notes.rs + notes/   # note ops, append, templates
         ├── markdown.rs         # heading/paragraph extractors, line utils
@@ -208,39 +208,39 @@ flags (`--sort`, `--limit`), not DSL clauses. See
 `docs/migrating-task-queries.md` for the predicate translation table
 from the removed standalone task DSL.
 
-### Synthesis ritual (`link_review` + `synth`)
+### Synthesis (`pulse` + `gather` + `synth`)
 
-The synthesis ritual is the "post-connecting" workflow for the
+Synthesis is the "post-connecting" workflow for the
 quick-capture style note-taking the user-guide philosophy chapter
-describes: review recently-mentioned `[[wikilinks]]`, aggregate
+describes: pulse recently-mentioned `[[wikilinks]]`, aggregate
 cross-vault context for a chosen subset, and produce synth notes whose
 quoted excerpts are pinned to verifiable git provenance. It runs
 through three composable layers:
 
 ```rust
 // Engine 2: git log diff scan + paragraph-frequency dedup.
-pub fn ft_core::link_review::compute_link_review(
+pub fn ft_core::pulse::compute_pulse(
     graph: &Graph, vault: &Vault, repo: &Path,
     window: &WindowRange, cfg: &Synth,
-) -> Result<LinkReview>;
+) -> Result<Pulse>;
 
-// Engine 1 (generalized): one journal feed across many targets.
+// Engine 1 (generalized): one gather feed across many targets.
 // targets.len() == 1 preserves the original Related-aliases +
 // self-exclusion semantics; multi-target skips both.
-pub fn ft_core::journal::build_journal(
+pub fn ft_core::gather::build_gather(
     graph: &Graph, targets: &[NoteId],
     vault: &Vault, repo: &Path, cache: &mut BlameCache,
-) -> Result<JournalReport>;
+) -> Result<GatherReport>;
 
 // Engine 1's untargeted, time-shaped sibling: every vault paragraph
 // edited within a window, recency-ordered. Selects by window-edit
-// (link_review added-lines overlap) instead of by link target; shares
-// the journal's blame dates and sort. Drives `ft notes history` + the
-// History tab.
-pub fn ft_core::history::build_history(
+// (pulse added-lines overlap) instead of by link target; shares
+// the gather feed's blame dates and sort. Drives `ft notes recent` + the
+// Recent tab.
+pub fn ft_core::recent::build_recent(
     graph: &Graph, vault: &Vault, window: &WindowRange,
-    cfg: &Synth, opts: &HistoryOptions, cache: &mut BlameCache,
-) -> Result<HistoryReport>;
+    cfg: &Synth, opts: &RecentOptions, cache: &mut BlameCache,
+) -> Result<RecentReport>;
 
 // Plan/apply for synth-note scaffolding.
 pub fn ft_core::synth::scaffold::plan_synth_scaffold(...)
@@ -254,7 +254,7 @@ pub fn ft_core::synth::verify::verify_synth_note(...)
 pub fn ft_core::synth::verify::verify_all(...)
     -> Vec<(PathBuf, Vec<VerificationResult>)>;
 
-// Plan/apply for repairing broken pins (`ft synth repair`): rehash
+// Plan/apply for repairing broken pins (`ft notes synth repair`): rehash
 // hash-only drift at the pin, re-pin stranded sections to HEAD by
 // locating the quoted body in the current blob, report the rest
 // unrecoverable. The body is the source of truth.
@@ -281,18 +281,18 @@ body and compares against the git blob slice at the pinned commit,
 reporting `Ok` / `Drifted` / `SourceMissing` / `Malformed` per section.
 
 A synth note is identified by an `ft-synth: true` frontmatter marker.
-This lets the link-review skip wikilinks quoted inside `[!ft-source]`
+This lets the pulse skip wikilinks quoted inside `[!ft-source]`
 callouts of a synth note (recycled material doesn't double-count on
-the next ritual) while still counting links the user wrote in their
+the next pulse) while still counting links the user wrote in their
 own prose between callouts.
 
-CLI surface lives in `ft/src/cmd/{review.rs, synth.rs}` and the
-extended `ft/src/cmd/notes.rs::run_journal` (which now accepts repeated
+CLI surface lives in `ft/src/cmd/{pulse.rs, synth.rs}` and the
+extended `ft/src/cmd/notes.rs::run_gather` (which now accepts repeated
 `--link "[[X]]"` flags in addition to the positional note argument).
-The TUI exposes the flow through a new `Review` tab
-(`ft/src/tui/tabs/review.rs`) that hands selected links off to the
-Journal tab via `AppRequest::JournalForMulti` carrying a
-`MultiTargetRequest`. The Journal tab gained: multi-target rendering
+The TUI exposes the flow through the `Pulse` tab
+(`ft/src/tui/tabs/pulse.rs`) that hands selected links off to the
+Gather tab via `AppRequest::GatherForMulti` carrying a
+`MultiTargetRequest`. The Gather tab gained: multi-target rendering
 with a `matched: X, Y` badge when an entry's paragraph hits more than
 one selected target, an in-window-only toggle (`w`), entry multi-select
 (`Space`), and a `s` chord that opens an inline send-to-synth prompt
@@ -304,9 +304,9 @@ periodic-notes folder).
 
 ### Accrete: grow, dedup-on-append, watermark, self-describing notes
 
-`ft synth grow` (and the Journal tab's `n` chord) accrete missing
-journal entries into an existing synth note. Two selection steps sit on
-top of the unchanged `build_journal` + `plan_synth_scaffold` machinery:
+`ft notes synth grow` (and the Gather tab's `n` chord) accrete missing
+gathered entries into an existing synth note. Two selection steps sit on
+top of the unchanged `build_gather` + `plan_synth_scaffold` machinery:
 
 - **Dedup-on-append invariant** (`ft_core::synth::accrete::filter_missing`):
   the planner's append path drops entries whose `(source_path, body)`
@@ -322,17 +322,17 @@ top of the unchanged `build_journal` + `plan_synth_scaffold` machinery:
   branch switch) are skipped, and an all-unreachable note degrades
   `--new-only` to "all missing" with a warning.
 
-A synth note MAY self-describe its journal target(s) in frontmatter via
+A synth note MAY self-describe its gather target(s) in frontmatter via
 `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]` (a YAML sequence; helpers
 `callout::parse_synth_targets` / `upsert_synth_frontmatter`). When
 `--link` is supplied, scaffold/grow write the key on create (or upsert
 when absent on append); when `--link`/`--from` are absent, `grow` reads
-targets from frontmatter — the "persisted journal note" UX. The key is
+targets from frontmatter — the "persisted gather note" UX. The key is
 optional and backward-compatible; verify/repair/reslice ignore it.
 
-CLI: `ft synth grow <note.md> [--link ...] [--new-only] [--limit N]
+CLI: `ft notes synth grow <note.md> [--link ...] [--new-only] [--limit N]
 [--since|--range [--in-window]] [--from path:line] [--no-edit]`.
-TUI: `n` (send-to-synth-new-only) on the Journal tab; `s` now dedups
+TUI: `n` (send-to-synth-new-only) on the Gather tab; `s` now dedups
 for free via the planner invariant.
 
 ## Adding things
@@ -347,13 +347,14 @@ for free via the planner invariant.
 
 ### A new TUI tab
 
-The TUI ships seven tabs today: Graph, Tasks, Notes, Timeblocks,
-Journal, History, and Review. Review drives the synthesis ritual's
-link-pick → Journal handoff (see §"Synthesis ritual"). History is the
-untargeted, time-shaped sibling of Journal: it renders `build_history`
-(recently-edited paragraphs, windowed, default 7d) and reuses Journal's
-row renderer + send-to-synth overlay and the shared section-move modal
-(seeded via `section_move::begin_for_source`).
+The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent,
+Gather — plus opt-in Tasks and Timeblocks tabs (config `[tui]`,
+default off). Pulse drives the link-pick → Gather handoff (see
+§"Synthesis"). Recent is the untargeted, time-shaped sibling of
+Gather: it renders `build_recent` (recently-edited paragraphs,
+windowed, default 7d) and reuses Gather's row renderer +
+send-to-synth overlay and the shared section-move modal (seeded via
+`section_move::begin_for_source`).
 
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
    `App::new`. `Tab::kind() -> TabKind` is required — it's the typed
@@ -428,8 +429,8 @@ pub enum ActiveModal {
     Rename(GraphRenameState), PresetPicker(PresetPickerModal),
     Related(RelatedModal), Search(SearchPickerModal),
     ConfirmDelete(ConfirmDeleteState), CreateSubdir(CreateSubdirState),
-    JournalSources(JournalSourcesModal),
-    JournalAppendOrReplace(JournalAppendOrReplaceModal),
+    GatherSources(GatherSourcesModal),
+    GatherAppendOrReplace(GatherAppendOrReplaceModal),
     PeriodicLeader, QueryBar { view_id: usize },
 }
 ```
@@ -481,8 +482,8 @@ Tab-specific actions raised by modals route through `AppRequest`
 variants. There is exactly one routing table: `App::service_simple`.
 It services every variant that doesn't need the terminal or the event
 stream, looking the target tab up by its typed `Tab::kind()`
-(`TabKind::Graph`, `TabKind::Journal`, …) and calling a typed
-`Tab::graph_*` hook — same shape as the `Tab::queue_journal_for`
+(`TabKind::Graph`, `TabKind::Gather`, …) and calling a typed
+`Tab::graph_*` hook — same shape as the `Tab::queue_gather_for`
 precedent (typed hooks per action, default no-op, host overrides).
 The four terminal-touching variants (`OpenInEditor`, `OpenInObsidian`,
 `SyncGit`, `CommitGit`) are deferred back to `App::service_request`,

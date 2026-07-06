@@ -61,7 +61,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 | 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
 | 3 | Ghost promotion                             | done (change: `ghost-promotion`) | — |
 | 4 | Concept drift: detect + merge               | done (change: `drift-detection`) | — |
-| 5 | Renames + TUI reshape (tab order)           | proposed (change: `note-flow-renames`) | 1–4 (last) |
+| 5 | Renames + TUI reshape (tab order)           | implemented (change: `note-flow-renames`) | 1–4 (last) |
 
 Session 5 is deliberately last: the right names fall out of the
 conceptual frame, so settle the frame (and the features that create new
@@ -277,6 +277,15 @@ should reflect the same flow.
 - New verbs coined by sessions 2–4 (promote, dismiss, a duplicates
   report) get their final names here, in one coherent pass.
 - TUI: reorder tabs to follow capture → resurface → consolidate.
+
+**Decisions taken (2026-07-06, change `note-flow-renames`):**
+journal→gather, history→recent, review→pulse; everything under
+`ft notes` (incl. `ft notes synth <sub>`); sessions 2–4 names ratified
+as-is; no `ft jot` (append + TUI quick capture cover it); tab order
+Graph, Notes, Pulse, Recent, Gather with Tasks/Timeblocks opt-in via
+`[tui]` (default off); hard cut, no aliases; on-disk vault formats
+untouched. Also fixed en passant: review's commands had never been in
+the static registry (missing from `ft commands list`/keybindings.md).
 
 ---
 

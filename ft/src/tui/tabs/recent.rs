@@ -1,11 +1,11 @@
 //! `History` tab — interactive surface for
-//! [`ft_core::history::build_history`].
+//! [`ft_core::recent::build_recent`].
 //!
 //! Where the Journal tab is target-centric ("what mentions `[[X]]`?"),
 //! History is time-shaped: a whole-vault, reverse-chronological feed of
 //! the paragraphs edited within a window (default `7d`). It reuses the
 //! Journal tab's row renderer and send-to-synth overlay
-//! ([`crate::tui::tabs::journal`]'s `pub(crate)` helpers) and the shared
+//! ([`crate::tui::tabs::gather`]'s `pub(crate)` helpers) and the shared
 //! section-move modal.
 //!
 //! Row actions: `Enter` opens the source note in `$EDITOR`; `Space`
@@ -30,10 +30,10 @@ use ratatui::{
 };
 
 use ft_core::blame_cache::BlameCache;
+use ft_core::gather::GatherEntry;
 use ft_core::git::discover_repo;
-use ft_core::history::{build_history, HistoryEntry, HistoryOptions};
-use ft_core::journal::JournalEntry;
-use ft_core::link_review::WindowRange;
+use ft_core::pulse::WindowRange;
+use ft_core::recent::{build_recent, RecentEntry, RecentOptions};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
@@ -43,7 +43,7 @@ use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::notes_actions::queue_toast;
 use crate::tui::palette;
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle};
-use crate::tui::tabs::journal::{
+use crate::tui::tabs::gather::{
     inline_markdown_spans, mark_note_as_synth, pad_to_width, render_synth_send, wrap_line,
     NonSynthChoice, SynthSendState,
 };
@@ -53,119 +53,119 @@ use crate::tui::widgets::{
 
 // ── Commands ─────────────────────────────────────────────────────────
 
-pub(crate) static HISTORY_COMMANDS: &[CommandDef] = &[
+pub(crate) static RECENT_COMMANDS: &[CommandDef] = &[
     CommandDef {
-        name: "history.reload",
+        name: "recent.reload",
         description: "Rebuild the recently-edited feed",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Feed",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-up",
+        name: "recent.cursor-up",
         description: "Move the cursor up one entry",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-down",
+        name: "recent.cursor-down",
         description: "Move the cursor down one entry",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-first",
+        name: "recent.cursor-first",
         description: "Move the cursor to the first entry",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-last",
+        name: "recent.cursor-last",
         description: "Move the cursor to the last entry",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-half-page-down",
+        name: "recent.cursor-half-page-down",
         description: "Move the cursor down half a page (10 entries)",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.cursor-half-page-up",
+        name: "recent.cursor-half-page-up",
         description: "Move the cursor up half a page (10 entries)",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.open-selected",
+        name: "recent.open-selected",
         description: "Open the selected entry's note in $EDITOR",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Open",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.toggle-entry-selection",
+        name: "recent.toggle-entry-selection",
         description: "Toggle multi-select on the entry under the cursor",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Selection",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.toggle-uncited",
+        name: "recent.toggle-uncited",
         description: "Filter to entries not yet cited in any synth note",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Filter",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "history.send-to-synth-existing",
+        name: "recent.send-to-synth-existing",
         description: "Pick an existing note to append the selected (or all) entries to",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "history.send-to-synth-new",
+        name: "recent.send-to-synth-new",
         description: "Create a new synth note for the selected (or all) entries",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "history.move-section",
+        name: "recent.move-section",
         description: "Move the selected entry's section into another note",
-        scope: CommandScope::Tab("history"),
+        scope: CommandScope::Tab("recent"),
         group: "Edit",
         args_schema: &[],
         opens_modal: true,
@@ -173,26 +173,26 @@ pub(crate) static HISTORY_COMMANDS: &[CommandDef] = &[
     },
 ];
 
-pub(crate) static HISTORY_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static RECENT_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
-        .bind("R", "history.reload")
-        .bind("Up", "history.cursor-up")
-        .bind("k", "history.cursor-up")
-        .bind("Down", "history.cursor-down")
-        .bind("j", "history.cursor-down")
-        .bind("g", "history.cursor-first")
-        .bind("G", "history.cursor-last")
-        .bind("Ctrl+d", "history.cursor-half-page-down")
-        .bind("Ctrl+u", "history.cursor-half-page-up")
-        .bind("Enter", "history.open-selected")
-        .bind("Space", "history.toggle-entry-selection")
-        .bind("u", "history.toggle-uncited")
-        .bind("s", "history.send-to-synth-existing")
-        .bind("S", "history.send-to-synth-new")
-        .bind("m", "history.move-section")
+        .bind("R", "recent.reload")
+        .bind("Up", "recent.cursor-up")
+        .bind("k", "recent.cursor-up")
+        .bind("Down", "recent.cursor-down")
+        .bind("j", "recent.cursor-down")
+        .bind("g", "recent.cursor-first")
+        .bind("G", "recent.cursor-last")
+        .bind("Ctrl+d", "recent.cursor-half-page-down")
+        .bind("Ctrl+u", "recent.cursor-half-page-up")
+        .bind("Enter", "recent.open-selected")
+        .bind("Space", "recent.toggle-entry-selection")
+        .bind("u", "recent.toggle-uncited")
+        .bind("s", "recent.send-to-synth-existing")
+        .bind("S", "recent.send-to-synth-new")
+        .bind("m", "recent.move-section")
 });
 
-pub struct HistoryTab {
+pub struct RecentTab {
     /// Window the feed is built for. Defaults to the last 7 days.
     window: WindowRange,
     /// When `true`, the feed keeps only entries not yet cited
@@ -200,7 +200,7 @@ pub struct HistoryTab {
     /// Mirrors the CLI's `--uncited`.
     uncited_only: bool,
     /// The currently-displayed feed.
-    entries: Vec<HistoryEntry>,
+    entries: Vec<RecentEntry>,
     /// Per-entry multi-selection (indices into `entries`).
     entry_selected: HashSet<usize>,
     /// 0-indexed cursor into `entries`.
@@ -220,13 +220,13 @@ pub struct HistoryTab {
     keymap: KeyMap,
 }
 
-impl Default for HistoryTab {
+impl Default for RecentTab {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HistoryTab {
+impl RecentTab {
     pub fn new() -> Self {
         Self {
             window: WindowRange::Since(Duration::days(7)),
@@ -239,12 +239,12 @@ impl HistoryTab {
             built_generation: None,
             last_error: None,
             synth_send: None,
-            keymap: HISTORY_KEYMAP.clone(),
+            keymap: RECENT_KEYMAP.clone(),
         }
     }
 
     pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
-        self.keymap = HISTORY_KEYMAP.with_overlay(overlay);
+        self.keymap = RECENT_KEYMAP.with_overlay(overlay);
         self
     }
 
@@ -252,9 +252,8 @@ impl HistoryTab {
     /// Single seam — every path that changes what's shown funnels here.
     fn rebuild(&mut self, ctx: &mut TabCtx) {
         if discover_repo(&ctx.vault.path).is_none() {
-            self.last_error = Some(
-                "vault is not inside a git repository — history needs git history".to_string(),
-            );
+            self.last_error =
+                Some("vault is not inside a git repository — recent needs git history".to_string());
             self.entries.clear();
             self.entry_selected.clear();
             self.selected = 0;
@@ -275,12 +274,12 @@ impl HistoryTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
         let cfg = ctx.vault.config.config.synth.clone();
-        let opts = HistoryOptions::default();
+        let opts = RecentOptions::default();
 
-        let report = match build_history(graph, ctx.vault, &self.window, &cfg, &opts, cache) {
+        let report = match build_recent(graph, ctx.vault, &self.window, &cfg, &opts, cache) {
             Ok(r) => r,
             Err(e) => {
-                self.last_error = Some(format!("build_history failed: {e}"));
+                self.last_error = Some(format!("build_recent failed: {e}"));
                 self.entries.clear();
                 return;
             }
@@ -412,12 +411,12 @@ impl HistoryTab {
         self.synth_send = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
     }
 
-    /// Entries to ship to the scaffold, as `JournalEntry` (the type the
+    /// Entries to ship to the scaffold, as `GatherEntry` (the type the
     /// core scaffold planner consumes). Selected rows when any are
     /// selected, otherwise the whole feed. `matched` is always empty —
     /// History has no link target.
-    fn entries_to_send(&self) -> Vec<JournalEntry> {
-        let chosen: Vec<&HistoryEntry> = if self.entry_selected.is_empty() {
+    fn entries_to_send(&self) -> Vec<GatherEntry> {
+        let chosen: Vec<&RecentEntry> = if self.entry_selected.is_empty() {
             self.entries.iter().collect()
         } else {
             self.entries
@@ -429,7 +428,7 @@ impl HistoryTab {
         };
         chosen
             .into_iter()
-            .map(|e| JournalEntry {
+            .map(|e| GatherEntry {
                 source_title: e.source_title.clone(),
                 source_path: e.source_path.clone(),
                 line_start: e.line_start,
@@ -616,13 +615,13 @@ fn matches_mark(focus: NonSynthChoice) -> bool {
     matches!(focus, NonSynthChoice::MarkAndAppend)
 }
 
-impl Tab for HistoryTab {
+impl Tab for RecentTab {
     fn title(&self) -> &str {
-        "History"
+        "Recent"
     }
 
     fn kind(&self) -> TabKind {
-        TabKind::History
+        TabKind::Recent
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -635,7 +634,7 @@ impl Tab for HistoryTab {
     }
 
     fn commands(&self) -> &'static [CommandDef] {
-        HISTORY_COMMANDS
+        RECENT_COMMANDS
     }
 
     fn keymap(&self) -> &KeyMap {
@@ -644,55 +643,55 @@ impl Tab for HistoryTab {
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
         match cmd.name {
-            "history.reload" => {
+            "recent.reload" => {
                 self.rebuild(ctx);
                 CommandOutcome::Handled
             }
-            "history.cursor-up" => {
+            "recent.cursor-up" => {
                 self.move_selection(-1);
                 CommandOutcome::Handled
             }
-            "history.cursor-down" => {
+            "recent.cursor-down" => {
                 self.move_selection(1);
                 CommandOutcome::Handled
             }
-            "history.cursor-first" => {
+            "recent.cursor-first" => {
                 self.jump_first();
                 CommandOutcome::Handled
             }
-            "history.cursor-last" => {
+            "recent.cursor-last" => {
                 self.jump_last();
                 CommandOutcome::Handled
             }
-            "history.cursor-half-page-down" => {
+            "recent.cursor-half-page-down" => {
                 self.move_selection(10);
                 CommandOutcome::Handled
             }
-            "history.cursor-half-page-up" => {
+            "recent.cursor-half-page-up" => {
                 self.move_selection(-10);
                 CommandOutcome::Handled
             }
-            "history.open-selected" => {
+            "recent.open-selected" => {
                 self.request_open_selected(ctx);
                 CommandOutcome::Handled
             }
-            "history.toggle-entry-selection" => {
+            "recent.toggle-entry-selection" => {
                 self.toggle_entry_selection();
                 CommandOutcome::Handled
             }
-            "history.toggle-uncited" => {
+            "recent.toggle-uncited" => {
                 self.toggle_uncited(ctx);
                 CommandOutcome::Handled
             }
-            "history.send-to-synth-existing" => {
+            "recent.send-to-synth-existing" => {
                 self.open_send_to_existing(ctx);
                 CommandOutcome::Handled
             }
-            "history.send-to-synth-new" => {
+            "recent.send-to-synth-new" => {
                 self.open_send_to_new(ctx);
                 CommandOutcome::Handled
             }
-            "history.move-section" => {
+            "recent.move-section" => {
                 self.open_move_for_selected(ctx);
                 CommandOutcome::Handled
             }
@@ -739,7 +738,7 @@ impl Tab for HistoryTab {
 fn render_history(
     frame: &mut Frame,
     area: Rect,
-    entries: &[HistoryEntry],
+    entries: &[RecentEntry],
     uncited_only: bool,
     citations: Option<&ft_core::synth::citations::CitationIndex>,
     selected: usize,
@@ -748,9 +747,9 @@ fn render_history(
     last_error: Option<&str>,
 ) {
     let title = if uncited_only {
-        format!(" History ({} entries) [filter: uncited] ", entries.len())
+        format!(" Recent ({} entries) [filter: uncited] ", entries.len())
     } else {
-        format!(" History ({} entries) ", entries.len())
+        format!(" Recent ({} entries) ", entries.len())
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
@@ -805,7 +804,7 @@ fn render_history(
         )));
         if let Some(index) = citations {
             let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
-            if let Some((badge, style)) = super::journal::citation_badge_line(&state, None) {
+            if let Some((badge, style)) = super::gather::citation_badge_line(&state, None) {
                 lines.push(Line::from(Span::styled(format!("    ↳ {badge}"), style)));
             }
         }

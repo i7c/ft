@@ -26,7 +26,8 @@ silently default.
 | `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
-| `[synth]`               | table                             | either        | Synthesis ritual: default folder for new synth notes; path-prefix exclude filter for `ft review`. |
+| `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes pulse`. |
+| `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (both default off).       |
 
 `default_vault` is only honored in the user config; setting it in a
 vault config does nothing (the vault has already been chosen by the
@@ -292,7 +293,7 @@ strict = false       # default: false; true → TUI startup fails on any error
 
 # Per-scope overrides: chord string → command name.
 # Valid scopes: global, tab/graph, tab/tasks, tab/notes, tab/timeblocks,
-#               tab/journal, modal/create, modal/append, modal/section-move,
+#               tab/gather, tab/recent, tab/pulse, modal/create, modal/append, modal/section-move,
 #               modal/capture-var, modal/periodic-leader, modal/query-bar,
 #               modal/rename, modal/search, modal/preset-picker,
 #               modal/capture-picker, modal/related, modal/move
@@ -382,22 +383,38 @@ The query syntax is documented in [graph-query-dsl.md](graph-query-dsl.md)
 (run under `Profile::Tasks`); see also
 [migrating-task-queries.md](migrating-task-queries.md).
 
+## `[tui]`
+
+The Tasks and Timeblocks tabs are adjacent features — the vault
+workflow lives in the note-flow tabs (Graph, Notes, Pulse, Recent,
+Gather) — so they are opt-in and default to off:
+
+```toml
+[tui]
+tasks_tab = true        # default: false — show the Tasks tab
+timeblocks_tab = true   # default: false — show the Timeblocks tab
+```
+
+Enabled tabs append after Gather (order: Tasks, then Timeblocks); tab
+digits and `Tab`-cycling follow the built list. The headless CLI
+(`ft tasks`, `ft timeblocks`) is unaffected by these toggles.
+
 ## `[synth]`
 
-Settings for the synthesis ritual (`ft review`, `ft notes journal --link`,
-`ft synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
+Settings for synthesis (`ft notes pulse`, `ft notes gather --link`,
+`ft notes synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
 walkthrough.
 
 ```toml
 [synth]
-# Default folder for `ft synth scaffold <bare-name>` (the CLI's
+# Default folder for `ft notes synth scaffold <bare-name>` (the CLI's
 # convenience fallback when no folder is part of the path). Has no
 # effect on the TUI flow, which always asks where to put new notes.
 # Vault-relative. Trailing slash optional. Default: "Synthesis/".
 folder = "Synthesis/"
 
 # Files whose vault-relative path starts with any listed prefix are
-# excluded from `ft review`. Conventional use: filter out your
+# excluded from `ft notes pulse`. Conventional use: filter out your
 # periodic-notes folder so daily-note repetition doesn't drown out
 # real signal. Default: empty.
 #

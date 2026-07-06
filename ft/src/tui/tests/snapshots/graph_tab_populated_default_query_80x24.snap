@@ -1,8 +1,9 @@
 ---
-source: ft/src/tui/tests.rs
+source: ft/src/tui/tests/graph.rs
+assertion_line: 61
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 > node where path = ""; expand where edge.kind in {directory-contains, note-link
  1: node where path = "…                                                        
 ┌ node where path = "… ────────────────────────────────────────────────────────┐
@@ -25,4 +26,4 @@ expression: frame
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal
+ vault: vault  ·  tab: Graph                not yet refreshed      mode: normal

@@ -8,7 +8,7 @@ pub mod git;
 pub mod graph;
 pub mod man;
 pub mod notes;
-pub mod review;
+pub mod pulse;
 pub mod synth;
 pub mod tasks;
 pub mod timeblocks;

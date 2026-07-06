@@ -42,7 +42,7 @@ linked from each chapter.
   plugin's query language is parsed natively.
 - **Notes.** Fuzzy-open, create from templates, jump to today's daily
   note, rename across links, move between folders, append templates,
-  and build a paragraph-level journal from `git blame`.
+  and gather a paragraph-level mention feed from `git blame`.
 - **Timeblocks.** Read, add, edit, delete, and report on day-planner
   blocks (`- HH:MM - HH:MM <desc> @tag`) in daily notes.
 - **Link graph.** Walk wikilinks, markdown links, and embeds; query
@@ -50,10 +50,10 @@ linked from each chapter.
   moved.
 - **Git sync.** Commit, pull, and push the vault repo in one command,
   with the same operation available on a background thread in the TUI.
-- **Interactive TUI.** Seven tabs (Graph, Tasks, Notes, Timeblocks,
-  Journal, History, Review) tied together by a common command/keymap
-  registry.
-- **Synthesis.** Review recently-mentioned `[[wikilinks]]`, aggregate
+- **Interactive TUI.** The note-flow tabs (Graph, Notes, Pulse,
+  Recent, Gather) plus opt-in Tasks and Timeblocks tabs, tied together
+  by a common command/keymap registry.
+- **Synthesis.** Pulse recently-mentioned `[[wikilinks]]`, aggregate
   cross-vault context across a chosen subset, and produce "synth
   notes" whose quoted excerpts are pinned to verifiable git commits.
   See [synthesis.md](synthesis.md).

@@ -74,7 +74,7 @@ fn history_default_window_includes_recent_excludes_old() {
     let tmp = make_history_vault();
     let out = ft()
         .env("NO_COLOR", "1")
-        .args(["--vault", tmp.path().to_str().unwrap(), "notes", "history"])
+        .args(["--vault", tmp.path().to_str().unwrap(), "notes", "recent"])
         .assert()
         .success()
         .get_output()
@@ -94,7 +94,7 @@ fn history_json_shape_omits_matched() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--range",
             "HEAD~1..HEAD",
             "--json",
@@ -125,7 +125,7 @@ fn history_window_flags_mutually_exclusive() {
         "--vault",
         tmp.path().to_str().unwrap(),
         "notes",
-        "history",
+        "recent",
         "--since",
         "7d",
         "--range",
@@ -163,7 +163,7 @@ fn history_excludes_synth_notes_by_default() {
             "--vault",
             repo.to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--range",
             "HEAD~1..HEAD",
         ])
@@ -185,7 +185,7 @@ fn history_excludes_synth_notes_by_default() {
             "--vault",
             repo.to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--range",
             "HEAD~1..HEAD",
             "--include-synth",
@@ -210,7 +210,7 @@ fn history_no_color_has_no_ansi() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--no-color",
         ])
         .assert()
@@ -228,7 +228,7 @@ fn history_non_git_vault_errors() {
     let tmp = assert_fs::TempDir::new().unwrap();
     tmp.child(".obsidian").create_dir_all().unwrap();
     tmp.child("Note.md").write_str("# Note\n\nBody.\n").unwrap();
-    ft().args(["--vault", tmp.path().to_str().unwrap(), "notes", "history"])
+    ft().args(["--vault", tmp.path().to_str().unwrap(), "notes", "recent"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not inside a git repository"));

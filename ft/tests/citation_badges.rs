@@ -3,7 +3,7 @@
 //! JSON field, and the `--uncited` filter.
 //!
 //! Each test builds a git-backed vault, then creates the synth note
-//! through the real `ft synth scaffold` flow so the callout pins
+//! through the real `ft notes synth scaffold` flow so the callout pins
 //! (commit SHA, content hash) are genuine.
 
 use assert_cmd::Command;
@@ -68,6 +68,7 @@ fn make_vault() -> assert_fs::TempDir {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synth/topic.md",
@@ -87,7 +88,7 @@ fn journal_json(tmp: &assert_fs::TempDir, extra: &[&str]) -> Vec<Value> {
         "--vault",
         tmp.path().to_str().unwrap(),
         "notes",
-        "journal",
+        "gather",
         "Topic",
         "--json",
     ];
@@ -132,7 +133,7 @@ fn journal_table_shows_cited_badge() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Topic",
         ])
         .assert()
@@ -184,7 +185,7 @@ fn edited_since_cited_is_stale_and_survives_uncited() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Topic",
         ])
         .assert()
@@ -205,7 +206,7 @@ fn history_json_and_uncited_match_journal_semantics() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--since",
             "30d",
             "--json",
@@ -228,7 +229,7 @@ fn history_json_and_uncited_match_journal_semantics() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "history",
+            "recent",
             "--since",
             "30d",
             "--uncited",

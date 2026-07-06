@@ -70,11 +70,11 @@ pub enum NotesCommand {
     /// Reverse-chronological feed of paragraph-level mentions of a
     /// note (and its Related-section aliases) across the vault. Dates
     /// come from `git blame`.
-    Journal(JournalArgs),
+    Gather(GatherArgs),
     /// Reverse-chronological feed of every paragraph edited within a
     /// time window, across the whole vault — the untargeted, time-shaped
     /// sibling of `journal`. Dates come from `git blame`.
-    History(HistoryArgs),
+    Recent(RecentArgs),
     /// Print the graph-derived co-occurrence suggestions for a note
     /// (or a `[[ghost]]` target) — the same scored concept list the
     /// `update-related` modal shows, as a read-only CLI surface.
@@ -84,6 +84,14 @@ pub enum NotesCommand {
     /// no backing note — by distinct-paragraph mentions. The concepts
     /// that have earned a note of their own. Pure graph; no git needed.
     Ghosts(GhostsArgs),
+    /// Rank the `[[wikilinks]]` most mentioned in a recent commit/date
+    /// window — the sweep trigger: "what's been on my mind?" Ghosts are
+    /// marked `?`. Dates come from git history.
+    Pulse(crate::cmd::pulse::PulseArgs),
+    /// Synth notes: scaffold, grow, verify, repair, or reslice
+    /// provenance-pinned syntheses compiled from gathered paragraphs.
+    #[command(subcommand)]
+    Synth(crate::cmd::synth::SynthCommand),
     /// Report likely concept-name drift — one idea split across several
     /// `[[spellings]]` — ranked by stakes, each pair with a
     /// ready-to-paste merge or alias resolution. Read-only; pure graph.
@@ -109,11 +117,13 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Links(a) => run_links(a, vault_flag, Direction::Forward),
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
         NotesCommand::Move(a) => run_mv(a, vault_flag),
-        NotesCommand::Journal(a) => run_journal(a, vault_flag),
-        NotesCommand::History(a) => run_history(a, vault_flag),
+        NotesCommand::Gather(a) => run_gather(a, vault_flag),
+        NotesCommand::Recent(a) => run_recent(a, vault_flag),
         NotesCommand::Related(a) => run_related(a, vault_flag),
         NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
         NotesCommand::Drift(a) => run_drift(a, vault_flag),
+        NotesCommand::Pulse(a) => crate::cmd::pulse::run(a, vault_flag),
+        NotesCommand::Synth(c) => crate::cmd::synth::run_command(c, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
     }
@@ -1527,7 +1537,7 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
 // ── ft notes journal ─────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
-pub struct JournalArgs {
+pub struct GatherArgs {
     /// Note to build the journal for. Vault-relative path (e.g.
     /// `Areas/finance.md`), bare title, fuzzy query, or — for an
     /// unresolved-link target with no backing file — the explicit
@@ -1576,7 +1586,7 @@ pub struct JournalArgs {
     pub no_color: bool,
 }
 
-fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     if args.note.is_empty() && args.link.is_empty() {
         return Err(anyhow!(
             "provide a NOTE argument or one or more --link flags"
@@ -1593,7 +1603,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     // vault-relative, and `git -C <vault>` finds the enclosing repo
     // regardless of whether the vault is the repo root or a subdir.
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
-        anyhow!("the vault is not inside a git repository — `ft notes journal` needs git history for section dates")
+        anyhow!("the vault is not inside a git repository — `ft notes gather` needs git history for section dates")
     })?;
 
     let targets: Vec<NoteId> = if !args.link.is_empty() {
@@ -1612,7 +1622,7 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
 
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::journal::build_journal(&graph, &targets, &vault, &mut cache)
+    let report = ft_core::gather::build_gather(&graph, &targets, &vault, &mut cache)
         .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
@@ -1634,10 +1644,10 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     if args.in_window {
         // Compute the link-review's added_lines map for the same window
         // and keep only entries whose paragraph touches an added line.
-        let window = resolve_journal_window(&args.since, &args.range)?
+        let window = resolve_window(&args.since, &args.range)?
             .expect("validated above: in_window implies since/range");
         let cfg = vault.config.config.synth.clone();
-        let review = ft_core::link_review::compute_link_review(&graph, &vault, &window, &cfg)
+        let review = ft_core::pulse::compute_pulse(&graph, &vault, &window, &cfg)
             .context("computing in-window filter")?;
         entries.retain(|e| {
             review
@@ -1669,11 +1679,11 @@ fn run_journal(args: JournalArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     };
 
     if args.json {
-        render_journal_json(&entries, &resolve_titles, &citations)?;
+        render_gather_json(&entries, &resolve_titles, &citations)?;
     } else {
         let use_color =
             !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
-        render_journal_table(&entries, use_color, &resolve_titles, &citations);
+        render_gather_table(&entries, use_color, &resolve_titles, &citations);
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1719,11 +1729,11 @@ fn resolve_link_arg(graph: &Graph, raw: &str) -> Option<NoteId> {
     graph.ghost_by_raw(trimmed)
 }
 
-fn resolve_journal_window(
+fn resolve_window(
     since: &Option<String>,
     range: &Option<String>,
-) -> Result<Option<ft_core::link_review::WindowRange>> {
-    use ft_core::link_review::WindowRange;
+) -> Result<Option<ft_core::pulse::WindowRange>> {
+    use ft_core::pulse::WindowRange;
     if let Some(s) = since {
         let dur = WindowRange::parse_since(s)
             .ok_or_else(|| anyhow!("invalid --since value `{s}` (try e.g. 7d, 24h, 2w, 1m)"))?;
@@ -1748,8 +1758,8 @@ fn resolve_journal_window(
 
 /// Build the shared `FeedRow`s for a journal entry slice, resolving each
 /// entry's matched-target titles for the badge / JSON field.
-fn journal_feed_rows<'a>(
-    entries: &'a [ft_core::journal::JournalEntry],
+fn gather_feed_rows<'a>(
+    entries: &'a [ft_core::gather::GatherEntry],
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
     citations: &ft_core::synth::citations::CitationIndex,
 ) -> Vec<crate::output::feed::FeedRow<'a>> {
@@ -1771,29 +1781,29 @@ fn journal_feed_rows<'a>(
         .collect()
 }
 
-fn render_journal_table(
-    entries: &[ft_core::journal::JournalEntry],
+fn render_gather_table(
+    entries: &[ft_core::gather::GatherEntry],
     use_color: bool,
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
     citations: &ft_core::synth::citations::CitationIndex,
 ) {
-    let rows = journal_feed_rows(entries, resolve_titles, citations);
+    let rows = gather_feed_rows(entries, resolve_titles, citations);
     crate::output::feed::render_table(&rows, use_color, "no journal entries");
 }
 
-fn render_journal_json(
-    entries: &[ft_core::journal::JournalEntry],
+fn render_gather_json(
+    entries: &[ft_core::gather::GatherEntry],
     resolve_titles: &dyn Fn(&[NoteId]) -> Vec<String>,
     citations: &ft_core::synth::citations::CitationIndex,
 ) -> Result<()> {
-    let rows = journal_feed_rows(entries, resolve_titles, citations);
+    let rows = gather_feed_rows(entries, resolve_titles, citations);
     crate::output::feed::render_json(&rows)
 }
 
 // ── ft notes history ─────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
-pub struct HistoryArgs {
+pub struct RecentArgs {
     /// Duration window: `7d`, `24h`, `2w`, `1m`. Defaults to `7d`.
     /// Mutually exclusive with `--range`.
     #[arg(long, value_name = "DURATION", conflicts_with = "range")]
@@ -1826,27 +1836,27 @@ pub struct HistoryArgs {
     pub no_color: bool,
 }
 
-fn run_history(args: HistoryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+fn run_recent(args: RecentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     // Blame runs from `vault.path`; `git -C <vault>` finds the enclosing
     // repo whether the vault is the repo root or a subdir.
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
-        anyhow!("the vault is not inside a git repository — `ft notes history` needs git history for section dates")
+        anyhow!("the vault is not inside a git repository — `ft notes recent` needs git history for section dates")
     })?;
 
     // Default to a 7-day window when no window flag is given.
-    let window = resolve_journal_window(&args.since, &args.range)?.unwrap_or(
-        ft_core::link_review::WindowRange::Since(chrono::Duration::days(7)),
+    let window = resolve_window(&args.since, &args.range)?.unwrap_or(
+        ft_core::pulse::WindowRange::Since(chrono::Duration::days(7)),
     );
 
     let cfg = vault.config.config.synth.clone();
-    let opts = ft_core::history::HistoryOptions {
+    let opts = ft_core::recent::RecentOptions {
         include_synth: args.include_synth,
     };
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::history::build_history(&graph, &vault, &window, &cfg, &opts, &mut cache)
+    let report = ft_core::recent::build_recent(&graph, &vault, &window, &cfg, &opts, &mut cache)
         .context("building history")?;
     let _ = cache.save(&vault.path);
 
@@ -1996,7 +2006,7 @@ fn resolve_note_query(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteI
 /// have their own explicit selectors and should not silently target
 /// ghosts.
 ///
-/// Shared by `ft notes journal` and `ft notes related`. The name
+/// Shared by `ft notes gather` and `ft notes related`. The name
 /// reflects that it is no longer journal-specific: both commands
 /// accept a note path, title, fuzzy query, or `[[Ghost]]` target.
 fn resolve_note_or_ghost(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {

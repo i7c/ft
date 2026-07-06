@@ -53,8 +53,7 @@ use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
 use crate::tui::tab::{
-    empty_keymap, AppRequest, AppendOrReplaceMode, GraphRequest, JournalTarget, JournalWindow,
-    TabCtx,
+    empty_keymap, AppRequest, AppendOrReplaceMode, GatherTarget, GatherWindow, GraphRequest, TabCtx,
 };
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
@@ -65,9 +64,7 @@ use crate::tui::tabs::notes::view::{
     render_periodic_leader,
 };
 use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
-use crate::tui::widgets::{
-    FuzzyPicker, JournalSourceHit, JournalSourcePickerSource, PickerOutcome,
-};
+use crate::tui::widgets::{FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PickerOutcome};
 
 // ── Trait ────────────────────────────────────────────────────────────
 
@@ -195,35 +192,35 @@ pub struct ConfirmDeleteState {
 /// State for the Journal-tab Sources Manager modal. Owns a live
 /// `sources` working set the user can mutate (add/remove/clear) plus
 /// an optional inner fuzzy picker; on `Enter` it commits the working
-/// set back to the Journal tab via [`AppRequest::JournalCommitSources`].
+/// set back to the Journal tab via [`AppRequest::GatherCommitSources`].
 /// On `Esc` it cancels without committing.
-pub struct JournalSourcesModal {
+pub struct GatherSourcesModal {
     /// Working copy of the source set — mutations stay local until the
     /// user commits with Enter.
-    pub sources: Vec<JournalTarget>,
+    pub sources: Vec<GatherTarget>,
     /// Row cursor into `sources`. Clamped on every mutation.
     pub cursor: usize,
     /// Window from the Journal tab's current state, passed back on
     /// commit so the Journal tab can keep it attached after rebuild.
-    pub window: Option<JournalWindow>,
+    pub window: Option<GatherWindow>,
     /// Inner add-source picker. `Some` while the picker overlay owns
     /// the keyboard; cleared on selection or `Esc`.
-    pub picker: Option<FuzzyPicker<JournalSourcePickerSource>>,
+    pub picker: Option<FuzzyPicker<GatherSourcePickerSource>>,
 }
 
 /// State for the Append-or-Replace prompt modal. Raised when an
-/// external `AppRequest::JournalAddSources` arrives on the Journal
-/// tab; commits one of two `AppRequest::JournalCommitSources` shapes
+/// external `AppRequest::GatherAddSources` arrives on the Journal
+/// tab; commits one of two `AppRequest::GatherCommitSources` shapes
 /// depending on the user's pick.
-pub struct JournalAppendOrReplaceModal {
+pub struct GatherAppendOrReplaceModal {
     /// Sources the Journal tab currently holds — needed to compute the
     /// union when the user picks Append.
-    pub current_sources: Vec<JournalTarget>,
+    pub current_sources: Vec<GatherTarget>,
     /// Targets being added by the external request.
-    pub incoming_targets: Vec<JournalTarget>,
+    pub incoming_targets: Vec<GatherTarget>,
     /// Window from the Journal tab's current state, preserved on
     /// either commit path (the prompt itself does not change the window).
-    pub window: Option<JournalWindow>,
+    pub window: Option<GatherWindow>,
     /// Which choice is currently focused.
     pub focus: AppendOrReplaceMode,
 }
@@ -283,10 +280,10 @@ pub enum ActiveModal {
     TaskCreate(Box<TaskCreateState>),
     /// Sources Manager for the Journal tab: view / add / remove /
     /// clear sources, with an inner ghost-aware fuzzy picker.
-    JournalSources(JournalSourcesModal),
+    GatherSources(GatherSourcesModal),
     /// Append-or-Replace prompt raised on the Journal tab when an
-    /// external `JournalAddSources` request arrives.
-    JournalAppendOrReplace(JournalAppendOrReplaceModal),
+    /// external `GatherAddSources` request arrives.
+    GatherAppendOrReplace(GatherAppendOrReplaceModal),
 }
 
 impl Modal for ActiveModal {
@@ -311,8 +308,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskLeader(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskCreate(s) => s.handle_event(ev, ctx),
-            ActiveModal::JournalSources(s) => s.handle_event(ev, ctx),
-            ActiveModal::JournalAppendOrReplace(s) => s.handle_event(ev, ctx),
+            ActiveModal::GatherSources(s) => s.handle_event(ev, ctx),
+            ActiveModal::GatherAppendOrReplace(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -337,8 +334,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.render(frame, area, ctx),
             ActiveModal::TaskLeader(s) => s.render(frame, area, ctx),
             ActiveModal::TaskCreate(s) => s.render(frame, area, ctx),
-            ActiveModal::JournalSources(s) => s.render(frame, area, ctx),
-            ActiveModal::JournalAppendOrReplace(s) => s.render(frame, area, ctx),
+            ActiveModal::GatherSources(s) => s.render(frame, area, ctx),
+            ActiveModal::GatherAppendOrReplace(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -361,8 +358,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.keymap_help(),
             ActiveModal::TaskLeader(s) => s.keymap_help(),
             ActiveModal::TaskCreate(s) => s.keymap_help(),
-            ActiveModal::JournalSources(s) => s.keymap_help(),
-            ActiveModal::JournalAppendOrReplace(s) => s.keymap_help(),
+            ActiveModal::GatherSources(s) => s.keymap_help(),
+            ActiveModal::GatherAppendOrReplace(s) => s.keymap_help(),
         }
     }
 
@@ -385,8 +382,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(_) => "task-edit",
             ActiveModal::TaskLeader(_) => "task-leader",
             ActiveModal::TaskCreate(_) => "task-create",
-            ActiveModal::JournalSources(_) => "journal-sources",
-            ActiveModal::JournalAppendOrReplace(_) => "journal-append-or-replace",
+            ActiveModal::GatherSources(_) => "journal-sources",
+            ActiveModal::GatherAppendOrReplace(_) => "journal-append-or-replace",
         }
     }
 
@@ -409,8 +406,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.commands(),
             ActiveModal::TaskLeader(s) => s.commands(),
             ActiveModal::TaskCreate(s) => s.commands(),
-            ActiveModal::JournalSources(s) => s.commands(),
-            ActiveModal::JournalAppendOrReplace(s) => s.commands(),
+            ActiveModal::GatherSources(s) => s.commands(),
+            ActiveModal::GatherAppendOrReplace(s) => s.commands(),
         }
     }
 
@@ -433,8 +430,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.keymap(),
             ActiveModal::TaskLeader(s) => s.keymap(),
             ActiveModal::TaskCreate(s) => s.keymap(),
-            ActiveModal::JournalSources(s) => s.keymap(),
-            ActiveModal::JournalAppendOrReplace(s) => s.keymap(),
+            ActiveModal::GatherSources(s) => s.keymap(),
+            ActiveModal::GatherAppendOrReplace(s) => s.keymap(),
         }
     }
 
@@ -457,8 +454,8 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskLeader(_) => CommandOutcome::NotHandled,
             ActiveModal::TaskCreate(s) => s.dispatch_command(cmd, ctx),
-            ActiveModal::JournalSources(s) => s.dispatch_command(cmd, ctx),
-            ActiveModal::JournalAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::GatherSources(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::GatherAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }
@@ -1049,7 +1046,7 @@ impl Modal for QueryBar {
 
 // ── Journal sources manager ─────────────────────────────────────────
 
-impl Modal for JournalSourcesModal {
+impl Modal for GatherSourcesModal {
     fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
@@ -1062,8 +1059,8 @@ impl Modal for JournalSourcesModal {
             match picker.handle_key(k) {
                 PickerOutcome::Selected(hit) => {
                     let target = match hit {
-                        JournalSourceHit::Note(p) => JournalTarget::Note(p),
-                        JournalSourceHit::Ghost(r) => JournalTarget::Ghost(r),
+                        GatherSourceHit::Note(p) => GatherTarget::Note(p),
+                        GatherSourceHit::Ghost(r) => GatherTarget::Ghost(r),
                     };
                     if !self.sources.iter().any(|s| s == &target) {
                         self.sources.push(target);
@@ -1084,7 +1081,7 @@ impl Modal for JournalSourcesModal {
         match k.code {
             KeyCode::Esc => ModalOutcome::Closed,
             KeyCode::Enter => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
                     sources: self.sources.clone(),
                     window: self.window.clone(),
                 });
@@ -1153,7 +1150,7 @@ impl Modal for JournalSourcesModal {
     }
 }
 
-impl JournalSourcesModal {
+impl GatherSourcesModal {
     fn clamp_cursor(&mut self) {
         if self.sources.is_empty() {
             self.cursor = 0;
@@ -1169,7 +1166,7 @@ impl JournalSourcesModal {
         let Some(snap) = ctx.snapshot.as_ref() else {
             return;
         };
-        let source = JournalSourcePickerSource::new(
+        let source = GatherSourcePickerSource::new(
             std::sync::Arc::clone(ctx.vault),
             std::sync::Arc::clone(ctx.recents),
             &snap.graph,
@@ -1178,7 +1175,7 @@ impl JournalSourcesModal {
     }
 }
 
-fn render_journal_sources(frame: &mut Frame, area: Rect, state: &mut JournalSourcesModal) {
+fn render_journal_sources(frame: &mut Frame, area: Rect, state: &mut GatherSourcesModal) {
     let popup_height = 16u16.min(area.height.saturating_sub(2));
     let popup_width = 70u16.min(area.width.saturating_sub(4));
     let popup_area = Rect {
@@ -1253,7 +1250,7 @@ fn render_journal_sources(frame: &mut Frame, area: Rect, state: &mut JournalSour
 
 // ── Journal append-or-replace prompt ────────────────────────────────
 
-impl Modal for JournalAppendOrReplaceModal {
+impl Modal for GatherAppendOrReplaceModal {
     fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
         let Event::Key(k) = ev else {
             return ModalOutcome::NotHandled;
@@ -1316,10 +1313,10 @@ impl Modal for JournalAppendOrReplaceModal {
     }
 }
 
-impl JournalAppendOrReplaceModal {
+impl GatherAppendOrReplaceModal {
     fn commit_append(&self, ctx: &TabCtx) {
         // Union: current sources, then incoming targets not already
-        // present, in insertion order. JournalTarget derives Eq, so
+        // present, in insertion order. GatherTarget derives Eq, so
         // equality is structural.
         let mut sources = self.current_sources.clone();
         for t in &self.incoming_targets {
@@ -1327,14 +1324,14 @@ impl JournalAppendOrReplaceModal {
                 sources.push(t.clone());
             }
         }
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
             sources,
             window: self.window.clone(),
         });
     }
 
     fn commit_replace(&self, ctx: &TabCtx) {
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalCommitSources {
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
             sources: self.incoming_targets.clone(),
             // Replace clears any previous window — the incoming
             // request didn't carry one.
@@ -1346,7 +1343,7 @@ impl JournalAppendOrReplaceModal {
 fn render_journal_append_or_replace(
     frame: &mut Frame,
     area: Rect,
-    state: &JournalAppendOrReplaceModal,
+    state: &GatherAppendOrReplaceModal,
 ) {
     let height = 5u16.min(area.height);
     let y = area.y + area.height.saturating_sub(height);

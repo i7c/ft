@@ -1,9 +1,10 @@
 ---
-source: ft/src/tui/tests.rs
+source: ft/src/tui/tests/synthesis.rs
+assertion_line: 918
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
-┌ Journal — 2 sources (2 entries) ─────────────────────────────────────────────┐
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
+┌ Gather — 2 sources (2 entries) ──────────────────────────────────────────────┐
 │Sources (2)                                                                   │
 │Foo (ghost), Bar (ghost)                                                      │
 │● 2026-05-10  Alpha                                                           │
@@ -25,4 +26,4 @@ expression: frame
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- vault: vault  ·  tab: Journal              not yet refreshed      mode: normal
+ vault: vault  ·  tab: Gather               not yet refreshed      mode: normal

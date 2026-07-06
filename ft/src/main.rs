@@ -46,10 +46,6 @@ enum Commands {
     Find(cmd::find::FindArgs),
     /// Note operations: open, move-section
     Notes(cmd::notes::NotesArgs),
-    /// Synthesis ritual: review wikilinks added in a commit/date window
-    Review(cmd::review::ReviewArgs),
-    /// Synthesis notes: scaffold or verify protected sections
-    Synth(cmd::synth::SynthArgs),
     /// Graph operations: query (walk DSL-selected subgraph)
     Graph(cmd::graph::GraphArgs),
     /// Git operations: sync (commit + pull + push), commit (commit only)
@@ -101,8 +97,6 @@ fn main() -> ExitCode {
         Commands::Timeblocks(args) => cmd::timeblocks::run(args, vault),
         Commands::Find(args) => cmd::find::run(args, vault),
         Commands::Notes(args) => cmd::notes::run(args, vault),
-        Commands::Review(args) => cmd::review::run(args, vault),
-        Commands::Synth(args) => cmd::synth::run(args, vault),
         Commands::Graph(args) => cmd::graph::run(args, vault),
         Commands::Git(args) => cmd::git::run(args, vault),
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),

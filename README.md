@@ -40,15 +40,15 @@ box.
 they're about, the unsorted pile stays retrievable. Two directions:
 
 - *Pull* — you need everything on a topic, now, maybe minutes before a
-  meeting: `ft notes journal --link "[[topic]]"` gathers every
+  meeting: `ft notes gather --link "[[topic]]"` gathers every
   paragraph in the vault that mentions it, newest first, dated from
   git history.
-- *Sweep* — you want to know what accumulated: `ft review` ranks the
-  concepts most mentioned in a recent window, and `ft notes history`
+- *Sweep* — you want to know what accumulated: `ft notes pulse` ranks the
+  concepts most mentioned in a recent window, and `ft notes recent`
   feeds back every paragraph you touched in it.
 
 **Consolidate when a topic earns it.** Some concepts keep coming up.
-When one does, `ft synth scaffold` compiles the scattered paragraphs
+When one does, `ft notes synth scaffold` compiles the scattered paragraphs
 into one focused note, each excerpt pinned to the git commit it came
 from. Move sections between notes, rename a ghost into a real note
 with every link rewritten — the structure grows out of what you
@@ -64,12 +64,12 @@ the system.
 ## Ninety seconds of it
 
 ```
-$ ft review --since 7d        # sweep: what's been on my mind?
+$ ft notes pulse --since 7d        # sweep: what's been on my mind?
 (3) [[onboarding]]
 (2) [[analytics migration]]
 (1) [[activation]]?
 
-$ ft notes journal --link "[[onboarding]]" --link "[[analytics migration]]"
+$ ft notes gather --link "[[onboarding]]" --link "[[analytics migration]]"
 2026-06-13  2026-06-13
 matched: onboarding, analytics migration
 ──────────────────────
@@ -88,12 +88,12 @@ flows through the new pipeline.
 The [[onboarding]] metrics she keeps asking for are really a proxy
 for activation, not setup completion.
 
-$ ft synth scaffold Synthesis/onboarding-and-analytics.md \
+$ ft notes synth scaffold Synthesis/onboarding-and-analytics.md \
     --link "[[onboarding]]" --link "[[analytics migration]]"
 created Synthesis/onboarding-and-analytics.md with 3 section(s)
 ```
 
-The `?` in the review marks a ghost — a concept mentioned three
+The `?` in the pulse marks a ghost — a concept mentioned three
 times that has no note yet. The `matched:` badge marks co-occurrence:
 paragraphs where the two topics collided, which is usually the
 interesting part. And the scaffolded note is plain text — prose you
@@ -131,7 +131,7 @@ Where `ft` departs from Obsidian is that **the graph is a tool, not a
 visualization.** In Obsidian the graph is mostly something you look
 at; in `ft` you work on it — the interconnections between notes (and
 between paragraphs inside notes) are the substrate the operations run
-over. The journal above is a graph walk across every paragraph that
+over. The gather feed above is a graph walk across every paragraph that
 mentions a concept; backlinks surface every reference including
 ghosts; the query DSL walks the graph ad hoc.
 
@@ -160,6 +160,16 @@ timeblocks and time-spent reports) — and nothing else. They live in
 the same vault, the same daily notes, and the same TUI, so triaging
 tasks and capturing thoughts are one workflow, not two tools.
 
+Because they're adjacent features, their TUI tabs are off by default —
+the CLI (`ft tasks`, `ft timeblocks`) always works. Two config lines
+bring the tabs back:
+
+```toml
+[tui]
+tasks_tab = true
+timeblocks_tab = true
+```
+
 ## Synthesis: plain text with provenance, not live embeds
 
 Obsidian and Roam suggest composing new notes from old material with
@@ -169,7 +179,7 @@ not: embeds require a renderer to be readable, which makes the
 composed note hostile to machines and to plain-text tooling. What
 `ft` keeps from the embed idea is the part that matters —
 **provenance**. Each excerpt is quoted as plain text and pinned to a
-git commit via an `[!ft-source]` callout; `ft synth verify` confirms
+git commit via an `[!ft-source]` callout; `ft notes synth verify` confirms
 every excerpt still matches its pinned source. The note reads as-is,
 greps as-is, and can be handed to a machine as-is. The full argument
 and the callout grammar are in
@@ -198,8 +208,8 @@ ft tasks list today
 ft tui
 ```
 
-One thing to know up front: the resurfacing commands (`journal`,
-`history`, `review`) date paragraphs from `git blame`, so the vault
+One thing to know up front: the resurfacing commands (`gather`,
+`recent`, `pulse`) date paragraphs from `git blame`, so the vault
 should be a git repository and committed to regularly — `ft git sync`
 does commit + pull + push in one shot. Commit cadence is the temporal
 resolution of your history.
@@ -216,11 +226,11 @@ feature, common workflows, and the design philosophy:
 | [install.md](docs/guide/install.md)                      | Build from source, completions, man pages, first run.      |
 | [vault-and-config.md](docs/guide/vault-and-config.md)    | Vault discovery, the two config layers, periodic notes.    |
 | [tasks.md](docs/guide/tasks.md)                          | List / filter / create / complete / move, CLI + TUI.       |
-| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, journal, history. |
+| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, gather, recent. |
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |
-| [synthesis.md](docs/guide/synthesis.md)                  | Review → multi-source journal → synth notes.                |
+| [synthesis.md](docs/guide/synthesis.md)                  | Pulse → multi-source gather → synth notes.                  |
 | [tui.md](docs/guide/tui.md)                              | The TUI tour and the command/keymap model.                  |
 | [git-sync.md](docs/guide/git-sync.md)                    | One-shot commit + pull + push.                              |
 | [scripting.md](docs/guide/scripting.md)                  | Pipelines, exit codes, `--json-errors`, `ft do`.            |
@@ -256,7 +266,7 @@ depth.
 - [docs/append-and-capture.md](docs/append-and-capture.md) —
   exhaustive reference for append-with-template and quick capture
 - [docs/architecture.md](docs/architecture.md) (synthesis section) —
-  internals of the consolidation flow (`ft review`, `ft notes
-  journal --link`, `ft notes history`, `ft synth scaffold` / `verify`),
+  internals of the consolidation flow (`ft notes pulse`, `ft notes
+  gather --link`, `ft notes recent`, `ft notes synth scaffold` / `verify`),
   the `[!ft-source]` callout grammar used in synth notes, and the
   `[synth]` config table

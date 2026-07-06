@@ -26,9 +26,9 @@ use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
 use ft_core::blame_cache::{paragraph_date, BlameCache};
+use ft_core::gather::{build_gather, GatherEntry};
 use ft_core::graph::{Graph, NodeKind, NoteId};
-use ft_core::journal::{build_journal, JournalEntry};
-use ft_core::link_review::{compute_link_review, WindowRange};
+use ft_core::pulse::{compute_pulse, WindowRange};
 use ft_core::synth::repair::{
     apply_synth_repair, plan_repair_all, plan_synth_repair, RepairAction, SynthRepairPlan,
 };
@@ -36,12 +36,6 @@ use ft_core::synth::reslice::{apply_reslice, plan_reslice, NewRange};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 use ft_core::synth::verify::{verify_all, verify_synth_note, SectionStatus, VerificationResult};
 use ft_core::vault::Vault;
-
-#[derive(Args, Debug)]
-pub struct SynthArgs {
-    #[command(subcommand)]
-    pub command: SynthCommand,
-}
 
 #[derive(Subcommand, Debug)]
 pub enum SynthCommand {
@@ -51,7 +45,7 @@ pub enum SynthCommand {
     Scaffold(ScaffoldArgs),
     /// Accrete missing journal entries into an existing synth note,
     /// optionally scoped to entries newer than the note's last synth
-    /// watermark. See `ft synth grow --help`.
+    /// watermark. See `ft notes synth grow --help`.
     #[command(name = "grow")]
     Grow(GrowArgs),
     /// Grow or shrink a protected section's line range, re-pinned at its
@@ -65,8 +59,8 @@ pub enum SynthCommand {
     Repair(RepairArgs),
 }
 
-pub fn run(args: SynthArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    match args.command {
+pub fn run_command(command: SynthCommand, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    match command {
         SynthCommand::Scaffold(a) => run_scaffold(a, vault_flag),
         SynthCommand::Grow(a) => run_grow(a, vault_flag),
         SynthCommand::Reslice(a) => run_reslice(a, vault_flag),
@@ -184,7 +178,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     let target = normalize_md_target(&args.target);
 
-    let mut entries: Vec<JournalEntry> = Vec::new();
+    let mut entries: Vec<GatherEntry> = Vec::new();
 
     // ── --link sourcing via multi-target journal ─────────────────────
     if !args.link.is_empty() {
@@ -199,7 +193,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             ));
         }
         let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_journal(&graph, &targets, &vault, &mut cache)
+        let report = build_gather(&graph, &targets, &vault, &mut cache)
             .context("building multi-source journal")?;
         let _ = cache.save(&vault.path);
 
@@ -207,7 +201,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             let window = resolve_window(&args.since, &args.range)?
                 .expect("validated above: in_window implies since/range");
             let cfg = vault.config.config.synth.clone();
-            let review = compute_link_review(&graph, &vault, &window, &cfg)
+            let review = compute_pulse(&graph, &vault, &window, &cfg)
                 .context("computing in-window filter")?;
             report
                 .entries
@@ -356,7 +350,7 @@ fn run_grow_with_targets(
     links: Vec<String>,
     links_were_explicit: bool,
 ) -> Result<ExitCode> {
-    let mut entries: Vec<JournalEntry> = Vec::new();
+    let mut entries: Vec<GatherEntry> = Vec::new();
 
     if !links.is_empty() {
         let targets: Vec<NoteId> = links
@@ -369,7 +363,7 @@ fn run_grow_with_targets(
             ));
         }
         let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_journal(&graph, &targets, &vault, &mut cache)
+        let report = build_gather(&graph, &targets, &vault, &mut cache)
             .context("building multi-source journal")?;
         let _ = cache.save(&vault.path);
 
@@ -377,7 +371,7 @@ fn run_grow_with_targets(
             let window = resolve_window(&args.since, &args.range)?
                 .expect("validated above: in_window implies since/range");
             let cfg = vault.config.config.synth.clone();
-            let review = compute_link_review(&graph, &vault, &window, &cfg)
+            let review = compute_pulse(&graph, &vault, &window, &cfg)
                 .context("computing in-window filter")?;
             report
                 .entries
@@ -538,7 +532,7 @@ fn resolve_window(since: &Option<String>, range: &Option<String>) -> Result<Opti
 }
 
 fn entry_overlaps_window(
-    entry: &JournalEntry,
+    entry: &GatherEntry,
     added_lines: &std::collections::HashMap<PathBuf, std::collections::BTreeSet<u32>>,
 ) -> bool {
     let Some(lines) = added_lines.get(&entry.source_path) else {
@@ -559,13 +553,13 @@ fn parse_from_spec(spec: &str) -> Result<(PathBuf, u32)> {
     Ok((PathBuf::from(path), line))
 }
 
-/// Build a [`JournalEntry`] for the paragraph at `(path, line_start)`.
+/// Build a [`GatherEntry`] for the paragraph at `(path, line_start)`.
 fn pick_paragraph(
     graph: &Graph,
     vault: &Vault,
     path: &Path,
     line_start: u32,
-) -> Result<JournalEntry> {
+) -> Result<GatherEntry> {
     let p_id = graph
         .paragraph_by_loc(path, line_start)
         .ok_or_else(|| anyhow!("no paragraph found at {}:{}", path.display(), line_start))?;
@@ -598,7 +592,7 @@ fn pick_paragraph(
         today_naive()
     };
     let _ = cache.save(&vault.path);
-    Ok(JournalEntry {
+    Ok(GatherEntry {
         source_title,
         source_path: p.source_file.clone(),
         line_start: p.line_start,
@@ -615,7 +609,7 @@ fn today_naive() -> NaiveDate {
 
 /// Dedup journal entries by `(source_path, line_start)`. Sorts by date
 /// desc afterward to preserve "newest first" scaffold order.
-fn dedup_entries(mut entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
+fn dedup_entries(mut entries: Vec<GatherEntry>) -> Vec<GatherEntry> {
     let mut seen: HashSet<(PathBuf, u32)> = HashSet::new();
     entries.retain(|e| seen.insert((e.source_path.clone(), e.line_start)));
     entries.sort_by(|a, b| {

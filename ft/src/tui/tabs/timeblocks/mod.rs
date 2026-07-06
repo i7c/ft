@@ -1426,7 +1426,7 @@ impl Tab for TimeblocksTab {
 
         // Per-mode handlers (DeleteConfirm, Quickline, EditDesc, Form,
         // Tagging) capture raw keys before the Idle keymap is consulted
-        // — same pattern as JournalTab's picker-overlay bypass.
+        // — same pattern as GatherTab's picker-overlay bypass.
         match &mut self.mode {
             Mode::Idle => {}
             Mode::DeleteConfirm { .. } => {

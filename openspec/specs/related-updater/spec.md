@@ -92,7 +92,7 @@ Each selected concept SHALL be appended as a new line `- [[Concept Name]]` at th
 - **THEN** the command exits with a non-zero code and an informative error (the modal requires a terminal)
 
 ### Requirement: TUI graph-tab Related updater modal
-The graph tab SHALL support a Related modal overlay triggered when a `NodeKind::Note` node is selected and the user presses `R` (displayed in help as `Shift+R`, normalizing to the same chord form as `Shift+J` for the Journal tab). The modal is a unified **read + write** surface: it reads the scored concept list (the same data `ft notes related` prints) and optionally writes via commit. The modal SHALL display:
+The graph tab SHALL support a Related modal overlay triggered when a `NodeKind::Note` node is selected and the user presses `R` (displayed in help as `Shift+R`, normalizing to the same chord form as `Shift+J` for the Gather tab). The modal is a unified **read + write** surface: it reads the scored concept list (the same data `ft notes related` prints) and optionally writes via commit. The modal SHALL display:
 
 - A header identifying the note, titled `Related: <note title>` (the modal is no longer framed as write-only; "Update" wording is dropped)
 - A scrollable list of `RelatedScore` entries sorted by: already-in-related first (marked, non-interactive), then candidate concepts sorted descending by score

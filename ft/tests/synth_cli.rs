@@ -51,6 +51,7 @@ fn scaffold_create_writes_frontmatter_and_callouts() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -83,6 +84,7 @@ fn scaffold_append_preserves_existing_content() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -105,6 +107,7 @@ fn scaffold_from_picks_specific_paragraph() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/picked.md",
@@ -128,6 +131,7 @@ fn scaffold_requires_link_or_from() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -144,6 +148,7 @@ fn verify_single_note_passes_after_scaffold() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -158,6 +163,7 @@ fn verify_single_note_passes_after_scaffold() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "verify",
             "Synthesis/topic.md",
@@ -192,6 +198,7 @@ fn nested_vault_scaffold_verify_roundtrip() {
     ft().args([
         "--vault",
         vault.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -213,6 +220,7 @@ fn nested_vault_scaffold_verify_roundtrip() {
         .args([
             "--vault",
             vault.path().to_str().unwrap(),
+            "notes",
             "synth",
             "verify",
             "--all",
@@ -228,6 +236,7 @@ fn verify_all_json_reports_drift_after_edit() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -248,6 +257,7 @@ fn verify_all_json_reports_drift_after_edit() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "verify",
             "--all",
@@ -270,9 +280,15 @@ fn verify_all_json_reports_drift_after_edit() {
 #[test]
 fn verify_requires_note_or_all() {
     let tmp = make_source_vault();
-    ft().args(["--vault", tmp.path().to_str().unwrap(), "synth", "verify"])
-        .assert()
-        .failure();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "verify",
+    ])
+    .assert()
+    .failure();
 }
 
 // ── reslice ──────────────────────────────────────────────────────────────
@@ -284,6 +300,7 @@ fn scaffold_single_section(tmp: &assert_fs::TempDir) {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -308,6 +325,7 @@ fn reslice_extends_range_and_verifies() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "reslice",
         "Synthesis/topic.md",
@@ -324,6 +342,7 @@ fn reslice_extends_range_and_verifies() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "verify",
         "Synthesis/topic.md",
@@ -341,6 +360,7 @@ fn reslice_absolute_lines() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "reslice",
         "Synthesis/topic.md",
@@ -362,6 +382,7 @@ fn reslice_ambiguous_without_at_errors() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -377,6 +398,7 @@ fn reslice_ambiguous_without_at_errors() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "reslice",
         "Synthesis/topic.md",
@@ -397,6 +419,7 @@ fn make_vault_with_stranded_pin() -> assert_fs::TempDir {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -427,6 +450,7 @@ fn repair_repins_stranded_sections_and_verify_passes() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "verify",
         "Synthesis/topic.md",
@@ -438,6 +462,7 @@ fn repair_repins_stranded_sections_and_verify_passes() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "repair",
             "Synthesis/topic.md",
@@ -454,6 +479,7 @@ fn repair_repins_stranded_sections_and_verify_passes() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "verify",
         "Synthesis/topic.md",
@@ -472,6 +498,7 @@ fn repair_dry_run_reports_but_writes_nothing() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "repair",
             "--all",
@@ -492,6 +519,7 @@ fn repair_dry_run_reports_but_writes_nothing() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "verify",
         "--all",
@@ -517,6 +545,7 @@ fn repair_unrecoverable_body_exits_failure_with_json_detail() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "repair",
             "Synthesis/topic.md",
@@ -607,6 +636,7 @@ fn grow_appends_only_missing_entries() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -624,6 +654,7 @@ fn grow_appends_only_missing_entries() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "grow",
         "Synthesis/topic.md",
@@ -673,6 +704,7 @@ fn grow_new_only_scopes_to_entries_newer_than_watermark() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -709,6 +741,7 @@ fn grow_new_only_scopes_to_entries_newer_than_watermark() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",
@@ -748,6 +781,7 @@ fn grow_new_only_on_brand_new_note_falls_back_with_warning() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",
@@ -775,6 +809,7 @@ fn grow_reads_targets_from_frontmatter() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
+        "notes",
         "synth",
         "scaffold",
         "Synthesis/topic.md",
@@ -790,6 +825,7 @@ fn grow_reads_targets_from_frontmatter() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",
@@ -821,6 +857,7 @@ fn grow_no_targets_errors_clearly() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",
@@ -842,6 +879,7 @@ fn grow_nonexistent_target_errors() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/missing.md",
@@ -870,6 +908,7 @@ fn grow_limit_caps_appended_sections() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",
@@ -908,6 +947,7 @@ fn grow_no_edit_suppresses_editor() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
+            "notes",
             "synth",
             "grow",
             "Synthesis/topic.md",

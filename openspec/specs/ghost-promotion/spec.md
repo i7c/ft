@@ -11,7 +11,7 @@ Created by archiving change ghost-promotion.
 node with its mention count, where the count is the number of
 **distinct paragraph nodes** holding a `ParagraphLink` edge to the
 ghost (multiple mentions inside one paragraph count once — the same
-dedup rule as `ft review`). Results SHALL be sorted by count
+dedup rule as `ft notes pulse`). Results SHALL be sorted by count
 descending, then ghost name ascending. The ranking SHALL require no
 git history.
 
@@ -26,7 +26,7 @@ git history.
 
 ### Requirement: ft notes ghosts CLI
 `ft notes ghosts` SHALL print the ranked ghost list as `(N) [[ghost]]`
-rows (the same row grammar as `ft review`), highest count first. It
+rows (the same row grammar as `ft notes pulse`), highest count first. It
 SHALL support `--limit <n>` (truncate), `--min-mentions <n>` (drop
 ghosts below the threshold; default 1), and `--json` (array of
 `{target, mentions}` objects). An empty result SHALL print

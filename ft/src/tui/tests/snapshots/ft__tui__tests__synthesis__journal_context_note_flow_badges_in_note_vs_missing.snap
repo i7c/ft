@@ -3,8 +3,8 @@ source: ft/src/tui/tests/synthesis.rs
 assertion_line: 1691
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
-┌ Journal — Target.md (2 entries) ─────────────────────────────────────────────┐
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
+┌ Gather — Target.md (2 entries) ──────────────────────────────────────────────┐
 │Sources (1) [context: Synth]                                                  │
 │Target.md                                                                     │
 │  2025-01-02  DailyA                                                          │
@@ -26,4 +26,4 @@ expression: frame
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- vault: vault  ·  tab: Journal              not yet refreshed      mode: normal
+ vault: vault  ·  tab: Gather               not yet refreshed      mode: normal

@@ -568,12 +568,12 @@ fn build_label_with_indices(
 
 // ── concrete source: journal sources (notes + ghosts) ───────────────────
 
-/// One row in [`JournalSourcePickerSource`]'s result list. Carried back
+/// One row in [`GatherSourcePickerSource`]'s result list. Carried back
 /// to the Journal tab's Sources Manager so it can decide whether the
 /// user picked a real note (vault-relative path) or a ghost (raw
-/// unresolved-link string) and build the right [`JournalTarget`].
+/// unresolved-link string) and build the right [`GatherTarget`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JournalSourceHit {
+pub enum GatherSourceHit {
     Note(std::path::PathBuf),
     Ghost(String),
 }
@@ -584,7 +584,7 @@ pub enum JournalSourceHit {
 /// owned `Graph` snapshot (ghost names from `NodeKind::Ghost` nodes).
 /// Real notes and ghosts are merged into one ranked result list so the
 /// user thinks of "this concept" rather than "real or imaginary".
-pub struct JournalSourcePickerSource {
+pub struct GatherSourcePickerSource {
     vault: Arc<Vault>,
     recents: Arc<RecentsLog>,
     path_matcher: Matcher,
@@ -595,7 +595,7 @@ pub struct JournalSourcePickerSource {
     ghosts: Vec<String>,
 }
 
-impl JournalSourcePickerSource {
+impl GatherSourcePickerSource {
     /// Construct from an `Arc<Vault>`, a `RecentsLog`, and a fresh
     /// graph snapshot. The caller is expected to have built the graph
     /// at the moment the picker opens (same pattern Journal uses for
@@ -618,22 +618,22 @@ impl JournalSourcePickerSource {
     }
 }
 
-impl PickerSource for JournalSourcePickerSource {
-    type Item = JournalSourceHit;
+impl PickerSource for GatherSourcePickerSource {
+    type Item = GatherSourceHit;
 
-    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<JournalSourceHit>> {
+    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<GatherSourceHit>> {
         let cap = limit.min(RECENTS_DISPLAY_LIMIT);
         recent_hits(&self.vault, &self.recents, cap)
             .into_iter()
             .map(|hit| PickerItem {
                 label: hit.path.display().to_string(),
                 match_indices: Vec::new(),
-                data: JournalSourceHit::Note(hit.path),
+                data: GatherSourceHit::Note(hit.path),
             })
             .collect()
     }
 
-    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<JournalSourceHit>> {
+    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<GatherSourceHit>> {
         let parsed = Query::parse(q);
         if parsed.is_empty() {
             return Vec::new();
@@ -658,7 +658,7 @@ impl PickerSource for JournalSourcePickerSource {
             )
         });
 
-        let mut out: Vec<PickerItem<JournalSourceHit>> = hits
+        let mut out: Vec<PickerItem<GatherSourceHit>> = hits
             .into_iter()
             .map(|hit| {
                 let (label, match_indices) = build_label_with_indices(
@@ -671,7 +671,7 @@ impl PickerSource for JournalSourcePickerSource {
                 PickerItem {
                     label,
                     match_indices,
-                    data: JournalSourceHit::Note(hit.path),
+                    data: GatherSourceHit::Note(hit.path),
                 }
             })
             .collect();
@@ -694,7 +694,7 @@ impl PickerSource for JournalSourcePickerSource {
                         // Highlight covers only the raw portion, not
                         // the ` (ghost)` suffix.
                         match_indices: local,
-                        data: JournalSourceHit::Ghost(raw.clone()),
+                        data: GatherSourceHit::Ghost(raw.clone()),
                     });
                 }
             }
@@ -920,10 +920,10 @@ mod tests {
         assert!(src.query("", 10).is_empty());
     }
 
-    // ── JournalSourcePickerSource (notes + ghosts) ──────────────────────
+    // ── GatherSourcePickerSource (notes + ghosts) ──────────────────────
 
     /// Build a vault with `files` and a graph snapshot over it, so the
-    /// JournalSourcePickerSource has both real notes and any ghost
+    /// GatherSourcePickerSource has both real notes and any ghost
     /// references the files contain.
     fn make_vault_with_graph(
         files: &[(&str, &str)],
@@ -943,12 +943,12 @@ mod tests {
             ("notes/a.md", "linking [[Phantom]]\n"),
             ("notes/real.md", "# Real\n"),
         ]);
-        let mut src = JournalSourcePickerSource::new(vault, recents, &graph);
+        let mut src = GatherSourcePickerSource::new(vault, recents, &graph);
         let items = src.query("phan", 10);
         assert!(
             items
                 .iter()
-                .any(|i| matches!(i.data, JournalSourceHit::Ghost(ref r) if r == "Phantom")),
+                .any(|i| matches!(i.data, GatherSourceHit::Ghost(ref r) if r == "Phantom")),
             "expected a ghost row for `Phantom`, got: {items:?}"
         );
         // The ghost label includes the ` (ghost)` suffix so users can
@@ -965,14 +965,14 @@ mod tests {
             ("Phantasm.md", "# Phantasm\n"),
             ("notes/a.md", "linking [[Phantom]]\n"),
         ]);
-        let mut src = JournalSourcePickerSource::new(vault, recents, &graph);
+        let mut src = GatherSourcePickerSource::new(vault, recents, &graph);
         let items = src.query("phan", 10);
         let has_note = items
             .iter()
-            .any(|i| matches!(i.data, JournalSourceHit::Note(ref p) if p.ends_with("Phantasm.md")));
+            .any(|i| matches!(i.data, GatherSourceHit::Note(ref p) if p.ends_with("Phantasm.md")));
         let has_ghost = items
             .iter()
-            .any(|i| matches!(i.data, JournalSourceHit::Ghost(ref r) if r == "Phantom"));
+            .any(|i| matches!(i.data, GatherSourceHit::Ghost(ref r) if r == "Phantom"));
         assert!(has_note, "expected Phantasm.md note row: {items:?}");
         assert!(has_ghost, "expected Phantom ghost row: {items:?}");
     }
@@ -983,13 +983,13 @@ mod tests {
             ("Phantasm.md", "# Phantasm\n"),
             ("notes/a.md", "linking [[Phantom]]\n"),
         ]);
-        let mut picker = FuzzyPicker::new(JournalSourcePickerSource::new(vault, recents, &graph));
+        let mut picker = FuzzyPicker::new(GatherSourcePickerSource::new(vault, recents, &graph));
         for c in "phantasm".chars() {
             picker.handle_key(key(c));
         }
         let out = picker.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match out {
-            PickerOutcome::Selected(JournalSourceHit::Note(p)) => {
+            PickerOutcome::Selected(GatherSourceHit::Note(p)) => {
                 assert!(p.ends_with("Phantasm.md"), "got path: {}", p.display())
             }
             other => panic!("expected Selected(Note(...)), got {other:?}"),
@@ -1000,7 +1000,7 @@ mod tests {
     fn journal_picker_empty_query_returns_empty() {
         let (_dir, vault, recents, graph) =
             make_vault_with_graph(&[("notes/a.md", "linking [[Phantom]]\n")]);
-        let mut src = JournalSourcePickerSource::new(vault, recents, &graph);
+        let mut src = GatherSourcePickerSource::new(vault, recents, &graph);
         // Empty input => initial_items (recents); recents is empty here.
         assert!(src.query("", 10).is_empty());
     }

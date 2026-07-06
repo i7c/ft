@@ -62,7 +62,7 @@ impl WindowRange {
 
 /// One row of the link review.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkReviewRow {
+pub struct PulseRow {
     /// Number of distinct paragraphs (or synthetic keys) containing
     /// added mentions of this target in the window.
     pub count: usize,
@@ -77,13 +77,13 @@ pub struct LinkReviewRow {
     pub source_paths: Vec<PathBuf>,
 }
 
-/// Full output of [`compute_link_review`]. Rows are sorted by count
+/// Full output of [`compute_pulse`]. Rows are sorted by count
 /// desc, target asc. `added_lines` is keyed on vault-relative path and
 /// stores the set of post-`to` line numbers added in the window — used
 /// by the journal's `--in-window` filter.
 #[derive(Debug, Clone, Default)]
-pub struct LinkReview {
-    pub rows: Vec<LinkReviewRow>,
+pub struct Pulse {
+    pub rows: Vec<PulseRow>,
     pub added_lines: HashMap<PathBuf, BTreeSet<u32>>,
 }
 
@@ -92,12 +92,12 @@ pub struct LinkReview {
 /// `repo` is the git repo path (typically `vault.path` per the existing
 /// blame convention). `cfg` provides `exclude_prefixes` and is read but
 /// not modified.
-pub fn compute_link_review(
+pub fn compute_pulse(
     graph: &Graph,
     vault: &Vault,
     window: &WindowRange,
     cfg: &SynthCfg,
-) -> Result<LinkReview> {
+) -> Result<Pulse> {
     let repo = git::RepoMap::discover(&vault.path)?;
     let (from_sha, to_sha) = resolve_window(repo.root(), window)?;
     let head_sha = git::head_hash(repo.root())?;
@@ -202,7 +202,7 @@ pub fn compute_link_review(
     }
 
     // Materialize rows.
-    let mut rows: Vec<LinkReviewRow> = source_paths_per_target
+    let mut rows: Vec<PulseRow> = source_paths_per_target
         .iter()
         .map(|(target_id, paths)| {
             let (target, is_ghost) = match graph.node(*target_id) {
@@ -211,7 +211,7 @@ pub fn compute_link_review(
                 _ => (String::new(), false),
             };
             let count = counted.iter().filter(|(t, _)| t == target_id).count();
-            LinkReviewRow {
+            PulseRow {
                 count,
                 target,
                 is_ghost,
@@ -225,7 +225,7 @@ pub fn compute_link_review(
     rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.target.cmp(&b.target)));
 
     let _ = BTreeMap::<(), ()>::new(); // keep BTreeMap import live for future use
-    Ok(LinkReview { rows, added_lines })
+    Ok(Pulse { rows, added_lines })
 }
 
 /// Internal dedup key. For v1 the only variant is `Paragraph(id)`;
@@ -356,7 +356,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
 
         // Expected: [[Foo]] count = 2 (two paragraphs in note-a, only first
         // also mentions [[Bar]]). Wait — the second paragraph also has Foo.
@@ -415,7 +415,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         assert_eq!(foo.count, 1, "paragraph-level dedup");
     }
@@ -469,7 +469,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         assert_eq!(foo.count, 1, "both [[Foo]] mentions are in one block");
     }
@@ -480,7 +480,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
         // Both counts are 2; alphabetical tiebreak → Bar before Foo.
         assert_eq!(review.rows[0].target, "Bar");
         assert_eq!(review.rows[1].target, "Foo");
@@ -494,7 +494,7 @@ mod tests {
         cfg.exclude_prefixes = vec!["note-a".into()]; // drop note-a contributions
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &cfg).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &cfg).unwrap();
         // note-a contributed Foo (×2) and Bar (×1). Excluding note-a leaves
         // only note-b's Bar.
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
@@ -514,7 +514,7 @@ mod tests {
             from: head.clone(),
             to: head,
         };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
         assert!(review.rows.is_empty());
     }
 
@@ -540,7 +540,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
         assert!(!foo.is_ghost, "Foo.md exists → not a ghost");
@@ -594,7 +594,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(review.rows.iter().any(|r| r.target == "Bar"));
         assert!(
@@ -651,7 +651,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(
             review.rows.iter().any(|r| r.target == "Replacement"),
@@ -720,7 +720,7 @@ Then I add a thought about [[Bar]].
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_link_review(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
 
         assert!(
             review.rows.iter().all(|r| r.target != "Foo"),

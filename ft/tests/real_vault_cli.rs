@@ -187,7 +187,7 @@ fn real_vault_review_since_7d_runs() {
     }
     // A real vault may legitimately have no new links in the last 7d
     // (the command prints "no new links in window" and exits 0).
-    ft().args(["--vault", REAL_VAULT, "review", "--since", "7d"])
+    ft().args(["--vault", REAL_VAULT, "notes", "pulse", "--since", "7d"])
         .assert()
         .success();
 }
@@ -198,7 +198,9 @@ fn real_vault_review_json_is_valid_json() {
         return;
     }
     let out = ft()
-        .args(["--vault", REAL_VAULT, "review", "--since", "30d", "--json"])
+        .args([
+            "--vault", REAL_VAULT, "notes", "pulse", "--since", "30d", "--json",
+        ])
         .assert()
         .success()
         .get_output()
@@ -219,6 +221,8 @@ fn real_vault_synth_verify_all_runs() {
     // "no synth notes found" and exits 0. Accept either as long as
     // the command doesn't panic / fail to launch.
     let _ = ft()
-        .args(["--vault", REAL_VAULT, "synth", "verify", "--all"])
+        .args([
+            "--vault", REAL_VAULT, "notes", "notes", "synth", "verify", "--all",
+        ])
         .assert();
 }

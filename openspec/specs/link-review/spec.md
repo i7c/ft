@@ -1,17 +1,17 @@
 # link-review Specification
 
 ## Purpose
-TBD - created by archiving change add-synthesis-ritual. Update Purpose after archive.
+TBD - created by archiving change add-synthesis-flow. Update Purpose after archive.
 ## Requirements
-### Requirement: ft review subcommand
-`ft review` SHALL be a new top-level subcommand that prints a frequency-ranked list of `[[wikilinks]]` newly mentioned in a time window. It SHALL accept either `--since <duration>` (e.g. `--since 7d`, `--since 24h`) or `--range <X>..<Y>` (two git refs). The two flags SHALL be mutually exclusive. The command SHALL be read-only and SHALL NOT modify any files.
+### Requirement: ft notes pulse subcommand
+`ft notes pulse` SHALL be a new top-level subcommand that prints a frequency-ranked list of `[[wikilinks]]` newly mentioned in a time window. It SHALL accept either `--since <duration>` (e.g. `--since 7d`, `--since 24h`) or `--range <X>..<Y>` (two git refs). The two flags SHALL be mutually exclusive. The command SHALL be read-only and SHALL NOT modify any files.
 
 #### Scenario: Invocation with date duration
-- **WHEN** the user runs `ft review --since 7d` in a vault that is a git repo with commits in the last 7 days
+- **WHEN** the user runs `ft notes pulse --since 7d` in a vault that is a git repo with commits in the last 7 days
 - **THEN** the command exits 0 and prints a table of links from the window
 
 #### Scenario: Invocation with commit range
-- **WHEN** the user runs `ft review --range main~10..HEAD`
+- **WHEN** the user runs `ft notes pulse --range main~10..HEAD`
 - **THEN** the command exits 0 and prints a table of links from that commit range
 
 #### Scenario: Mutually exclusive flags
@@ -19,7 +19,7 @@ TBD - created by archiving change add-synthesis-ritual. Update Purpose after arc
 - **THEN** the command exits with a non-zero code and a clear "mutually exclusive" error
 
 #### Scenario: Vault is not a git repo
-- **WHEN** the user runs `ft review` in a directory without git
+- **WHEN** the user runs `ft notes pulse` in a directory without git
 - **THEN** the command exits with a non-zero code and an error naming the missing git repo
 
 ### Requirement: Link extraction via git-log scan
@@ -102,25 +102,25 @@ The command SHALL skip `[[wikilink]]` occurrences whose position in the post-com
 The default output SHALL display the link-review as a table with one row per link, format `(<count>) [[<target>]]` (with `?` suffix for ghosts), one row per line. Output SHALL respect `--no-color` / `NO_COLOR` / non-TTY auto-disable for ANSI styling. Vault-relative paths SHALL be used in any path-bearing diagnostics.
 
 #### Scenario: Table output format
-- **WHEN** `ft review --since 7d` is run in a TTY
+- **WHEN** `ft notes pulse --since 7d` is run in a TTY
 - **THEN** stdout contains one row per link in the prescribed format
 
 #### Scenario: No-color mode
-- **WHEN** `NO_COLOR=1 ft review --since 7d` is run
+- **WHEN** `NO_COLOR=1 ft notes pulse --since 7d` is run
 - **THEN** output contains no ANSI escape sequences
 
 ### Requirement: JSON output mode
 With `--json`, the command SHALL emit a JSON array where each element has fields: `count` (integer), `target` (string, e.g. `"Foo"`), `is_ghost` (boolean), `source_paths` (array of vault-relative path strings — the paths whose paragraphs contributed).
 
 #### Scenario: JSON structure
-- **WHEN** `ft review --since 7d --json` is run and two links are produced
+- **WHEN** `ft notes pulse --since 7d --json` is run and two links are produced
 - **THEN** stdout is valid JSON: an array of exactly two objects, each with the four named fields
 
 ### Requirement: Empty-window handling
 When no commits in the window add any countable wikilinks, the command SHALL exit 0 and print a clear "no new links in window" message (text mode) or an empty JSON array (`--json`).
 
 #### Scenario: No commits in window
-- **WHEN** `ft review --since 1m` is run in a vault with no recent commits
+- **WHEN** `ft notes pulse --since 1m` is run in a vault with no recent commits
 - **THEN** the command exits 0 and prints a "no new links" message
 
 #### Scenario: No new wikilinks in window

@@ -31,7 +31,7 @@ fn seed_day(vault: &Vault, date: &str, body: &str) {
 fn timeblocks_tab_empty_renders_placeholders() -> Result<()> {
     let (_dir, vault) = timeblocks_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     let frame = render(&mut app, 100, 24);
     assert_tui_snapshot!("timeblocks_tab_empty_100x24", frame);
     Ok(())
@@ -46,7 +46,7 @@ fn timeblocks_tab_populated_today_renders_blocks_and_totals() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 standup @work\n- 10:00 - 10:30 review @work/code\n- 11:00 - 11:15 coffee @break\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     let frame = render(&mut app, 100, 24);
     assert_tui_snapshot!("timeblocks_tab_populated_today_100x24", frame);
     Ok(())
@@ -62,7 +62,7 @@ fn timeblocks_tab_populated_today_missing_tomorrow_shows_placeholder() -> Result
     );
     // Don't seed 2026-05-11 — tomorrow's pane should show the placeholder.
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Default is now Single-day; toggle to Split to see both panes.
     app.dispatch(key('f'))?;
     let frame = render(&mut app, 100, 24);
@@ -87,7 +87,7 @@ fn timeblocks_tab_both_days_populated_renders_two_lists() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 tomorrow-a @personal\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Default is now Single-day; toggle to Split to see both panes.
     app.dispatch(key('f'))?;
     let frame = render(&mut app, 100, 24);
@@ -110,7 +110,7 @@ fn timeblocks_tab_l_shifts_focus_to_tomorrow() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 tomorrow-a @personal\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Initial frame: focus indicator points at today's date.
     let initial = render(&mut app, 100, 24);
     assert!(initial.contains("▶ 2026-05-10"), "got: {initial}");
@@ -130,7 +130,7 @@ fn timeblocks_tab_j_k_move_selection_in_focused_pane() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 first\n- 10:00 - 11:00 second\n- 11:00 - 12:00 third\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('j'))?;
     app.dispatch(key('j'))?;
     let after_two_j = render(&mut app, 100, 24);
@@ -156,7 +156,7 @@ fn timeblocks_tab_g_and_capital_g_jump_to_ends() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 first\n- 10:00 - 11:00 second\n- 11:00 - 12:00 third\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('G'))?;
     let last = render(&mut app, 100, 24);
     assert!(last.lines().any(|l| l.contains("▶") && l.contains("third")));
@@ -174,7 +174,7 @@ fn timeblocks_tab_r_refreshes_from_disk() -> Result<()> {
     // Start empty.
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     let initial = render(&mut app, 100, 24);
     assert!(initial.contains("no daily note yet"));
     // Drop a file on disk and press `r`.
@@ -221,7 +221,7 @@ fn timeblocks_tab_close_bracket_extends_end_by_5m() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key(']'))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -235,7 +235,7 @@ fn timeblocks_tab_open_bracket_shrinks_end_by_5m() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('['))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -249,7 +249,7 @@ fn timeblocks_tab_close_brace_shifts_start_by_5m() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('}'))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -263,7 +263,7 @@ fn timeblocks_tab_gt_shifts_block_5m_later_preserving_duration() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('>'))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -277,7 +277,7 @@ fn timeblocks_tab_lt_shifts_block_5m_earlier_preserving_duration() -> Result<()>
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('<'))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -294,7 +294,7 @@ fn timeblocks_tab_gt_keeps_cursor_on_shifted_block_after_resort() -> Result<()> 
         "## Time Blocks\n- 09:00 - 09:30 first\n- 09:10 - 09:40 second\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Select "first" (idx 0) and push it +15m → 09:15 - 09:45. Now
     // second (09:10) comes first; cursor should follow "first" to idx 1.
     for _ in 0..3 {
@@ -317,7 +317,7 @@ fn timeblocks_tab_open_brace_pulls_start_5m_earlier() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('{'))?;
     app.service_pending_requests()?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -335,7 +335,7 @@ fn timeblocks_tab_dd_deletes_focused_block() -> Result<()> {
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // First `d` arms the chord; second `d` commits.
     app.dispatch(key('d'))?;
     app.service_pending_requests()?;
@@ -358,7 +358,7 @@ fn timeblocks_tab_dd_esc_cancels() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('d'))?;
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
     let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
@@ -372,7 +372,7 @@ fn timeblocks_tab_quickline_a_adds_block() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('a'))?;
     for c in "09:00 - 10:00 standup".chars() {
         app.dispatch(key(c))?;
@@ -392,7 +392,7 @@ fn timeblocks_tab_quickline_parse_error_keeps_buffer() -> Result<()> {
     let (_dir, vault) = timeblocks_vault();
     seed_day(&vault, "2026-05-10", "## Time Blocks\n");
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('a'))?;
     for c in "garbage".chars() {
         app.dispatch(key(c))?;
@@ -417,7 +417,7 @@ fn timeblocks_tab_edit_desc_e_chord() -> Result<()> {
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('e'))?;
     // EditBuffer prefilled with "old"; clear and type "new".
     for _ in 0..3 {
@@ -445,7 +445,7 @@ fn timeblocks_tab_form_capital_a_commits_on_desc_enter() -> Result<()> {
     seed_day(&vault, "2026-05-10", "## Time Blocks\n");
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('A'),
         KeyModifiers::SHIFT,
@@ -479,7 +479,7 @@ fn timeblocks_tab_time_chord_keeps_selection_on_non_first_block() -> Result<()> 
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Move down to select the second block, then extend its end by 5m
     // three times — each `]` should leave the cursor on "second".
     app.dispatch(key('j'))?;
@@ -516,7 +516,7 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
 
     // Time-shift on the first block (line 1, 09:00 - 10:00).
     app.dispatch(key(']'))?;
@@ -587,7 +587,7 @@ fn timeblocks_tab_capital_l_slides_anchor_to_next_day() -> Result<()> {
         "## Time Blocks\n- 14:00 - 15:00 day-plus-2\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Slide forward twice — left pane should now be 2026-05-12.
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('L'),
@@ -613,7 +613,7 @@ fn timeblocks_tab_capital_h_slides_anchor_to_previous_day() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 yblk\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('H'),
         KeyModifiers::SHIFT,
@@ -636,7 +636,7 @@ fn timeblocks_tab_capital_t_jumps_anchor_back_to_today() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 home-block\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Wander 5 days into the future.
     for _ in 0..5 {
         app.dispatch(Event::Key(KeyEvent::new(
@@ -672,7 +672,7 @@ fn timeblocks_tab_f_toggles_to_single_day_view() -> Result<()> {
         "## Time Blocks\n- 09:00 - 10:00 tomorrow-a\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Default is now Single-day: only today visible.
     let single = render(&mut app, 100, 24);
     assert!(single.contains("today-a"));
@@ -712,7 +712,7 @@ fn timeblocks_tab_form_cursor_lands_after_visible_prefix() -> Result<()> {
     let (_dir, vault) = timeblocks_vault();
     seed_day(&vault, "2026-05-10", "## Time Blocks\n");
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('A'),
         KeyModifiers::SHIFT,
@@ -744,7 +744,7 @@ fn timeblocks_tab_block_height_scales_with_duration() -> Result<()> {
          - 12:00 - 14:30 onefifty\n",
     );
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('f'))?; // fullscreen so the column is wide enough
     let frame = render(&mut app, 100, 40);
     // Each header still shows once.
@@ -779,7 +779,7 @@ fn timeblocks_tab_t_modal_adds_and_removes_tags() -> Result<()> {
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('t'))?;
     for c in "+@meeting -@work".chars() {
         app.dispatch(key(c))?;
@@ -804,7 +804,7 @@ fn timeblocks_tab_t_modal_rejects_invalid_token() -> Result<()> {
     );
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.dispatch(key('t'))?;
     // Tokens without `+` / `-` prefix should be rejected; file untouched.
     for c in "work".chars() {
@@ -824,7 +824,7 @@ fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     // Initial frame: today's file doesn't exist yet.
     let initial = render(&mut app, 100, 24);
     assert!(initial.contains("no daily note yet"));

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fs::write_atomic;
+use crate::gather::resolve_related_aliases;
 use crate::graph::{EdgeKind, Graph, NodeKind, NoteId};
-use crate::journal::resolve_related_aliases;
 use crate::markdown::extract_headings;
 use crate::vault::Vault;
 
@@ -42,7 +42,7 @@ pub struct RelatedScore {
 /// `already_in_related = true`.
 pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Vec<RelatedScore>> {
     // Ghost targets have no backing file, so there is no Related
-    // section to read aliases from — mirror journal::build_journal's
+    // section to read aliases from — mirror gather::build_gather's
     // ghost handling (note_path = None, aliases = []). The
     // co-occurrence walk below runs unchanged because ghosts can be
     // the target of incoming ParagraphLink edges.

@@ -14,13 +14,13 @@ fn initial_tab_is_graph() {
 
 #[test]
 fn digit_jumps_directly_to_target_tab() -> Result<()> {
-    // `3` should land on Notes in one keypress, even from Graph.
+    // `3` should land on Pulse in one keypress, even from Graph.
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     assert_eq!(app.active_index(), 0);
     app.dispatch(key('3'))?;
     assert_eq!(app.active_index(), 2);
-    assert_eq!(app.active_title(), "Notes");
+    assert_eq!(app.active_title(), "Pulse");
     Ok(())
 }
 
@@ -38,7 +38,7 @@ fn q_quits_from_initial_tab() -> Result<()> {
 fn q_quits_from_tasks_tab() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('q'))?;
     assert!(app.is_quit());
     Ok(())
@@ -48,7 +48,7 @@ fn q_quits_from_tasks_tab() -> Result<()> {
 fn ctrl_c_quits() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let ev = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     app.dispatch(ev)?;
     assert!(app.is_quit());
@@ -60,20 +60,20 @@ fn tab_key_cycles_tabs() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     // Start on Tasks so Tab isn't intercepted by Graph's input mode.
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let tab_ev = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    app.dispatch(tab_ev.clone())?;
-    assert_eq!(app.active_title(), "Notes");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Timeblocks");
     app.dispatch(tab_ev.clone())?;
-    assert_eq!(app.active_title(), "Journal");
-    app.dispatch(tab_ev.clone())?;
-    assert_eq!(app.active_title(), "History");
-    app.dispatch(tab_ev.clone())?;
-    assert_eq!(app.active_title(), "Review");
-    app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Graph");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Notes");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Pulse");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Recent");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Gather");
     app.dispatch(tab_ev)?;
     assert_eq!(app.active_title(), "Tasks");
     Ok(())
@@ -83,7 +83,7 @@ fn tab_key_cycles_tabs() -> Result<()> {
 fn search_arrow_navigation_wraps() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     let up = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     // 5 matches in default window — going up from selection 0 should wrap.
@@ -104,7 +104,7 @@ fn search_arrow_navigation_wraps() -> Result<()> {
 fn search_query_edit_apply_updates_list() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
 
     // Replace query with one that only matches a single task.
     app.dispatch(key('/'))?;
@@ -137,7 +137,7 @@ fn search_query_edit_apply_updates_list() -> Result<()> {
 fn search_esc_cancels_edit_without_changing_query() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let before = render(&mut app, 80, 24);
 
     app.dispatch(key('/'))?;
@@ -158,7 +158,7 @@ fn search_esc_cancels_edit_without_changing_query() -> Result<()> {
 fn search_capital_r_reloads_and_picks_up_disk_changes() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let before = render(&mut app, 80, 24);
     assert!(before.contains("Pay rent"));
 
@@ -185,7 +185,7 @@ fn search_capital_r_reloads_and_picks_up_disk_changes() -> Result<()> {
 fn quick_key_bracket_close_nudges_due_forward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // Selection starts on "Pay rent" (overdue 2026-05-08).
     app.dispatch(key(']'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
@@ -200,7 +200,7 @@ fn quick_key_bracket_close_nudges_due_forward() -> Result<()> {
 fn quick_key_bracket_open_nudges_due_back() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('['))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
     assert!(
@@ -214,7 +214,7 @@ fn quick_key_bracket_open_nudges_due_back() -> Result<()> {
 fn quick_key_brace_close_nudges_scheduled_forward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // Move down to "Submit Q2 report" which has a scheduled date.
     for _ in 0..3 {
         app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
@@ -232,7 +232,7 @@ fn quick_key_brace_close_nudges_scheduled_forward() -> Result<()> {
 fn quick_key_p_cycles_priority_forward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // Selection: "Pay rent" already has priority High (⏫). Cycle: high → none.
     app.dispatch(key('p'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
@@ -251,7 +251,7 @@ fn quick_key_p_cycles_priority_forward() -> Result<()> {
 fn quick_key_capital_p_cycles_priority_backward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // "Reply to Sara" has no priority — selection 2 (overdue 2 + first upcoming).
     for _ in 0..2 {
         app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
@@ -272,7 +272,7 @@ fn quick_key_capital_p_cycles_priority_backward() -> Result<()> {
 fn quick_key_x_completes_selected_task() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('x'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
     assert!(
@@ -296,7 +296,7 @@ fn quick_key_x_completes_selected_task() -> Result<()> {
 fn quick_key_capital_x_cancels_selected_task() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('X'),
         KeyModifiers::SHIFT,
@@ -317,7 +317,7 @@ fn quick_key_capital_x_cancels_selected_task() -> Result<()> {
 fn quick_key_t_sets_due_to_today() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // Selection starts on "Pay rent" (📅 2026-05-08, overdue).
     app.dispatch(key('t'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
@@ -332,7 +332,7 @@ fn quick_key_t_sets_due_to_today() -> Result<()> {
 fn edit_popup_opens_on_e_with_current_values() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     let frame = render(&mut app, 80, 24);
     assert!(frame.contains("edit task"), "popup title missing:\n{frame}");
@@ -349,7 +349,7 @@ fn edit_popup_opens_on_e_with_current_values() -> Result<()> {
 fn edit_popup_renders_at_80x24_snapshot() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("edit_popup_80x24", frame);
@@ -360,7 +360,7 @@ fn edit_popup_renders_at_80x24_snapshot() -> Result<()> {
 fn edit_popup_ctrl_s_saves_changes() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Tab to the due field, clear it, type "+3d" (CLI relative-date).
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
@@ -393,7 +393,7 @@ fn edit_popup_esc_cancels_without_writing() -> Result<()> {
     let (dir, vault) = populated_vault();
     let before = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     for c in "garbage".chars() {
         app.dispatch(key(c))?;
@@ -408,7 +408,7 @@ fn edit_popup_esc_cancels_without_writing() -> Result<()> {
 fn edit_popup_invalid_date_keeps_popup_open_with_error() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Tab to due, clear, type garbage.
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
@@ -447,7 +447,7 @@ fn edit_popup_invalid_date_keeps_popup_open_with_error() -> Result<()> {
 fn enter_on_search_view_queues_editor_open_request() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -485,7 +485,7 @@ fn quick_keys_recurring_complete_inserts_next_instance() -> Result<()> {
     let vault = Vault::discover(Some(vault_path)).unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('x'))?;
     let body = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
     assert!(
@@ -503,7 +503,7 @@ fn quick_keys_recurring_complete_inserts_next_instance() -> Result<()> {
 fn question_mark_toggles_help_overlay() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('?'))?;
     let frame_with_help = render(&mut app, 80, 24);
     assert!(frame_with_help.contains("Keybindings"));
@@ -519,7 +519,7 @@ fn question_mark_toggles_help_overlay() -> Result<()> {
 fn help_overlay_over_tasks_tab_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.enter_help();
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("help_overlay_over_tasks_80x24", frame);
@@ -530,7 +530,7 @@ fn help_overlay_over_tasks_tab_renders() -> Result<()> {
 fn edit_popup_error_state_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Tab to due, clear, type garbage, submit — popup stays open with ⚠.
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
@@ -557,7 +557,7 @@ fn edit_popup_error_state_renders() -> Result<()> {
 fn tasks_tab_wide_terminal_snapshot() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let frame = render(&mut app, 120, 30);
     assert_tui_snapshot!("tasks_tab_populated_120x30", frame);
     Ok(())
@@ -574,7 +574,7 @@ fn tasks_tab_wide_terminal_snapshot() -> Result<()> {
 fn help_overlay_header_names_active_tab() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    for (idx, title) in ["Graph", "Tasks", "Notes", "Timeblocks"].iter().enumerate() {
+    for (idx, title) in ["Graph", "Notes", "Pulse", "Recent"].iter().enumerate() {
         app.switch_to(idx)?;
         app.enter_help();
         let frame = render(&mut app, 80, 40);
@@ -605,7 +605,7 @@ fn real_vault_tasks_tab_renders_without_panic() -> Result<()> {
     }
     let vault = Vault::discover(Some(path))?;
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // First render runs vault.scan() + filter + sort under the hood.
     let frame = render(&mut app, 120, 40);
     assert!(
@@ -660,7 +660,7 @@ fn perf_first_render_5k_vault_under_budget() -> Result<()> {
 
     let start = std::time::Instant::now();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let _ = render(&mut app, 80, 24);
     let elapsed = start.elapsed();
 
@@ -699,7 +699,7 @@ fn mixed_status_vault() -> (TempDir, Vault) {
 fn search_view_renders_status_glyphs_when_query_includes_all_statuses() -> Result<()> {
     let (_dir, vault) = mixed_status_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     // Default query is `not done` — replace with a no-op filter so every
     // task shows up regardless of status.
     app.dispatch(key('/'))?;
@@ -762,7 +762,7 @@ fn search_view_renders_status_glyphs_when_query_includes_all_statuses() -> Resul
 fn ctrl_backspace_deletes_word_in_query_bar() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
 
     // Open the query bar and replace its contents with a known string.
     app.dispatch(key('/'))?;
@@ -798,7 +798,7 @@ fn ctrl_backspace_deletes_word_in_query_bar() -> Result<()> {
 fn ctrl_w_deletes_word_in_query_bar() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('/'))?;
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
     for _ in 0..200 {
@@ -834,7 +834,7 @@ fn ctrl_w_deletes_word_in_query_bar() -> Result<()> {
 fn ctrl_a_jumps_to_start_in_tasks_search_picker() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('/'))?;
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
     for _ in 0..200 {
@@ -876,7 +876,7 @@ fn ctrl_a_jumps_to_start_in_tasks_search_picker() -> Result<()> {
 fn ctrl_a_jumps_to_start_in_tasks_edit_popup() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Focus starts on description, which holds "Pay rent" in the fixture.
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
@@ -904,7 +904,7 @@ fn ctrl_a_jumps_to_start_in_tasks_edit_popup() -> Result<()> {
 fn alt_b_word_jump_in_tasks_quickline() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "buy milk".chars() {
         app.dispatch(key(c))?;
@@ -933,7 +933,7 @@ fn alt_b_word_jump_in_tasks_quickline() -> Result<()> {
 fn ctrl_backspace_deletes_word_in_edit_popup_field() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Focus starts on description, which holds "Pay rent". Ctrl+Backspace
     // should erase "rent" but leave "Pay ".
@@ -981,7 +981,7 @@ fn edit_popup_saves_tag_changes_back_to_description() -> Result<()> {
     let vault = Vault::discover(Some(vault_path)).unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     // Jump straight to the tags field (description, due, scheduled, priority, tags).
     for _ in 0..4 {
@@ -1031,7 +1031,7 @@ fn edit_popup_emptying_tags_field_removes_all_tags() -> Result<()> {
     let vault = Vault::discover(Some(vault_path)).unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     for _ in 0..4 {
         app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
@@ -1093,7 +1093,7 @@ fn perf_keystrokes_5k_vault_under_budget() -> Result<()> {
     let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
     let (_dir, vault) = synthetic_5k_vault(today);
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     let _ = render(&mut app, 80, 24);
 
     // Dispatch 100 down-arrows + redraw each time. In-memory navigation
@@ -1143,7 +1143,7 @@ fn quickline_vault() -> (TempDir, Vault) {
 fn quickline_opens_with_c_and_closes_on_esc() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     let frame = render(&mut app, 100, 24);
     assert!(
@@ -1163,7 +1163,7 @@ fn quickline_opens_with_c_and_closes_on_esc() -> Result<()> {
 fn quickline_enter_writes_to_daily_note() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "buy milk due:tomorrow pri:high #grocery".chars() {
         app.dispatch(key(c))?;
@@ -1209,7 +1209,7 @@ fn quickline_honors_default_section_and_frontmatter() -> Result<()> {
     .unwrap();
     let vault = Vault::discover(Some(vault_path)).unwrap();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
 
     // Daily note → config default section.
     app.dispatch(key('c'))?;
@@ -1253,7 +1253,7 @@ fn quickline_honors_default_section_and_frontmatter() -> Result<()> {
 fn quickline_in_path_overrides_target() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "remember to call dentist in:Inbox.md".chars() {
         app.dispatch(key(c))?;
@@ -1281,7 +1281,7 @@ fn quickline_in_path_overrides_target() -> Result<()> {
 fn quickline_parse_error_blocks_write() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "draft due:not-a-date".chars() {
         app.dispatch(key(c))?;
@@ -1314,7 +1314,7 @@ fn quickline_duplicate_detection_surfaces_inline() -> Result<()> {
     std::fs::write(&inbox, "- [ ] follow up with team 📅 2026-05-11\n").unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "follow up with team due:tomorrow in:Inbox.md".chars() {
         app.dispatch(key(c))?;
@@ -1343,7 +1343,7 @@ fn quickline_duplicate_detection_surfaces_inline() -> Result<()> {
 fn quickline_empty_description_blocks_write() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     // Only a tag — no description text.
     for c in "due:tomorrow".chars() {
@@ -1368,7 +1368,7 @@ fn quickline_empty_description_blocks_write() -> Result<()> {
 fn quickline_success_raises_green_toast_request() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "buy milk due:tomorrow".chars() {
         app.dispatch(key(c))?;
@@ -1396,7 +1396,7 @@ fn quickline_success_raises_green_toast_request() -> Result<()> {
 fn quickline_success_renders_toast_in_status_bar_center_cell() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "draft report due:tomorrow".chars() {
         app.dispatch(key(c))?;
@@ -1422,7 +1422,7 @@ fn quickline_success_anchors_cursor_to_new_task_when_it_matches_filter() -> Resu
     // cursor should land on its row.
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "anchor target due:tomorrow".chars() {
         app.dispatch(key(c))?;
@@ -1453,7 +1453,7 @@ fn quickline_duplicate_does_not_raise_toast() -> Result<()> {
     let inbox = dir.path().join("test-vault/Inbox.md");
     std::fs::write(&inbox, "- [ ] dup task 📅 2026-05-11\n").unwrap();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "dup task due:tomorrow in:Inbox.md".chars() {
         app.dispatch(key(c))?;
@@ -1476,7 +1476,7 @@ fn quickline_duplicate_does_not_raise_toast() -> Result<()> {
 fn shift_c_opens_blank_new_task_popup() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1498,7 +1498,7 @@ fn shift_c_opens_blank_new_task_popup() -> Result<()> {
 fn ctrl_e_in_quickline_opens_popup_with_pre_populated_fields() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "review report due:tomorrow pri:high #work in:Inbox.md".chars() {
         app.dispatch(key(c))?;
@@ -1528,7 +1528,7 @@ fn new_popup_ctrl_s_writes_to_in_target() -> Result<()> {
     let inbox = dir.path().join("test-vault/Inbox.md");
     std::fs::write(&inbox, "# Inbox\n").unwrap();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1577,7 +1577,7 @@ fn new_popup_target_with_heading_uses_under_heading_position() -> Result<()> {
     .unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1626,7 +1626,7 @@ fn new_popup_target_with_heading_uses_under_heading_position() -> Result<()> {
 fn new_popup_empty_description_blocks_write() -> Result<()> {
     let (dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1652,7 +1652,7 @@ fn edit_popup_still_works_after_refactor() -> Result<()> {
     // mustn't break the existing `e`-on-selected-task edit flow.
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('e'))?;
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
     for c in " (updated)".chars() {
@@ -1674,7 +1674,7 @@ fn edit_popup_still_works_after_refactor() -> Result<()> {
 fn new_popup_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1688,7 +1688,7 @@ fn new_popup_snapshot_80x24() -> Result<()> {
 fn quickline_empty_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("quickline_empty_80x24", frame);
@@ -1699,7 +1699,7 @@ fn quickline_empty_snapshot_80x24() -> Result<()> {
 fn quickline_valid_preview_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "buy milk due:tomorrow pri:high #grocery".chars() {
         app.dispatch(key(c))?;
@@ -1713,7 +1713,7 @@ fn quickline_valid_preview_snapshot_80x24() -> Result<()> {
 fn quickline_parse_error_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "draft due:not-a-date".chars() {
         app.dispatch(key(c))?;
@@ -1727,7 +1727,7 @@ fn quickline_parse_error_snapshot_80x24() -> Result<()> {
 fn new_popup_prefilled_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "review report due:tomorrow pri:high #work".chars() {
         app.dispatch(key(c))?;
@@ -1745,7 +1745,7 @@ fn new_popup_prefilled_snapshot_80x24() -> Result<()> {
 fn quickline_toast_success_snapshot_80x24() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "ship feature due:tomorrow".chars() {
         app.dispatch(key(c))?;
@@ -1765,7 +1765,7 @@ fn quickline_toast_success_snapshot_80x24() -> Result<()> {
 fn quickline_ctrl_w_works_in_input() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(key('c'))?;
     for c in "foo bar".chars() {
         app.dispatch(key(c))?;
@@ -1820,7 +1820,7 @@ fn target_picker_vault() -> (TempDir, Vault) {
 /// Open the new-task popup with target focused and the picker ready
 /// to be triggered. Shared setup for the picker tests below.
 fn open_new_popup_on_target(app: &mut App) -> Result<()> {
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,
@@ -1964,7 +1964,7 @@ fn target_picker_esc_cancels_and_leaves_field_unchanged() -> Result<()> {
 fn target_picker_does_not_open_from_description_field() -> Result<()> {
     let (_dir, vault) = target_picker_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('C'),
         KeyModifiers::SHIFT,

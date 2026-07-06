@@ -311,7 +311,7 @@ mod tests {
     fn lookup_agrees_with_filter_missing() {
         // Spec "Consistency with scaffold dedup": for a note's callout
         // set, lookup == Cited-in-note ⇔ filter_missing drops the entry.
-        use crate::journal::JournalEntry;
+        use crate::gather::GatherEntry;
         use crate::synth::accrete::filter_missing;
         use crate::synth::callout::parse as parse_callouts;
 
@@ -325,7 +325,7 @@ mod tests {
         idx.add_note(note, &content);
         let callouts = parse_callouts(&content);
 
-        let entry = |path: &str, lines: (u32, u32), text: &str| JournalEntry {
+        let entry = |path: &str, lines: (u32, u32), text: &str| GatherEntry {
             source_title: "t".into(),
             source_path: PathBuf::from(path),
             line_start: lines.0,

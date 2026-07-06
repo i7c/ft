@@ -27,7 +27,7 @@ A paragraph SHALL be included in the history feed if and only if its line range
 resolved window, as reported by the link-review engine's added-lines map for that
 same window. The window SHALL be resolvable from either a `--since <duration>`
 (e.g. `7d`, `24h`, `2w`, `1m`) or a `--range <X>..<Y>` commit range, exactly as
-`ft notes journal` resolves its window arguments.
+`ft notes gather` resolves its window arguments.
 
 #### Scenario: Edited paragraph included
 - **WHEN** a paragraph's lines overlap a line added within the window
@@ -42,11 +42,11 @@ When neither `--since` nor `--range` is supplied, the history feed SHALL default
 a `7d` window. The feed SHALL always be windowed — there is no all-time mode.
 
 #### Scenario: No window flag defaults to 7d
-- **WHEN** `ft notes history` is run with no `--since` or `--range`
+- **WHEN** `ft notes recent` is run with no `--since` or `--range`
 - **THEN** the feed contains paragraphs edited within the last 7 days
 
 #### Scenario: Explicit window overrides the default
-- **WHEN** `ft notes history --since 2w` is run
+- **WHEN** `ft notes recent --since 2w` is run
 - **THEN** the feed uses the 2-week window rather than the 7-day default
 
 ### Requirement: Recency ordering matches the journal
@@ -91,19 +91,19 @@ every file in the vault. Files with no window edits SHALL NOT be blamed.
 - **WHEN** the vault has 100 notes but only 3 were touched within the window
 - **THEN** at most the 3 touched files are blamed (untouched files trigger no `git blame`)
 
-### Requirement: ft notes history subcommand
-`ft notes history` SHALL be a read-only subcommand under `ft notes` that runs
+### Requirement: ft notes recent subcommand
+`ft notes recent` SHALL be a read-only subcommand under `ft notes` that runs
 `build_history` and prints the feed. It SHALL accept `--since <duration>` and
 `--range <X>..<Y>` (mutually exclusive, defaulting to `7d`), `--include-synth`,
 `--json`, and `--no-color`. It SHALL require the vault to be inside a git
 repository, erroring clearly otherwise. It SHALL NOT modify any files.
 
 #### Scenario: Default invocation
-- **WHEN** the user runs `ft notes history` inside a git-backed vault
+- **WHEN** the user runs `ft notes recent` inside a git-backed vault
 - **THEN** it prints the last-7-days feed to stdout and exits successfully
 
 #### Scenario: Mutually exclusive window flags
-- **WHEN** the user runs `ft notes history --since 7d --range A..B`
+- **WHEN** the user runs `ft notes recent --since 7d --range A..B`
 - **THEN** the command exits non-zero with a mutual-exclusion error
 
 #### Scenario: Non-git vault errors
@@ -119,20 +119,20 @@ non-TTY. With `--json`, the command SHALL emit a JSON array whose elements have
 `date`, `source_title`, `source_path`, and `section` fields.
 
 #### Scenario: Table output
-- **WHEN** `ft notes history` runs in a TTY with color
+- **WHEN** `ft notes recent` runs in a TTY with color
 - **THEN** stdout shows date, source title, separator, and paragraph text per entry
 
 #### Scenario: No-color mode
-- **WHEN** `NO_COLOR=1 ft notes history` runs
+- **WHEN** `NO_COLOR=1 ft notes recent` runs
 - **THEN** output contains no ANSI escape sequences
 
 #### Scenario: JSON output structure
-- **WHEN** `ft notes history --json` runs with two entries
+- **WHEN** `ft notes recent --json` runs with two entries
 - **THEN** stdout is a valid JSON array of two objects, each with `date`, `source_title`, `source_path`, and `section`
 
 ### Requirement: Cited badge in history text output
-`ft notes history` SHALL annotate entries with the same badge grammar
-as `ft notes journal`: `cited: <note stem>` / `cited*: <note stem>`,
+`ft notes recent` SHALL annotate entries with the same badge grammar
+as `ft notes gather`: `cited: <note stem>` / `cited*: <note stem>`,
 first citing note plus `+N` overflow, uncited entries unchanged.
 
 #### Scenario: History entry shows badge
@@ -140,7 +140,7 @@ first citing note plus `+N` overflow, uncited entries unchanged.
 - **THEN** its history entry renders the `cited:` badge line
 
 ### Requirement: cited_in in history JSON
-`ft notes history --json` entries SHALL gain the same additive
+`ft notes recent --json` entries SHALL gain the same additive
 `cited_in` array of `{note, stale}` objects as the journal.
 
 #### Scenario: JSON parity with journal
@@ -148,10 +148,10 @@ first citing note plus `+N` overflow, uncited entries unchanged.
 - **THEN** both report identical `cited_in` contents
 
 ### Requirement: --uncited filter on history
-`ft notes history --uncited` SHALL keep only entries whose state is
+`ft notes recent --uncited` SHALL keep only entries whose state is
 not `Cited` (stale kept), composing with the existing window flags.
 
 #### Scenario: Incremental sweep
-- **WHEN** the user runs `ft notes history --since 7d --uncited`
+- **WHEN** the user runs `ft notes recent --since 7d --uncited`
 - **THEN** only paragraphs from the window not yet pinned
   byte-identically in any synth note are listed

@@ -70,15 +70,15 @@ to `ft-core` first so the CLI benefits too.
   `GraphCfg::presets`; quick-capture presets in `Config::capture_presets`
   (`CapturePreset`, drives the TUI `Q` flow) — three separate maps
   because the three consumers default to different profiles/shapes.
-- **Synthesis ritual (`link_review` + `journal` + `synth`).** The
-  post-connecting workflow: `ft_core::link_review::compute_link_review`
-  (git-log wikilink scan), `ft_core::journal::build_journal` (multi-source
+- **Synthesis (`pulse` + `gather` + `synth`).** The
+  post-connecting workflow: `ft_core::pulse::compute_pulse`
+  (git-log wikilink scan), `ft_core::gather::build_gather` (multi-source
   git-blame feed), and `ft_core::synth::{scaffold,verify,repair,reslice,callout}`
   (plan/apply synth notes with `[!ft-source]` callouts pinned to git
   provenance). Synth notes carry an `ft-synth: true` frontmatter marker;
   callouts round-trip via `synth::callout::{serialize,parse,compute_section_hash}`.
-  CLI: `ft review`, `ft synth`, `ft notes journal --link`. See
-  `docs/architecture.md` §"Synthesis ritual".
+  CLI: `ft notes pulse`, `ft notes synth`, `ft notes gather --link`. See
+  `docs/architecture.md` §"Synthesis".
 - **Signature changes on core APIs.** A new param to a widely-called
   function (e.g. `Graph::build`) ripples through every test file. Before
   making such a change, grep for callers and consider a compatibility

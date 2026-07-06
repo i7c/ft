@@ -3,7 +3,7 @@
 ## Purpose
 TBD - created by archiving change notes-history-tab. Update Purpose after archive.
 ## Requirements
-### Requirement: History tab registration
+### Requirement: Recent tab registration
 The TUI SHALL register a new top-level tab titled `History`, implementing the `Tab`
 trait with its own `TabKind` routing key and declaring `HISTORY_COMMANDS` +
 `HISTORY_KEYMAP` static slices. It SHALL be pushed into `build_tabs_with_overlays`
@@ -16,16 +16,16 @@ wrapped with `.with_keymap_overlay(...)`, and its keymap SHALL appear in
 
 #### Scenario: Keymap overlay is registered
 - **WHEN** `ft commands check-keymap` runs
-- **THEN** the History tab's keymap is included (the overlay wiring is present)
+- **THEN** the Recent tab's keymap is included (the overlay wiring is present)
 
 ### Requirement: Shared-snapshot participation
-The History tab SHALL read graph/scan data only from `ctx.snapshot` and SHALL NOT
+The Recent tab SHALL read graph/scan data only from `ctx.snapshot` and SHALL NOT
 call `vault.scan()` or `Graph::build` itself. It SHALL re-derive its feed on graph
 generation change (`on_graph_ready` / `on_focus`), and after any mutation it
 performs SHALL raise `ctx.request_graph_refresh()`.
 
 #### Scenario: No direct scan
-- **WHEN** the History tab loads its feed
+- **WHEN** the Recent tab loads its feed
 - **THEN** it uses `ctx.snapshot` and issues no `vault.scan()` / `Graph::build` call
 
 #### Scenario: Refresh after mutation
@@ -33,13 +33,13 @@ performs SHALL raise `ctx.request_graph_refresh()`.
 - **THEN** it raises `ctx.request_graph_refresh()` so the feed re-derives on the new generation
 
 ### Requirement: Windowed feed rendering
-The History tab SHALL render the `build_history` feed for a window that defaults to
+The Recent tab SHALL render the `build_history` feed for a window that defaults to
 `7d`, showing each paragraph entry with its date and source title, ordered
 reverse-chronologically. It SHALL reuse a `BlameCache` for the session and hold the
 current window so the feed can be recomputed on reload.
 
 #### Scenario: Feed renders on focus
-- **WHEN** the History tab is focused in a git-backed vault
+- **WHEN** the Recent tab is focused in a git-backed vault
 - **THEN** it displays the last-7-days paragraph feed
 
 #### Scenario: Empty window state
@@ -51,7 +51,7 @@ current window so the feed can be recomputed on reload.
 - **THEN** `build_history` is re-run and newly edited paragraphs appear
 
 ### Requirement: Row selection for synth
-The History tab SHALL let the user select one, several, or all feed rows and hand
+The Recent tab SHALL let the user select one, several, or all feed rows and hand
 the selected paragraphs to the existing synth scaffold flow, producing protected
 `[!ft-source]` callout sections in a chosen target note. The flow SHALL NOT write
 an `ft-synth-target` frontmatter key (there is no target), and SHALL NOT offer the
@@ -70,12 +70,12 @@ synth-grow/accrete step — History synth is scaffold-only.
 - **THEN** `T` gains no `ft-synth-target` frontmatter key (the marker written for target-based synth is omitted)
 
 ### Requirement: Seeded section-move action (TUI only)
-On a focused feed row, the History tab SHALL offer an action that opens the
+On a focused feed row, the Recent tab SHALL offer an action that opens the
 existing section-move modal (`ActiveModal::SectionMove`) seeded to the row's source
 note, skipping the source picker and starting at heading multi-select for that
 note. This SHALL reuse the existing move machinery via a thin `begin_for_source`
 entry point built on `advance_to_multiselect`; no new movement primitive is
-introduced. This action is available in the TUI only (the CLI `ft notes history`
+introduced. This action is available in the TUI only (the CLI `ft notes recent`
 is read-only).
 
 #### Scenario: Move opens seeded to the row's note
@@ -87,21 +87,21 @@ is read-only).
 - **THEN** the section is moved using the existing `move_sections` apply path, and the tab raises a graph refresh
 
 ### Requirement: Citation badge on history rows
-History tab rows SHALL render the same citation badges as the Journal
+Recent tab rows SHALL render the same citation badges as the Journal
 tab (`cited` / `cited*` / nothing), read from the shared snapshot's
 citation index via `TabCtx::snapshot`.
 
 #### Scenario: Badge visible in the sweep
-- **WHEN** the History tab shows a window containing a paragraph
+- **WHEN** the Recent tab shows a window containing a paragraph
   pinned in a synth note
 - **THEN** that row carries the `cited` marker
 
 ### Requirement: history.toggle-uncited command
-A `history.toggle-uncited` command (bound to `u` by default) SHALL
+A `recent.toggle-uncited` command (bound to `u` by default) SHALL
 toggle uncited-only filtering with the same semantics as the Journal
 tab, declared in the tab's command/keymap statics.
 
 #### Scenario: Incremental triage in the TUI
-- **WHEN** the user presses `u` on the History tab
+- **WHEN** the user presses `u` on the Recent tab
 - **THEN** rows already pinned byte-identically in synth notes
   disappear, leaving the entries still needing attention

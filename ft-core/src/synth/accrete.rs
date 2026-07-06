@@ -13,7 +13,7 @@
 //!   **not** pure; callers pass a `repo_root`.
 //!
 //! See [`crate::synth`] for the higher-level synth-note contract and
-//! `docs/architecture.md` §"Synthesis ritual" for the grow flow.
+//! `docs/architecture.md` §"Synthesis" for the grow flow.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,8 +21,8 @@ use std::path::Path;
 use chrono::NaiveDate;
 
 use crate::error::{Error, Result};
+use crate::gather::GatherEntry;
 use crate::git;
-use crate::journal::JournalEntry;
 use crate::synth::callout::{compute_section_hash, ParsedCallout, CONTENT_HASH_PREFIX_LEN};
 
 /// Drop journal entries whose `(source_path, body)` is already pinned in
@@ -38,7 +38,7 @@ use crate::synth::callout::{compute_section_hash, ParsedCallout, CONTENT_HASH_PR
 /// flow). Input order is preserved among the survivors.
 ///
 /// Pure: no I/O, no git. Cheap (bodies are small).
-pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
+pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<GatherEntry>) -> Vec<GatherEntry> {
     // hash-prefix → list of (path, body) for that prefix. The prefix is
     // a fast reject; the body compare below is exact.
     let mut by_hash: HashMap<&str, Vec<(&Path, &str)>> = HashMap::new();
@@ -155,8 +155,8 @@ mod tests {
         }
     }
 
-    fn entry(path: &str, body: &str, date: &str) -> JournalEntry {
-        JournalEntry {
+    fn entry(path: &str, body: &str, date: &str) -> GatherEntry {
+        GatherEntry {
             source_title: path.to_string(),
             source_path: PathBuf::from(path),
             line_start: 1,

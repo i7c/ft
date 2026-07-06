@@ -1,14 +1,14 @@
 # synth-notes Specification
 
 ## Purpose
-TBD - created by archiving change add-synthesis-ritual. Update Purpose after archive.
+TBD - created by archiving change add-synthesis-flow. Update Purpose after archive.
 ## Requirements
 ### Requirement: Synth note frontmatter marker
 A synth note SHALL be identified by the presence of `ft-synth: true` in its YAML frontmatter. Notes without this marker SHALL NOT be treated as synth notes by any `ft` feature. The marker SHALL be respected regardless of where the note lives in the vault; the `synth.folder` config is convenience for the scaffold-create path, not enforcement.
 
 #### Scenario: Marker identifies synth note
 - **WHEN** `Synthesis/topic.md` starts with `---\nft-synth: true\n---\n`
-- **THEN** `ft synth verify --all` includes it; the link-review treats its `[!ft-source]` callouts as protected sections
+- **THEN** `ft notes synth verify --all` includes it; the link-review treats its `[!ft-source]` callouts as protected sections
 
 #### Scenario: Note without marker is not synth
 - **WHEN** a note in `Synthesis/` lacks the `ft-synth: true` marker
@@ -24,7 +24,7 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
   > Some original paragraph
   > spanning two lines.
   ```
-- **THEN** `ft synth verify` recognizes and validates this section
+- **THEN** `ft notes synth verify` recognizes and validates this section
 
 #### Scenario: One callout per source paragraph
 - **WHEN** the scaffold generator pulls two adjacent paragraphs (lines 42-44 and 46-48) from `notes/foo.md`
@@ -32,10 +32,10 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 
 #### Scenario: Malformed header detected
 - **WHEN** a callout header is missing a token (e.g. no `#<hash>`)
-- **THEN** `ft synth verify` reports the section as `malformed` with the path:line of the broken header
+- **THEN** `ft notes synth verify` reports the section as `malformed` with the path:line of the broken header
 
 ### Requirement: Protected-section verification
-`ft synth verify <note.md>` SHALL parse every `[!ft-source]` callout in the note and, for each, fetch the source git blob at `(commit, vault-rel-path)`, slice lines `a..=b` (1-indexed inclusive), strip the `> ` prefix from each body line in the callout, and compare the two texts joined by `\n` for byte-equality. It SHALL also re-compute blake3 of the body text and confirm the first 6 hex chars equal the header's `#hash6`. Both comparisons MUST succeed for the section to be reported `ok`.
+`ft notes synth verify <note.md>` SHALL parse every `[!ft-source]` callout in the note and, for each, fetch the source git blob at `(commit, vault-rel-path)`, slice lines `a..=b` (1-indexed inclusive), strip the `> ` prefix from each body line in the callout, and compare the two texts joined by `\n` for byte-equality. It SHALL also re-compute blake3 of the body text and confirm the first 6 hex chars equal the header's `#hash6`. Both comparisons MUST succeed for the section to be reported `ok`.
 
 #### Scenario: Section content matches source
 - **WHEN** the body text matches the git blob slice byte-for-byte and the content hash matches
@@ -53,11 +53,11 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 - **WHEN** the pinned commit hash is not present in the local git history
 - **THEN** the section is reported `source-missing` with a diagnostic naming the commit
 
-### Requirement: ft synth verify command
-`ft synth verify` SHALL accept either a single `<note.md>` path argument or `--all`. With `--all`, the command SHALL walk every `.md` file in the vault, identify those with `ft-synth: true` frontmatter, and run verification across all of them. The exit code SHALL be 0 if every section reports `ok`, 1 otherwise.
+### Requirement: ft notes synth verify command
+`ft notes synth verify` SHALL accept either a single `<note.md>` path argument or `--all`. With `--all`, the command SHALL walk every `.md` file in the vault, identify those with `ft-synth: true` frontmatter, and run verification across all of them. The exit code SHALL be 0 if every section reports `ok`, 1 otherwise.
 
 #### Scenario: Verify single note all ok
-- **WHEN** `ft synth verify Synthesis/topic.md` is run on a note whose sections all pass
+- **WHEN** `ft notes synth verify Synthesis/topic.md` is run on a note whose sections all pass
 - **THEN** the command exits 0 and prints one line per section: `ok | <header info>`
 
 #### Scenario: Verify with drift
@@ -65,35 +65,35 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 - **THEN** the command exits 1 and prints one line per section with the status and location
 
 #### Scenario: --all sweeps the vault
-- **WHEN** `ft synth verify --all` is run in a vault with three synth notes
+- **WHEN** `ft notes synth verify --all` is run in a vault with three synth notes
 - **THEN** all three notes are verified and the report groups by note
 
 #### Scenario: JSON output
-- **WHEN** `ft synth verify --all --json` is run
+- **WHEN** `ft notes synth verify --all --json` is run
 - **THEN** stdout is a JSON array where each element has `note` (path), `header` (raw header line), `status` (`ok`/`drifted`/`source-missing`/`malformed`), and `detail` (string)
 
-### Requirement: ft synth scaffold command
+### Requirement: ft notes synth scaffold command
 
-`ft synth <target.md> --link "[[Foo]]" [--link "[[Bar]]" ...] [--since <duration> | --range <X>..<Y>] [--all | --in-window] [--from <path>:<line> ...] [--no-edit]` SHALL generate or append protected-section scaffolding into the target note. `--link` SHALL be repeatable. When the target file does not exist, the command SHALL create it with `ft-synth: true` frontmatter AND, when `--link` is supplied, an `ft-synth-targets` key listing the supplied links, followed by the scaffolded sections as the body. When the target exists, the command SHALL append (at end of file) the new sections separated from existing content by one blank line; the append path SHALL drop any entry whose `(source_path, body)` is already pinned in the note (dedup-on-append invariant), so re-running scaffold with the same target is idempotent. After writing, the command SHALL open `$EDITOR` at the bottom of the file unless `--no-edit` is passed.
+`ft notes synth <target.md> --link "[[Foo]]" [--link "[[Bar]]" ...] [--since <duration> | --range <X>..<Y>] [--all | --in-window] [--from <path>:<line> ...] [--no-edit]` SHALL generate or append protected-section scaffolding into the target note. `--link` SHALL be repeatable. When the target file does not exist, the command SHALL create it with `ft-synth: true` frontmatter AND, when `--link` is supplied, an `ft-synth-targets` key listing the supplied links, followed by the scaffolded sections as the body. When the target exists, the command SHALL append (at end of file) the new sections separated from existing content by one blank line; the append path SHALL drop any entry whose `(source_path, body)` is already pinned in the note (dedup-on-append invariant), so re-running scaffold with the same target is idempotent. After writing, the command SHALL open `$EDITOR` at the bottom of the file unless `--no-edit` is passed.
 
 #### Scenario: Create new synth note
 
-- **WHEN** `ft synth Synthesis/topic.md --link "[[Foo]]" --since 7d` is run and `Synthesis/topic.md` does not exist
+- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Foo]]" --since 7d` is run and `Synthesis/topic.md` does not exist
 - **THEN** the file is created with `ft-synth: true` and `ft-synth-targets: ["[[Foo]]"]` frontmatter and the scaffolded sections; `$EDITOR` is launched at the bottom of the file
 
 #### Scenario: Append to existing synth note dedups
 
-- **WHEN** `ft synth Synthesis/topic.md --link "[[Bar]]"` is run and the file already exists with some of Bar's paragraphs pinned
+- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Bar]]"` is run and the file already exists with some of Bar's paragraphs pinned
 - **THEN** only the not-yet-pinned sections are appended (separated by a blank line) and `$EDITOR` is launched at the new bottom; existing content is preserved unchanged
 
 #### Scenario: Re-running scaffold with the same target is idempotent
 
-- **WHEN** `ft synth Synthesis/topic.md --link "[[Foo]]"` is run twice in succession with no source changes
+- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Foo]]"` is run twice in succession with no source changes
 - **THEN** the second run appends zero sections (all entries are already pinned)
 
 #### Scenario: --no-edit suppresses editor handoff
 
-- **WHEN** `ft synth ... --no-edit` is run
+- **WHEN** `ft notes synth ... --no-edit` is run
 - **THEN** the file is written but `$EDITOR` is NOT launched and the command exits 0
 
 #### Scenario: --link is required when no --from given
@@ -108,15 +108,15 @@ With `--link` flags, the scaffold SHALL be sourced from the multi-source journal
 The scaffold's per-section body text SHALL be taken verbatim from `JournalEntry.section_text`, which derives from `ParagraphData.text`. Because the heading line remains part of the paragraph that begins at that line (Fork A2), `section_text` is unchanged in shape: a paragraph that begins at a heading line still includes the heading line verbatim.
 
 #### Scenario: --link sources from journal
-- **WHEN** `ft synth out.md --link "[[Foo]]" --link "[[Bar]]"` is run
+- **WHEN** `ft notes synth out.md --link "[[Foo]]" --link "[[Bar]]"` is run
 - **THEN** the scaffold includes a section for every paragraph that the multi-source journal returns for `Foo` or `Bar`
 
 #### Scenario: --in-window filter applied
-- **WHEN** `ft synth out.md --link "[[Foo]]" --since 7d --in-window` is run
+- **WHEN** `ft notes synth out.md --link "[[Foo]]" --since 7d --in-window` is run
 - **THEN** only paragraphs whose lines overlap added-lines in the last 7 days are included
 
 #### Scenario: --from picks specific paragraphs
-- **WHEN** `ft synth out.md --link "[[Foo]]" --from notes/bar.md:42 --no-edit` is run
+- **WHEN** `ft notes synth out.md --link "[[Foo]]" --from notes/bar.md:42 --no-edit` is run
 - **THEN** the scaffold includes the journal results for `[[Foo]]` PLUS the paragraph starting at line 42 of `notes/bar.md`
 
 #### Scenario: Scaffold ordered newest first
@@ -155,16 +155,16 @@ The `Config` struct SHALL gain a `synth: Synth` sub-struct with two fields: `fol
 
 ### Requirement: Self-describing synth note targets
 
-A synth note MAY declare its journal target(s) in YAML frontmatter via the key `ft-synth-targets`, whose value SHALL be a YAML sequence of `[[wikilink]]` strings (e.g. `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]`). The key SHALL be optional; notes without it SHALL behave exactly as today (scaffold append, verify, repair, reslice all unchanged). `ft synth scaffold` and `ft synth grow` SHALL write the key when `--link` is supplied and the note is being created, or when appending and the key is absent. The key SHALL NOT affect verify, repair, or reslice. Parsing SHALL be lenient (accept quoted or bare values, `"[[Foo]]"` or `"Foo"`) and SHALL store values as raw wikilink text. A helper `ft_core::synth::callout::parse_synth_targets(content) -> Option<Vec<String>>` SHALL extract the list; a helper `upsert_synth_frontmatter(content, targets: Option<&[String]>)` SHALL idempotently set both `ft-synth: true` and `ft-synth-targets` without clobbering unrelated frontmatter keys.
+A synth note MAY declare its journal target(s) in YAML frontmatter via the key `ft-synth-targets`, whose value SHALL be a YAML sequence of `[[wikilink]]` strings (e.g. `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]`). The key SHALL be optional; notes without it SHALL behave exactly as today (scaffold append, verify, repair, reslice all unchanged). `ft notes synth scaffold` and `ft notes synth grow` SHALL write the key when `--link` is supplied and the note is being created, or when appending and the key is absent. The key SHALL NOT affect verify, repair, or reslice. Parsing SHALL be lenient (accept quoted or bare values, `"[[Foo]]"` or `"Foo"`) and SHALL store values as raw wikilink text. A helper `ft_core::synth::callout::parse_synth_targets(content) -> Option<Vec<String>>` SHALL extract the list; a helper `upsert_synth_frontmatter(content, targets: Option<&[String]>)` SHALL idempotently set both `ft-synth: true` and `ft-synth-targets` without clobbering unrelated frontmatter keys.
 
 #### Scenario: Scaffold writes targets on create
 
-- **WHEN** `ft synth scaffold Synthesis/topic.md --link "[[Foo]]" --link "[[Bar]]"` creates a new note
+- **WHEN** `ft notes synth scaffold Synthesis/topic.md --link "[[Foo]]" --link "[[Bar]]"` creates a new note
 - **THEN** the frontmatter contains `ft-synth: true` and `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]`
 
 #### Scenario: Grow appends targets when key absent
 
-- **WHEN** `ft synth grow Synthesis/topic.md --link "[[Baz]]"` is run on an existing note that lacks `ft-synth-targets`
+- **WHEN** `ft notes synth grow Synthesis/topic.md --link "[[Baz]]"` is run on an existing note that lacks `ft-synth-targets`
 - **THEN** the frontmatter gains `ft-synth-targets: ["[[Baz]]"]` and existing frontmatter keys are preserved
 
 #### Scenario: Notes without the key are unaffected

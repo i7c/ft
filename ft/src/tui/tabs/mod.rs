@@ -1,7 +1,7 @@
+pub mod gather;
 pub mod graph;
-pub mod history;
-pub mod journal;
 pub mod notes;
-pub mod review;
+pub mod pulse;
+pub mod recent;
 pub mod tasks;
 pub mod timeblocks;

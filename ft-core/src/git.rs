@@ -409,7 +409,7 @@ fn parse_porcelain_header(line: &str) -> Option<(String, &str)> {
     Some((sha.to_string(), rest))
 }
 
-// ── Diff helpers (used by link_review) ──────────────────────────────────
+// ── Diff helpers (used by pulse) ──────────────────────────────────
 
 /// Resolve a ref (branch, tag, partial SHA) to its full 40-char commit SHA.
 pub fn rev_parse(repo: &Path, refspec: &str) -> Result<String> {

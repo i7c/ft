@@ -218,7 +218,7 @@ pub fn header_regex() -> &'static Regex {
 /// `callouts`.
 ///
 /// This is the predicate the link-review uses to skip wikilinks that
-/// were quoted from elsewhere (so they don't double-count next ritual).
+/// were quoted from elsewhere (so they don't double-count in the next pulse).
 pub fn line_is_inside_callout(line: u32, callouts: &[ParsedCallout]) -> bool {
     callouts.iter().any(|c| {
         // Number of body lines = number of `\n`-separated chunks in body.

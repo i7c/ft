@@ -38,7 +38,7 @@ today — the readline-style `edit.*` commands (line jumps, word jumps,
 kill/yank, transpose, etc.) live on the shared `EditBuffer` widget
 that every text-input site mounts (graph query bar, fuzzy picker
 input, rename modal, quickline, capture var prompt, timeblocks form,
-journal entry). Routing keys through `EditBuffer::handle_event`
+gather entry). Routing keys through `EditBuffer::handle_event`
 guarantees one source of truth for what each chord does, regardless of
 which site mounted the widget.
 
@@ -179,7 +179,7 @@ collision-free. Helpers (`confirm_def`, `cancel_def`, `nav_def` in
 
 The shared `EditBuffer` widget mounts inside every text input — the
 graph query bar, fuzzy picker input, rename modal, quickline, capture
-var prompt, timeblocks form, journal entry. It owns a readline-style
+var prompt, timeblocks form, gather entry. It owns a readline-style
 keymap so the same chords work in every site:
 
 | Chord | Command | Action |

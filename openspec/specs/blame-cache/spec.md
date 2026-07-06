@@ -44,11 +44,11 @@ Cache entries SHALL be keyed on `(vault-relative path as String, HEAD commit has
 The `BlameCache` SHALL NOT be populated at graph-build time. It SHALL be populated on demand when a caller requests blame data for a specific file. After computing, the result SHALL be inserted into the cache and the cache SHALL be saved to disk.
 
 #### Scenario: First journal query populates cache
-- **WHEN** `ft notes journal` is invoked for the first time on a vault with a cold cache
+- **WHEN** `ft notes gather` is invoked for the first time on a vault with a cold cache
 - **THEN** blame data is computed only for files containing matching paragraphs, and the cache file is created/updated after the query
 
 #### Scenario: Second journal query uses cache
-- **WHEN** `ft notes journal` is invoked a second time with no intervening commits
+- **WHEN** `ft notes gather` is invoked a second time with no intervening commits
 - **THEN** no `git blame` subprocesses are spawned for previously cached files
 
 ### Requirement: Paragraph section date derivation

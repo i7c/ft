@@ -31,40 +31,40 @@ pub fn empty_keymap() -> &'static KeyMap {
 /// raw unresolved-link target string (e.g. `"Phantom"`), since a ghost
 /// has no path and is keyed only by that string within a `Graph`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JournalTarget {
+pub enum GatherTarget {
     Note(PathBuf),
     Ghost(String),
 }
 
 /// Cross-tab request for the Journal tab to enter multi-target mode.
 /// Built by the Review tab when the user presses Enter on a selection
-/// of links; consumed by the Journal tab's `queue_journal_for_multi`
+/// of links; consumed by the Journal tab's `queue_gather_for_multi`
 /// hook and turned into a multi-source journal load on the next
 /// `on_focus`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiTargetRequest {
-    pub targets: Vec<JournalTarget>,
+    pub targets: Vec<GatherTarget>,
     /// Window range that produced these targets, if any. Enables the
     /// Journal tab's `--in-window` toggle when present.
-    pub window: Option<JournalWindow>,
+    pub window: Option<GatherWindow>,
 }
 
-/// Serializable mirror of `ft_core::link_review::WindowRange` for the
+/// Serializable mirror of `ft_core::pulse::WindowRange` for the
 /// cross-tab handoff. Kept here (rather than importing the core enum
 /// into `tab.rs` directly) to avoid pulling link-review types into the
 /// Tab trait surface; the Journal tab converts back to the core type
 /// when running the in-window filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JournalWindow {
+pub enum GatherWindow {
     Since(chrono::Duration),
     Range { from: String, to: String },
 }
 
-impl JournalWindow {
-    pub fn to_core(&self) -> ft_core::link_review::WindowRange {
+impl GatherWindow {
+    pub fn to_core(&self) -> ft_core::pulse::WindowRange {
         match self {
-            JournalWindow::Since(d) => ft_core::link_review::WindowRange::Since(*d),
-            JournalWindow::Range { from, to } => ft_core::link_review::WindowRange::Range {
+            GatherWindow::Since(d) => ft_core::pulse::WindowRange::Since(*d),
+            GatherWindow::Range { from, to } => ft_core::pulse::WindowRange::Range {
                 from: from.clone(),
                 to: to.clone(),
             },
@@ -72,21 +72,21 @@ impl JournalWindow {
     }
 }
 
-impl JournalTarget {
+impl GatherTarget {
     /// Single-line user-facing label: the vault-relative path for a
     /// note, the raw target string (suffixed with `(ghost)`) for a
     /// ghost. Used in the Journal tab's header and error messages.
     pub fn label(&self) -> String {
         match self {
-            JournalTarget::Note(p) => p.display().to_string(),
-            JournalTarget::Ghost(raw) => format!("{raw} (ghost)"),
+            GatherTarget::Note(p) => p.display().to_string(),
+            GatherTarget::Ghost(raw) => format!("{raw} (ghost)"),
         }
     }
 }
 
 /// Whether an external "add these targets" hand-off should append to
 /// the Journal tab's current source set or replace it. Carried on
-/// [`AppRequest::JournalAddSources`] as the initial focus of the
+/// [`AppRequest::GatherAddSources`] as the initial focus of the
 /// Append-or-Replace prompt; the user can still flip the choice in the
 /// prompt before committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,14 +231,14 @@ pub enum AppRequest {
     /// tab's `Shift+J` keybinding; accepts both real notes and ghost
     /// (unresolved-link) targets, since the journal feed is defined
     /// for either.
-    JournalFor {
-        target: JournalTarget,
+    GatherFor {
+        target: GatherTarget,
     },
     /// Switch to the Journal tab and queue a multi-target request.
     /// Raised by the Review tab on Enter; the Journal tab consumes
     /// the request on its next `on_focus` and builds the multi-source
     /// journal across all `targets`.
-    JournalForMulti {
+    GatherForMulti {
         request: MultiTargetRequest,
     },
     /// Switch to the Journal tab and queue an "add these targets"
@@ -247,8 +247,8 @@ pub enum AppRequest {
     /// request on its next `on_focus` and raises the Append-or-Replace
     /// prompt — the user decides whether to union with the current
     /// source set or replace it.
-    JournalAddSources {
-        targets: Vec<JournalTarget>,
+    GatherAddSources {
+        targets: Vec<GatherTarget>,
         default_mode: AppendOrReplaceMode,
     },
     /// Commit a new source set to the Journal tab. Raised by the
@@ -256,9 +256,9 @@ pub enum AppRequest {
     /// prompt on commit; the App routes it back to the Journal tab
     /// which replaces `sources` (and the optional `window`) with the
     /// provided values and rebuilds the journal feed.
-    JournalCommitSources {
-        sources: Vec<JournalTarget>,
-        window: Option<JournalWindow>,
+    GatherCommitSources {
+        sources: Vec<GatherTarget>,
+        window: Option<GatherWindow>,
     },
     /// Install a new active modal. The App writes the variant into its
     /// `active_modal` slot and, on the next event, dispatches keys to
@@ -309,25 +309,24 @@ impl std::fmt::Debug for AppRequest {
                 .debug_struct("CommitGit")
                 .field("message", message)
                 .finish(),
-            AppRequest::JournalFor { target } => f
-                .debug_struct("JournalFor")
-                .field("target", target)
-                .finish(),
-            AppRequest::JournalForMulti { request } => f
-                .debug_struct("JournalForMulti")
+            AppRequest::GatherFor { target } => {
+                f.debug_struct("GatherFor").field("target", target).finish()
+            }
+            AppRequest::GatherForMulti { request } => f
+                .debug_struct("GatherForMulti")
                 .field("targets_count", &request.targets.len())
                 .field("has_window", &request.window.is_some())
                 .finish(),
-            AppRequest::JournalAddSources {
+            AppRequest::GatherAddSources {
                 targets,
                 default_mode,
             } => f
-                .debug_struct("JournalAddSources")
+                .debug_struct("GatherAddSources")
                 .field("targets_count", &targets.len())
                 .field("default_mode", default_mode)
                 .finish(),
-            AppRequest::JournalCommitSources { sources, window } => f
-                .debug_struct("JournalCommitSources")
+            AppRequest::GatherCommitSources { sources, window } => f
+                .debug_struct("GatherCommitSources")
                 .field("sources_count", &sources.len())
                 .field("has_window", &window.is_some())
                 .finish(),
@@ -451,9 +450,9 @@ pub enum TabKind {
     Tasks,
     Notes,
     Timeblocks,
-    Journal,
-    History,
-    Review,
+    Gather,
+    Recent,
+    Pulse,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
@@ -532,40 +531,40 @@ pub trait Tab {
     fn queue_related_modal(&mut self, _note_path: &std::path::Path) {}
 
     /// Hook for the cross-tab Journal jump (see
-    /// [`AppRequest::JournalFor`]). The Journal tab overrides this to
+    /// [`AppRequest::GatherFor`]). The Journal tab overrides this to
     /// store the target; it's consumed and turned into a load on the
     /// tab's next `on_focus`. Default is a no-op: other tabs ignore
     /// the request.
-    fn queue_journal_for(&mut self, _target: &JournalTarget) {}
+    fn queue_gather_for(&mut self, _target: &GatherTarget) {}
 
     /// Hook for the cross-tab multi-target Journal handoff (see
-    /// [`AppRequest::JournalForMulti`]). The Journal tab overrides this
+    /// [`AppRequest::GatherForMulti`]). The Journal tab overrides this
     /// to store the request; it's consumed on next `on_focus` and turned
     /// into a multi-source journal load. Default is a no-op.
-    fn queue_journal_for_multi(&mut self, _request: &MultiTargetRequest) {}
+    fn queue_gather_for_multi(&mut self, _request: &MultiTargetRequest) {}
 
     /// Hook for the cross-tab "add sources" handoff (see
-    /// [`AppRequest::JournalAddSources`]). The Journal tab overrides
+    /// [`AppRequest::GatherAddSources`]). The Journal tab overrides
     /// this to store the request; it's consumed on next `on_focus` and
     /// turned into an Append-or-Replace prompt. Default is a no-op.
-    fn queue_journal_add_sources(
+    fn queue_gather_add_sources(
         &mut self,
-        _targets: Vec<JournalTarget>,
+        _targets: Vec<GatherTarget>,
         _default_mode: AppendOrReplaceMode,
     ) {
     }
 
     /// Hook for the Sources Manager / Append-or-Replace commit (see
-    /// [`AppRequest::JournalCommitSources`]). The Journal tab overrides
+    /// [`AppRequest::GatherCommitSources`]). The Journal tab overrides
     /// this to replace its `sources` slot and rebuild the feed
     /// synchronously. Takes a `&mut TabCtx` so the override can run
-    /// `rebuild_journal` without bouncing through `on_focus`. Default
+    /// `rebuild_gather` without bouncing through `on_focus`. Default
     /// is a no-op.
-    fn queue_journal_commit_sources(
+    fn queue_gather_commit_sources(
         &mut self,
         _ctx: &mut TabCtx,
-        _sources: Vec<JournalTarget>,
-        _window: Option<JournalWindow>,
+        _sources: Vec<GatherTarget>,
+        _window: Option<GatherWindow>,
     ) {
     }
 

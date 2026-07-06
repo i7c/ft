@@ -318,7 +318,7 @@ fn find_body(lines: &[&str], body: &str, prefer_near: u32) -> Option<FoundBody> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::JournalEntry;
+    use crate::gather::GatherEntry;
     use crate::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
     use crate::synth::verify::{verify_synth_note, SectionStatus};
     use assert_fs::prelude::*;
@@ -342,7 +342,7 @@ mod tests {
         run_git(tmp.path(), &["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,

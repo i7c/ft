@@ -96,7 +96,7 @@ Also:
   comments.
 
 **Fix direction:** a downcast to the concrete tab (or per-tab request
-sub-enums) collapses the four-site ritual; delete the test-only routing
+sub-enums) collapses the four-site dance; delete the test-only routing
 clones in favor of driving the real path.
 
 ## 4. The pluggable-format story is aspirational
@@ -152,7 +152,7 @@ boundaries (lexer/parser/eval).
 
 ## 7. The git dependency is load-bearing for a third of the product
 
-`link_review`, `journal`, and `synth` — the whole synthesis ritual —
+`link_review`, `journal`, and `synth` — the whole synthesis flow —
 hard-require the vault to be a git repo, shell out to the `git` binary
 (subprocess per blame/show/diff), and pin provenance to commit SHAs
 inside note content. Legitimate design choice, but the costs:

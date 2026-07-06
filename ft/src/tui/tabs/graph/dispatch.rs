@@ -74,16 +74,16 @@ impl GraphTab {
                         .get(self.active_view().selected)?;
                     match graph.node(row.note_id) {
                         NodeKind::Note(n) => {
-                            Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
+                            Some(crate::tui::tab::GatherTarget::Note(n.path.clone()))
                         }
                         NodeKind::Ghost(g) => {
-                            Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
+                            Some(crate::tui::tab::GatherTarget::Ghost(g.raw.clone()))
                         }
                         _ => None,
                     }
                 });
                 if let Some(target) = target {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalFor { target });
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherFor { target });
                 } else {
                     queue_toast(
                         ctx,
@@ -94,7 +94,7 @@ impl GraphTab {
                 CommandOutcome::Handled
             }
             "graph.add-to-journal-sources" => {
-                let targets: Vec<crate::tui::tab::JournalTarget> =
+                let targets: Vec<crate::tui::tab::GatherTarget> =
                     match Self::graph_of(&self.snapshot) {
                         Some(graph) => {
                             let v = self.active_view();
@@ -115,10 +115,10 @@ impl GraphTab {
                             ids.into_iter()
                                 .filter_map(|id| match graph.node(id) {
                                     NodeKind::Note(n) => {
-                                        Some(crate::tui::tab::JournalTarget::Note(n.path.clone()))
+                                        Some(crate::tui::tab::GatherTarget::Note(n.path.clone()))
                                     }
                                     NodeKind::Ghost(g) => {
-                                        Some(crate::tui::tab::JournalTarget::Ghost(g.raw.clone()))
+                                        Some(crate::tui::tab::GatherTarget::Ghost(g.raw.clone()))
                                     }
                                     _ => None,
                                 })
@@ -129,7 +129,7 @@ impl GraphTab {
                 if targets.is_empty() {
                     queue_toast(ctx, "no Note or Ghost rows selected", ToastStyle::Error);
                 } else {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalAddSources {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherAddSources {
                         targets,
                         default_mode: crate::tui::tab::AppendOrReplaceMode::Append,
                     });
@@ -794,18 +794,18 @@ impl GraphTab {
             return;
         };
         let mut cache = ft_core::blame_cache::BlameCache::load(&ctx.vault.path).unwrap_or_default();
-        let report =
-            match ft_core::journal::build_journal(graph, &[ghost_id], ctx.vault, &mut cache) {
-                Ok(r) => r,
-                Err(e) => {
-                    queue_toast(
-                        ctx,
-                        &format!("promote: journal failed: {e}"),
-                        ToastStyle::Error,
-                    );
-                    return;
-                }
-            };
+        let report = match ft_core::gather::build_gather(graph, &[ghost_id], ctx.vault, &mut cache)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("promote: journal failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
         let _ = cache.save(&ctx.vault.path);
         if report.entries.is_empty() {
             queue_toast(

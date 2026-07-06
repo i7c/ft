@@ -1,7 +1,7 @@
 //! Plan + apply for synth-note scaffolding.
 //!
 //! `plan_synth_scaffold` is a pure function: given a list of
-//! [`crate::journal::JournalEntry`] values and a target path, it returns
+//! [`crate::gather::GatherEntry`] values and a target path, it returns
 //! a [`SynthScaffoldPlan`] describing the file mutation without
 //! performing any I/O writes. `apply_synth_scaffold` consumes a plan
 //! and writes the file atomically via [`crate::fs::write_atomic`].
@@ -14,8 +14,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::gather::GatherEntry;
 use crate::git;
-use crate::journal::JournalEntry;
 use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection, SHORT_SHA_LEN};
 use crate::vault::Vault;
 
@@ -96,7 +96,7 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 pub fn plan_synth_scaffold(
     vault: &Vault,
     target: &Path,
-    entries: &[JournalEntry],
+    entries: &[GatherEntry],
 ) -> Result<SynthScaffoldPlan> {
     let repo = git::RepoMap::discover(&vault.path)?;
 
@@ -137,7 +137,7 @@ pub fn plan_synth_scaffold(
     // pinned in the note. Read + parse the existing callouts, then run
     // the pure filter. The create path skips this (no existing note to
     // dedup against).
-    let (entries_owned, dedup_skipped): (Vec<JournalEntry>, usize) = if exists {
+    let (entries_owned, dedup_skipped): (Vec<GatherEntry>, usize) = if exists {
         let existing_content = std::fs::read_to_string(&absolute).map_err(|e| Error::Io {
             path: absolute.clone(),
             source: e,
@@ -228,7 +228,7 @@ mod tests {
 
     /// Build a repo with one note + one commit, return a journal entry
     /// referencing the first paragraph.
-    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, JournalEntry) {
+    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, GatherEntry) {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
         tmp.child("notes/source.md")
@@ -252,7 +252,7 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,
@@ -401,7 +401,7 @@ mod tests {
         tmp.child("notes/new.md")
             .write_str("Fresh untracked paragraph.\n")
             .unwrap();
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "new".into(),
             source_path: PathBuf::from("notes/new.md"),
             line_start: 1,
@@ -475,7 +475,7 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry_a = JournalEntry {
+        let entry_a = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,
@@ -484,7 +484,7 @@ mod tests {
             date: chrono::NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
             matched: vec![],
         };
-        let entry_b = JournalEntry {
+        let entry_b = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 3,

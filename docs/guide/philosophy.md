@@ -2,7 +2,7 @@
 
 `ft` is built around one bet about note-taking: **capture can't wait,
 and filing can't be predicted.** Everything else in the tool — the
-graph, the journal, the synthesis flow, the CLI/TUI split — follows
+graph, the gather feed, the synthesis flow, the CLI/TUI split — follows
 from taking that bet seriously. This chapter is the long-form answer
 to *why the tool is shaped the way it is*.
 
@@ -47,8 +47,8 @@ Two properties make this cheap act load-bearing:
 
 - **The target doesn't need to exist.** Write `[[activation]]` even
   though there is no `activation.md`. `ft` tracks it as a *ghost*, and
-  ghosts participate in everything — backlinks, the journal, the
-  review ranking. A concept accumulates weight before anyone decides
+  ghosts participate in everything — backlinks, the gather feed, the
+  pulse ranking. A concept accumulates weight before anyone decides
   it deserves a page.
 - **Completion keeps it frictionless.** If you write in Neovim,
   [ft.nvim](https://github.com/i7c/ft.nvim) pops up note titles from
@@ -67,7 +67,7 @@ Here is the payoff of that contract. Because every paragraph carries
 its concept mentions, the unsorted pile never becomes an unqueryable
 pile:
 
-- `ft notes journal --link "[[Foo]]"` regathers every paragraph in the
+- `ft notes gather --link "[[Foo]]"` regathers every paragraph in the
   vault that mentions the concept, reverse-chronological, dated from
   git history. Add more `--link` flags and co-occurring paragraphs get
   a `matched:` badge — the places where two topics collided.
@@ -80,7 +80,7 @@ note's "right place" can be discovered *after* the fact — or never,
 if the topic stays minor.
 
 That changes what consolidation *is*. Compiling a focused note from
-the scattered material (`ft synth scaffold`, see
+the scattered material (`ft notes synth scaffold`, see
 [synthesis.md](synthesis.md)) stops being maintenance you owe the
 system and becomes compression you apply selectively — to the topics
 that keep coming up, when they keep coming up. Moving sections
@@ -96,11 +96,11 @@ being precise about this, because they feel different in use:
 
 - **Pull** — topic-shaped, genuinely on demand. You need everything
   about `[[onboarding]]` *now*, perhaps minutes before a meeting:
-  `ft notes journal --link` and `ft notes related` answer from a
+  `ft notes gather --link` and `ft notes related` answer from a
   standing start.
 - **Sweep** — time-shaped. You want to know what accumulated:
-  `ft review --since 7d` ranks the concepts most mentioned in the
-  window; `ft notes history` feeds back every paragraph edited in it.
+  `ft notes pulse --since 7d` ranks the concepts most mentioned in the
+  window; `ft notes recent` feeds back every paragraph edited in it.
 
 A sweep is periodic by nature — a window-shaped query implies you'll
 run it again. `ft` doesn't pretend otherwise, and it doesn't abolish
@@ -126,7 +126,7 @@ Three reasons, in increasing order of importance:
   you wrote it. No search over the words recovers that; similarity
   search recovers it probabilistically, sometimes.
 - **The operations need identity, not similarity.** Co-occurrence
-  scoring, the `matched:` badge, review's ranking, rename's vault-wide
+  scoring, the `matched:` badge, pulse's ranking, rename's vault-wide
   rewrite, synthesis's excerpt gathering — all of these count and
   transform *references to the same thing*. "Probably about the same
   thing" isn't a unit you can count, rank, or rewrite.
@@ -150,7 +150,7 @@ names, and every tool that counts references undercounts by three.
 1. **Completion at capture** (ft.nvim, Obsidian) makes the existing
    spelling the path of least resistance — most drift never happens.
 2. **Aliases when multiple names are legitimate.** Links listed under
-   a note's `## Related` heading act as aliases: the journal for that
+   a note's `## Related` heading act as aliases: the gather feed for that
    note also gathers paragraphs mentioning them. Two names can
    coexist without splitting the concept's history.
    `ft notes update-related` maintains the section interactively,
@@ -168,7 +168,7 @@ names, and every tool that counts references undercounts by three.
 A concrete picture of the shape this produces. The capture surface is
 mostly the **daily note**: ad-hoc thought lands there as short
 sections, a few paragraphs each, named in the moment. The retrieval
-unit is the **paragraph** — the journal, history, and review all
+unit is the **paragraph** — gather, recent, and pulse all
 operate at paragraph granularity, which is what makes a daily note of
 unrelated thoughts usable: each paragraph carries its own concepts and
 resurfaces independently. This is finer-grained than note-level
@@ -204,9 +204,9 @@ Practical consequences:
   and `ft` at the same time; changes from either land on disk and the
   other picks them up on the next read.
 - **No proprietary state.** No separate database, index, or sync log.
-  There's a small `git blame` cache so `ft notes journal` doesn't
+  There's a small `git blame` cache so `ft notes gather` doesn't
   re-shell-out, but it's derivative — delete it and the only cost is
-  the next journal taking longer.
+  the next gather taking longer.
 - **Byte-compatible task writes.** A task rewritten by `ft` is
   byte-equivalent to what the Tasks plugin produces for the same
   fields, so the plugin keeps working over `ft`'s writes.

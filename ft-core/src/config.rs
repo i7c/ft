@@ -58,13 +58,16 @@ pub struct Config {
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
     pub keymap: Option<KeymapConfig>,
-    /// Synthesis-ritual settings (link review, multi-source journal,
+    /// Synthesis settings (pulse, multi-source gather,
     /// synth notes). See [`Synth`].
     #[serde(default)]
     pub synth: Synth,
     /// Task-creation settings. See [`Tasks`].
     #[serde(default)]
     pub tasks: Tasks,
+    /// TUI settings. See [`Tui`].
+    #[serde(default)]
+    pub tui: Tui,
 }
 
 impl Config {
@@ -227,7 +230,7 @@ pub struct PeriodicPeriod {
     pub template: Option<String>,
 }
 
-/// Synthesis-ritual configuration. Governs the `ft review` /
+/// Synthesis configuration. Governs the `ft notes pulse` /
 /// multi-source journal / `ft synth` flow.
 ///
 /// `folder` is the convenience default location for new synth notes
@@ -246,6 +249,20 @@ pub struct Synth {
     pub folder: String,
     #[serde(default)]
     pub exclude_prefixes: Vec<String>,
+}
+
+/// TUI configuration. The Tasks and Timeblocks tabs are adjacent
+/// features (the vault workflow lives in the note-flow tabs), so they
+/// are opt-in and default to off.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tui {
+    /// Show the Tasks tab in the TUI. Defaults to `false`.
+    #[serde(default)]
+    pub tasks_tab: bool,
+    /// Show the Timeblocks tab in the TUI. Defaults to `false`.
+    #[serde(default)]
+    pub timeblocks_tab: bool,
 }
 
 impl Default for Synth {

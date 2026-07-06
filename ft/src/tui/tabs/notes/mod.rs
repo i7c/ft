@@ -38,7 +38,7 @@ use crate::tui::{
 /// Every Idle-state action the Notes tab exposes. Sub-state handlers
 /// (OpenPicking, MoveSection, Creating, Appending, CapturePicking,
 /// CaptureVarPrompt, PeriodicLeader) capture raw keys and bypass the
-/// keymap — same pattern as JournalTab's picker overlay.
+/// keymap — same pattern as GatherTab's picker overlay.
 pub(crate) static NOTES_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "notes.open-picker",

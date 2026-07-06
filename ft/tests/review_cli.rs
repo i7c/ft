@@ -71,7 +71,8 @@ fn review_range_json_counts_paragraph_dedup() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
-            "review",
+            "notes",
+            "pulse",
             "--range",
             &range,
             "--json",
@@ -103,7 +104,8 @@ fn review_table_format_count_target_with_ghost_suffix() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
-            "review",
+            "notes",
+            "pulse",
             "--range",
             &range,
         ])
@@ -128,7 +130,8 @@ fn review_no_commits_in_window_prints_friendly_message() {
         .args([
             "--vault",
             tmp.path().to_str().unwrap(),
-            "review",
+            "notes",
+            "pulse",
             "--range",
             "HEAD..HEAD",
         ])
@@ -147,7 +150,8 @@ fn review_mutually_exclusive_flags_rejected() {
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
-        "review",
+        "notes",
+        "pulse",
         "--since",
         "7d",
         "--range",
@@ -163,7 +167,7 @@ fn review_outside_git_repo_errors_clearly() {
     let tmp = assert_fs::TempDir::new().unwrap();
     tmp.child(".obsidian").create_dir_all().unwrap();
     tmp.child("foo.md").write_str("just a note\n").unwrap();
-    ft().args(["--vault", tmp.path().to_str().unwrap(), "review"])
+    ft().args(["--vault", tmp.path().to_str().unwrap(), "notes", "pulse"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("not inside a git repository"));

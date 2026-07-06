@@ -8,7 +8,7 @@ powers several user-facing features:
   the note links to.
 - `ft notes rename` and `ft notes mv` — vault-wide reference
   rewriting.
-- `ft notes journal` — paragraph-level "mentions over time."
+- `ft notes gather` — paragraph-level "mentions over time."
 - `ft graph query` — a small DSL for ad-hoc graph walks.
 - The TUI Graph tab — an interactive tree view driven by the same DSL.
 
@@ -178,7 +178,7 @@ each with their own cursor and expansion state.
 | `m`       | enter the move-section flow with the selected note as source     |
 | `r`       | rename the selected note (or move the multi-selection)           |
 | `R`       | open the Related panel for the selected note                     |
-| `J`       | open the Journal tab for the selected note                       |
+| `J`       | open the Gather tab for the selected note                       |
 | `Ctrl+r`  | refresh the graph from disk                                      |
 
 ### Periodic notes

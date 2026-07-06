@@ -1,29 +1,29 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 155
-expression: collapsed
+assertion_line: 577
+expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
-┌ query ───────────────────────────────────────────────────────────────────────┐
-│status in {Open, InProgress} and due < 2026-05-18                             │
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather                     
+> node where path = ""; expand where edge.kind in {directory-contains, note-link
+ 1: node where path = "…                                                        
+┌ node where path = "… ────────────────────────────────────────────────────────┐
+│    D /                                                                       │
+│press / to edit query                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ tasks ───────────────────────────────────────────────────────────────────────┐
-│ ── upcoming (2) ──                                                           │
-│▶       ▸ Build a house                              📅  in 2d                 │
-│        Buy groceries                                📅  in 3d                 │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
- vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal
+ vault: test-vault  ·  tab: Graph           not yet refreshed      mode: normal

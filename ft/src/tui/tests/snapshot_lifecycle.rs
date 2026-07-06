@@ -24,7 +24,7 @@ fn refresh_graph_requests_coalesce_into_one_build() -> Result<()> {
 
     // Three refresh requests before the pump (via the Tasks tab's `R`,
     // which raises the TabCtx graph-refresh flag): at most one rebuild.
-    app.switch_to(1)?;
+    app.switch_to(5)?;
     for _ in 0..3 {
         app.dispatch(Event::Key(KeyEvent::new(
             KeyCode::Char('R'),
@@ -166,7 +166,7 @@ fn graph_task_cursor_restores_after_async_rebuild() -> Result<()> {
 fn tasks_tab_stale_line_mutation_fails_safe() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(1)?; // Tasks tab; snapshot adopted on focus.
+    app.switch_to(5)?; // Tasks tab; snapshot adopted on focus.
 
     // The file changes on disk behind the snapshot's back: an inserted
     // line shifts every task down by one.

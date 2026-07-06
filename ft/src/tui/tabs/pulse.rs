@@ -1,12 +1,12 @@
 //! `Review` tab — frequency-ranked `[[wikilinks]]` mentioned in a
-//! commit/date window. Drives the synthesis ritual's discovery step:
+//! commit/date window. Drives synthesis' discovery step:
 //! user selects N links with `<space>`, hits `<enter>`, and the
 //! Journal tab opens in multi-target mode with those targets queued.
 //!
 //! v1 computes the link review synchronously on focus / window-change.
 //! For very large vaults that becomes a UX problem; the codebase's
 //! single-threaded + mpsc background-worker pattern (see
-//! `journal::load_for` and the `g s` worker) can be applied here if
+//! `gather::load_for` and the `g s` worker) can be applied here if
 //! needed — track separately.
 
 use std::collections::HashSet;
@@ -24,7 +24,7 @@ use ratatui::{
 
 use ft_core::git::discover_repo;
 use ft_core::graph::{Graph, NodeKind, NoteId};
-use ft_core::link_review::{compute_link_review, LinkReview, LinkReviewRow, WindowRange};
+use ft_core::pulse::{compute_pulse, Pulse, PulseRow, WindowRange};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
@@ -32,71 +32,70 @@ use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
 use crate::tui::tab::{
-    AppRequest, EventOutcome, JournalTarget, JournalWindow, MultiTargetRequest, Tab, TabCtx,
-    TabKind,
+    AppRequest, EventOutcome, GatherTarget, GatherWindow, MultiTargetRequest, Tab, TabCtx, TabKind,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
 
-pub(crate) static REVIEW_COMMANDS: &[CommandDef] = &[
+pub(crate) static PULSE_COMMANDS: &[CommandDef] = &[
     CommandDef {
-        name: "review.cursor-up",
+        name: "pulse.cursor-up",
         description: "Move the cursor up one row",
-        scope: CommandScope::Tab("review"),
+        scope: CommandScope::Tab("pulse"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.cursor-down",
+        name: "pulse.cursor-down",
         description: "Move the cursor down one row",
-        scope: CommandScope::Tab("review"),
+        scope: CommandScope::Tab("pulse"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.toggle-selection",
+        name: "pulse.toggle-selection",
         description: "Toggle multi-select on the current row",
-        scope: CommandScope::Tab("review"),
+        scope: CommandScope::Tab("pulse"),
         group: "Selection",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.handoff-to-journal",
-        description: "Open the Journal tab with selected (or cursor) links as multi-targets",
-        scope: CommandScope::Tab("review"),
+        name: "pulse.handoff-to-gather",
+        description: "Open the Gather tab with selected (or cursor) links as multi-targets",
+        scope: CommandScope::Tab("pulse"),
         group: "Handoff",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.window-wider",
+        name: "pulse.window-wider",
         description: "Double the window duration (--since-style only)",
-        scope: CommandScope::Tab("review"),
+        scope: CommandScope::Tab("pulse"),
         group: "Window",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.window-narrower",
+        name: "pulse.window-narrower",
         description: "Halve the window duration (--since-style only, minimum 1 day)",
-        scope: CommandScope::Tab("review"),
+        scope: CommandScope::Tab("pulse"),
         group: "Window",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "review.reload",
-        description: "Recompute the link review",
-        scope: CommandScope::Tab("review"),
+        name: "pulse.reload",
+        description: "Recompute the pulse",
+        scope: CommandScope::Tab("pulse"),
         group: "Source",
         args_schema: &[],
         opens_modal: false,
@@ -104,24 +103,24 @@ pub(crate) static REVIEW_COMMANDS: &[CommandDef] = &[
     },
 ];
 
-pub(crate) static REVIEW_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static PULSE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
-        .bind("Up", "review.cursor-up")
-        .bind("k", "review.cursor-up")
-        .bind("Down", "review.cursor-down")
-        .bind("j", "review.cursor-down")
-        .bind("Space", "review.toggle-selection")
-        .bind("Enter", "review.handoff-to-journal")
-        .bind("]", "review.window-wider")
-        .bind("[", "review.window-narrower")
-        .bind("R", "review.reload")
+        .bind("Up", "pulse.cursor-up")
+        .bind("k", "pulse.cursor-up")
+        .bind("Down", "pulse.cursor-down")
+        .bind("j", "pulse.cursor-down")
+        .bind("Space", "pulse.toggle-selection")
+        .bind("Enter", "pulse.handoff-to-gather")
+        .bind("]", "pulse.window-wider")
+        .bind("[", "pulse.window-narrower")
+        .bind("R", "pulse.reload")
 });
 
-pub struct ReviewTab {
+pub struct PulseTab {
     /// Current window — defaults to `--since 7d` on first focus.
     window: WindowRange,
     /// Last-computed rows. Empty when not yet loaded or window is empty.
-    rows: Vec<LinkReviewRow>,
+    rows: Vec<PulseRow>,
     /// Set of selected row indices (multi-select via `<space>`).
     selected: HashSet<usize>,
     /// 0-indexed cursor into `rows`.
@@ -134,13 +133,13 @@ pub struct ReviewTab {
     keymap: KeyMap,
 }
 
-impl Default for ReviewTab {
+impl Default for PulseTab {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ReviewTab {
+impl PulseTab {
     pub fn new() -> Self {
         Self {
             window: WindowRange::Since(Duration::days(7)),
@@ -149,19 +148,19 @@ impl ReviewTab {
             cursor: 0,
             last_error: None,
             loaded_once: false,
-            keymap: REVIEW_KEYMAP.clone(),
+            keymap: PULSE_KEYMAP.clone(),
         }
     }
 
     pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
-        self.keymap = REVIEW_KEYMAP.with_overlay(overlay);
+        self.keymap = PULSE_KEYMAP.with_overlay(overlay);
         self
     }
 
     fn load(&mut self, ctx: &mut TabCtx) {
         if discover_repo(&ctx.vault.path).is_none() {
             self.last_error =
-                Some("vault is not inside a git repository — review needs git history".to_string());
+                Some("vault is not inside a git repository — pulse needs git history".to_string());
             self.rows.clear();
             return;
         }
@@ -172,19 +171,19 @@ impl ReviewTab {
         };
         let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
-        let review = match compute_link_review(graph, ctx.vault, &self.window, &cfg) {
+        let review = match compute_pulse(graph, ctx.vault, &self.window, &cfg) {
             Ok(r) => r,
             Err(e) => {
-                self.last_error = Some(format!("compute_link_review failed: {e}"));
+                self.last_error = Some(format!("compute_pulse failed: {e}"));
                 return;
             }
         };
-        self.apply_review(review);
+        self.apply_pulse(review);
         self.last_error = None;
         self.loaded_once = true;
     }
 
-    fn apply_review(&mut self, review: LinkReview) {
+    fn apply_pulse(&mut self, review: Pulse) {
         self.rows = review.rows;
         // Clamp cursor and clear selection.
         if self.cursor >= self.rows.len() {
@@ -224,7 +223,7 @@ impl ReviewTab {
             v
         };
         // Need a graph to convert each row's target name to a
-        // JournalTarget (Note vs Ghost). Both tabs read the same shared
+        // GatherTarget (Note vs Ghost). Both tabs read the same shared
         // snapshot, so names resolve consistently across the handoff.
         let Some(snap) = ctx.snapshot.as_ref() else {
             self.last_error =
@@ -232,16 +231,16 @@ impl ReviewTab {
             return;
         };
         let graph = &snap.graph;
-        let mut targets: Vec<JournalTarget> = Vec::new();
+        let mut targets: Vec<GatherTarget> = Vec::new();
         for idx in row_indices {
             let row = &self.rows[idx];
             let target = if row.is_ghost {
-                JournalTarget::Ghost(row.target.clone())
+                GatherTarget::Ghost(row.target.clone())
             } else if let Some(id) = note_id_by_title(graph, &row.target) {
                 let NodeKind::Note(n) = graph.node(id) else {
                     continue;
                 };
-                JournalTarget::Note(n.path.clone())
+                GatherTarget::Note(n.path.clone())
             } else {
                 continue;
             };
@@ -252,9 +251,9 @@ impl ReviewTab {
         }
         let request = MultiTargetRequest {
             targets,
-            window: Some(window_to_journal(&self.window)),
+            window: Some(window_to_gather(&self.window)),
         };
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::JournalForMulti { request });
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherForMulti { request });
     }
 
     /// Double the window (Since-style only).
@@ -290,10 +289,10 @@ fn note_id_by_title(graph: &Graph, title: &str) -> Option<NoteId> {
     None
 }
 
-fn window_to_journal(window: &WindowRange) -> JournalWindow {
+fn window_to_gather(window: &WindowRange) -> GatherWindow {
     match window {
-        WindowRange::Since(d) => JournalWindow::Since(*d),
-        WindowRange::Range { from, to } => JournalWindow::Range {
+        WindowRange::Since(d) => GatherWindow::Since(*d),
+        WindowRange::Range { from, to } => GatherWindow::Range {
             from: from.clone(),
             to: to.clone(),
         },
@@ -315,13 +314,13 @@ fn window_label(w: &WindowRange) -> String {
     }
 }
 
-impl Tab for ReviewTab {
+impl Tab for PulseTab {
     fn title(&self) -> &str {
-        "Review"
+        "Pulse"
     }
 
     fn kind(&self) -> TabKind {
-        TabKind::Review
+        TabKind::Pulse
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -335,7 +334,7 @@ impl Tab for ReviewTab {
     }
 
     fn commands(&self) -> &'static [CommandDef] {
-        REVIEW_COMMANDS
+        PULSE_COMMANDS
     }
 
     fn keymap(&self) -> &KeyMap {
@@ -344,31 +343,31 @@ impl Tab for ReviewTab {
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
         match cmd.name {
-            "review.cursor-up" => {
+            "pulse.cursor-up" => {
                 self.move_cursor(-1);
                 CommandOutcome::Handled
             }
-            "review.cursor-down" => {
+            "pulse.cursor-down" => {
                 self.move_cursor(1);
                 CommandOutcome::Handled
             }
-            "review.toggle-selection" => {
+            "pulse.toggle-selection" => {
                 self.toggle_selection();
                 CommandOutcome::Handled
             }
-            "review.handoff-to-journal" => {
+            "pulse.handoff-to-gather" => {
                 self.handoff(ctx);
                 CommandOutcome::Handled
             }
-            "review.window-wider" => {
+            "pulse.window-wider" => {
                 self.window_wider(ctx);
                 CommandOutcome::Handled
             }
-            "review.window-narrower" => {
+            "pulse.window-narrower" => {
                 self.window_narrower(ctx);
                 CommandOutcome::Handled
             }
-            "review.reload" => {
+            "pulse.reload" => {
                 self.load(ctx);
                 CommandOutcome::Handled
             }
@@ -392,7 +391,7 @@ impl Tab for ReviewTab {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
         let title = format!(
-            " Review — {} ({} link{}, {} selected) ",
+            " Pulse — {} ({} link{}, {} selected) ",
             window_label(&self.window),
             self.rows.len(),
             if self.rows.len() == 1 { "" } else { "s" },
@@ -473,9 +472,9 @@ impl Tab for ReviewTab {
             HelpSection::new("Window", &[("[", "narrower window"), ("]", "wider window")]),
             HelpSection::new(
                 "Handoff",
-                &[("Enter", "open Journal tab with selected (or cursor) links")],
+                &[("Enter", "open Gather tab with selected (or cursor) links")],
             ),
-            HelpSection::new("Source", &[("R", "reload the review")]),
+            HelpSection::new("Source", &[("R", "reload the pulse")]),
         ]
     }
 }

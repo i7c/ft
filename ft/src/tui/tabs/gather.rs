@@ -1,4 +1,4 @@
-//! `Journal` tab — interactive surface for `ft_core::journal::build_journal`.
+//! `Journal` tab — interactive surface for `ft_core::gather::build_gather`.
 //!
 //! The user picks a note via the shared fuzzy picker, then scrolls the
 //! reverse-chronological feed of paragraph mentions. `Enter` opens the
@@ -7,14 +7,14 @@
 //! `R` reloads, `c` clears back to the empty-state prompt.
 //!
 //! Cross-tab entry: the graph tab's `Shift+J` keybinding raises
-//! [`crate::tui::tab::AppRequest::JournalFor`]; the App services that
-//! by calling [`JournalTab::queue_journal_for`] and switching the
+//! [`crate::tui::tab::AppRequest::GatherFor`]; the App services that
+//! by calling [`GatherTab::queue_gather_for`] and switching the
 //! active tab. The queued target (a note path or a ghost name) is
 //! consumed on the next `on_focus` and turned into a load.
 //!
 //! `BlameCache` is held in the tab so subsequent loads in the same
 //! session warm up; the on-disk file at `.ft/cache/blame.msgpack` is
-//! refreshed best-effort after every successful `build_journal` call.
+//! refreshed best-effort after every successful `build_gather` call.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,10 +31,10 @@ use ratatui::{
 };
 
 use ft_core::blame_cache::BlameCache;
+use ft_core::gather::{build_gather, GatherEntry};
 use ft_core::git::discover_repo;
 use ft_core::graph::{NodeKind, NoteId};
-use ft_core::journal::{build_journal, JournalEntry};
-use ft_core::link_review::compute_link_review;
+use ft_core::pulse::compute_pulse;
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
@@ -44,8 +44,8 @@ use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::palette;
 use crate::tui::tab::{
-    AppRequest, AppendOrReplaceMode, EventOutcome, JournalTarget, JournalWindow,
-    MultiTargetRequest, Tab, TabCtx, TabKind, ToastStyle,
+    AppRequest, AppendOrReplaceMode, EventOutcome, GatherTarget, GatherWindow, MultiTargetRequest,
+    Tab, TabCtx, TabKind, ToastStyle,
 };
 use crate::tui::widgets::{
     EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
@@ -56,155 +56,155 @@ use crate::tui::widgets::{
 /// Every action the Journal tab exposes through the command/keymap
 /// layer. Pulled out of the tab impl so the registry can include them
 /// at build time and `?` / `ft commands list` can introspect them.
-pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
+pub(crate) static GATHER_COMMANDS: &[CommandDef] = &[
     CommandDef {
-        name: "journal.open-sources-manager",
+        name: "gather.open-sources-manager",
         description: "Open the Sources Manager modal (add/remove/clear sources)",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Sources",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.reload",
+        name: "gather.reload",
         description: "Reload the current note's journal",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Source",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.clear",
+        name: "gather.clear",
         description: "Clear the current journal and return to the picker prompt",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Source",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-up",
+        name: "gather.cursor-up",
         description: "Move the cursor up one entry",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-down",
+        name: "gather.cursor-down",
         description: "Move the cursor down one entry",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-first",
+        name: "gather.cursor-first",
         description: "Move the cursor to the first entry",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-last",
+        name: "gather.cursor-last",
         description: "Move the cursor to the last entry",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-half-page-down",
+        name: "gather.cursor-half-page-down",
         description: "Move the cursor down half a page (10 entries)",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.cursor-half-page-up",
+        name: "gather.cursor-half-page-up",
         description: "Move the cursor up half a page (10 entries)",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Navigation",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.open-selected",
+        name: "gather.open-selected",
         description: "Open the selected entry's note in $EDITOR",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Open",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.toggle-entry-selection",
+        name: "gather.toggle-entry-selection",
         description: "Toggle multi-select on the entry under the cursor",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Selection",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.toggle-in-window",
+        name: "gather.toggle-in-window",
         description: "Filter to entries touched by the window (multi-target with window only)",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Filter",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.toggle-uncited",
+        name: "gather.toggle-uncited",
         description: "Filter to entries not yet cited in any synth note",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Filter",
         args_schema: &[],
         opens_modal: false,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.open-for-synth-note",
+        name: "gather.open-for-synth-note",
         description: "Load a synth note's targets as sources and badge entries against it",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.send-to-synth-existing",
+        name: "gather.send-to-synth-existing",
         description: "Pick an existing note to append the selected (or all) entries to",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.send-to-synth-new-only",
+        name: "gather.send-to-synth-new-only",
         description: "Append to an existing note only entries newer than its last synth watermark",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
         is_primary: false,
     },
     CommandDef {
-        name: "journal.send-to-synth-new",
+        name: "gather.send-to-synth-new",
         description: "Create a new synth note for the selected (or all) entries",
-        scope: CommandScope::Tab("journal"),
+        scope: CommandScope::Tab("gather"),
         group: "Synth",
         args_schema: &[],
         opens_modal: true,
@@ -216,32 +216,32 @@ pub(crate) static JOURNAL_COMMANDS: &[CommandDef] = &[
 /// `Down`/`j`) bind the same command to multiple chords. The
 /// picker-open state captures keys before this keymap is consulted
 /// (see `handle_event`).
-pub(crate) static JOURNAL_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static GATHER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Sources
-        .bind("/", "journal.open-sources-manager")
-        .bind("a", "journal.open-sources-manager")
-        .bind("R", "journal.reload")
-        .bind("c", "journal.clear")
+        .bind("/", "gather.open-sources-manager")
+        .bind("a", "gather.open-sources-manager")
+        .bind("R", "gather.reload")
+        .bind("c", "gather.clear")
         // Navigation — vim aliases
-        .bind("Up", "journal.cursor-up")
-        .bind("k", "journal.cursor-up")
-        .bind("Down", "journal.cursor-down")
-        .bind("j", "journal.cursor-down")
-        .bind("g", "journal.cursor-first")
-        .bind("G", "journal.cursor-last")
-        .bind("Ctrl+d", "journal.cursor-half-page-down")
-        .bind("Ctrl+u", "journal.cursor-half-page-up")
+        .bind("Up", "gather.cursor-up")
+        .bind("k", "gather.cursor-up")
+        .bind("Down", "gather.cursor-down")
+        .bind("j", "gather.cursor-down")
+        .bind("g", "gather.cursor-first")
+        .bind("G", "gather.cursor-last")
+        .bind("Ctrl+d", "gather.cursor-half-page-down")
+        .bind("Ctrl+u", "gather.cursor-half-page-up")
         // Open
-        .bind("Enter", "journal.open-selected")
+        .bind("Enter", "gather.open-selected")
         // Multi-target + synth
-        .bind("Space", "journal.toggle-entry-selection")
-        .bind("w", "journal.toggle-in-window")
-        .bind("u", "journal.toggle-uncited")
-        .bind("o", "journal.open-for-synth-note")
-        .bind("s", "journal.send-to-synth-existing")
-        .bind("n", "journal.send-to-synth-new-only")
-        .bind("S", "journal.send-to-synth-new")
+        .bind("Space", "gather.toggle-entry-selection")
+        .bind("w", "gather.toggle-in-window")
+        .bind("u", "gather.toggle-uncited")
+        .bind("o", "gather.open-for-synth-note")
+        .bind("s", "gather.send-to-synth-existing")
+        .bind("n", "gather.send-to-synth-new-only")
+        .bind("S", "gather.send-to-synth-new")
 });
 
 /// Send-to-synth multi-step flow state. Active only when the user has
@@ -296,14 +296,14 @@ pub enum NonSynthChoice {
     MarkAndAppend,
 }
 
-pub struct JournalTab {
+pub struct GatherTab {
     /// The currently-loaded source set. Empty `Vec` = empty-state.
     /// Every rebuild reads from this slot; cross-tab queues (Review
     /// handoff, Graph jump) mutate it in `on_focus`.
-    sources: Vec<JournalTarget>,
+    sources: Vec<GatherTarget>,
     /// Captured window from a Review-tab handoff. Enables the
     /// `--in-window` toggle (`w`).
-    window: Option<JournalWindow>,
+    window: Option<GatherWindow>,
     /// When `true` and `window.is_some()`, the rendered feed is filtered
     /// down to entries whose paragraph lines overlap an added-line in
     /// the window.
@@ -321,7 +321,7 @@ pub struct JournalTab {
     /// handoff replaces the source set.
     context_note: Option<PathBuf>,
     /// The currently-displayed feed.
-    entries: Vec<JournalEntry>,
+    entries: Vec<GatherEntry>,
     /// Per-entry display titles for the matched badge, parallel to
     /// `entries`. Resolved at load-time because `entry.matched` carries
     /// `NoteId`s that belong to the load-time graph, not the one the
@@ -337,14 +337,14 @@ pub struct JournalTab {
     scroll_offset: usize,
     /// Queued single-target from the Graph tab's `Shift+J`. Consumed by
     /// `on_focus` and replaces the source set with `vec![target]`.
-    queued_for: Option<JournalTarget>,
+    queued_for: Option<GatherTarget>,
     /// Queued multi-target request from the Review tab. Consumed by
     /// `on_focus`; replaces the source set with `request.targets`.
     queued_multi: Option<MultiTargetRequest>,
     /// Queued AddSources request from the Graph tab's `Shift+A`.
     /// Consumed by `on_focus` and turned into an
-    /// `ActiveModal::JournalAppendOrReplace` prompt.
-    queued_add_sources: Option<(Vec<JournalTarget>, AppendOrReplaceMode)>,
+    /// `ActiveModal::GatherAppendOrReplace` prompt.
+    queued_add_sources: Option<(Vec<GatherTarget>, AppendOrReplaceMode)>,
     /// Lazy-loaded blame cache; preserved across loads within the
     /// tab's session.
     cache: Option<BlameCache>,
@@ -359,13 +359,13 @@ pub struct JournalTab {
     keymap: crate::tui::keymap::KeyMap,
 }
 
-impl Default for JournalTab {
+impl Default for GatherTab {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl JournalTab {
+impl GatherTab {
     pub fn new() -> Self {
         Self {
             sources: Vec::new(),
@@ -384,12 +384,12 @@ impl JournalTab {
             cache: None,
             last_error: None,
             synth_send: None,
-            keymap: JOURNAL_KEYMAP.clone(),
+            keymap: GATHER_KEYMAP.clone(),
         }
     }
 
     pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
-        self.keymap = JOURNAL_KEYMAP.with_overlay(overlay);
+        self.keymap = GATHER_KEYMAP.with_overlay(overlay);
         self
     }
 
@@ -399,7 +399,7 @@ impl JournalTab {
     /// per-target resolution misses (banner if *all* miss). Re-applies
     /// the in-window filter when applicable. Single seam — all source
     /// mutations funnel through here.
-    fn rebuild_journal(&mut self, ctx: &mut TabCtx) {
+    fn rebuild_gather(&mut self, ctx: &mut TabCtx) {
         // Pre-flight: empty source set is a valid "empty journal"
         // state; entries clear, no error.
         if self.sources.is_empty() {
@@ -417,9 +417,8 @@ impl JournalTab {
         }
 
         if discover_repo(&ctx.vault.path).is_none() {
-            self.last_error = Some(
-                "vault is not inside a git repository — journal needs git history".to_string(),
-            );
+            self.last_error =
+                Some("vault is not inside a git repository — gather needs git history".to_string());
             self.entries.clear();
             self.entry_matched_titles.clear();
             self.entry_selected.clear();
@@ -442,8 +441,8 @@ impl JournalTab {
         let mut unresolved: Vec<String> = Vec::new();
         for t in &self.sources {
             let id = match t {
-                JournalTarget::Note(p) => graph.note_by_path(p),
-                JournalTarget::Ghost(raw) => graph.ghost_by_raw(raw),
+                GatherTarget::Note(p) => graph.note_by_path(p),
+                GatherTarget::Ghost(raw) => graph.ghost_by_raw(raw),
             };
             match id {
                 Some(i) => ids.push(i),
@@ -452,7 +451,7 @@ impl JournalTab {
         }
         if ids.is_empty() {
             self.last_error = Some(format!(
-                "no Journal sources resolved in current graph: {}",
+                "no Gather sources resolved in current graph: {}",
                 unresolved.join(", ")
             ));
             self.entries.clear();
@@ -464,10 +463,10 @@ impl JournalTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
 
-        let report = match build_journal(graph, &ids, ctx.vault, cache) {
+        let report = match build_gather(graph, &ids, ctx.vault, cache) {
             Ok(r) => r,
             Err(e) => {
-                self.last_error = Some(format!("build_journal failed: {e}"));
+                self.last_error = Some(format!("build_gather failed: {e}"));
                 self.entries.clear();
                 return;
             }
@@ -541,9 +540,9 @@ impl JournalTab {
     /// `entries`. Rebuilds from scratch (cheap) so toggling the filter
     /// on/off restores the full list without storing a shadow copy.
     fn refresh_after_filter_toggle(&mut self, ctx: &mut TabCtx) {
-        // `rebuild_journal` re-applies the filter at the end if
+        // `rebuild_gather` re-applies the filter at the end if
         // `in_window_only` is still set, so we just rebuild.
-        self.rebuild_journal(ctx);
+        self.rebuild_gather(ctx);
     }
 
     /// Drop entries whose paragraph lines don't overlap any added line
@@ -558,7 +557,7 @@ impl JournalTab {
         let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
         let core_window = window.to_core();
-        let review = match compute_link_review(graph, ctx.vault, &core_window, &cfg) {
+        let review = match compute_pulse(graph, ctx.vault, &core_window, &cfg) {
             Ok(r) => r,
             Err(_) => return,
         };
@@ -696,7 +695,7 @@ impl JournalTab {
             return;
         };
         let graph = &snap.graph;
-        let targets: Vec<JournalTarget> = raw_targets
+        let targets: Vec<GatherTarget> = raw_targets
             .iter()
             .map(|raw| {
                 let trimmed = raw
@@ -706,10 +705,10 @@ impl JournalTab {
                     .trim();
                 match note_id_by_title(graph, trimmed) {
                     Some(id) => match graph.node(id) {
-                        NodeKind::Note(n) => JournalTarget::Note(n.path.clone()),
-                        _ => JournalTarget::Ghost(trimmed.to_string()),
+                        NodeKind::Note(n) => GatherTarget::Note(n.path.clone()),
+                        _ => GatherTarget::Ghost(trimmed.to_string()),
                     },
-                    None => JournalTarget::Ghost(trimmed.to_string()),
+                    None => GatherTarget::Ghost(trimmed.to_string()),
                 }
             })
             .collect();
@@ -725,7 +724,7 @@ impl JournalTab {
         self.window = None;
         self.in_window_only = false;
         self.context_note = Some(path);
-        self.rebuild_journal(ctx);
+        self.rebuild_gather(ctx);
     }
 
     fn toggle_entry_selection(&mut self) {
@@ -945,7 +944,7 @@ impl JournalTab {
 
     /// Entries to ship to the scaffold: selected entries when any are
     /// selected, otherwise the full feed.
-    fn entries_to_send(&self) -> Vec<JournalEntry> {
+    fn entries_to_send(&self) -> Vec<GatherEntry> {
         if self.entry_selected.is_empty() {
             self.entries.clone()
         } else {
@@ -1108,19 +1107,19 @@ impl JournalTab {
             );
             return;
         };
-        let source = crate::tui::widgets::JournalSourcePickerSource::new(
+        let source = crate::tui::widgets::GatherSourcePickerSource::new(
             Arc::clone(ctx.vault),
             Arc::clone(ctx.recents),
             &snap.graph,
         );
-        let modal = crate::tui::modal::JournalSourcesModal {
+        let modal = crate::tui::modal::GatherSourcesModal {
             sources: self.sources.clone(),
             cursor: 0,
             window: self.window.clone(),
             picker: Some(FuzzyPicker::new(source)),
         };
         *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
-            crate::tui::modal::ActiveModal::JournalSources(modal),
+            crate::tui::modal::ActiveModal::GatherSources(modal),
         )));
     }
 
@@ -1158,19 +1157,19 @@ impl JournalTab {
     }
 }
 
-impl Tab for JournalTab {
+impl Tab for GatherTab {
     fn title(&self) -> &str {
-        "Journal"
+        "Gather"
     }
 
     fn kind(&self) -> TabKind {
-        TabKind::Journal
+        TabKind::Gather
     }
 
     fn on_focus(&mut self, ctx: &mut TabCtx) -> Result<()> {
         // Priority: multi > single > add_sources. (Commits from the
         // Sources Manager / Append-or-Replace modal arrive via
-        // `queue_journal_commit_sources` which rebuilds synchronously
+        // `queue_gather_commit_sources` which rebuilds synchronously
         // and doesn't go through `on_focus`.)
         if let Some(request) = self.queued_multi.take() {
             self.queued_for = None;
@@ -1179,62 +1178,62 @@ impl Tab for JournalTab {
             self.window = request.window;
             self.in_window_only = false;
             self.context_note = None;
-            self.rebuild_journal(ctx);
+            self.rebuild_gather(ctx);
         } else if let Some(target) = self.queued_for.take() {
             self.queued_add_sources = None;
             self.sources = vec![target];
             self.window = None;
             self.in_window_only = false;
             self.context_note = None;
-            self.rebuild_journal(ctx);
+            self.rebuild_gather(ctx);
         } else if let Some((targets, default_mode)) = self.queued_add_sources.take() {
             // Raise the Append/Replace prompt; don't mutate sources
-            // yet. The modal commits via `JournalCommitSources` which
+            // yet. The modal commits via `GatherCommitSources` which
             // is serviced on the next focus.
-            let modal = crate::tui::modal::JournalAppendOrReplaceModal {
+            let modal = crate::tui::modal::GatherAppendOrReplaceModal {
                 current_sources: self.sources.clone(),
                 incoming_targets: targets,
                 window: self.window.clone(),
                 focus: default_mode,
             };
             *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
-                crate::tui::modal::ActiveModal::JournalAppendOrReplace(modal),
+                crate::tui::modal::ActiveModal::GatherAppendOrReplace(modal),
             )));
         }
         Ok(())
     }
 
-    fn queue_journal_for(&mut self, target: &JournalTarget) {
+    fn queue_gather_for(&mut self, target: &GatherTarget) {
         self.queued_for = Some(target.clone());
     }
 
-    fn queue_journal_for_multi(&mut self, request: &MultiTargetRequest) {
+    fn queue_gather_for_multi(&mut self, request: &MultiTargetRequest) {
         self.queued_multi = Some(request.clone());
     }
 
-    fn queue_journal_add_sources(
+    fn queue_gather_add_sources(
         &mut self,
-        targets: Vec<JournalTarget>,
+        targets: Vec<GatherTarget>,
         default_mode: AppendOrReplaceMode,
     ) {
         self.queued_add_sources = Some((targets, default_mode));
     }
 
-    fn queue_journal_commit_sources(
+    fn queue_gather_commit_sources(
         &mut self,
         ctx: &mut TabCtx,
-        sources: Vec<JournalTarget>,
-        window: Option<JournalWindow>,
+        sources: Vec<GatherTarget>,
+        window: Option<GatherWindow>,
     ) {
         self.sources = sources;
         self.window = window;
         self.in_window_only = false;
         self.context_note = None;
-        self.rebuild_journal(ctx);
+        self.rebuild_gather(ctx);
     }
 
     fn commands(&self) -> &'static [CommandDef] {
-        JOURNAL_COMMANDS
+        GATHER_COMMANDS
     }
 
     fn keymap(&self) -> &KeyMap {
@@ -1243,17 +1242,17 @@ impl Tab for JournalTab {
 
     fn dispatch_command(&mut self, cmd: &Command, ctx: &mut TabCtx) -> CommandOutcome {
         match cmd.name {
-            "journal.open-sources-manager" => {
+            "gather.open-sources-manager" => {
                 self.open_sources_manager(ctx);
                 CommandOutcome::Handled
             }
-            "journal.reload" => {
+            "gather.reload" => {
                 if !self.sources.is_empty() {
-                    self.rebuild_journal(ctx);
+                    self.rebuild_gather(ctx);
                 }
                 CommandOutcome::Handled
             }
-            "journal.clear" => {
+            "gather.clear" => {
                 self.sources.clear();
                 self.window = None;
                 self.in_window_only = false;
@@ -1267,59 +1266,59 @@ impl Tab for JournalTab {
                 self.last_error = None;
                 CommandOutcome::Handled
             }
-            "journal.cursor-up" => {
+            "gather.cursor-up" => {
                 self.move_selection(-1);
                 CommandOutcome::Handled
             }
-            "journal.cursor-down" => {
+            "gather.cursor-down" => {
                 self.move_selection(1);
                 CommandOutcome::Handled
             }
-            "journal.cursor-first" => {
+            "gather.cursor-first" => {
                 self.jump_first();
                 CommandOutcome::Handled
             }
-            "journal.cursor-last" => {
+            "gather.cursor-last" => {
                 self.jump_last();
                 CommandOutcome::Handled
             }
-            "journal.cursor-half-page-down" => {
+            "gather.cursor-half-page-down" => {
                 self.move_selection(10);
                 CommandOutcome::Handled
             }
-            "journal.cursor-half-page-up" => {
+            "gather.cursor-half-page-up" => {
                 self.move_selection(-10);
                 CommandOutcome::Handled
             }
-            "journal.open-selected" => {
+            "gather.open-selected" => {
                 self.request_open_selected(ctx);
                 CommandOutcome::Handled
             }
-            "journal.toggle-entry-selection" => {
+            "gather.toggle-entry-selection" => {
                 self.toggle_entry_selection();
                 CommandOutcome::Handled
             }
-            "journal.toggle-in-window" => {
+            "gather.toggle-in-window" => {
                 self.toggle_in_window(ctx);
                 CommandOutcome::Handled
             }
-            "journal.toggle-uncited" => {
+            "gather.toggle-uncited" => {
                 self.toggle_uncited(ctx);
                 CommandOutcome::Handled
             }
-            "journal.open-for-synth-note" => {
+            "gather.open-for-synth-note" => {
                 self.open_for_synth_note(ctx);
                 CommandOutcome::Handled
             }
-            "journal.send-to-synth-existing" => {
+            "gather.send-to-synth-existing" => {
                 self.open_send_to_existing(ctx);
                 CommandOutcome::Handled
             }
-            "journal.send-to-synth-new-only" => {
+            "gather.send-to-synth-new-only" => {
                 self.open_send_to_new_only(ctx);
                 CommandOutcome::Handled
             }
-            "journal.send-to-synth-new" => {
+            "gather.send-to-synth-new" => {
                 self.open_send_to_new(ctx);
                 CommandOutcome::Handled
             }
@@ -1351,7 +1350,7 @@ impl Tab for JournalTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
-        render_journal(
+        render_gather(
             frame,
             area,
             &self.sources,
@@ -1478,8 +1477,8 @@ fn note_id_by_title(graph: &ft_core::graph::Graph, title: &str) -> Option<NoteId
 fn render_sources_strip(
     frame: &mut Frame,
     area: Rect,
-    sources: &[JournalTarget],
-    window: Option<&JournalWindow>,
+    sources: &[GatherTarget],
+    window: Option<&GatherWindow>,
     in_window_only: bool,
     uncited_only: bool,
     context_note: Option<&Path>,
@@ -1603,9 +1602,9 @@ fn truncate_source_list(labels: &[String], width: usize) -> String {
     out
 }
 
-fn window_label(w: &JournalWindow) -> String {
+fn window_label(w: &GatherWindow) -> String {
     match w {
-        JournalWindow::Since(d) => {
+        GatherWindow::Since(d) => {
             let days = d.num_days();
             if days >= 1 {
                 format!("since {days}d")
@@ -1613,21 +1612,21 @@ fn window_label(w: &JournalWindow) -> String {
                 format!("since {}h", d.num_hours())
             }
         }
-        JournalWindow::Range { from, to } => format!("range {from}..{to}"),
+        GatherWindow::Range { from, to } => format!("range {from}..{to}"),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_journal(
+fn render_gather(
     frame: &mut Frame,
     area: Rect,
-    sources: &[JournalTarget],
-    window: Option<&JournalWindow>,
+    sources: &[GatherTarget],
+    window: Option<&GatherWindow>,
     in_window_only: bool,
     uncited_only: bool,
     context_note: Option<&Path>,
     citations: Option<&ft_core::synth::citations::CitationIndex>,
-    entries: &[JournalEntry],
+    entries: &[GatherEntry],
     entry_matched_titles: &[Vec<String>],
     selected: usize,
     entry_selected: &std::collections::HashSet<usize>,
@@ -1637,16 +1636,16 @@ fn render_journal(
     // Tab block: title still carries entry-count for terminal-width
     // compatibility but is no longer the sole signal of what's loaded.
     let title = if sources.is_empty() {
-        " Journal ".to_string()
+        " Gather ".to_string()
     } else if sources.len() == 1 {
         format!(
-            " Journal — {} ({} entries) ",
+            " Gather — {} ({} entries) ",
             sources[0].label(),
             entries.len()
         )
     } else {
         format!(
-            " Journal — {} sources ({} entries) ",
+            " Gather — {} sources ({} entries) ",
             sources.len(),
             entries.len()
         )

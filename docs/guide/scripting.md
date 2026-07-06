@@ -9,7 +9,7 @@ This chapter is the operational manual for that side of `ft`.
 
 ## Output formats
 
-`tasks list`, `notes backlinks`, `notes links`, `notes journal`,
+`tasks list`, `notes backlinks`, `notes links`, `notes gather`,
 `timeblocks list`, `graph query`, and the others all accept
 `--format <fmt>`. The set is consistent:
 

@@ -28,7 +28,7 @@ use crate::vault::Vault;
 
 /// One row of the journal feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntry {
+pub struct GatherEntry {
     /// Filename stem of the note the section lives in (no `.md`).
     pub source_title: String,
     /// Vault-relative path of the source note.
@@ -53,12 +53,12 @@ pub struct JournalEntry {
     pub matched: Vec<NoteId>,
 }
 
-/// Result of [`build_journal`]: the feed plus per-file diagnostics so
+/// Result of [`build_gather`]: the feed plus per-file diagnostics so
 /// the CLI/TUI can warn instead of silently dropping entries.
 #[derive(Debug, Default, Clone)]
-pub struct JournalReport {
+pub struct GatherReport {
     /// The feed itself, already sorted reverse-chronologically.
-    pub entries: Vec<JournalEntry>,
+    pub entries: Vec<GatherEntry>,
     /// Vault-relative paths whose paragraphs were dropped because
     /// `git blame` failed — typically untracked files or files outside
     /// the git repo. Useful as a warning signal: if this is non-empty
@@ -114,14 +114,14 @@ pub struct JournalReport {
 /// silently ignored — those node kinds have no journal semantics.
 ///
 /// Passing an empty slice returns an empty report.
-pub fn build_journal(
+pub fn build_gather(
     graph: &Graph,
     targets: &[NoteId],
     vault: &Vault,
     cache: &mut BlameCache,
-) -> Result<JournalReport> {
+) -> Result<GatherReport> {
     if targets.is_empty() {
-        return Ok(JournalReport::default());
+        return Ok(GatherReport::default());
     }
 
     // All git lookups run against the repo root with repo-root-relative
@@ -137,7 +137,7 @@ pub fn build_journal(
         let note_path: Option<PathBuf> = match graph.node(primary) {
             NodeKind::Note(n) => Some(n.path.clone()),
             NodeKind::Ghost(_) => None,
-            _ => return Ok(JournalReport::default()),
+            _ => return Ok(GatherReport::default()),
         };
         let aliases = match &note_path {
             Some(p) => resolve_related_aliases(graph, primary, vault, p)?,
@@ -196,7 +196,7 @@ pub fn build_journal(
 
     // Resolve dates per paragraph, fetching blame lazily on demand.
     let head = git::head_hash(repo.root())?;
-    let mut entries: Vec<JournalEntry> = Vec::new();
+    let mut entries: Vec<GatherEntry> = Vec::new();
     let mut skipped_blame: Vec<PathBuf> = Vec::new();
     let mut skipped_seen: HashSet<PathBuf> = HashSet::new();
     for p_id in paragraph_ids {
@@ -264,7 +264,7 @@ pub fn build_journal(
                 .collect()
         };
 
-        entries.push(JournalEntry {
+        entries.push(GatherEntry {
             source_title,
             source_path: p.source_file.clone(),
             line_start: p.line_start,
@@ -285,7 +285,7 @@ pub fn build_journal(
             .then_with(|| a.line_start.cmp(&b.line_start))
     });
     skipped_blame.sort();
-    Ok(JournalReport {
+    Ok(GatherReport {
         entries,
         skipped_blame,
     })
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(r.0, 1);
     }
 
-    // ── build_journal integration ─────────────────────────────────────
+    // ── build_gather integration ─────────────────────────────────────
 
     /// Build a vault under `tmp` with two commits so blame has real
     /// per-line dates. Returns (Vault, Graph, repo_path).
@@ -507,7 +507,7 @@ mod tests {
         let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // Daily-A mentions [[Target]]; Daily-B mentions [[Bar]] which
@@ -541,7 +541,7 @@ mod tests {
         let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
         assert_eq!(report.entries.len(), 2);
         assert_eq!(
             report.entries[0].date, report.entries[1].date,
@@ -595,7 +595,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be materialized as a Ghost");
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[phantom], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[phantom], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty(), "blame should succeed");
         let mut titles: Vec<&str> = report
             .entries
@@ -611,7 +611,7 @@ mod tests {
     }
 
     /// Regression test for the subdirectory-vault bug: when the vault
-    /// lives below the git repo root, `build_journal` discovers the
+    /// lives below the git repo root, `build_gather` discovers the
     /// enclosing repo and prefixes vault-relative node paths so blame
     /// resolves against the repo-root-relative path.
     #[test]
@@ -652,7 +652,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
         assert!(
             report.skipped_blame.is_empty(),
             "expected no blame skips, got {:?}",
@@ -731,7 +731,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // The three section paragraphs (A includes the heading line text
@@ -772,7 +772,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         let bodies: Vec<String> = report
             .entries
             .iter()
@@ -844,7 +844,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         assert_eq!(report.entries.len(), 2, "got {:?}", report.entries);
         // Map text → date, then assert each paragraph's date is its own.
         let by_text: std::collections::HashMap<&str, chrono::NaiveDate> = report
@@ -892,7 +892,7 @@ mod tests {
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache).unwrap();
         // Para B: expansion-only, no direct link → matched should be [Foo].
         let para_b = report
             .entries
@@ -932,7 +932,7 @@ mod tests {
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache).unwrap();
         // Para A appears exactly once.
         let para_a: Vec<_> = report
             .entries
@@ -966,7 +966,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         assert!(
             report.entries.is_empty(),
             "self-exclusion should drop Foo's own paragraphs, got {:?}",
@@ -994,7 +994,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be a ghost");
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[phantom], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[phantom], &vault, &mut cache).unwrap();
         assert!(report.skipped_blame.is_empty());
         let bodies: Vec<String> = report
             .entries
@@ -1029,7 +1029,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         assert_eq!(report.entries.len(), 3);
         // Reverse-chrono by date (all equal) → title (all equal) → line_start asc.
         let texts: Vec<&str> = report
@@ -1073,7 +1073,7 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_journal(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
         // The Daily body paragraph is a direct match → included.
         let daily_present = report
             .entries

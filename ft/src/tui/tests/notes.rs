@@ -46,7 +46,7 @@ fn notes_tab_help_overlay_renders_over_idle() -> Result<()> {
 fn timeblocks_tab_help_overlay_renders() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(3)?;
+    app.switch_to(6)?;
     app.enter_help();
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("timeblocks_help_overlay_80x24", frame);

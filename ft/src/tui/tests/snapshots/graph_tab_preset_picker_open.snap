@@ -1,9 +1,9 @@
 ---
-source: ft/src/tui/tests.rs
-assertion_line: 6135
+source: ft/src/tui/tests/graph.rs
+assertion_line: 789
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 >                                                                               
  1: node where path = "…   2: (empty)                                           
 ┌ (empty) ─────────────────────────────────────────────────────────────────────┐

@@ -1,9 +1,9 @@
 ---
-source: ft/src/tui/tests.rs
-assertion_line: 7513
+source: ft/src/tui/tests/graph.rs
+assertion_line: 2146
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 Move 1 selection(s): navigate to target directory, Enter/m to confirm, t for pic
  1: node where path = "…                                                        
 ┌ node where path = "… ────────────────────────────────────────────────────────┐

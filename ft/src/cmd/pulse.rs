@@ -1,9 +1,9 @@
 //! `ft review` — paragraph-level frequency of `[[wikilinks]]` newly
 //! mentioned in a commit/date window. Drives the "what's been on my
-//! mind?" half of the synthesis ritual; the multi-source journal
+//! mind?" sweep half of the consolidation flow; the multi-source gather
 //! (`ft notes journal --link`) picks up from there.
 //!
-//! All heavy lifting lives in [`ft_core::link_review`]; this module is
+//! All heavy lifting lives in [`ft_core::pulse`]; this module is
 //! flag parsing, window validation, and output rendering.
 
 use std::io::{self, IsTerminal};
@@ -13,10 +13,10 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use chrono::Duration;
 use clap::Args;
-use ft_core::link_review::{compute_link_review, LinkReview, LinkReviewRow, WindowRange};
+use ft_core::pulse::{compute_pulse, Pulse, PulseRow, WindowRange};
 
 #[derive(Args, Debug)]
-pub struct ReviewArgs {
+pub struct PulseArgs {
     /// Duration back from today: `7d`, `24h`, `2w`, `1m`. Mutually
     /// exclusive with `--range`. Defaults to `7d` when neither is set.
     #[arg(long, value_name = "DURATION", conflicts_with = "range")]
@@ -37,7 +37,7 @@ pub struct ReviewArgs {
     pub no_color: bool,
 }
 
-pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+pub fn run(args: PulseArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!(
@@ -48,8 +48,7 @@ pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let window = resolve_window(&args)?;
     let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
     let cfg = vault.config.config.synth.clone();
-    let review =
-        compute_link_review(&graph, &vault, &window, &cfg).context("computing link review")?;
+    let review = compute_pulse(&graph, &vault, &window, &cfg).context("computing link review")?;
 
     if args.json {
         render_json(&review)?;
@@ -61,7 +60,7 @@ pub fn run(args: ReviewArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn resolve_window(args: &ReviewArgs) -> Result<WindowRange> {
+fn resolve_window(args: &PulseArgs) -> Result<WindowRange> {
     if let Some(s) = args.since.as_deref() {
         let dur = WindowRange::parse_since(s)
             .ok_or_else(|| anyhow!("invalid --since value `{s}` (try e.g. 7d, 24h, 2w, 1m)"))?;
@@ -84,7 +83,7 @@ fn resolve_window(args: &ReviewArgs) -> Result<WindowRange> {
     Ok(WindowRange::Since(Duration::days(7)))
 }
 
-fn render_table(review: &LinkReview, use_color: bool) {
+fn render_table(review: &Pulse, use_color: bool) {
     if review.rows.is_empty() {
         println!("no new links in window");
         return;
@@ -100,12 +99,12 @@ fn render_table(review: &LinkReview, use_color: bool) {
     }
 }
 
-fn format_row_plain(row: &LinkReviewRow) -> String {
+fn format_row_plain(row: &PulseRow) -> String {
     let ghost = if row.is_ghost { "?" } else { "" };
     format!("({}) [[{}]]{}", row.count, row.target, ghost)
 }
 
-fn render_json(review: &LinkReview) -> Result<()> {
+fn render_json(review: &Pulse) -> Result<()> {
     #[derive(serde::Serialize)]
     struct Row<'a> {
         count: usize,

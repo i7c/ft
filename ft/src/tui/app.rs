@@ -33,8 +33,8 @@ use crate::tui::{
     snapshot::{build_graph_snapshot, GraphSnapshot},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
-        graph::GraphTab, history::HistoryTab, journal::JournalTab, notes::NotesTab,
-        review::ReviewTab, tasks::TasksTab, timeblocks::TimeblocksTab,
+        gather::GatherTab, graph::GraphTab, notes::NotesTab, pulse::PulseTab, recent::RecentTab,
+        tasks::TasksTab, timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
@@ -773,34 +773,34 @@ impl App {
             AppRequest::Toast { text, style } => {
                 self.push_toast(text, style);
             }
-            AppRequest::JournalFor { target } => {
-                self.with_tab(TabKind::Journal, |tab, _| tab.queue_journal_for(&target));
-                if let Some(idx) = self.tab_index(TabKind::Journal) {
+            AppRequest::GatherFor { target } => {
+                self.with_tab(TabKind::Gather, |tab, _| tab.queue_gather_for(&target));
+                if let Some(idx) = self.tab_index(TabKind::Gather) {
                     self.switch_tab(idx)?;
                 }
             }
-            AppRequest::JournalForMulti { request } => {
-                self.with_tab(TabKind::Journal, |tab, _| {
-                    tab.queue_journal_for_multi(&request)
+            AppRequest::GatherForMulti { request } => {
+                self.with_tab(TabKind::Gather, |tab, _| {
+                    tab.queue_gather_for_multi(&request)
                 });
-                if let Some(idx) = self.tab_index(TabKind::Journal) {
+                if let Some(idx) = self.tab_index(TabKind::Gather) {
                     self.switch_tab(idx)?;
                 }
             }
-            AppRequest::JournalAddSources {
+            AppRequest::GatherAddSources {
                 targets,
                 default_mode,
             } => {
-                self.with_tab(TabKind::Journal, |tab, _| {
-                    tab.queue_journal_add_sources(targets, default_mode)
+                self.with_tab(TabKind::Gather, |tab, _| {
+                    tab.queue_gather_add_sources(targets, default_mode)
                 });
-                if let Some(idx) = self.tab_index(TabKind::Journal) {
+                if let Some(idx) = self.tab_index(TabKind::Gather) {
                     self.switch_tab(idx)?;
                 }
             }
-            AppRequest::JournalCommitSources { sources, window } => {
-                self.with_tab(TabKind::Journal, |tab, ctx| {
-                    tab.queue_journal_commit_sources(ctx, sources, window)
+            AppRequest::GatherCommitSources { sources, window } => {
+                self.with_tab(TabKind::Gather, |tab, ctx| {
+                    tab.queue_gather_commit_sources(ctx, sources, window)
                 });
             }
             AppRequest::OpenModal(modal) => {
@@ -1309,9 +1309,8 @@ fn build_tabs_with_overlays(
     use crate::tui::{
         keymap::KeymapOverlay,
         tabs::{
-            graph::GRAPH_KEYMAP, history::HISTORY_KEYMAP, journal::JOURNAL_KEYMAP,
-            notes::NOTES_KEYMAP, review::REVIEW_KEYMAP, tasks::TASKS_KEYMAP,
-            timeblocks::TIMEBLOCKS_KEYMAP,
+            gather::GATHER_KEYMAP, graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, pulse::PULSE_KEYMAP,
+            recent::RECENT_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1351,9 +1350,9 @@ fn build_tabs_with_overlays(
     let tasks_overlay = build_overlay("tab/tasks", &TASKS_KEYMAP);
     let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
     let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
-    let journal_overlay = build_overlay("tab/journal", &JOURNAL_KEYMAP);
-    let history_overlay = build_overlay("tab/history", &HISTORY_KEYMAP);
-    let review_overlay = build_overlay("tab/review", &REVIEW_KEYMAP);
+    let gather_overlay = build_overlay("tab/gather", &GATHER_KEYMAP);
+    let recent_overlay = build_overlay("tab/recent", &RECENT_KEYMAP);
+    let pulse_overlay = build_overlay("tab/pulse", &PULSE_KEYMAP);
 
     let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
         (
@@ -1414,15 +1413,27 @@ fn build_tabs_with_overlays(
     .into_iter()
     .collect();
 
-    let tabs: Vec<Box<dyn Tab>> = vec![
+    // Tab order reads the workflow: browse (Graph, Notes) → resurface
+    // in sweep-to-pull order (Pulse, Recent, Gather). The adjacent
+    // features (Tasks, Timeblocks) are opt-in via `[tui]` and append
+    // at the end; digits and cycling derive from the built list.
+    let mut tabs: Vec<Box<dyn Tab>> = vec![
         Box::new(GraphTab::new().with_keymap_overlay(&graph_overlay)),
-        Box::new(TasksTab::new().with_keymap_overlay(&tasks_overlay)),
         Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
-        Box::new(TimeblocksTab::new().with_keymap_overlay(&timeblocks_overlay)),
-        Box::new(JournalTab::new().with_keymap_overlay(&journal_overlay)),
-        Box::new(HistoryTab::new().with_keymap_overlay(&history_overlay)),
-        Box::new(ReviewTab::new().with_keymap_overlay(&review_overlay)),
+        Box::new(PulseTab::new().with_keymap_overlay(&pulse_overlay)),
+        Box::new(RecentTab::new().with_keymap_overlay(&recent_overlay)),
+        Box::new(GatherTab::new().with_keymap_overlay(&gather_overlay)),
     ];
+    if config.tui.tasks_tab {
+        tabs.push(Box::new(
+            TasksTab::new().with_keymap_overlay(&tasks_overlay),
+        ));
+    }
+    if config.tui.timeblocks_tab {
+        tabs.push(Box::new(
+            TimeblocksTab::new().with_keymap_overlay(&timeblocks_overlay),
+        ));
+    }
 
     let effective_global_keymap = APP_KEYMAP.with_overlay(&global_overlay);
     (tabs, effective_global_keymap, per_modal_overlays)
@@ -1598,6 +1609,18 @@ impl App {
     /// never touch the user's real `$XDG_STATE_HOME`. Since `vault.path`
     /// is itself a `TempDir` in tests, the log is cleaned up on drop.
     pub fn for_test(vault: Vault) -> Self {
+        // Tests exercise the full layout; the production default hides
+        // the adjacent tabs (see `default_layout_hides_adjacent_tabs`).
+        let mut vault = vault;
+        vault.config.config.tui.tasks_tab = true;
+        vault.config.config.tui.timeblocks_tab = true;
+        let recents = Self::test_recents_for(&vault);
+        Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
+    }
+
+    /// Like [`for_test`] but honours the vault's own `[tui]` config —
+    /// for tests of the default (adjacent-tabs-off) layout.
+    pub fn for_test_default_tabs(vault: Vault) -> Self {
         let recents = Self::test_recents_for(&vault);
         Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
     }
@@ -1608,11 +1631,12 @@ impl App {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
-            Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
+            Box::new(PulseTab::new()),
+            Box::new(RecentTab::new()),
+            Box::new(GatherTab::new()),
+            Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),
-            Box::new(JournalTab::new()),
-            Box::new(ReviewTab::new()),
         ];
         let recents = Self::test_recents_for(&vault);
         Self::with_tabs(
@@ -1645,11 +1669,12 @@ impl App {
         let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
-            Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
+            Box::new(PulseTab::new()),
+            Box::new(RecentTab::new()),
+            Box::new(GatherTab::new()),
+            Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),
-            Box::new(JournalTab::new()),
-            Box::new(ReviewTab::new()),
         ];
         Self::with_tabs(
             Arc::new(vault),
@@ -1781,15 +1806,15 @@ impl App {
     }
 
     /// Forward a vault-relative note path to the Journal tab's queue.
-    /// Equivalent to the App servicing `AppRequest::JournalFor` with a
-    /// `JournalTarget::Note` without going through the request channel —
+    /// Equivalent to the App servicing `AppRequest::GatherFor` with a
+    /// `GatherTarget::Note` without going through the request channel —
     /// useful when a test wants to set up state without simulating the
     /// keystrokes.
     #[cfg(test)]
-    pub fn queue_journal_for_tab_test(&mut self, path: &str) {
-        let target = crate::tui::tab::JournalTarget::Note(std::path::PathBuf::from(path));
-        if let Some(idx) = self.tab_index(TabKind::Journal) {
-            self.tabs[idx].queue_journal_for(&target);
+    pub fn queue_gather_for_tab_test(&mut self, path: &str) {
+        let target = crate::tui::tab::GatherTarget::Note(std::path::PathBuf::from(path));
+        if let Some(idx) = self.tab_index(TabKind::Gather) {
+            self.tabs[idx].queue_gather_for(&target);
         }
     }
 
@@ -1800,8 +1825,8 @@ impl App {
         &mut self,
         request: crate::tui::tab::MultiTargetRequest,
     ) {
-        if let Some(idx) = self.tab_index(TabKind::Journal) {
-            self.tabs[idx].queue_journal_for_multi(&request);
+        if let Some(idx) = self.tab_index(TabKind::Gather) {
+            self.tabs[idx].queue_gather_for_multi(&request);
         }
     }
 

@@ -21,6 +21,6 @@ pub use scroll_list::{render_scroll_list, ScrollListOpts};
 // `#[allow(unused_imports)]` keeps the re-exports legal until then.
 #[allow(unused_imports)]
 pub use picker::{
-    FuzzyPicker, JournalSourceHit, JournalSourcePickerSource, PathListPickerSource, PickerItem,
+    FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PathListPickerSource, PickerItem,
     PickerOutcome, PickerSource, VaultFilePickerSource,
 };

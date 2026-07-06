@@ -41,23 +41,23 @@ write time.
   not depend on filing ever happening
 
 #### Scenario: Pull and sweep are presented honestly
-- **WHEN** the docs describe `ft review` / `ft notes history`
-  (window-shaped commands) alongside `ft notes journal` / `ft notes
+- **WHEN** the docs describe `ft notes pulse` / `ft notes recent`
+  (window-shaped commands) alongside `ft notes gather` / `ft notes
   related` (topic-shaped commands)
 - **THEN** the window-shaped commands are framed as the sweep trigger
   and the topic-shaped commands as the pull trigger, and no text claims
   ft eliminates periodic sweeping — only that deferring it carries no
   penalty
 
-### Requirement: No "ritual" framing in user-facing docs
+### Requirement: No "flow" framing in user-facing docs
 README.md and all prose under docs/guide/ SHALL NOT describe any ft
-workflow as a "ritual". CLI help strings, code identifiers, developer
+workflow as a "flow". CLI help strings, code identifiers, developer
 docs (docs/architecture.md, CLAUDE.md, AGENTS.md), openspec/specs, and
 archived changes are out of scope for this requirement (deferred to the
 renames session).
 
-#### Scenario: Grep for ritual in user-facing docs
-- **WHEN** `rg -i ritual README.md docs/guide/` is run at the repo root
+#### Scenario: Grep for flow in user-facing docs
+- **WHEN** `rg -i flow README.md docs/guide/` is run at the repo root
 - **THEN** it returns no matches
 
 ### Requirement: Philosophy answers the links-vs-search objection

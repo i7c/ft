@@ -64,7 +64,7 @@ fn journal_returns_expected_entries_in_json() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Target",
             "--json",
         ])
@@ -92,7 +92,7 @@ fn journal_table_output_renders_entries() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Target",
         ])
         .assert()
@@ -114,7 +114,7 @@ fn journal_unknown_note_exits_non_zero() {
         "--vault",
         tmp.path().to_str().unwrap(),
         "notes",
-        "journal",
+        "gather",
         "NoSuchNoteExists",
     ])
     .assert()
@@ -185,7 +185,7 @@ fn journal_heading_link_expands_sibling_paragraphs_table() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Target",
         ])
         .assert()
@@ -214,7 +214,7 @@ fn journal_heading_link_expansion_json_one_entry_per_paragraph() {
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
-            "journal",
+            "gather",
             "Target",
             "--json",
         ])

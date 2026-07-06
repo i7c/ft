@@ -1,9 +1,9 @@
 # synthesis-review-tui-tab Specification
 
 ## Purpose
-TBD - created by archiving change add-synthesis-ritual. Update Purpose after archive.
+TBD - created by archiving change add-synthesis-flow. Update Purpose after archive.
 ## Requirements
-### Requirement: Review tab registration
+### Requirement: Pulse tab registration
 The TUI SHALL register a new top-level tab titled `Review`, slotted after the existing `Journal` tab in `App::new`. The tab SHALL implement the `Tab` trait alongside the existing tabs.
 
 #### Scenario: Tab appears in the tab strip
@@ -11,14 +11,14 @@ The TUI SHALL register a new top-level tab titled `Review`, slotted after the ex
 - **THEN** the tab strip lists `Graph`, `Tasks`, `Notes`, `Timeblocks`, `Journal`, `Review` (in that order)
 
 #### Scenario: Tab can receive focus
-- **WHEN** the user presses the digit key for the Review tab's position
-- **THEN** focus switches to the Review tab and `on_focus` runs
+- **WHEN** the user presses the digit key for the Pulse tab's position
+- **THEN** focus switches to the Pulse tab and `on_focus` runs
 
 ### Requirement: Default window on first focus
-On first focus, the Review tab SHALL compute and display the link-review over a default window equivalent to `--since 7d`. The window range SHALL be shown in the tab header so the user always knows what period is being reviewed.
+On first focus, the Pulse tab SHALL compute and display the link-review over a default window equivalent to `--since 7d`. The window range SHALL be shown in the tab header so the user always knows what period is being reviewed.
 
 #### Scenario: Default window shown
-- **WHEN** the Review tab is focused for the first time
+- **WHEN** the Pulse tab is focused for the first time
 - **THEN** the tab header shows the date range covered (e.g. `2026-06-01 .. 2026-06-08`) and the body lists links from that range
 
 ### Requirement: Link list rendering
@@ -44,7 +44,7 @@ Pressing `<space>` on the focused row SHALL toggle that row's selection. The sel
 - **THEN** all three rows remain selected
 
 ### Requirement: Window adjustment
-The Review tab SHALL allow adjusting the window from within the tab. At least one keybinding SHALL be provided for "narrower window" and "wider window" (exact bindings TBD during implementation but documented in `Tab::help_sections`). When the window changes, the review SHALL re-run and the list and header SHALL update.
+The Pulse tab SHALL allow adjusting the window from within the tab. At least one keybinding SHALL be provided for "narrower window" and "wider window" (exact bindings TBD during implementation but documented in `Tab::help_sections`). When the window changes, the review SHALL re-run and the list and header SHALL update.
 
 #### Scenario: Widen window
 - **WHEN** the user presses the "wider window" key
@@ -54,30 +54,30 @@ The Review tab SHALL allow adjusting the window from within the tab. At least on
 - **WHEN** the user presses the "narrower window" key
 - **THEN** the window shrinks and the list re-runs
 
-### Requirement: Handoff to Journal tab on enter
-Pressing `<enter>` on the Review tab SHALL queue the currently selected link targets to the Journal tab and switch focus to it. If no rows are selected when `<enter>` is pressed, the link under the cursor SHALL be used as the sole target. The window range in effect at handoff SHALL also be passed so the Journal tab can offer its in-window-only toggle.
+### Requirement: Handoff to Gather tab on enter
+Pressing `<enter>` on the Pulse tab SHALL queue the currently selected link targets to the Gather tab and switch focus to it. If no rows are selected when `<enter>` is pressed, the link under the cursor SHALL be used as the sole target. The window range in effect at handoff SHALL also be passed so the Gather tab can offer its in-window-only toggle.
 
 #### Scenario: Selected rows handed off
 - **WHEN** the user selects three links and presses `<enter>`
-- **THEN** focus switches to the Journal tab and it loads the multi-source journal for those three link targets
+- **THEN** focus switches to the Gather tab and it loads the multi-source journal for those three link targets
 
 #### Scenario: No selection falls back to cursor
 - **WHEN** no rows are selected and the user presses `<enter>` on a row
-- **THEN** the Journal tab loads the multi-source journal for that one link's target
+- **THEN** the Gather tab loads the multi-source journal for that one link's target
 
 #### Scenario: Window range passed along
-- **WHEN** the Review tab's window is the last 14 days at handoff
-- **THEN** the Journal tab's in-window-only toggle uses that same window
+- **WHEN** the Pulse tab's window is the last 14 days at handoff
+- **THEN** the Gather tab's in-window-only toggle uses that same window
 
 ### Requirement: Help overlay via Tab::help_sections
-The Review tab SHALL override `Tab::help_sections()` so the `?` overlay shows its keymap: navigation, `<space>` to select, `<enter>` to hand off, window-adjustment keys, and any others.
+The Pulse tab SHALL override `Tab::help_sections()` so the `?` overlay shows its keymap: navigation, `<space>` to select, `<enter>` to hand off, window-adjustment keys, and any others.
 
 #### Scenario: Help overlay shows Review keys
-- **WHEN** the Review tab is focused and the user presses `?`
-- **THEN** the overlay includes a section for the Review tab listing all its bindings
+- **WHEN** the Pulse tab is focused and the user presses `?`
+- **THEN** the overlay includes a section for the Pulse tab listing all its bindings
 
 ### Requirement: Background loading via mpsc
-The Review tab's link-review computation SHALL run on a background worker thread following the existing single-threaded + mpsc producer pattern. The worker SHALL post a `BgEvent` back to the main loop on completion; in-flight state SHALL live in a typed `RefCell<Option<...>>` slot on `App`. There SHALL be no async runtime and no `Mutex<AppState>`.
+The Pulse tab's link-review computation SHALL run on a background worker thread following the existing single-threaded + mpsc producer pattern. The worker SHALL post a `BgEvent` back to the main loop on completion; in-flight state SHALL live in a typed `RefCell<Option<...>>` slot on `App`. There SHALL be no async runtime and no `Mutex<AppState>`.
 
 #### Scenario: UI remains responsive during load
 - **WHEN** the tab is focused and the link-review is computing

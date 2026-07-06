@@ -8,8 +8,8 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 
 /// Index of the History tab in the production tab layout.
-fn history_tab_idx() -> usize {
-    5
+fn recent_tab_idx() -> usize {
+    3
 }
 
 fn key(c: char) -> Event {
@@ -87,8 +87,8 @@ fn stale_only_vault() -> (TempDir, Vault) {
 fn history_tab_renders_recent_feed() -> Result<()> {
     let (_dir, vault) = recent_edit_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(history_tab_idx())?;
-    assert_eq!(app.active_title(), "History");
+    app.switch_to(recent_tab_idx())?;
+    assert_eq!(app.active_title(), "Recent");
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("Fixed the parser bug today."),
@@ -105,7 +105,7 @@ fn history_tab_renders_recent_feed() -> Result<()> {
 fn history_tab_empty_state_when_nothing_recent() -> Result<()> {
     let (_dir, vault) = stale_only_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(history_tab_idx())?;
+    app.switch_to(recent_tab_idx())?;
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("no paragraphs edited in the window"),
@@ -118,7 +118,7 @@ fn history_tab_empty_state_when_nothing_recent() -> Result<()> {
 fn history_move_opens_seeded_section_move_modal() -> Result<()> {
     let (_dir, vault) = recent_edit_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(history_tab_idx())?;
+    app.switch_to(recent_tab_idx())?;
     // Precondition: the feed rendered at least one row.
     let frame = render(&mut app, 80, 24);
     assert!(
@@ -139,7 +139,7 @@ fn history_move_opens_seeded_section_move_modal() -> Result<()> {
 fn history_send_to_synth_opens_existing_picker() -> Result<()> {
     let (_dir, vault) = recent_edit_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(history_tab_idx())?;
+    app.switch_to(recent_tab_idx())?;
     let before = render(&mut app, 80, 24);
     assert!(
         !before.contains("Seed"),
@@ -181,7 +181,7 @@ fn cited_recent_vault() -> (TempDir, Vault) {
 fn history_rows_show_citation_badge_and_uncited_toggle() -> Result<()> {
     let (_dir, vault) = cited_recent_vault();
     let mut app = App::for_test(vault);
-    app.switch_to(history_tab_idx())?;
+    app.switch_to(recent_tab_idx())?;
     let frame = render(&mut app, 80, 24);
     assert!(
         frame.contains("cited: Synth"),

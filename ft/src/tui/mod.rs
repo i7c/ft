@@ -51,8 +51,9 @@ pub mod registry {
             crate::tui::tabs::tasks::TASKS_COMMANDS,
             crate::tui::tabs::notes::NOTES_COMMANDS,
             crate::tui::tabs::timeblocks::TIMEBLOCKS_COMMANDS,
-            crate::tui::tabs::journal::JOURNAL_COMMANDS,
-            crate::tui::tabs::history::HISTORY_COMMANDS,
+            crate::tui::tabs::pulse::PULSE_COMMANDS,
+            crate::tui::tabs::recent::RECENT_COMMANDS,
+            crate::tui::tabs::gather::GATHER_COMMANDS,
         ];
         let modal_slices: &[&'static [CommandDef]] = &[
             modal_commands::CREATE_COMMANDS,
@@ -90,8 +91,9 @@ pub mod registry {
             keymap::{parse_scope, KeymapOverlay},
             modal_commands,
             tabs::{
-                graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
-                tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+                gather::GATHER_KEYMAP, graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP,
+                pulse::PULSE_KEYMAP, recent::RECENT_KEYMAP, tasks::TASKS_KEYMAP,
+                timeblocks::TIMEBLOCKS_KEYMAP,
             },
         };
 
@@ -112,7 +114,9 @@ pub mod registry {
             ("tab/tasks", &TASKS_KEYMAP),
             ("tab/notes", &NOTES_KEYMAP),
             ("tab/timeblocks", &TIMEBLOCKS_KEYMAP),
-            ("tab/journal", &JOURNAL_KEYMAP),
+            ("tab/gather", &GATHER_KEYMAP),
+            ("tab/recent", &RECENT_KEYMAP),
+            ("tab/pulse", &PULSE_KEYMAP),
             ("modal/create", &modal_commands::CREATE_KEYMAP),
             ("modal/append", &modal_commands::APPEND_KEYMAP),
             ("modal/section-move", &modal_commands::SECTION_MOVE_KEYMAP),
@@ -180,8 +184,9 @@ pub mod registry {
             keymap::{chord_to_str, KeymapOverlay},
             modal_commands,
             tabs::{
-                graph::GRAPH_KEYMAP, journal::JOURNAL_KEYMAP, notes::NOTES_KEYMAP,
-                tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+                gather::GATHER_KEYMAP, graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP,
+                pulse::PULSE_KEYMAP, recent::RECENT_KEYMAP, tasks::TASKS_KEYMAP,
+                timeblocks::TIMEBLOCKS_KEYMAP,
             },
         };
 
@@ -202,7 +207,9 @@ pub mod registry {
             ("tab/tasks", &TASKS_KEYMAP),
             ("tab/notes", &NOTES_KEYMAP),
             ("tab/timeblocks", &TIMEBLOCKS_KEYMAP),
-            ("tab/journal", &JOURNAL_KEYMAP),
+            ("tab/gather", &GATHER_KEYMAP),
+            ("tab/recent", &RECENT_KEYMAP),
+            ("tab/pulse", &PULSE_KEYMAP),
             ("modal/create", &modal_commands::CREATE_KEYMAP),
             ("modal/append", &modal_commands::APPEND_KEYMAP),
             ("modal/section-move", &modal_commands::SECTION_MOVE_KEYMAP),

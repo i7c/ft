@@ -305,7 +305,7 @@ add an as-of header or delete. Not re-audited item-by-item here.
 
 **Fixed:** Added a one-sentence tab roster ("six tabs today: Graph,
 Tasks, Notes, Timeblocks, Journal, and Review") at the top of the
-"A new TUI tab" recipe, cross-referencing the synthesis-ritual section
+"A new TUI tab" recipe, cross-referencing the synthesis section
 where the Review→Journal handoff is described.
 
 `ft/src/tui/tabs/review.rs` exists and is wired into `build_tabs`
@@ -314,12 +314,12 @@ Tasks, Notes, Timeblocks, Journal, Review)." But `architecture.md`'s
 "Adding a new TUI tab" recipe and the modal-driver section never
 mention the Review tab or its `AppRequest::JournalForMulti` /
 `MultiTargetRequest` handoff to the Journal tab (the handoff *is*
-described under the synthesis-ritual section, but not framed as a
+described under the synthesis section, but not framed as a
 Review-tab feature). A reader of architecture.md alone would not know
 the tab exists.
 
 **Fix:** Add Review to the tab roster in architecture.md, or at least
-cross-reference the synthesis-ritual section where the
+cross-reference the synthesis section where the
 Review→Journal flow is described.
 
 ### C2. `notes_actions/reslice.rs` flow is absent from the modal-driver taxonomy — ✅

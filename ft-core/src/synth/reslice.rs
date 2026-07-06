@@ -208,7 +208,7 @@ fn resolve_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::JournalEntry;
+    use crate::gather::GatherEntry;
     use crate::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
     use crate::synth::verify::{verify_synth_note, SectionStatus};
     use assert_fs::prelude::*;
@@ -247,7 +247,7 @@ mod tests {
         run_git(&repo, &["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 2,
@@ -412,7 +412,7 @@ mod tests {
     fn ambiguous_without_at_errors() {
         let (tmp, vault, target) = setup();
         // Append a second section to the same note.
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 5,

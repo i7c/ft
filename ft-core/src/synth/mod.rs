@@ -1,4 +1,4 @@
-//! Synthesis-ritual support: callout grammar for protected sections,
+//! Synthesis support: callout grammar for protected sections,
 //! scaffold planner/applier for `ft synth`, verifier for
 //! `ft synth verify`, and pin repairer for `ft synth repair`.
 //!

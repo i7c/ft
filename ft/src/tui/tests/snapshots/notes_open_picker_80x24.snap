@@ -1,9 +1,9 @@
 ---
-source: ft/src/tui/tests.rs
-assertion_line: 3171
+source: ft/src/tui/tests/notes.rs
+assertion_line: 167
 expression: frame
 ---
-  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 ┌ notes ───────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  Notes — Obsidian-flavoured editing                                          │

@@ -218,7 +218,7 @@ pub(crate) fn walk_markdown_files(vault_root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::JournalEntry;
+    use crate::gather::GatherEntry;
     use crate::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
     use assert_fs::prelude::*;
     use chrono::NaiveDate;
@@ -248,7 +248,7 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = JournalEntry {
+        let entry = GatherEntry {
             source_title: "source".into(),
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,

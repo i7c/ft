@@ -1,8 +1,9 @@
 ---
-source: ft/src/tui/tests.rs
+source: ft/src/tui/tests/tasks.rs
+assertion_line: 525
 expression: frame
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐ Review   
+  1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
 ┌ query ──│Keybindings — Tasks                                       │─────────┐
 │status in│                                                          │         │
 └─────────│  Global                                                  │─────────┘

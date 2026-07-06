@@ -4,9 +4,9 @@
 TBD - created by syncing change related-notes-reader.
 ## Requirements
 ### Requirement: ft notes related subcommand
-`ft notes related <note>` SHALL be a read-only subcommand under `ft notes`. `<note>` SHALL be resolved via the shared note-or-ghost resolver (same `[[]]`-aware path as `ft notes journal`): exact vault-relative path → title lookup → fuzzy match → `[[Phantom]]` / bare-name ghost fallback. The command SHALL resolve to either a `NodeKind::Note` or a `NodeKind::Ghost`, call `ft_core::related::score_related`, and print the result. It SHALL NOT modify any files and SHALL NOT require a git repository (scoring is pure graph).
+`ft notes related <note>` SHALL be a read-only subcommand under `ft notes`. `<note>` SHALL be resolved via the shared note-or-ghost resolver (same `[[]]`-aware path as `ft notes gather`): exact vault-relative path → title lookup → fuzzy match → `[[Phantom]]` / bare-name ghost fallback. The command SHALL resolve to either a `NodeKind::Note` or a `NodeKind::Ghost`, call `ft_core::related::score_related`, and print the result. It SHALL NOT modify any files and SHALL NOT require a git repository (scoring is pure graph).
 
-The command SHALL accept a single positional NOTE argument. A `--link` form SHALL NOT be supported (unlike `ft notes journal`, multi-source related scoring is out of scope; `<note>` may itself be a `[[Ghost]]` to target a phantom).
+The command SHALL accept a single positional NOTE argument. A `--link` form SHALL NOT be supported (unlike `ft notes gather`, multi-source related scoring is out of scope; `<note>` may itself be a `[[Ghost]]` to target a phantom).
 
 #### Scenario: Note target prints scored concepts
 - **WHEN** the user runs `ft notes related "Foo"` and Foo.md exists and co-occurs with concepts Bar (score 3) and Baz (score 1)
@@ -18,7 +18,7 @@ The command SHALL accept a single positional NOTE argument. A `--link` form SHAL
 
 #### Scenario: No git repository required
 - **WHEN** `ft notes related "Foo"` is run in a vault that is not inside a git repository
-- **THEN** the command succeeds and prints scored concepts (unlike `ft notes journal`, no git/blame dependency)
+- **THEN** the command succeeds and prints scored concepts (unlike `ft notes gather`, no git/blame dependency)
 
 #### Scenario: Read-only — no files modified
 - **WHEN** `ft notes related "Foo"` is run
@@ -37,7 +37,7 @@ The command SHALL accept a single positional NOTE argument. A `--link` form SHAL
 - **THEN** the command exits with a non-zero code and a human-readable error
 
 ### Requirement: ft notes related output formats
-`ft notes related` SHALL support `--format table|json|ndjson|markdown` (default `table`), `--no-color`, and honor `NO_COLOR` / non-TTY auto-disable for ANSI styling — parity with `ft notes backlinks`/`links` and `ft notes journal`.
+`ft notes related` SHALL support `--format table|json|ndjson|markdown` (default `table`), `--no-color`, and honor `NO_COLOR` / non-TTY auto-disable for ANSI styling — parity with `ft notes backlinks`/`links` and `ft notes gather`.
 
 Each row SHALL carry: `title` (the concept's filename stem or ghost raw target), `score` (the aggregate co-occurrence score), `already_in_related` (boolean), and the candidate's path. The candidate path SHALL be serialized as `Resolved { path }` for notes and `Unresolved { raw }` for ghosts (matching `LinkRowTarget` from `ft notes links`).
 

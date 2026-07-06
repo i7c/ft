@@ -1,7 +1,7 @@
 //! Notes History — a whole-vault, windowed, recency-ordered feed of the
 //! paragraphs that were edited within a git window.
 //!
-//! Where [`crate::journal`] selects paragraphs by *link target* ("what
+//! Where [`crate::gather`] selects paragraphs by *link target* ("what
 //! mentions `[[X]]`?"), history selects them by *recency of edit* ("what
 //! did I change anywhere in the vault lately?"). It is the untargeted,
 //! time-shaped sibling of the journal and shares its entry shape, blame
@@ -24,14 +24,14 @@ use crate::config::Synth as SynthCfg;
 use crate::error::Result;
 use crate::git;
 use crate::graph::{Graph, NodeKind};
-use crate::link_review::{compute_link_review, WindowRange};
+use crate::pulse::{compute_pulse, WindowRange};
 use crate::synth::callout::is_synth_note;
 use crate::vault::Vault;
 
-/// One row of the history feed. Mirrors [`crate::journal::JournalEntry`]
+/// One row of the history feed. Mirrors [`crate::gather::GatherEntry`]
 /// minus the `matched` field — history has no link target to attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryEntry {
+pub struct RecentEntry {
     /// Filename stem of the note the paragraph lives in (no `.md`).
     pub source_title: String,
     /// Vault-relative path of the source note.
@@ -46,21 +46,21 @@ pub struct HistoryEntry {
     pub date: NaiveDate,
 }
 
-/// Result of [`build_history`]: the feed plus per-file blame diagnostics,
-/// matching [`crate::journal::JournalReport`] so callers can warn instead
+/// Result of [`build_recent`]: the feed plus per-file blame diagnostics,
+/// matching [`crate::gather::GatherReport`] so callers can warn instead
 /// of silently dropping entries.
 #[derive(Debug, Default, Clone)]
-pub struct HistoryReport {
+pub struct RecentReport {
     /// The feed, already sorted reverse-chronologically.
-    pub entries: Vec<HistoryEntry>,
+    pub entries: Vec<RecentEntry>,
     /// Vault-relative paths whose paragraphs were dropped because
     /// `git blame` failed (untracked or outside the repo).
     pub skipped_blame: Vec<PathBuf>,
 }
 
-/// Behavioral knobs for [`build_history`].
+/// Behavioral knobs for [`build_recent`].
 #[derive(Debug, Clone, Default)]
-pub struct HistoryOptions {
+pub struct RecentOptions {
     /// Include paragraphs from synth notes (`ft-synth: true`). Off by
     /// default so the synth flow does not feed itself.
     pub include_synth: bool,
@@ -68,7 +68,7 @@ pub struct HistoryOptions {
 
 /// Build the windowed, recency-ordered history feed.
 ///
-/// 1. Resolve `added_lines` for `window` via [`compute_link_review`] — a
+/// 1. Resolve `added_lines` for `window` via [`compute_pulse`] — a
 ///    per-file map of lines added in the window. Its keys are the files
 ///    touched in the window and the only files that get blamed.
 /// 2. For every `Paragraph` node whose `source_file` is in that map and
@@ -77,25 +77,25 @@ pub struct HistoryOptions {
 /// 3. Dates come from `git blame` (lazy-populated `cache`), and the feed
 ///    is sorted date-descending, then source title ascending, then
 ///    `line_start` ascending — identical to the journal's sort.
-pub fn build_history(
+pub fn build_recent(
     graph: &Graph,
     vault: &Vault,
     window: &WindowRange,
     cfg: &SynthCfg,
-    opts: &HistoryOptions,
+    opts: &RecentOptions,
     cache: &mut BlameCache,
-) -> Result<HistoryReport> {
+) -> Result<RecentReport> {
     let repo = git::RepoMap::discover(&vault.path)?;
 
     // The added-lines map is both the edit filter and the file prefilter:
     // only files touched in the window appear as keys.
-    let review = compute_link_review(graph, vault, window, cfg)?;
+    let review = compute_pulse(graph, vault, window, cfg)?;
     if review.added_lines.is_empty() {
-        return Ok(HistoryReport::default());
+        return Ok(RecentReport::default());
     }
 
     let head = git::head_hash(repo.root())?;
-    let mut entries: Vec<HistoryEntry> = Vec::new();
+    let mut entries: Vec<RecentEntry> = Vec::new();
     let mut skipped_blame: Vec<PathBuf> = Vec::new();
     let mut skipped_seen: HashSet<PathBuf> = HashSet::new();
     // Per-file synth-marker memo so each touched file is read at most once.
@@ -147,7 +147,7 @@ pub fn build_history(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        entries.push(HistoryEntry {
+        entries.push(RecentEntry {
             source_title,
             source_path: p.source_file.clone(),
             line_start: p.line_start,
@@ -166,7 +166,7 @@ pub fn build_history(
             .then_with(|| a.line_start.cmp(&b.line_start))
     });
     skipped_blame.sort();
-    Ok(HistoryReport {
+    Ok(RecentReport {
         entries,
         skipped_blame,
     })
@@ -243,12 +243,12 @@ mod tests {
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_history(
+        let report = build_recent(
             &graph,
             &vault,
             &range("HEAD~1", "HEAD"),
             &default_cfg(),
-            &HistoryOptions::default(),
+            &RecentOptions::default(),
             &mut cache,
         )
         .unwrap();
@@ -293,12 +293,12 @@ mod tests {
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
 
         let mut cache = BlameCache::default();
-        let default_report = build_history(
+        let default_report = build_recent(
             &graph,
             &vault,
             &range("HEAD~1", "HEAD"),
             &default_cfg(),
-            &HistoryOptions::default(),
+            &RecentOptions::default(),
             &mut cache,
         )
         .unwrap();
@@ -314,12 +314,12 @@ mod tests {
         );
 
         let mut cache2 = BlameCache::default();
-        let incl_report = build_history(
+        let incl_report = build_recent(
             &graph,
             &vault,
             &range("HEAD~1", "HEAD"),
             &default_cfg(),
-            &HistoryOptions {
+            &RecentOptions {
                 include_synth: true,
             },
             &mut cache2,
@@ -355,12 +355,12 @@ mod tests {
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_history(
+        let report = build_recent(
             &graph,
             &vault,
             &range("HEAD~2", "HEAD"),
             &default_cfg(),
-            &HistoryOptions::default(),
+            &RecentOptions::default(),
             &mut cache,
         )
         .unwrap();
@@ -394,12 +394,12 @@ mod tests {
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         let graph = Graph::build(&vault, &vault.scan()).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_history(
+        let report = build_recent(
             &graph,
             &vault,
             &range("HEAD~1", "HEAD"),
             &default_cfg(),
-            &HistoryOptions::default(),
+            &RecentOptions::default(),
             &mut cache,
         )
         .unwrap();
