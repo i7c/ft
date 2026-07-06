@@ -59,7 +59,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 |---|---------------------------------------------|---------|------------|
 | 1 | Story rewrite (README + philosophy)         | done (change: `note-flow-story-rewrite`) | — |
 | 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
-| 3 | Ghost promotion                             | implemented (change: `ghost-promotion`) | — |
+| 3 | Ghost promotion                             | done (change: `ghost-promotion`) | — |
 | 4 | Concept drift: detect + merge               | planned | —          |
 | 5 | Renames + TUI reshape (tab order)           | planned | 1–4 (last) |
 
