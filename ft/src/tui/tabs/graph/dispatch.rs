@@ -502,6 +502,10 @@ impl GraphTab {
                     Some(AppRequest::OpenModal(Box::new(ActiveModal::Create(state))));
                 CommandOutcome::Handled
             }
+            "graph.promote-ghost" => {
+                self.promote_ghost(ctx);
+                CommandOutcome::Handled
+            }
             "graph.append" => {
                 let Some(target_path) = self.selected_note_abs_path(ctx) else {
                     queue_toast(
@@ -741,6 +745,128 @@ impl GraphTab {
             }
             _ => CommandOutcome::NotHandled,
         }
+    }
+
+    /// `P` — promote the selected ghost into a synth note scaffolded
+    /// with every paragraph mentioning it: journal feed → synth
+    /// scaffold at the ghost's path, `ft-synth-targets` set, graph
+    /// refreshed, editor opened. The ghost node disappears on refresh
+    /// because the note now exists.
+    fn promote_ghost(&mut self, ctx: &mut TabCtx) {
+        let (ghost_id, raw) = {
+            let Some(graph) = Self::graph_of(&self.snapshot) else {
+                queue_toast(
+                    ctx,
+                    "graph is still building — retry in a moment",
+                    ToastStyle::Error,
+                );
+                return;
+            };
+            let view = self.active_view();
+            match view
+                .tree
+                .rows()
+                .get(view.selected)
+                .map(|row| (row.note_id, graph.node(row.note_id)))
+            {
+                Some((id, NodeKind::Ghost(g))) => (id, g.raw.clone()),
+                _ => {
+                    queue_toast(
+                        ctx,
+                        "promote applies to ghost rows — select a ghost",
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            }
+        };
+
+        if ft_core::git::discover_repo(&ctx.vault.path).is_none() {
+            queue_toast(
+                ctx,
+                "vault is not inside a git repository — promote needs git history for the seeded journal",
+                ToastStyle::Error,
+            );
+            return;
+        }
+
+        let Some(graph) = Self::graph_of(&self.snapshot) else {
+            return;
+        };
+        let mut cache = ft_core::blame_cache::BlameCache::load(&ctx.vault.path).unwrap_or_default();
+        let report =
+            match ft_core::journal::build_journal(graph, &[ghost_id], ctx.vault, &mut cache) {
+                Ok(r) => r,
+                Err(e) => {
+                    queue_toast(
+                        ctx,
+                        &format!("promote: journal failed: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            };
+        let _ = cache.save(&ctx.vault.path);
+        if report.entries.is_empty() {
+            queue_toast(
+                ctx,
+                "promote: no mentioning paragraphs with git history found",
+                ToastStyle::Error,
+            );
+            return;
+        }
+
+        let target = std::path::Path::new(&raw).with_extension("md");
+        let plan = match ft_core::synth::scaffold::plan_synth_scaffold(
+            ctx.vault,
+            &target,
+            &report.entries,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("promote: plan failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+        let section_count = plan.sections.len();
+        let written = match ft_core::synth::scaffold::apply_synth_scaffold(ctx.vault, &plan) {
+            Ok(p) => p,
+            Err(e) => {
+                queue_toast(
+                    ctx,
+                    &format!("promote: write failed: {e}"),
+                    ToastStyle::Error,
+                );
+                return;
+            }
+        };
+
+        // Record the promoted concept so `synth grow` and the Journal
+        // tab's context flow (`o`) know this note's targets.
+        let link = format!("[[{raw}]]");
+        if let Ok(content) = std::fs::read_to_string(&written) {
+            let new_content =
+                ft_core::synth::callout::upsert_synth_frontmatter(&content, Some(&[link]));
+            let _ = ft_core::fs::write_atomic(&written, &new_content);
+        }
+
+        ctx.request_graph_refresh();
+        queue_toast(
+            ctx,
+            &format!(
+                "promoted [[{raw}]] → {} with {section_count} section(s)",
+                target.display()
+            ),
+            ToastStyle::Success,
+        );
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
+            path: written,
+            line: 1,
+        });
     }
 }
 

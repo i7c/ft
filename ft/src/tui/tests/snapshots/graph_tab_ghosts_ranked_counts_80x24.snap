@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests/graph.rs
+assertion_line: 2330
+expression: frame
+---
+  1 Graph  │  2 Tasks  │  3 Notes  │  4 Timeblocks  │  5 Journal  │  6 Review   
+> node where kind in {Ghost};                                                   
+ 1: node where kind in …                                                        
+┌ node where kind in … ────────────────────────────────────────────────────────┐
+│    G busy (3)                                                                │
+│    G quiet (1)                                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: vault  ·  tab: Graph               refreshed [HH:MM:SS]      mode: normal

@@ -95,7 +95,8 @@ impl GraphQuery {
     /// have empty `children`, matching the `None` return from
     /// [`GraphQuery::expand`].
     pub fn walk(&self, graph: &Graph, opts: &WalkOptions) -> Vec<WalkNode> {
-        let roots = self.select(graph);
+        let mut roots = self.select(graph);
+        reorder_ghost_roots(graph, &mut roots);
         let mut st = WalkState::default();
         let mut out = Vec::with_capacity(roots.len());
         for id in roots {
@@ -211,13 +212,50 @@ fn child_sort_key(graph: &Graph, id: NoteId) -> (u8, String) {
     match graph.node(id) {
         NodeKind::Directory(d) => (0, d.path.to_string_lossy().into_owned()),
         NodeKind::Note(n) => (1, n.path.to_string_lossy().into_owned()),
-        NodeKind::Ghost(g) => (2, g.raw.clone()),
+        // Ghosts rank by mention count (desc) before name, so ghost
+        // siblings — and the `ghosts` preset — read as the ranked
+        // "which concepts earned a note" view. The zero-padded
+        // inverted count makes lexicographic-ascending equal
+        // mentions-descending.
+        NodeKind::Ghost(g) => (2, ghost_order_key(graph, id, &g.raw)),
         NodeKind::Task(t) => (3, format!("{}:{}", t.source_file.display(), t.source_line)),
         NodeKind::Paragraph(p) => (
             4,
             format!("{}:{:08}", p.source_file.display(), p.line_start),
         ),
         NodeKind::Heading(h) => (5, format!("{}:{:08}", h.source_file.display(), h.line)),
+    }
+}
+
+/// Sort key placing higher-mentioned ghosts first, ties alphabetical.
+fn ghost_order_key(graph: &Graph, id: NoteId, raw: &str) -> String {
+    let mentions = crate::graph::ghosts::mention_count(graph, id);
+    format!("{:08}:{raw}", 99_999_999usize.saturating_sub(mentions))
+}
+
+/// Reorder ghost roots among themselves by `(mentions desc, name asc)`
+/// while every non-ghost root keeps its position — the walk-level
+/// counterpart of the ghost arm in [`child_sort_key`].
+fn reorder_ghost_roots(graph: &Graph, roots: &mut [NoteId]) {
+    let ghost_positions: Vec<usize> = roots
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| matches!(graph.node(**id), NodeKind::Ghost(_)))
+        .map(|(i, _)| i)
+        .collect();
+    if ghost_positions.len() < 2 {
+        return;
+    }
+    let mut ghosts: Vec<NoteId> = ghost_positions.iter().map(|&i| roots[i]).collect();
+    ghosts.sort_by_key(|id| {
+        let raw = match graph.node(*id) {
+            NodeKind::Ghost(g) => g.raw.as_str(),
+            _ => "",
+        };
+        ghost_order_key(graph, *id, raw)
+    });
+    for (pos, id) in ghost_positions.into_iter().zip(ghosts) {
+        roots[pos] = id;
     }
 }
 

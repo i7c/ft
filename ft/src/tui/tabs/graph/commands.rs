@@ -245,6 +245,16 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "graph.promote-ghost",
+        description:
+            "Promote the selected ghost into a synth note seeded with every paragraph mentioning it",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "graph.append",
         description: "Append a template to the selected note",
         scope: CommandScope::Tab("graph"),
@@ -511,6 +521,7 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Ctrl+o", "graph.open-in-obsidian")
         .bind("c", "graph.create-blank")
         .bind("C", "graph.create-from-template")
+        .bind("P", "graph.promote-ghost")
         .bind("A", "graph.append")
         .bind("Q", "graph.quick-capture")
         .bind("m", "graph.move")

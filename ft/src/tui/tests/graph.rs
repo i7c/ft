@@ -2272,3 +2272,147 @@ fn graph_related_modal_confirm_writes_to_note() -> Result<()> {
     drop(dir);
     Ok(())
 }
+
+// ── Ghost ranking + promotion (ghost-promotion change) ───────────────
+
+/// Type a query into the graph query bar (clearing the seeded one) and
+/// apply it with Enter.
+fn apply_graph_query(app: &mut App, query: &str) -> Result<()> {
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..300 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in query.chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(())
+}
+
+/// Vault with two ghosts: `busy` mentioned in three distinct
+/// paragraphs, `quiet` in one. No git — ranking is pure graph.
+fn ghost_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vp = dir.path().join("vault");
+    std::fs::create_dir_all(vp.join(".obsidian")).unwrap();
+    std::fs::write(
+        vp.join("a.md"),
+        "[[busy]] one.\n\n[[busy]] two.\n\n[[busy]] three.\n\n[[quiet]] once.\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vp)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn ghost_rows_show_ranked_mention_counts() -> Result<()> {
+    let (_dir, vault) = ghost_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    apply_graph_query(&mut app, "node where kind in {Ghost};")?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("busy (3)"),
+        "ghost row missing count:\n{frame}"
+    );
+    assert!(
+        frame.contains("quiet (1)"),
+        "ghost row missing count:\n{frame}"
+    );
+    let busy = frame.find("busy (3)").unwrap();
+    let quiet = frame.find("quiet (1)").unwrap();
+    assert!(
+        busy < quiet,
+        "expected ranked order busy before quiet:\n{frame}"
+    );
+    assert_tui_snapshot!("graph_tab_ghosts_ranked_counts_80x24", frame);
+    Ok(())
+}
+
+/// Git-backed ghost vault for the promote flow (blame dates pinned).
+fn ghost_git_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let (dir, vault) = ghost_vault();
+    let vp = vault.path.clone();
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vp)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_DATE", "2025-03-01T00:00:00")
+            .env("GIT_COMMITTER_DATE", "2025-03-01T00:00:00")
+            .args(args)
+            .output()
+            .expect("git binary on PATH");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+    (dir, vault)
+}
+
+#[test]
+fn promote_ghost_creates_seeded_synth_note() -> Result<()> {
+    let (_dir, vault) = ghost_git_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    apply_graph_query(&mut app, "node where kind in {Ghost};")?;
+    // Cursor sits on the first (top-ranked) row: busy.
+    app.dispatch(key('P'))?;
+
+    let promoted = vault_path.join("busy.md");
+    assert!(promoted.exists(), "promote should create busy.md");
+    let content = std::fs::read_to_string(&promoted).unwrap();
+    assert!(
+        content.contains("ft-synth: true"),
+        "missing synth marker:\n{content}"
+    );
+    assert!(
+        content.contains("ft-synth-targets") && content.contains("[[busy]]"),
+        "missing ft-synth-targets:\n{content}"
+    );
+    assert_eq!(
+        content.matches("[!ft-source]").count(),
+        3,
+        "expected one section per mentioning paragraph:\n{content}"
+    );
+    // The success toast is superseded in the status line by the
+    // graph-refresh notification the promote itself triggers, so the
+    // on-disk note is the assertion surface here; the non-ghost test
+    // below covers the toast path.
+    Ok(())
+}
+
+#[test]
+fn promote_on_non_ghost_row_is_a_noop_with_toast() -> Result<()> {
+    let (_dir, vault) = ghost_git_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+    // Default dirs query: cursor on the root directory row.
+    app.dispatch(key('P'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("promote applies to ghost"),
+        "missing explanatory toast:\n{frame}"
+    );
+    assert!(
+        !vault_path.join("busy.md").exists(),
+        "nothing should be created"
+    );
+    Ok(())
+}

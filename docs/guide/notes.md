@@ -197,6 +197,35 @@ become "ghost" nodes that backlinks queries can still find.
 Output formats match `ft tasks list`: `table` (default), `json`,
 `ndjson`, `markdown`. Empty results exit `1` unless `--allow-empty`.
 
+## Ghosts: concepts that earned a note
+
+A ghost accumulating mentions is the vault telling you a note has
+earned its existence. `ft notes ghosts` ranks every ghost by how many
+*distinct paragraphs* mention it (the same dedup rule as `ft review`
+— three mentions in one paragraph count once), highest first. Pure
+graph: no git history needed.
+
+```sh
+ft notes ghosts                        # (N) [[ghost]] rows, ranked
+ft notes ghosts --min-mentions 3       # only the heavy hitters
+ft notes ghosts --limit 10 --json      # [{target, mentions}, …]
+```
+
+Promotion — giving the concept its page — happens where the ghost is:
+
+- **In the TUI graph tab**, ghost rows show their count
+  (`G activation (3)`) and the `ghosts` preset lists them ranked.
+  On a ghost row: `c` creates the note blank at the ghost's path,
+  `Shift+c` creates it from a template, and `Shift+p` **promotes with
+  material** — the note is created as a synth note scaffolded with
+  every paragraph that mentions the ghost, `ft-synth-targets` set,
+  editor open (needs git history for the seeded journal). Because the
+  note takes the ghost's exact name, every existing link resolves
+  without any rewriting.
+- **From the CLI**, the seeded equivalent is
+  `ft synth scaffold <path>.md --link "[[ghost]]"` — see
+  [synthesis.md](synthesis.md).
+
 ## The Journal
 
 `ft notes journal <note>` is a reverse-chronological feed of

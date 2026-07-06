@@ -442,7 +442,13 @@ pub(super) fn leaf_display(graph: &Graph, id: NoteId, today: chrono::NaiveDate) 
                 (format!("{}/", d.name), 'D')
             }
         }
-        NodeKind::Ghost(g) => (g.raw.clone(), 'G'),
+        // Ghosts carry their distinct-paragraph mention count — the
+        // "has this concept earned a note?" signal. Computed here at
+        // row-derive time (per tree rebuild, not per frame).
+        NodeKind::Ghost(g) => {
+            let mentions = ft_core::graph::ghosts::mention_count(graph, id);
+            (format!("{} ({mentions})", g.raw), 'G')
+        }
         NodeKind::Task(t) => {
             let marker = match t.status.as_str() {
                 "Open" => "[ ]",

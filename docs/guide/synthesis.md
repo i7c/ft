@@ -283,6 +283,14 @@ with the right frontmatter and the scaffolded excerpts, then
 If you have entries selected with `Space`, only those go into the
 scaffold. With no selection, the whole displayed feed is sent.
 
+One more entry point: on a **ghost row in the Graph tab**, `Shift+p`
+promotes the ghost into a synth note in one keystroke — the note is
+created at the ghost's path, scaffolded with every paragraph that
+mentions it, `ft-synth-targets` set. The CLI equivalent is
+`ft synth scaffold <path>.md --link "[[ghost]]"`. See
+[notes.md](notes.md#ghosts-concepts-that-earned-a-note) for the
+ranked ghost list that tells you which concepts are ready.
+
 ## Editing a protected section
 
 Sometimes the captured excerpt is one line short, or one line too long.

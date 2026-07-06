@@ -80,6 +80,10 @@ pub enum NotesCommand {
     /// `update-related` modal shows, as a read-only CLI surface.
     /// Unlike `journal`, needs no git history (scoring is pure graph).
     Related(RelatedArgs),
+    /// Vault-wide ranked list of ghosts — unresolved `[[targets]]` with
+    /// no backing note — by distinct-paragraph mentions. The concepts
+    /// that have earned a note of their own. Pure graph; no git needed.
+    Ghosts(GhostsArgs),
     /// Interactively update a note's `## Related` section. Launches
     /// the TUI graph tab with a co-occurrence-scoring modal for the
     /// target note.
@@ -104,6 +108,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Journal(a) => run_journal(a, vault_flag),
         NotesCommand::History(a) => run_history(a, vault_flag),
         NotesCommand::Related(a) => run_related(a, vault_flag),
+        NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
     }
@@ -1312,6 +1317,75 @@ fn run_related(args: RelatedArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     }
 
     Ok(exit)
+}
+
+// ── ft notes ghosts ──────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct GhostsArgs {
+    /// Keep only ghosts with at least this many distinct-paragraph
+    /// mentions
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub min_mentions: usize,
+
+    /// Truncate the ranked list to the first N rows
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Output a JSON array of `{target, mentions}` objects instead of
+    /// the table
+    #[arg(long)]
+    pub json: bool,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+fn run_ghosts(args: GhostsArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+
+    let mut ranks = ft_core::graph::ghosts::rank_ghosts(&graph);
+    ranks.retain(|r| r.mentions >= args.min_mentions);
+    if let Some(n) = args.limit {
+        ranks.truncate(n);
+    }
+
+    if args.json {
+        #[derive(serde::Serialize)]
+        struct Row<'a> {
+            target: &'a str,
+            mentions: usize,
+        }
+        let rows: Vec<Row> = ranks
+            .iter()
+            .map(|r| Row {
+                target: &r.raw,
+                mentions: r.mentions,
+            })
+            .collect();
+        let s = serde_json::to_string_pretty(&rows).context("serialize ghosts json")?;
+        println!("{s}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if ranks.is_empty() {
+        println!("no ghosts in the vault");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let use_color =
+        !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    use owo_colors::OwoColorize;
+    for r in &ranks {
+        let line = format!("({}) [[{}]]", r.mentions, r.raw);
+        if use_color {
+            println!("{}", line.cyan());
+        } else {
+            println!("{line}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 // ── ft notes update-related ──────────────────────────────────────────────────

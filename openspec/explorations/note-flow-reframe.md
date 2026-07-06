@@ -59,7 +59,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 |---|---------------------------------------------|---------|------------|
 | 1 | Story rewrite (README + philosophy)         | done (change: `note-flow-story-rewrite`) | — |
 | 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
-| 3 | Ghost promotion                             | proposed (change: `ghost-promotion`) | —          |
+| 3 | Ghost promotion                             | implemented (change: `ghost-promotion`) | — |
 | 4 | Concept drift: detect + merge               | planned | —          |
 | 5 | Renames + TUI reshape (tab order)           | planned | 1–4 (last) |
 
@@ -190,6 +190,13 @@ view + new command, or leverage the graph view?
 - Possible third surface: fold a vault-wide "top unpromoted ghosts"
   line into `review`'s output, since review is the sweep trigger where
   this information changes behavior.
+
+**Decisions taken (2026-07-06, change `ghost-promotion`):** dedicated
+`ft notes ghosts` CLI (name provisional, session 5); scaffold-seeded
+promotion shipped as `graph.promote-ghost` (`Shift+p`); ranked ghost
+ordering implemented in the walk's deterministic sort rather than DSL
+sort syntax; review integration rejected (review stays window-shaped).
+Blank/template creates on ghost rows already existed and were kept.
 
 ---
 

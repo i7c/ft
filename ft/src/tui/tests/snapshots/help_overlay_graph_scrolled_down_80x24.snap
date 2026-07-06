@@ -24,6 +24,6 @@ expression: down
 │         │  Ctrl+o         Open the selected note in Obsidian      ║│         │
 │         │  c              Create a new note (blank) in the selecte║│         │
 │         │  Shift+c        Create a new note from a template       ║│         │
-│         │  Shift+a        Append a template to the selected note  ║│         │
+│         │  Shift+p        Promote the selected ghost into a synth ║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

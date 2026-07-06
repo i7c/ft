@@ -25,7 +25,13 @@ Nodes:
 - **Directory** — a folder. Path. Connected to its contents via
   `directory-contains` edges.
 - **Ghost** — an unresolved wikilink target. Lets backlink queries
-  surface broken references.
+  surface broken references. Ghosts order by distinct-paragraph
+  mention count (descending, alphabetical tiebreak) wherever a walk
+  lists them, so the `ghosts` preset doubles as the ranked "which
+  concepts earned a note" view; in the TUI their rows carry the count
+  (`G activation (3)`) and `Shift+p` promotes one into a synth note
+  seeded with everything that mentions it (see
+  [notes.md](notes.md#ghosts-concepts-that-earned-a-note)).
 - **Task** — an individual task line (referenced from rename and
   related flows).
 - **Paragraph** — a paragraph in a note (used by the Journal
