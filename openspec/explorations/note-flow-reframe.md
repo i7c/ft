@@ -61,7 +61,7 @@ presented as the *sweep* trigger, not disguised as on-demand.
 | 2 | Close the loop: cited/processed state       | implemented (change: `citation-visibility`) | — |
 | 3 | Ghost promotion                             | done (change: `ghost-promotion`) | — |
 | 4 | Concept drift: detect + merge               | done (change: `drift-detection`) | — |
-| 5 | Renames + TUI reshape (tab order)           | implemented (change: `note-flow-renames`) | 1–4 (last) |
+| 5 | Renames + TUI reshape (tab order)           | done (change: `note-flow-renames`) | 1–4 (last) |
 
 Session 5 is deliberately last: the right names fall out of the
 conceptual frame, so settle the frame (and the features that create new
