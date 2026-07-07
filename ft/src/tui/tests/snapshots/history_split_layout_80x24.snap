@@ -1,19 +1,19 @@
 ---
-source: ft/src/tui/tests/synthesis.rs
-assertion_line: 983
+source: ft/src/tui/tests/history.rs
+assertion_line: 260
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
-┌ Gather — 2 sources (2 entries) ──────────────────────────────────────────────┐
-│Sources (2)                                                                   │
-│Foo (ghost), Bar (ghost)                                                      │
-│▶ ● 2026-05-10  Alpha                                                         │
-│    2026-05-10  Beta                                                          │
+┌ Recent (3 entries) ──────────────────────────────────────────────────────────┐
+│    2026-07-07  Daily                                                         │
+│    2026-07-07  Daily                                                         │
+│▶   2026-07-07  Daily cited: Synth                                            │
 │──────────────────────────────────────────────────────────────────────────────│
-│Alpha  ·  2026-05-10  ·  L1–1                                                 │
-│    ↳ matched: Foo                                                            │
+│Daily  ·  2026-07-07  ·  L5–5                                                 │
+│    ↳ cited: Synth                                                            │
 │──────────────────────────────────────────────────────────────────────────────│
-│Talk about [[Foo]].                                                           │
+│Fixed the parser bug today.                                                   │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -26,4 +26,4 @@ expression: frame
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- vault: vault  ·  tab: Gather               not yet refreshed      mode: normal
+ vault: vault  ·  tab: Recent               not yet refreshed      mode: normal

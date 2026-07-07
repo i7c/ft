@@ -26,7 +26,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, ListItem, Paragraph},
     Frame,
 };
 
@@ -48,7 +48,8 @@ use crate::tui::tab::{
     Tab, TabCtx, TabKind, ToastStyle,
 };
 use crate::tui::widgets::{
-    EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+    render_feed_split, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
+    VaultFilePickerSource,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -332,9 +333,6 @@ pub struct GatherTab {
     entry_selected: std::collections::HashSet<usize>,
     /// 0-indexed cursor into `entries`. Saturating-clamped on load.
     selected: usize,
-    /// 0-indexed scroll offset (in entries, not lines). Adjusted at
-    /// render time when `selected` would otherwise fall offscreen.
-    scroll_offset: usize,
     /// Queued single-target from the Graph tab's `Shift+J`. Consumed by
     /// `on_focus` and replaces the source set with `vec![target]`.
     queued_for: Option<GatherTarget>,
@@ -377,7 +375,6 @@ impl GatherTab {
             entry_matched_titles: Vec::new(),
             entry_selected: std::collections::HashSet::new(),
             selected: 0,
-            scroll_offset: 0,
             queued_for: None,
             queued_multi: None,
             queued_add_sources: None,
@@ -407,7 +404,6 @@ impl GatherTab {
             self.entry_matched_titles.clear();
             self.entry_selected.clear();
             self.selected = 0;
-            self.scroll_offset = 0;
             self.last_error = None;
             // The in-window/uncited filters are meaningless with zero
             // sources.
@@ -423,7 +419,6 @@ impl GatherTab {
             self.entry_matched_titles.clear();
             self.entry_selected.clear();
             self.selected = 0;
-            self.scroll_offset = 0;
             return;
         }
 
@@ -522,7 +517,6 @@ impl GatherTab {
         self.entry_matched_titles = entry_matched_titles;
         self.entry_selected.clear();
         self.selected = 0;
-        self.scroll_offset = 0;
         // In-window filter only makes sense in multi-target mode with
         // a window attached; otherwise clear it silently.
         if !(self.sources.len() >= 2 && self.window.is_some()) {
@@ -1134,7 +1128,6 @@ impl GatherTab {
 
     fn jump_first(&mut self) {
         self.selected = 0;
-        self.scroll_offset = 0;
     }
 
     fn jump_last(&mut self) {
@@ -1262,7 +1255,6 @@ impl Tab for GatherTab {
                 self.entry_matched_titles.clear();
                 self.entry_selected.clear();
                 self.selected = 0;
-                self.scroll_offset = 0;
                 self.last_error = None;
                 CommandOutcome::Handled
             }
@@ -1363,7 +1355,6 @@ impl Tab for GatherTab {
             &self.entry_matched_titles,
             self.selected,
             &self.entry_selected,
-            &mut self.scroll_offset,
             self.last_error.as_deref(),
         );
 
@@ -1457,6 +1448,44 @@ pub(crate) fn citation_badge_line(
         )),
         CitationState::CitedStale { notes } => Some((
             format!("cited*: {}", stem(notes)),
+            Style::default().fg(palette::TERTIARY),
+        )),
+        CitationState::Uncited => None,
+    }
+}
+
+/// Full citation detail for the preview-pane header: names *every*
+/// citing note (comma-separated stems), and distinguishes fresh
+/// (`cited:`) from stale (`cited*:`) citations. Returns `None` when
+/// the entry is uncited in global mode (no header line). In
+/// context-note mode returns the same `in note` / `missing` label as
+/// [`citation_badge_line`] (the detail is the badge itself).
+pub(crate) fn citation_detail_line(
+    state: &ft_core::synth::citations::CitationState,
+    context_note: Option<&Path>,
+) -> Option<(String, Style)> {
+    use ft_core::synth::citations::CitationState;
+    if context_note.is_some() {
+        return citation_badge_line(state, context_note);
+    }
+    let stems = |notes: &[PathBuf]| -> String {
+        notes
+            .iter()
+            .map(|n| {
+                n.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| n.display().to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match state {
+        CitationState::Cited { notes } => Some((
+            format!("cited: {}", stems(notes)),
+            Style::default().fg(palette::DIM),
+        )),
+        CitationState::CitedStale { notes } => Some((
+            format!("cited*: {} (stale)", stems(notes)),
             Style::default().fg(palette::TERTIARY),
         )),
         CitationState::Uncited => None,
@@ -1630,7 +1659,6 @@ fn render_gather(
     entry_matched_titles: &[Vec<String>],
     selected: usize,
     entry_selected: &std::collections::HashSet<usize>,
-    scroll_offset: &mut usize,
     last_error: Option<&str>,
 ) {
     // Tab block: title still carries entry-count for terminal-width
@@ -1711,103 +1739,89 @@ fn render_gather(
         return;
     }
 
-    // Each entry contributes: 1 header line + (optional) `matched:` badge
-    // + N wrapped body lines + 1 blank separator. We wrap body lines
-    // manually (rather than letting ratatui's `Paragraph::wrap` do it) so
-    // `entry_starts` stays in sync with the post-wrap visual line count —
-    // that's what `scroll((y, 0))` indexes into. Without manual wrap the
-    // cursor would drift relative to scroll on entries with long paragraphs.
+    // Split layout: compact one-line-per-entry list on top, preview
+    // pane (header + rule + wrapped body) on the bottom. The Sources
+    // strip above is preserved. List scrolling + cursor-follow are
+    // owned by `render_feed_split` (via `render_scroll_list`).
     let inner = body_area;
     let wrap_width = inner.width as usize;
-    let mut lines: Vec<Line> = Vec::new();
-    let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
+
+    let mut list_rows: Vec<ListItem<'_>> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
-        entry_starts.push(lines.len());
-        let is_cursor = i == selected;
-        let is_multi = entry_selected.contains(&i);
-        // Cursor wins the loudest treatment; multi-select gets the gold
-        // band; everything else gets the dim full-width separator band.
-        let header_style = if is_cursor {
-            Style::default()
-                .fg(palette::BLACK)
-                .bg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD)
-        } else if is_multi {
-            Style::default()
-                .fg(palette::BLACK)
-                .bg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD)
+        let marker = if entry_selected.contains(&i) {
+            "● "
         } else {
+            "  "
+        };
+        let mut text = format!("{marker}{}  {}", e.date, e.source_title);
+        // Inline citation badge (compact form). `matched:` stays in
+        // the preview header — it's noisier and rarely varies per row.
+        if let Some(index) = citations {
+            let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
+            if let Some((badge, _)) = citation_badge_line(&state, context_note) {
+                text.push(' ');
+                text.push_str(&badge);
+            }
+        }
+        let row_style = Style::default().fg(palette::PRIMARY);
+        list_rows.push(ListItem::new(Line::from(Span::styled(
+            pad_to_width(&text, wrap_width),
+            row_style,
+        ))));
+    }
+
+    // Preview header + body for the selected entry. Header carries
+    // title · date · line range, the `matched:` badge (multi-source
+    // only), and the full citation detail (which note(s) cite it;
+    // staleness for `cited*`).
+    let mut preview_header: Vec<Line<'_>> = Vec::new();
+    if let Some(e) = entries.get(selected) {
+        let header_span = Span::styled(
+            format!(
+                "{}  ·  {}  ·  L{}–{}",
+                e.source_title, e.date, e.line_start, e.line_end
+            ),
             Style::default()
                 .fg(palette::PRIMARY)
                 .bg(palette::ENTRY_HEADER_BG)
-                .add_modifier(Modifier::BOLD)
-        };
-        // A leading glyph keeps multi-select legible even when the
-        // cursor's band overrides the gold background.
-        let marker = if is_multi { "● " } else { "  " };
-        lines.push(Line::from(Span::styled(
-            pad_to_width(
-                &format!("{marker}{}  {}", e.date, e.source_title),
-                wrap_width,
-            ),
-            header_style,
-        )));
-        // Always surface which sources each paragraph matched (multi-
-        // source only — in single-source mode the match is the lone
-        // source and the badge would be pure noise).
+                .add_modifier(Modifier::BOLD),
+        );
+        preview_header.push(Line::from(header_span));
+        // `matched:` badge — multi-source only.
         let empty: Vec<String> = Vec::new();
-        let titles = entry_matched_titles.get(i).unwrap_or(&empty);
+        let titles = entry_matched_titles.get(selected).unwrap_or(&empty);
         if !titles.is_empty() {
-            let badge = format!("    ↳ matched: {}", titles.join(", "));
-            lines.push(Line::from(Span::styled(
-                badge,
+            preview_header.push(Line::from(Span::styled(
+                format!("    ↳ matched: {}", titles.join(", ")),
                 Style::default().fg(palette::SECONDARY),
             )));
         }
-        // Citation badge: note-local (`in note` / `missing`) when a
-        // context note is set, global (`cited:` / `cited*:`) otherwise.
+        // Full citation detail.
         if let Some(index) = citations {
             let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
-            if let Some((badge, style)) = citation_badge_line(&state, context_note) {
-                lines.push(Line::from(Span::styled(format!("    ↳ {badge}"), style)));
+            if let Some((detail, style)) = citation_detail_line(&state, context_note) {
+                preview_header.push(Line::from(Span::styled(format!("    ↳ {detail}"), style)));
             }
         }
+    }
+
+    let mut preview_body: Vec<Line<'_>> = Vec::new();
+    if let Some(e) = entries.get(selected) {
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
-                lines.push(Line::from(inline_markdown_spans(&wrapped)));
+                preview_body.push(Line::from(inline_markdown_spans(&wrapped)));
             }
         }
-        lines.push(Line::from(""));
     }
 
-    // Scroll so the selected entry shows its header band *and* a peek of
-    // its content — never just the band stranded on the bottom row. We
-    // keep up to `MIN_VISIBLE` lines of the entry on screen, capped to
-    // the entry's own height so short entries don't over-scroll.
-    const MIN_VISIBLE: usize = 4;
-    let view_height = inner.height as usize;
-    let total_lines = lines.len();
-    let selected_start = entry_starts.get(selected).copied().unwrap_or(0);
-    let selected_end = entry_starts
-        .get(selected + 1)
-        .copied()
-        .unwrap_or(total_lines);
-    let want = MIN_VISIBLE.min(selected_end.saturating_sub(selected_start));
-    let desired_end = selected_start.saturating_add(want).min(total_lines);
-    if selected_start < *scroll_offset {
-        // Header above the viewport — pull it to the top.
-        *scroll_offset = selected_start;
-    } else if desired_end > scroll_offset.saturating_add(view_height) {
-        // Wanted context falls below the fold — scroll just enough to
-        // reveal it, but never past the header (so tall entries keep
-        // their title on screen).
-        *scroll_offset = desired_end.saturating_sub(view_height).min(selected_start);
-    }
-
-    frame.render_widget(
-        Paragraph::new(lines).scroll((*scroll_offset as u16, 0)),
+    render_feed_split(
+        frame,
         inner,
+        list_rows,
+        selected,
+        entry_selected,
+        &preview_header,
+        &preview_body,
     );
 
     if let Some(err) = last_error {

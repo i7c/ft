@@ -18,7 +18,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, ListItem, Paragraph},
     Frame,
 };
 
@@ -34,6 +34,7 @@ use crate::tui::palette;
 use crate::tui::tab::{
     AppRequest, EventOutcome, GatherTarget, GatherWindow, MultiTargetRequest, Tab, TabCtx, TabKind,
 };
+use crate::tui::widgets::scroll_list::{render_scroll_list, ScrollListOpts};
 
 // ── Commands ─────────────────────────────────────────────────────────
 
@@ -439,7 +440,7 @@ impl Tab for PulseTab {
             frame.render_widget(Paragraph::new(text), inner);
             return;
         }
-        let mut lines: Vec<Line> = Vec::with_capacity(self.rows.len());
+        let mut items: Vec<ListItem<'_>> = Vec::with_capacity(self.rows.len());
         for (i, row) in self.rows.iter().enumerate() {
             let select_marker = if self.selected.contains(&i) {
                 "[*] "
@@ -448,18 +449,22 @@ impl Tab for PulseTab {
             };
             let ghost = if row.is_ghost { "?" } else { "" };
             let text = format!("{select_marker}({}) [[{}]]{}", row.count, row.target, ghost);
-            let style = if i == self.cursor {
-                Style::default()
-                    .fg(palette::PRIMARY)
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else if row.is_ghost {
+            let style = if row.is_ghost {
                 Style::default().fg(palette::DIM)
             } else {
                 Style::default().fg(palette::PRIMARY)
             };
-            lines.push(Line::from(Span::styled(text, style)));
+            items.push(ListItem::new(Line::from(Span::styled(text, style))));
         }
-        frame.render_widget(Paragraph::new(lines), inner);
+        let opts = ScrollListOpts {
+            highlight_symbol: "▶ ",
+            highlight_style: Style::default()
+                .fg(palette::BLACK)
+                .bg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+            scrollbar: true,
+        };
+        render_scroll_list(frame, inner, items, Some(self.cursor), opts);
     }
 
     fn help_sections(&self) -> Vec<HelpSection> {

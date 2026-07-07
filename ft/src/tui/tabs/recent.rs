@@ -25,7 +25,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, ListItem, Paragraph},
     Frame,
 };
 
@@ -44,11 +44,12 @@ use crate::tui::notes_actions::queue_toast;
 use crate::tui::palette;
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle};
 use crate::tui::tabs::gather::{
-    inline_markdown_spans, mark_note_as_synth, pad_to_width, render_synth_send, wrap_line,
-    NonSynthChoice, SynthSendState,
+    citation_badge_line, citation_detail_line, inline_markdown_spans, mark_note_as_synth,
+    pad_to_width, render_synth_send, wrap_line, NonSynthChoice, SynthSendState,
 };
 use crate::tui::widgets::{
-    EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome, VaultFilePickerSource,
+    render_feed_split, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
+    VaultFilePickerSource,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -205,8 +206,6 @@ pub struct RecentTab {
     entry_selected: HashSet<usize>,
     /// 0-indexed cursor into `entries`.
     selected: usize,
-    /// 0-indexed scroll offset (in visual lines).
-    scroll_offset: usize,
     /// Lazy-loaded blame cache, preserved across rebuilds this session.
     cache: Option<BlameCache>,
     /// Generation of the snapshot the current feed was derived from, so
@@ -234,7 +233,6 @@ impl RecentTab {
             entries: Vec::new(),
             entry_selected: HashSet::new(),
             selected: 0,
-            scroll_offset: 0,
             cache: None,
             built_generation: None,
             last_error: None,
@@ -257,7 +255,6 @@ impl RecentTab {
             self.entries.clear();
             self.entry_selected.clear();
             self.selected = 0;
-            self.scroll_offset = 0;
             return;
         }
         let Some(snap) = ctx.snapshot.as_ref() else {
@@ -315,7 +312,6 @@ impl RecentTab {
         }
         self.entry_selected.clear();
         self.selected = 0;
-        self.scroll_offset = 0;
         self.built_generation = Some(generation);
     }
 
@@ -344,7 +340,6 @@ impl RecentTab {
 
     fn jump_first(&mut self) {
         self.selected = 0;
-        self.scroll_offset = 0;
     }
 
     fn jump_last(&mut self) {
@@ -725,7 +720,6 @@ impl Tab for RecentTab {
             ctx.snapshot.as_ref().map(|s| &s.citations),
             self.selected,
             &self.entry_selected,
-            &mut self.scroll_offset,
             self.last_error.as_deref(),
         );
         if let Some(state) = self.synth_send.as_mut() {
@@ -743,7 +737,6 @@ fn render_history(
     citations: Option<&ft_core::synth::citations::CitationIndex>,
     selected: usize,
     entry_selected: &HashSet<usize>,
-    scroll_offset: &mut usize,
     last_error: Option<&str>,
 ) {
     let title = if uncited_only {
@@ -772,69 +765,73 @@ fn render_history(
     }
 
     let wrap_width = inner.width as usize;
-    let mut lines: Vec<Line> = Vec::new();
-    let mut entry_starts: Vec<usize> = Vec::with_capacity(entries.len());
+
+    // Compact list rows: one line per entry. `{date} {title}` plus an
+    // inline citation badge when present. Multi-select marker `●`;
+    // cursor highlight is owned by `render_feed_split`'s list widget.
+    let mut list_rows: Vec<ListItem<'_>> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
-        entry_starts.push(lines.len());
-        let is_cursor = i == selected;
-        let is_multi = entry_selected.contains(&i);
-        let header_style = if is_cursor {
-            Style::default()
-                .fg(palette::BLACK)
-                .bg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD)
-        } else if is_multi {
-            Style::default()
-                .fg(palette::BLACK)
-                .bg(palette::SECONDARY)
-                .add_modifier(Modifier::BOLD)
+        let marker = if entry_selected.contains(&i) {
+            "● "
         } else {
+            "  "
+        };
+        let mut text = format!("{marker}{}  {}", e.date, e.source_title);
+        if let Some(index) = citations {
+            let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
+            if let Some((badge, _)) = citation_badge_line(&state, None) {
+                text.push(' ');
+                text.push_str(&badge);
+            }
+        }
+        let row_style = Style::default().fg(palette::PRIMARY);
+        list_rows.push(ListItem::new(Line::from(Span::styled(
+            pad_to_width(&text, wrap_width),
+            row_style,
+        ))));
+    }
+
+    // Preview header + body for the selected entry. The header is
+    // visually distinct (BOLD on the entry-header band) and carries the
+    // full citation detail (which note(s) cite it; staleness).
+    let mut preview_header: Vec<Line<'_>> = Vec::new();
+    if let Some(e) = entries.get(selected) {
+        let header_span = Span::styled(
+            format!(
+                "{}  ·  {}  ·  L{}–{}",
+                e.source_title, e.date, e.line_start, e.line_end
+            ),
             Style::default()
                 .fg(palette::PRIMARY)
                 .bg(palette::ENTRY_HEADER_BG)
-                .add_modifier(Modifier::BOLD)
-        };
-        let marker = if is_multi { "● " } else { "  " };
-        lines.push(Line::from(Span::styled(
-            pad_to_width(
-                &format!("{marker}{}  {}", e.date, e.source_title),
-                wrap_width,
-            ),
-            header_style,
-        )));
+                .add_modifier(Modifier::BOLD),
+        );
+        preview_header.push(Line::from(header_span));
         if let Some(index) = citations {
             let state = index.lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text);
-            if let Some((badge, style)) = super::gather::citation_badge_line(&state, None) {
-                lines.push(Line::from(Span::styled(format!("    ↳ {badge}"), style)));
+            if let Some((detail, style)) = citation_detail_line(&state, None) {
+                preview_header.push(Line::from(Span::styled(format!("    ↳ {detail}"), style)));
             }
         }
+    }
+
+    let mut preview_body: Vec<Line<'_>> = Vec::new();
+    if let Some(e) = entries.get(selected) {
         for body_line in e.section_text.lines() {
             for wrapped in wrap_line(body_line, wrap_width) {
-                lines.push(Line::from(inline_markdown_spans(&wrapped)));
+                preview_body.push(Line::from(inline_markdown_spans(&wrapped)));
             }
         }
-        lines.push(Line::from(""));
     }
 
-    const MIN_VISIBLE: usize = 4;
-    let view_height = inner.height as usize;
-    let total_lines = lines.len();
-    let selected_start = entry_starts.get(selected).copied().unwrap_or(0);
-    let selected_end = entry_starts
-        .get(selected + 1)
-        .copied()
-        .unwrap_or(total_lines);
-    let want = MIN_VISIBLE.min(selected_end.saturating_sub(selected_start));
-    let desired_end = selected_start.saturating_add(want).min(total_lines);
-    if selected_start < *scroll_offset {
-        *scroll_offset = selected_start;
-    } else if desired_end > scroll_offset.saturating_add(view_height) {
-        *scroll_offset = desired_end.saturating_sub(view_height).min(selected_start);
-    }
-
-    frame.render_widget(
-        Paragraph::new(lines).scroll((*scroll_offset as u16, 0)),
+    render_feed_split(
+        frame,
         inner,
+        list_rows,
+        selected,
+        entry_selected,
+        &preview_header,
+        &preview_body,
     );
 
     if let Some(err) = last_error {

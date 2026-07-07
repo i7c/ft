@@ -710,6 +710,71 @@ fn review_tab_lists_rows_with_counts_and_ghost_suffix() -> Result<()> {
     Ok(())
 }
 
+/// Vault whose single recent commit mentions many distinct ghost
+/// links, so the pulse yields more rows than a 24-row viewport fits.
+/// Used to verify the list viewport auto-follows the cursor past the
+/// fold (the pre-split render never scrolled, leaving lower rows
+/// unreachable).
+fn pulse_overflow_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("baseline.md"), "# Baseline\n").unwrap();
+
+    let run_git_at = |date: Option<&str>, args: &[&str]| {
+        let mut cmd = StdCommand::new("git");
+        cmd.current_dir(&vault_path).env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(d) = date {
+            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+        }
+        let out = cmd.args(args).output().expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git_at(None, &["init", "-b", "main"]);
+    run_git_at(None, &["config", "user.name", "T"]);
+    run_git_at(None, &["config", "user.email", "t@e.com"]);
+    run_git_at(None, &["config", "commit.gpgsign", "false"]);
+    run_git_at(None, &["add", "."]);
+    run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
+
+    // 30 distinct ghost links → 30 pulse rows, more than a 24-row
+    // viewport can show at once.
+    let mut body = String::new();
+    for i in 0..30 {
+        body.push_str(&format!("Mentions [[Link{i}]] here.\n\n"));
+    }
+    std::fs::write(vault_path.join("many.md"), body).unwrap();
+    run_git_at(None, &["add", "."]);
+    run_git_at(None, &["commit", "-m", "c2"]);
+
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn review_tab_cursor_stays_visible_past_the_fold() -> Result<()> {
+    let (_dir, vault) = pulse_overflow_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(pulse_tab_idx())?;
+    // Sanity: the pulse produced many rows.
+    let initial = render(&mut app, 80, 24);
+    assert!(initial.contains("[[Link0]]"), "Link0 missing:\n{initial}");
+    // Move the cursor well past the first screen (30 rows, viewport ~20).
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    for _ in 0..25 {
+        app.dispatch(down.clone())?;
+    }
+    let frame = render(&mut app, 80, 24);
+    // The cursor row (Link25) must be visible after scrolling; before
+    // the scroll-follow fix it was rendered off-screen and unreachable.
+    assert!(
+        frame.contains("[[Link25]]"),
+        "cursor row Link25 not visible after scrolling:\n{frame}"
+    );
+    Ok(())
+}
+
 #[test]
 fn review_tab_help_lists_keybindings() -> Result<()> {
     let (_dir, vault) = gather_test_vault();
@@ -891,10 +956,11 @@ fn journal_tab_selected_entry_body_always_visible() -> Result<()> {
     Ok(())
 }
 
-/// Locks the entry-block layout: full-width header band (padded to the
-/// pane width), the always-on `↳ matched:` badge, and the `●` marker on
-/// the multi-selected entry. Colors aren't captured by the snapshot
-/// backend, so this guards the text/layout half of the visual.
+/// Locks the split layout: Sources strip on top, compact list pane
+/// (one line per entry, `●` multi-select marker, cursor `▶`), and a
+/// preview pane whose header carries the `matched:` badge for the
+/// selected entry. Colors aren't captured by the snapshot backend, so
+/// this guards the text/layout half of the visual.
 #[test]
 fn journal_tab_entry_blocks_layout() -> Result<()> {
     use crate::tui::tab::{GatherTarget, MultiTargetRequest};
@@ -1621,10 +1687,18 @@ fn journal_rows_show_citation_badges() -> Result<()> {
         frame.contains("cited: Synth"),
         "cited entry missing badge:\n{frame}"
     );
-    assert_eq!(
-        frame.matches("cited: Synth").count(),
-        1,
-        "uncited entry must carry no badge:\n{frame}"
+    // The uncited entry (DailyB) must carry no citation badge on its
+    // list row. The cited entry (DailyA) shows the badge both in its
+    // list row (compact) and in the preview header (detail), so we
+    // check the uncited row's line directly rather than counting total
+    // occurrences.
+    let uncited_row = frame
+        .lines()
+        .find(|l| l.contains("DailyB"))
+        .unwrap_or_else(|| panic!("DailyB row missing:\n{frame}"));
+    assert!(
+        !uncited_row.contains("cited"),
+        "uncited entry must carry no badge: {uncited_row}"
     );
     insta::assert_snapshot!(frame);
     Ok(())

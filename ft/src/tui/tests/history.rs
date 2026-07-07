@@ -90,9 +90,22 @@ fn history_tab_renders_recent_feed() -> Result<()> {
     app.switch_to(recent_tab_idx())?;
     assert_eq!(app.active_title(), "Recent");
     let frame = render(&mut app, 80, 24);
+    // The list pane renders one compact row per entry; the paragraph
+    // body lives in the preview pane for the *selected* entry. The
+    // fixture's first entry is the `# Daily` heading, so step down
+    // until the preview shows the edited paragraph.
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let mut frame = frame;
+    for _ in 0..8 {
+        if frame.contains("Fixed the parser bug today.") {
+            break;
+        }
+        app.dispatch(down.clone())?;
+        frame = render(&mut app, 80, 24);
+    }
     assert!(
         frame.contains("Fixed the parser bug today."),
-        "history feed missing the recent paragraph:\n{frame}"
+        "history feed missing the recent paragraph in the preview pane:\n{frame}"
     );
     assert!(
         !frame.contains("Ancient"),
@@ -119,8 +132,17 @@ fn history_move_opens_seeded_section_move_modal() -> Result<()> {
     let (_dir, vault) = recent_edit_vault();
     let mut app = App::for_test(vault);
     app.switch_to(recent_tab_idx())?;
-    // Precondition: the feed rendered at least one row.
-    let frame = render(&mut app, 80, 24);
+    // Precondition: the feed rendered at least one row. Step down to a
+    // non-heading entry so the section-move modal has a real section.
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let mut frame = render(&mut app, 80, 24);
+    for _ in 0..8 {
+        if frame.contains("Fixed the parser bug") {
+            break;
+        }
+        app.dispatch(down.clone())?;
+        frame = render(&mut app, 80, 24);
+    }
     assert!(
         frame.contains("Fixed the parser bug"),
         "no feed row:\n{frame}"
@@ -183,6 +205,8 @@ fn history_rows_show_citation_badge_and_uncited_toggle() -> Result<()> {
     let mut app = App::for_test(vault);
     app.switch_to(recent_tab_idx())?;
     let frame = render(&mut app, 80, 24);
+    // The compact list row carries the inline `cited:` badge for the
+    // cited entry (the third row in this fixture).
     assert!(
         frame.contains("cited: Synth"),
         "cited paragraph missing badge:\n{frame}"
@@ -200,10 +224,39 @@ fn history_rows_show_citation_badge_and_uncited_toggle() -> Result<()> {
     );
 
     app.dispatch(key('u'))?;
-    let frame = render(&mut app, 80, 24);
+    // Toggle off restores the feed; navigate to the cited paragraph to
+    // confirm its body is back in the preview pane.
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let mut frame = render(&mut app, 80, 24);
+    for _ in 0..8 {
+        if frame.contains("Fixed the parser bug") {
+            break;
+        }
+        app.dispatch(down.clone())?;
+        frame = render(&mut app, 80, 24);
+    }
     assert!(
         frame.contains("Fixed the parser bug"),
         "toggle off should restore the feed:\n{frame}"
     );
+    Ok(())
+}
+
+#[test]
+fn history_split_layout_snapshot() -> Result<()> {
+    // Visual snapshot of the list/preview split: compact list pane on
+    // top, preview pane (header + rule + body) on the bottom. The
+    // cited entry is the third row; navigate to it so the preview
+    // header shows the citation detail and the body shows the paragraph.
+    let (_dir, vault) = cited_recent_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(recent_tab_idx())?;
+    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Step to the cited paragraph (third entry).
+    for _ in 0..2 {
+        app.dispatch(down.clone())?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("history_split_layout_80x24", frame);
     Ok(())
 }

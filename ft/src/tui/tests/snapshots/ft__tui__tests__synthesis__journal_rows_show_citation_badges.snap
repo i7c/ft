@@ -1,19 +1,19 @@
 ---
 source: ft/src/tui/tests/synthesis.rs
-assertion_line: 1629
+assertion_line: 1703
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 ┌ Gather — Target.md (2 entries) ──────────────────────────────────────────────┐
 │Sources (1)                                                                   │
 │Target.md                                                                     │
-│  2025-01-02  DailyA                                                          │
+│▶   2025-01-02  DailyA cited: Synth                                           │
+│    2025-01-02  DailyB                                                        │
+│──────────────────────────────────────────────────────────────────────────────│
+│DailyA  ·  2025-01-02  ·  L1–1                                                │
 │    ↳ cited: Synth                                                            │
+│──────────────────────────────────────────────────────────────────────────────│
 │Alpha mentions [[Target]].                                                    │
-│                                                                              │
-│  2025-01-02  DailyB                                                          │
-│Beta mentions [[Target]].                                                     │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
