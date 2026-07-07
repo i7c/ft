@@ -249,7 +249,14 @@ the splits that distort your vault most come first. `?` marks ghost
 sides; `--limit` and `--json` behave as everywhere else.
 
 The report is read-only — each pair just carries its fix, ready to
-paste. A ghost folds into its sibling with `ft notes rename` (all
+paste. If linked attachments pollute the report (`[[fig-v1.png]]` ↔
+`[[fig-v2.png]]` is a filename pattern, not concept drift), exclude
+them by glob in config — see [docs/config.md](../config.md#drift):
+
+```toml
+[drift]
+exclude = ["*.png", "*.pdf"]
+``` A ghost folds into its sibling with `ft notes rename` (all
 links rewritten vault-wide); when both sides are real notes the
 suggestion is a `## Related` alias, since two files' *content* can
 only be merged by hand.

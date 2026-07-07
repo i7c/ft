@@ -178,3 +178,36 @@ fn suggested_merge_resolves_the_pair() {
         .success()
         .stdout(predicates::str::contains("no drift candidates found"));
 }
+
+/// `[drift].exclude` keeps linked attachments out of the report while
+/// real concept drift still surfaces.
+#[test]
+fn config_exclude_patterns_drop_attachments() {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child(".ft/config.toml")
+        .write_str("[drift]\nexclude = [\"*.png\", \"*.pdf\"]\n")
+        .unwrap();
+    tmp.child("a.md")
+        .write_str(
+            "see ![[diagram-v1.png]] with [[zebra]].\n\n\
+             see ![[diagram-v2.png]] with [[zebra]].\n\n\
+             [[onboarding]] with [[zebra]].\n\n\
+             [[onboarding-flow]] with [[zebra]].\n",
+        )
+        .unwrap();
+    let out = ft()
+        .env("NO_COLOR", "1")
+        .args(["--vault", tmp.path().to_str().unwrap(), "notes", "drift"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!text.contains("diagram-v1.png"), "{text}");
+    assert!(
+        text.contains("[[onboarding]]") && text.contains("[[onboarding-flow]]"),
+        "{text}"
+    );
+}

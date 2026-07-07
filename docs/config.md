@@ -28,6 +28,7 @@ silently default.
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
 | `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes pulse`. |
 | `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (both default off).       |
+| `[drift]`               | table                             | either        | Exclude patterns for the `ft notes drift` report.      |
 
 `default_vault` is only honored in the user config; setting it in a
 vault config does nothing (the vault has already been chosen by the
@@ -398,6 +399,22 @@ timeblocks_tab = true   # default: false — show the Timeblocks tab
 Enabled tabs append after Gather (order: Tasks, then Timeblocks); tab
 digits and `Tab`-cycling follow the built list. The headless CLI
 (`ft tasks`, `ft timeblocks`) is unaffected by these toggles.
+
+## `[drift]`
+
+Settings for `ft notes drift`. Vaults that link attachments
+(`![[diagram-v1.png]]`, `[[report-2025.pdf]]`) accumulate ghost
+concepts with systematically similar names; exclude them from the
+drift report by pattern:
+
+```toml
+[drift]
+# Glob patterns: `*` matches any sequence (including `/`), `?` one
+# character; matching is case-insensitive. Patterns see ghost target
+# strings and, for notes, the filename stem and vault-relative path.
+# Default: empty (nothing excluded).
+exclude = ["*.png", "*.pdf"]
+```
 
 ## `[synth]`
 

@@ -68,6 +68,9 @@ pub struct Config {
     /// TUI settings. See [`Tui`].
     #[serde(default)]
     pub tui: Tui,
+    /// Drift-report settings. See [`Drift`].
+    #[serde(default)]
+    pub drift: Drift,
 }
 
 impl Config {
@@ -249,6 +252,19 @@ pub struct Synth {
     pub folder: String,
     #[serde(default)]
     pub exclude_prefixes: Vec<String>,
+}
+
+/// Drift-report configuration (`ft notes drift`).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Drift {
+    /// Glob patterns (`*` matches any sequence including `/`, `?` one
+    /// character; case-insensitive) excluding concepts from the drift
+    /// report. Matched against ghost target strings and, for notes,
+    /// the filename stem and vault-relative path. Typical use:
+    /// `exclude = ["*.png", "*.pdf"]` to keep linked attachments out.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 /// TUI configuration. The Tasks and Timeblocks tabs are adjacent

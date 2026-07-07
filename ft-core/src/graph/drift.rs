@@ -72,6 +72,7 @@ pub fn detect_drift(graph: &Graph, vault: &Vault) -> Vec<DriftCandidate> {
         joined: String,
         paragraphs: HashSet<NoteId>,
     }
+    let exclude = &vault.config.config.drift.exclude;
     let mut concepts: Vec<Concept> = Vec::new();
     for (id, node) in graph.nodes() {
         let (target, is_ghost) = match node {
@@ -85,6 +86,20 @@ pub fn detect_drift(graph: &Graph, vault: &Vault) -> Vec<DriftCandidate> {
             NodeKind::Ghost(g) => (g.raw.clone(), true),
             _ => continue,
         };
+        // `[drift].exclude` keeps linked attachments (`[[fig-v2.png]]`)
+        // and other systematically-similar names out of the candidate
+        // universe entirely. Patterns see the ghost raw target and, for
+        // notes, both the stem and the vault-relative path.
+        let excluded = exclude.iter().any(|pat| {
+            glob_match(pat, &target)
+                || match node {
+                    NodeKind::Note(n) => glob_match(pat, &n.path.to_string_lossy()),
+                    _ => false,
+                }
+        });
+        if excluded {
+            continue;
+        }
         let paragraphs: HashSet<NoteId> = graph
             .mentions_of(id)
             .into_iter()
@@ -242,6 +257,24 @@ fn name_similarity(
         1.0 - lev / max_len
     };
     containment.max(jaccard).max(edit_sim)
+}
+
+/// Minimal case-insensitive glob: `*` matches any sequence (including
+/// `/`), `?` exactly one character, everything else literal. Small and
+/// dependency-free, like the Levenshtein below — the patterns are
+/// user-config one-liners (`*.png`), not a full glob dialect.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    fn rec(p: &[char], t: &[char]) -> bool {
+        match p.first() {
+            None => t.is_empty(),
+            Some('*') => (0..=t.len()).any(|k| rec(&p[1..], &t[k..])),
+            Some('?') => !t.is_empty() && rec(&p[1..], &t[1..]),
+            Some(c) => t.first() == Some(c) && rec(&p[1..], &t[1..]),
+        }
+    }
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    rec(&p, &t)
 }
 
 /// Classic two-row Levenshtein over chars — small inputs only (concept
@@ -426,6 +459,73 @@ mod tests {
             c.suggestion
         );
         assert!(!c.suggestion.contains("rename"), "{}", c.suggestion);
+    }
+
+    #[test]
+    fn glob_matcher_semantics() {
+        assert!(glob_match("*.png", "diagram-v1.png"));
+        assert!(glob_match("*.png", "assets/deep/diagram.PNG")); // `*` crosses `/`, case-insensitive
+        assert!(glob_match("fig-?.pdf", "fig-2.pdf"));
+        assert!(!glob_match("fig-?.pdf", "fig-12.pdf"));
+        assert!(!glob_match("*.png", "diagram.pdf"));
+        assert!(glob_match("assets/*", "assets/x/y.bin"));
+    }
+
+    #[test]
+    fn exclude_patterns_drop_attachment_ghosts() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child(".ft/config.toml")
+            .write_str("[drift]\nexclude = [\"*.png\", \"*.pdf\"]\n")
+            .unwrap();
+        tmp.child("a.md")
+            .write_str(
+                "see ![[diagram-v1.png]] with [[zebra]].\n\n\
+                 see ![[diagram-v2.png]] with [[zebra]].\n\n\
+                 [[report-2024.pdf]] once.\n\n[[report-2025.pdf]] once.\n\n\
+                 [[onboarding]] with [[zebra]].\n\n[[onboarding-flow]] with [[zebra]].\n",
+            )
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &v.scan()).unwrap();
+        let cands = detect_drift(&g, &v);
+        assert!(
+            pair(&cands, "diagram-v1.png", "diagram-v2.png").is_none(),
+            "png ghosts must be excluded: {cands:?}"
+        );
+        assert!(
+            pair(&cands, "report-2024.pdf", "report-2025.pdf").is_none(),
+            "pdf ghosts must be excluded: {cands:?}"
+        );
+        assert!(
+            pair(&cands, "onboarding", "onboarding-flow").is_some(),
+            "real concept drift must survive the filter"
+        );
+    }
+
+    #[test]
+    fn exclude_matches_note_stem_and_path() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child(".ft/config.toml")
+            .write_str("[drift]\nexclude = [\"archive/*\"]\n")
+            .unwrap();
+        tmp.child("archive/onboarding.md")
+            .write_str("# onboarding\n")
+            .unwrap();
+        tmp.child("a.md")
+            .write_str(
+                "[[archive/onboarding]] with [[zebra]].\n\n\
+                 [[onboarding-flow]] with [[zebra]].\n",
+            )
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &v.scan()).unwrap();
+        let cands = detect_drift(&g, &v);
+        assert!(
+            pair(&cands, "onboarding", "onboarding-flow").is_none(),
+            "note under excluded path must not pair: {cands:?}"
+        );
     }
 
     #[test]
