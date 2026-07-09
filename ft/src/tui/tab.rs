@@ -187,6 +187,21 @@ pub enum GraphRequest {
     },
 }
 
+/// Every cross-tab / modal-raised request that the Tasks tab (and only the
+/// Tasks tab) services. A parallel of [`GraphRequest`]: carried as the
+/// single payload of [`AppRequest::Tasks`] and dispatched through the
+/// single [`Tab::handle_tasks_request`] hook. Today only the preset-picker
+/// modal raises a request (on Enter), but the channel is generic so future
+/// Tasks-targeted modal commits reuse it.
+#[derive(Debug)]
+pub enum TasksRequest {
+    /// Replace the active SearchView's query text with a preset DSL string
+    /// and recompute matches. Raised by the task-preset-picker modal on
+    /// Enter. Parsed under `Profile::Tasks` (the same profile the inline
+    /// query bar uses).
+    ApplyPreset(String),
+}
+
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
 /// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
 /// a status-bar toast) without each tab reaching for terminal state.
@@ -283,6 +298,11 @@ pub enum AppRequest {
     /// used to be sixteen dedicated `AppRequest::Graph*` variants, one
     /// per action.
     Graph(GraphRequest),
+    /// Routed to the Tasks tab: the App looks the tab up by
+    /// `TabKind::Tasks` and calls `Tab::handle_tasks_request` with the
+    /// carried [`TasksRequest`]. A parallel of [`AppRequest::Graph`] for
+    /// Tasks-targeted, modal-raised requests (today: the preset picker).
+    Tasks(TasksRequest),
 }
 
 impl std::fmt::Debug for AppRequest {
@@ -344,6 +364,7 @@ impl std::fmt::Debug for AppRequest {
                 .field("toast_style", toast_style)
                 .finish(),
             AppRequest::Graph(req) => f.debug_tuple("Graph").field(req).finish(),
+            AppRequest::Tasks(req) => f.debug_tuple("Tasks").field(req).finish(),
         }
     }
 }
@@ -575,6 +596,13 @@ pub trait Tab {
     /// `graph_*` methods, one per action. Default is a no-op; only
     /// `GraphTab` overrides it.
     fn handle_graph_request(&mut self, _req: GraphRequest, _ctx: &mut TabCtx) {}
+
+    /// Single hook for every cross-tab / modal-raised request targeting
+    /// the Tasks tab (see [`TasksRequest`] and [`AppRequest::Tasks`]).
+    /// A parallel of [`handle_graph_request`](Self::handle_graph_request):
+    /// the App looks the tab up by `TabKind::Tasks` and calls this once
+    /// per request. Default is a no-op; only `TasksTab` overrides it.
+    fn handle_tasks_request(&mut self, _req: TasksRequest, _ctx: &mut TabCtx) {}
 
     /// Test-only probe: does the currently-selected row represent a
     /// real Note? Default is `false`; the graph tab overrides this

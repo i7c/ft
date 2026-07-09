@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::NaiveDate;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
@@ -28,4 +29,12 @@ pub trait View {
     fn refresh(&mut self, _ctx: &mut TabCtx) -> Result<()> {
         Ok(())
     }
+
+    /// Replace the view's query with a preset DSL and recompute. Raised
+    /// by the task-preset-picker modal via `TasksTab::handle_tasks_request`.
+    /// Default: no-op (only `SearchView` overrides). Mirrors how
+    /// `on_graph_ready` / `refresh` are default-no-op `View` methods
+    /// so the owning tab can call through `Box<dyn View>` without
+    /// downcasting.
+    fn apply_preset(&mut self, _dsl: &str, _today: NaiveDate) {}
 }

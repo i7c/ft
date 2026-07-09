@@ -26,6 +26,7 @@ use crate::tui::{
     command::{Command, CommandOutcome},
     event::Event,
     keymap::{KeyChord, KeyMap},
+    modal::ActiveModal,
     palette,
     tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{
@@ -34,6 +35,7 @@ use crate::tui::{
             parse_optional_date, parse_priority, parse_tags_field, relative_date,
             render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
         },
+        modals::{TaskPresetPickerModal, TaskPresetPickerSource},
         quickline::parse_quickline,
         view::View,
     },
@@ -49,6 +51,7 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Navigation
         .bind("/", "tasks.edit-query")
+        .bind("Ctrl+p", "tasks.preset-pick")
         .bind("Up", "tasks.cursor-up")
         .bind("k", "tasks.cursor-up")
         .bind("Down", "tasks.cursor-down")
@@ -487,6 +490,16 @@ impl SearchView {
         }
     }
 
+    /// Replace the query with a preset DSL and recompute matches against
+    /// the current snapshot, leaving the view in normal mode (not query
+    /// edit). Raised by the task-preset-picker modal commit via
+    /// `TasksRequest::ApplyPreset` → `TasksTab::handle_tasks_request`.
+    fn apply_preset(&mut self, dsl: &str, today: NaiveDate) {
+        self.query_text = dsl.to_string();
+        self.recompile(today);
+        self.recompute_matches(today);
+    }
+
     // --- rendering helpers -------------------------------------------------
 
     fn render_query_bar(&self, frame: &mut Frame, area: Rect) {
@@ -770,6 +783,10 @@ impl View for SearchView {
         SearchView::refresh(self, ctx)
     }
 
+    fn apply_preset(&mut self, dsl: &str, today: chrono::NaiveDate) {
+        SearchView::apply_preset(self, dsl, today)
+    }
+
     fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
         let _ = self.adopt_snapshot(ctx);
     }
@@ -782,6 +799,16 @@ impl SearchView {
         match cmd.name {
             "tasks.edit-query" => {
                 self.enter_edit_mode();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.preset-pick" => {
+                let src = TaskPresetPickerSource::new(ctx.vault);
+                if src.items.is_empty() {
+                    return Ok(CommandOutcome::Handled);
+                }
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::TaskPresetPicker(TaskPresetPickerModal::new(src)),
+                )));
                 Ok(CommandOutcome::Handled)
             }
             "tasks.cursor-up" => {

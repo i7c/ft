@@ -65,6 +65,7 @@ pub mod registry {
             modal_commands::RENAME_COMMANDS,
             modal_commands::SEARCH_COMMANDS,
             modal_commands::PRESET_PICKER_COMMANDS,
+            modal_commands::TASK_PRESET_PICKER_COMMANDS,
             modal_commands::CAPTURE_PICKER_COMMANDS,
             modal_commands::RELATED_COMMANDS,
             modal_commands::MOVE_OUTER_COMMANDS,
@@ -129,6 +130,10 @@ pub mod registry {
             ("modal/rename", &modal_commands::RENAME_KEYMAP),
             ("modal/search", &modal_commands::SEARCH_KEYMAP),
             ("modal/preset-picker", &modal_commands::PRESET_PICKER_KEYMAP),
+            (
+                "modal/task-preset-picker",
+                &modal_commands::TASK_PRESET_PICKER_KEYMAP,
+            ),
             (
                 "modal/capture-picker",
                 &modal_commands::CAPTURE_PICKER_KEYMAP,
@@ -222,6 +227,10 @@ pub mod registry {
             ("modal/rename", &modal_commands::RENAME_KEYMAP),
             ("modal/search", &modal_commands::SEARCH_KEYMAP),
             ("modal/preset-picker", &modal_commands::PRESET_PICKER_KEYMAP),
+            (
+                "modal/task-preset-picker",
+                &modal_commands::TASK_PRESET_PICKER_KEYMAP,
+            ),
             (
                 "modal/capture-picker",
                 &modal_commands::CAPTURE_PICKER_KEYMAP,

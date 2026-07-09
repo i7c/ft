@@ -526,6 +526,36 @@ fn help_overlay_over_tasks_tab_renders() -> Result<()> {
     Ok(())
 }
 
+/// The Tasks tab's `help_sections()` advertises the Ctrl+P preset row.
+/// The rendered 80×24 overlay only shows the Global section (the
+/// Tasks-specific sections are below the fold), so assert on the
+/// section data directly — the coverage the `?` overlay can't give at
+/// default geometry.
+#[test]
+fn tasks_help_sections_advertise_ctrl_p() {
+    use crate::tui::help::HelpSection;
+    use crate::tui::tab::Tab;
+    use crate::tui::tabs::tasks::TasksTab;
+    let tab = TasksTab::new();
+    let nav: HelpSection = tab
+        .help_sections()
+        .into_iter()
+        .find(|s| s.title == "Navigation")
+        .expect("Tasks tab must have a Navigation help section");
+    assert!(
+        nav.entries.iter().any(|e| e.keys == "Ctrl+P"),
+        "Navigation help section must list Ctrl+P: {:?}",
+        nav.entries
+    );
+    // And the description matches the command's intent.
+    let row = nav
+        .entries
+        .iter()
+        .find(|e| e.keys == "Ctrl+P")
+        .expect("Ctrl+P row present (checked above)");
+    assert_eq!(row.desc, "load preset into query");
+}
+
 #[test]
 fn edit_popup_error_state_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
@@ -1982,6 +2012,141 @@ fn target_picker_does_not_open_from_description_field() -> Result<()> {
     assert!(
         frame.contains("Inbox"),
         "description should show typed text:\n{frame}"
+    );
+    Ok(())
+}
+
+// ── Ctrl+P task preset picker ───────────────────────────────────────
+
+/// Helper: build an app on the Tasks tab over a populated vault with the
+/// fixed test clock, with the default query active.
+fn tasks_app_populated() -> App {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5).expect("switch to Tasks");
+    app
+}
+
+/// Ctrl+P opens the task-preset-picker modal (built-in task presets are
+/// always available). Mirrors the graph tab's
+/// `graph_tab_preset_picker_opens_on_ctrl_n`.
+#[test]
+fn ctrl_p_opens_task_preset_picker() -> Result<()> {
+    let mut app = tasks_app_populated();
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("task-preset-picker"),
+        "Ctrl+P must open the task-preset-picker modal"
+    );
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("tasks_tab_preset_picker_open_80x24", frame);
+    Ok(())
+}
+
+/// Selecting a preset (Enter) replaces the active query with the preset's
+/// DSL, recomputes matches, and returns to normal mode (modal closed).
+/// The built-in `overdue` preset is `(status in {Open, InProgress}) and
+/// due < today`.
+#[test]
+fn ctrl_p_selecting_preset_replaces_query_and_stays_in_normal_mode() -> Result<()> {
+    let mut app = tasks_app_populated();
+    // Ctrl+P opens the picker; dispatch services the OpenModal request.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )))?;
+    assert_eq!(app.active_modal_name(), Some("task-preset-picker"));
+
+    // Move the cursor to land on the `overdue` built-in (presets are
+    // listed user-first then built-ins alphabetically: done-today,
+    // not-done, overdue, ...). Two Down presses from the top reach it.
+    for _ in 0..2 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    }
+    // Enter commits: the modal posts AppRequest::Tasks(ApplyPreset),
+    // which service_pending_requests routes to TasksTab::handle_tasks_request.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Modal is closed — we're back in normal mode.
+    assert_eq!(
+        app.active_modal_name(),
+        None,
+        "Enter must close the picker and return to normal mode"
+    );
+
+    // The active view's query bar now shows the overdue preset DSL.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("(status in {Open, InProgress}) and due < today"),
+        "query bar should show the overdue preset DSL:\n{frame}"
+    );
+    // The default query (due < <date>) is no longer present.
+    assert!(
+        !frame.contains("due < 2026-05-18"),
+        "default query should be replaced by the preset:\n{frame}"
+    );
+    Ok(())
+}
+
+/// Esc dismisses the picker without modifying the active query.
+#[test]
+fn ctrl_p_cancel_leaves_query_unchanged() -> Result<()> {
+    let mut app = tasks_app_populated();
+    // Capture the default query before opening the picker.
+    let before = render(&mut app, 80, 24);
+    let default_query = before
+        .lines()
+        .find(|l| l.contains("due < 2026"))
+        .expect("default query should be visible before Ctrl+P");
+
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )))?;
+    assert_eq!(app.active_modal_name(), Some("task-preset-picker"));
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    assert_eq!(app.active_modal_name(), None, "Esc must close the picker");
+
+    let after = render(&mut app, 80, 24);
+    let after_query = after
+        .lines()
+        .find(|l| l.contains("due < 2026"))
+        .expect("default query should still be visible after cancel");
+    assert_eq!(
+        default_query, after_query,
+        "Esc must leave the active query unchanged"
+    );
+    Ok(())
+}
+
+/// Ctrl+P is a no-op while the query bar is in edit mode (the edit_state
+/// sub-mode swallows keys before the idle keymap is consulted). Opening
+/// the picker from edit mode must not happen.
+#[test]
+fn ctrl_p_does_not_open_picker_while_editing_query() -> Result<()> {
+    let mut app = tasks_app_populated();
+    // `/` enters query edit mode.
+    app.dispatch(key('/'))?;
+    assert!(
+        app.active_modal_name().is_none(),
+        "query edit is an inline sub-mode, not a modal"
+    );
+    // Ctrl+P is consumed by the edit buffer, not the idle keymap.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )))?;
+    assert_eq!(
+        app.active_modal_name(),
+        None,
+        "Ctrl+P must not open the picker while the query bar is being edited"
     );
     Ok(())
 }

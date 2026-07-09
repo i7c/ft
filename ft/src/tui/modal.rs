@@ -63,6 +63,7 @@ use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
     render_periodic_leader,
 };
+use crate::tui::tabs::tasks::modals::TaskPresetPickerModal;
 use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
 use crate::tui::widgets::{FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PickerOutcome};
 
@@ -284,6 +285,10 @@ pub enum ActiveModal {
     /// Append-or-Replace prompt raised on the Journal tab when an
     /// external `GatherAddSources` request arrives.
     GatherAppendOrReplace(GatherAppendOrReplaceModal),
+    /// Fuzzy picker over task presets (user `Config::presets` + built-in
+    /// `query::preset::builtin`), hosted by the Tasks tab. On Enter
+    /// posts `AppRequest::Tasks(TasksRequest::ApplyPreset(dsl))`.
+    TaskPresetPicker(TaskPresetPickerModal),
 }
 
 impl Modal for ActiveModal {
@@ -310,6 +315,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.handle_event(ev, ctx),
             ActiveModal::GatherSources(s) => s.handle_event(ev, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -336,6 +342,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.render(frame, area, ctx),
             ActiveModal::GatherSources(s) => s.render(frame, area, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -360,6 +367,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.keymap_help(),
             ActiveModal::GatherSources(s) => s.keymap_help(),
             ActiveModal::GatherAppendOrReplace(s) => s.keymap_help(),
+            ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
         }
     }
 
@@ -384,6 +392,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(_) => "task-create",
             ActiveModal::GatherSources(_) => "journal-sources",
             ActiveModal::GatherAppendOrReplace(_) => "journal-append-or-replace",
+            ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
         }
     }
 
@@ -408,6 +417,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.commands(),
             ActiveModal::GatherSources(s) => s.commands(),
             ActiveModal::GatherAppendOrReplace(s) => s.commands(),
+            ActiveModal::TaskPresetPicker(s) => s.commands(),
         }
     }
 
@@ -432,6 +442,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.keymap(),
             ActiveModal::GatherSources(s) => s.keymap(),
             ActiveModal::GatherAppendOrReplace(s) => s.keymap(),
+            ActiveModal::TaskPresetPicker(s) => s.keymap(),
         }
     }
 
@@ -456,6 +467,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskCreate(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::GatherSources(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }

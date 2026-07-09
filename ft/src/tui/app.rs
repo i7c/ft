@@ -819,6 +819,11 @@ impl App {
                     tab.handle_graph_request(req, ctx)
                 });
             }
+            AppRequest::Tasks(req) => {
+                self.with_tab(TabKind::Tasks, |tab, ctx| {
+                    tab.handle_tasks_request(req, ctx)
+                });
+            }
         }
         Ok(None)
     }

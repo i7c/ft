@@ -1,4 +1,5 @@
 pub(crate) mod edit_popup;
+pub(crate) mod modals;
 mod quickline;
 mod search;
 mod view;
@@ -13,7 +14,7 @@ use crate::tui::{
     event::Event,
     help::HelpSection,
     keymap::KeyMap,
-    tab::{EventOutcome, Tab, TabCtx, TabKind},
+    tab::{EventOutcome, Tab, TabCtx, TabKind, TasksRequest},
 };
 
 /// Empty tab-level keymap (sidebar removed). Kept as a named static so
@@ -33,6 +34,15 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "tasks.edit-query",
         description: "Open the query editor",
+        scope: CommandScope::Tab("tasks"),
+        group: "Navigation",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.preset-pick",
+        description: "Load a task preset into the active query",
         scope: CommandScope::Tab("tasks"),
         group: "Navigation",
         args_schema: &[],
@@ -365,6 +375,16 @@ impl Tab for TasksTab {
         }
     }
 
+    fn handle_tasks_request(&mut self, req: TasksRequest, ctx: &mut TabCtx) {
+        match req {
+            TasksRequest::ApplyPreset(dsl) => {
+                if let Some(v) = self.views.get_mut(self.active_view) {
+                    v.apply_preset(&dsl, ctx.today);
+                }
+            }
+        }
+    }
+
     fn help_sections(&self) -> Vec<HelpSection> {
         vec![
             HelpSection::new(
@@ -373,6 +393,7 @@ impl Tab for TasksTab {
                     ("↑ / ↓ · j / k", "select prev / next task"),
                     ("→ / l · ← / h", "expand / collapse subtasks"),
                     ("/", "edit query"),
+                    ("Ctrl+P", "load preset into query"),
                     ("R", "reload vault"),
                     ("Enter", "open task in $EDITOR"),
                 ],

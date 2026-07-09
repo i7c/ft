@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/tasks.rs
-assertion_line: 525
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti

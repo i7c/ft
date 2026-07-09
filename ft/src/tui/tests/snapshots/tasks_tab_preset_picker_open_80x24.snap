@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests/tasks.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
+┌ query ───────────────────────────────────────────────────────────────────────┐
+│status in {Open, InProgress} and due < 2026-05-18                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────┐
+│ ── overdue (2)┌ find ────────────────────────────────────────┐               │
+│▶   !!  Pay ren│type to search…                               │               │
+│    !   Renew p└──────────────────────────────────────────────┘ay             │
+│ ── upcoming (3┌ recent · type to search ─────────────────────┐               │
+│        Reply t│▶ done-today                                  │               │
+│    !!  Submit │  not-done                                    │    ⏳  tomorrow│
+│    v   Buy bir│  overdue                                     │               │
+│               │  today                                       │               │
+│               │  upcoming                                    │               │
+│               │                                              │               │
+│               │                                              │               │
+│               │                                              │               │
+│               │                                              │               │
+│               └──────────────────────────────────────────────┘               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]   modal: task-pres

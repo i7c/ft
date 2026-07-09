@@ -333,6 +333,7 @@ pub fn parse_scope(s: &str) -> Option<CommandScope> {
         "modal/rename" => Some(CommandScope::Modal("rename")),
         "modal/search" => Some(CommandScope::Modal("search")),
         "modal/preset-picker" => Some(CommandScope::Modal("preset-picker")),
+        "modal/task-preset-picker" => Some(CommandScope::Modal("task-preset-picker")),
         "modal/capture-picker" => Some(CommandScope::Modal("capture-picker")),
         "modal/related" => Some(CommandScope::Modal("related")),
         "modal/move" => Some(CommandScope::Modal("move")),
