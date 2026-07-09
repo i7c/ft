@@ -1,15 +1,14 @@
 ---
 source: ft/src/tui/tests/history.rs
-assertion_line: 260
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 ┌ Recent (3 entries) ──────────────────────────────────────────────────────────┐
-│    2026-07-07  Daily                                                         │
-│    2026-07-07  Daily                                                         │
-│▶   2026-07-07  Daily cited: Synth                                            │
+│    2026-05-09  Daily                                                         │
+│    2026-05-09  Daily                                                         │
+│▶   2026-05-09  Daily cited: Synth                                            │
 │──────────────────────────────────────────────────────────────────────────────│
-│Daily  ·  2026-07-07  ·  L5–5                                                 │
+│Daily  ·  2026-05-09  ·  L5–5                                                 │
 │    ↳ cited: Synth                                                            │
 │──────────────────────────────────────────────────────────────────────────────│
 │Fixed the parser bug today.                                                   │

@@ -1,6 +1,9 @@
 //! History tab: windowed recent-edits feed, seeded section-move, and
-//! the send-to-synth overlay. Uses `App::for_test` (production tab
-//! layout — History sits at index 5, between Journal and Review).
+//! the send-to-synth overlay. The recent commit is backdated to a fixed
+//! date inside the default 7d window, and the helpers pin `FT_TODAY` to
+//! a matching fixed date so the pulse window (which reads
+//! `dates::today()` directly, not the App's clock field) stays stable
+//! and the snapshot doesn't drift as the calendar advances.
 
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -39,11 +42,23 @@ fn commit_dated(dir: &Path, msg: &str, date: &str) {
     assert!(out.status.success());
 }
 
+/// Pin `FT_TODAY` so the recent-feed window (which resolves
+/// `WindowRange::Since(7d)` against `dates::today()` directly, not the
+/// App's clock field) lands on a fixed date matching the backdated
+/// commits. Every vault helper in this module calls this so all tests
+/// agree on `today = 2026-05-10`, regardless of the real calendar date
+/// or test-thread scheduling. Safe under parallel test execution because
+/// every caller sets the same value (idempotent).
+fn pin_today() {
+    std::env::set_var("FT_TODAY", "2026-05-10");
+}
+
 /// Vault with an old base commit and a *recent* commit that adds a note
 /// with a heading + body — so the default 7-day window includes it and
 /// the note has a section for the move flow. The base commit is backdated
 /// so the `Since(7d)` window has a commit to diff against.
 fn recent_edit_vault() -> (TempDir, Vault) {
+    pin_today();
     let dir = TempDir::new().unwrap();
     let vp = dir.path().join("vault");
     std::fs::create_dir_all(vp.join(".obsidian")).unwrap();
@@ -53,14 +68,16 @@ fn recent_edit_vault() -> (TempDir, Vault) {
     run_git(&vp, &["config", "user.email", "t@e.com"]);
     run_git(&vp, &["config", "commit.gpgsign", "false"]);
     commit_dated(&vp, "base", "2025-01-01T00:00:00");
-    // Recent commit (real "now") — inside the default 7d window.
+    // Recent commit, backdated to a fixed date inside the default 7d
+    // window relative to the fixed test clock (2026-05-10). Keeping it
+    // deterministic (rather than committing at real "now") stops the
+    // recent-feed snapshot from drifting as the calendar advances.
     std::fs::write(
         vp.join("Daily.md"),
         "# Daily\n\n## Morning\n\nFixed the parser bug today.\n",
     )
     .unwrap();
-    run_git(&vp, &["add", "."]);
-    run_git(&vp, &["commit", "-m", "recent"]);
+    commit_dated(&vp, "recent", "2026-05-09T12:00:00");
     let vault = Vault::discover(Some(vp)).unwrap();
     (dir, vault)
 }
@@ -68,6 +85,7 @@ fn recent_edit_vault() -> (TempDir, Vault) {
 /// Vault whose only commits are all older than the 7-day window — the
 /// feed should be empty.
 fn stale_only_vault() -> (TempDir, Vault) {
+    pin_today();
     let dir = TempDir::new().unwrap();
     let vp = dir.path().join("vault");
     std::fs::create_dir_all(vp.join(".obsidian")).unwrap();
