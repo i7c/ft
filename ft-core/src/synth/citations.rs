@@ -1,6 +1,6 @@
 //! Citation index: which synth notes cite which source paragraphs.
 //!
-//! Built by walking the vault's synth notes (`ft-synth: true`) and
+//! Built by walking the vault's synth notes (`ft.synth.enabled: true`) and
 //! parsing their `[!ft-source]` callouts. Lookup classifies a paragraph
 //! into one of three states:
 //!
@@ -104,7 +104,7 @@ impl CitationIndex {
     /// Walk the vault, read every synth note, and index its callouts.
     ///
     /// Mirrors `synth::verify::verify_all`'s discovery: every markdown
-    /// file is read and checked for the `ft-synth: true` marker.
+    /// file is read and checked for the `ft.synth.enabled: true` marker.
     /// Unreadable files and malformed callout headers are recorded in
     /// [`CitationIndex::skipped`] rather than aborting.
     pub fn build(vault: &Vault) -> CitationIndex {
@@ -195,7 +195,7 @@ mod tests {
     use crate::synth::callout::{serialize, ProtectedSection};
 
     fn synth_note(sections: &[ProtectedSection]) -> String {
-        let mut out = String::from("---\nft-synth: true\n---\n\n");
+        let mut out = String::from("---\nft:\n  synth:\n    enabled: true\n---\n\n");
         for s in sections {
             out.push_str(&serialize(s));
             out.push_str("\n\n");
@@ -299,7 +299,7 @@ mod tests {
         let body = "good paragraph";
         let good = serialize(&section("notes/a.md", (1, 1), body));
         let content = format!(
-            "---\nft-synth: true\n---\n\n> [!ft-source] totally broken header\n> junk\n\n{good}\n"
+            "---\nft:\n  synth:\n    enabled: true\n---\n\n> [!ft-source] totally broken header\n> junk\n\n{good}\n"
         );
         let mut idx = CitationIndex::default();
         idx.add_note(Path::new("Synthesis/foo.md"), &content);

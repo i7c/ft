@@ -330,7 +330,7 @@ fn default_section_lands_task_under_heading() {
 fn frontmatter_section_overrides_config_default() {
     let dir = vault_with_daily_and_section("journal", "Tasks");
     let f = dir.child("notes.md");
-    f.write_str("---\nft-tasks-section: Inbox\n---\n# Notes\n\n## Inbox\n")
+    f.write_str("---\nft:\n  tasks:\n    section: Inbox\n---\n# Notes\n\n## Inbox\n")
         .unwrap();
     run(dir.path(), &["Ping bob", "--file", "notes.md"]).success();
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -384,7 +384,9 @@ fn missing_daily_note_is_created_from_template() {
         )
         .unwrap();
     dir.child("templates-ft/daily.md")
-        .write_str("---\nft-tasks-section: Tasks\n---\n# {{ title }}\n\n## Tasks\n\n## Log\n")
+        .write_str(
+            "---\nft:\n  tasks:\n    section: Tasks\n---\n# {{ title }}\n\n## Tasks\n\n## Log\n",
+        )
         .unwrap();
 
     run(dir.path(), &["Buy milk"]).success();
@@ -392,6 +394,6 @@ fn missing_daily_note_is_created_from_template() {
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
     assert_eq!(
         content,
-        "---\nft-tasks-section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk\n\n## Log\n"
+        "---\nft:\n  tasks:\n    section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk\n\n## Log\n"
     );
 }

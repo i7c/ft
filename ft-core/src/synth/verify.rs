@@ -70,7 +70,7 @@ pub fn verify_synth_note(vault: &Vault, note_path: &Path) -> Result<Vec<Verifica
 }
 
 /// Sweep every `.md` file in the vault, identify those with the
-/// `ft-synth: true` frontmatter marker, and verify each. Returns one
+/// `ft.synth.enabled: true` frontmatter marker, and verify each. Returns one
 /// `(note_path, results)` tuple per synth note in vault-walk order.
 ///
 /// Files that fail to read are silently skipped (transient I/O races,

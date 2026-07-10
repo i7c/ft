@@ -218,7 +218,7 @@ Promotion — giving the concept its page — happens where the ghost is:
   On a ghost row: `c` creates the note blank at the ghost's path,
   `Shift+c` creates it from a template, and `Shift+p` **promotes with
   material** — the note is created as a synth note scaffolded with
-  every paragraph that mentions the ghost, `ft-synth-targets` set,
+  every paragraph that mentions the ghost, `ft.synth.targets` set,
   editor open (needs git history for the seeded journal). Because the
   note takes the ghost's exact name, every existing link resolves
   without any rewriting.
@@ -295,7 +295,7 @@ ft notes gather finance --uncited    # only the unsynthesized mentions
 The TUI's Gather tab is the same feed with a fuzzy picker on top —
 press `5` in the TUI and pick a note. It shows the same badges, `u`
 toggles the uncited-only filter, and `o` picks a synth note to work
-*toward*: its `ft-synth-targets` load as the sources and every entry
+*toward*: its `ft.synth.targets` load as the sources and every entry
 badges as `in note` / `missing` relative to that note. See
 [tui.md](tui.md) and [synthesis.md](synthesis.md).
 
@@ -314,7 +314,7 @@ ft notes recent --since 2w --json    # last two weeks, machine-readable
 ft notes recent --range v1.0..HEAD   # a commit range
 ```
 
-Synth notes (`ft-synth: true`) are excluded by default; pass
+Synth notes (`ft.synth.enabled: true`) are excluded by default; pass
 `--include-synth` to include them. Periodic/daily notes are included.
 
 Recent carries the same citation badges and `--uncited` filter as

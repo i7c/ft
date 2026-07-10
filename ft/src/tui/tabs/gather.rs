@@ -263,7 +263,7 @@ pub enum SynthSendState {
         new_only: bool,
     },
     /// User picked a real note but its frontmatter lacks
-    /// `ft-synth: true`. Inline 3-way prompt: append anyway, mark and
+    /// `ft.synth.enabled: true`. Inline 3-way prompt: append anyway, mark and
     /// append, or cancel. `new_only` is carried through so the `n` flow
     /// still filters after the mark/append decision.
     NonSynthPrompt {
@@ -272,7 +272,7 @@ pub enum SynthSendState {
         new_only: bool,
     },
     /// `o` — fuzzy picker over the vault's synth notes. Picking one
-    /// loads its `ft-synth-targets` as the source set and installs it
+    /// loads its `ft.synth.targets` as the source set and installs it
     /// as the badge context note.
     PickContextNote(FuzzyPicker<PathListPickerSource>),
     /// `S` — fuzzy picker over every vault folder. `.` selects the
@@ -292,7 +292,7 @@ pub enum SynthSendState {
 pub enum NonSynthChoice {
     /// Append protected sections without touching frontmatter.
     AppendAnyway,
-    /// Insert/upgrade frontmatter to include `ft-synth: true`, then
+    /// Insert/upgrade frontmatter to include `ft.synth.enabled: true`, then
     /// append.
     MarkAndAppend,
 }
@@ -659,7 +659,7 @@ impl GatherTab {
         self.synth_send = Some(SynthSendState::PickContextNote(FuzzyPicker::new(source)));
     }
 
-    /// Context note picked: load its `ft-synth-targets` as the source
+    /// Context note picked: load its `ft.synth.targets` as the source
     /// set and install it as the badge context.
     fn on_context_note_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
         let abs = ctx.vault.path.join(&path);
@@ -678,7 +678,7 @@ impl GatherTab {
             crate::tui::notes_actions::queue_toast(
                 ctx,
                 &format!(
-                    "{} has no ft-synth-targets frontmatter — load sources manually with /",
+                    "{} has no ft.synth.targets frontmatter — load sources manually with /",
                     path.display()
                 ),
                 ToastStyle::Info,
@@ -709,7 +709,7 @@ impl GatherTab {
         if targets.is_empty() {
             crate::tui::notes_actions::queue_toast(
                 ctx,
-                &format!("{}: ft-synth-targets is empty", path.display()),
+                &format!("{}: ft.synth.targets is empty", path.display()),
                 ToastStyle::Info,
             );
             return;
@@ -953,7 +953,7 @@ impl GatherTab {
 
     /// Perform the actual scaffold + handoff. `vault_rel_path` is the
     /// vault-relative target; `mark_synth` ensures the on-disk file's
-    /// frontmatter includes `ft-synth: true` before the scaffold is
+    /// frontmatter includes `ft.synth.enabled: true` before the scaffold is
     /// applied (no-op when the file already has the marker or is being
     /// created — `apply_synth_scaffold` writes the marker fresh). When
     /// `new_only` is set, entries whose `date` is at or before the note's
@@ -982,7 +982,7 @@ impl GatherTab {
             if let Err(e) = mark_note_as_synth(&ctx.vault.path.join(vault_rel_path)) {
                 crate::tui::notes_actions::queue_toast(
                     ctx,
-                    &format!("could not add ft-synth marker: {e}"),
+                    &format!("could not add ft.synth marker: {e}"),
                     ToastStyle::Error,
                 );
                 return;
@@ -2054,9 +2054,9 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
-/// Insert `ft-synth: true` into the YAML frontmatter of the file at
+/// Insert `ft.synth.enabled: true` into the YAML frontmatter of the file at
 /// `absolute_path`. Delegates to [`ft_core::synth::callout::upsert_synth_frontmatter`]
-/// (the core pure transform) so the marker and the `ft-synth-targets` key
+/// (the core pure transform) so the marker and the `ft.synth.targets` key
 /// compose without clobbering each other. This thin wrapper handles the
 /// I/O (read + atomic write).
 pub(crate) fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
@@ -2070,7 +2070,7 @@ pub(crate) fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
 
 // `upsert_ft_synth_marker` (the pure marker-only transform) has moved
 // to `ft_core::synth::callout::upsert_synth_frontmatter`, which also
-// handles the optional `ft-synth-targets` key. The TUI layer no longer
+// handles the optional `ft.synth.targets` key. The TUI layer no longer
 // keeps its own copy; callers use the core helper directly.
 //
 // The three unit tests below (`upsert_ft_synth_marker_*`) now exercise

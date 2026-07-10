@@ -40,7 +40,7 @@ use ft_core::vault::Vault;
 #[derive(Subcommand, Debug)]
 pub enum SynthCommand {
     /// Scaffold protected sections into a target synth note (creating
-    /// it with `ft-synth: true` frontmatter if needed). Default action.
+    /// it with `ft.synth.enabled: true` frontmatter if needed). Default action.
     #[command(name = "scaffold")]
     Scaffold(ScaffoldArgs),
     /// Accrete missing journal entries into an existing synth note,
@@ -120,7 +120,7 @@ pub struct GrowArgs {
 
     /// A `[[wikilink]]` to source paragraphs from. Repeatable. When
     /// omitted (along with `--from`), targets are read from the note's
-    /// `ft-synth-targets` frontmatter.
+    /// `ft.synth.targets` frontmatter.
     #[arg(long, value_name = "LINK")]
     pub link: Vec<String>,
 
@@ -264,7 +264,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
 }
 
 /// Idempotently ensure the synth note at `absolute_path` carries an
-/// `ft-synth-targets` frontmatter key matching `links`. Writes only when
+/// `ft.synth.targets` frontmatter key matching `links`. Writes only when
 /// the on-disk key differs (create, or absent on an existing note).
 /// Existing keys are replaced so a re-run with different `--link` values
 /// updates the record. Best-effort: a write failure is surfaced as an
@@ -291,7 +291,7 @@ fn ensure_synth_targets(absolute_path: &Path, links: &[String]) -> Result<()> {
 /// - `--limit N`: cap the appended sections to the newest N.
 ///
 /// Targets come from `--link`/`--from`, or — when both are absent — from
-/// the note's `ft-synth-targets` frontmatter.
+/// the note's `ft.synth.targets` frontmatter.
 fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     if args.in_window && args.since.is_none() && args.range.is_none() {
         return Err(anyhow!("--in-window requires --since or --range"));
@@ -321,7 +321,7 @@ fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         let fm_targets = ft_core::synth::callout::parse_synth_targets(&content).unwrap_or_default();
         if fm_targets.is_empty() {
             return Err(anyhow!(
-                "no targets: pass --link or add `ft-synth-targets` frontmatter to {}",
+                "no targets: pass --link or add `ft.synth.targets` frontmatter to {}",
                 target.display()
             ));
         }
@@ -740,7 +740,7 @@ pub struct VerifyArgs {
     #[arg(value_name = "NOTE.md", conflicts_with = "all")]
     pub note: Option<PathBuf>,
 
-    /// Verify every `.md` marked `ft-synth: true` in the vault.
+    /// Verify every `.md` marked `ft.synth.enabled: true` in the vault.
     #[arg(long, conflicts_with = "note")]
     pub all: bool,
 
@@ -884,7 +884,7 @@ pub struct RepairArgs {
     #[arg(value_name = "NOTE.md", conflicts_with = "all")]
     pub note: Option<PathBuf>,
 
-    /// Repair every `.md` marked `ft-synth: true` in the vault.
+    /// Repair every `.md` marked `ft.synth.enabled: true` in the vault.
     #[arg(long, conflicts_with = "note")]
     pub all: bool,
 

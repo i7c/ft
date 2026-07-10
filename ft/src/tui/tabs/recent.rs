@@ -566,7 +566,7 @@ impl RecentTab {
             if let Err(e) = mark_note_as_synth(&ctx.vault.path.join(vault_rel_path)) {
                 queue_toast(
                     ctx,
-                    &format!("could not add ft-synth marker: {e}"),
+                    &format!("could not add ft.synth marker: {e}"),
                     ToastStyle::Error,
                 );
                 return;

@@ -20,7 +20,7 @@ use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection, S
 use crate::vault::Vault;
 
 /// Frontmatter block prepended to a freshly-created synth note.
-pub const SYNTH_FRONTMATTER: &str = "---\nft-synth: true\n---\n\n";
+pub const SYNTH_FRONTMATTER: &str = "---\nft:\n  synth:\n    enabled: true\n---\n\n";
 
 /// A planned mutation of a synth note. `create == true` means the target
 /// does not exist and the applier will create it with `frontmatter`
@@ -312,7 +312,7 @@ mod tests {
         let abs = apply_synth_scaffold(&vault, &plan).unwrap();
         assert!(abs.exists());
         let content = std::fs::read_to_string(&abs).unwrap();
-        assert!(content.starts_with("---\nft-synth: true\n---\n"));
+        assert!(content.starts_with("---\nft:\n  synth:\n    enabled: true\n---\n"));
         assert!(content.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
         assert!(content.contains("> First paragraph here.\n> Line two of first."));
         let _ = tmp;
@@ -323,7 +323,7 @@ mod tests {
         let (tmp, vault, entry) = make_repo_with_entry();
         // Pre-create a synth note.
         tmp.child("Synthesis/topic.md")
-            .write_str("---\nft-synth: true\n---\n\nUser prose already here.\n")
+            .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nUser prose already here.\n")
             .unwrap();
 
         let plan = plan_synth_scaffold(

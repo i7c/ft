@@ -2,7 +2,7 @@
 //! scaffold planner/applier for `ft synth`, verifier for
 //! `ft synth verify`, and pin repairer for `ft synth repair`.
 //!
-//! A synth note is a regular `.md` file marked `ft-synth: true` in YAML
+//! A synth note is a regular `.md` file marked `ft.synth.enabled: true` in YAML
 //! frontmatter. It contains one or more **protected sections** —
 //! callout blocks of the form
 //!

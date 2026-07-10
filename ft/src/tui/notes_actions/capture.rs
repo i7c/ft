@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ft_core::config::{CaptureAction, CapturePreset};
+use ft_core::frontmatter::ft_append_section;
 use ft_core::fs::write_atomic;
-use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
+use ft_core::notes::append::append_template as core_append_template;
 use ft_core::notes::template::render as render_template;
 use ft_core::vault::Vault;
 
@@ -310,7 +311,7 @@ fn commit_capture_append(
         .section_override
         .as_deref()
         .map(String::from)
-        .or_else(|| frontmatter_append_section(&file_content));
+        .or_else(|| ft_append_section(&file_content));
 
     let (new_content, insert_line) =
         core_append_template(&file_content, &rendered, section_heading.as_deref())

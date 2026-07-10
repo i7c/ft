@@ -235,35 +235,20 @@ pub fn line_is_inside_callout(line: u32, callouts: &[ParsedCallout]) -> bool {
 }
 
 /// Detect whether a `.md` file's content marks it as a synth note —
-/// `ft-synth: true` somewhere in the YAML frontmatter at the top.
+/// `ft.synth.enabled: true` in the nested `ft:` YAML frontmatter map.
 ///
-/// The check is lenient on whitespace and quote styles around `true`.
+/// Delegates to [`crate::frontmatter::ft_synth_enabled`]. The legacy
+/// flat `ft-synth: true` key is NOT recognized (breaking cutover).
 pub fn is_synth_note(content: &str) -> bool {
-    let mut lines = content.lines();
-    if lines.next() != Some("---") {
-        return false;
-    }
-    for line in lines {
-        if line == "---" {
-            return false;
-        }
-        let trimmed = line.trim();
-        // Match `ft-synth: true`, `ft-synth:true`, `ft-synth: "true"`, etc.
-        if let Some(val) = trimmed.strip_prefix("ft-synth:") {
-            let v = val
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_lowercase();
-            return v == "true";
-        }
-    }
-    false
+    crate::frontmatter::ft_synth_enabled(content) == Some(true)
 }
 
-/// Parse the optional `ft-synth-targets` frontmatter key into a list
+/// Parse the nested `ft.synth.targets` frontmatter key into a list
 /// of raw wikilink strings. Returns `None` when the key is absent (or
 /// the file has no frontmatter, or the value is not a YAML sequence).
+///
+/// Delegates to [`crate::frontmatter::ft_synth_targets`]. The legacy
+/// flat `ft-synth-targets` key is NOT recognized (breaking cutover).
 ///
 /// Lenient on quote styles: accepts `"[[Foo]]"`, `'[[Foo]]'`, `[[Foo]]`,
 /// `Foo`, and a mix. The value is returned verbatim (with surrounding
@@ -274,134 +259,30 @@ pub fn is_synth_note(content: &str) -> bool {
 /// line) and block-sequence form (`- "[[Foo]]"` lines), since users may
 /// hand-author either.
 pub fn parse_synth_targets(content: &str) -> Option<Vec<String>> {
-    let mut lines = content.lines();
-    if lines.next() != Some("---") {
-        return None;
-    }
-    // Collect the frontmatter body (between the fences).
-    let mut fm: Vec<&str> = Vec::new();
-    for line in lines {
-        if line == "---" {
-            break;
-        }
-        fm.push(line);
-    }
-    // Find the `ft-synth-targets:` key line.
-    let key_idx = fm
-        .iter()
-        .position(|l| l.trim_start().starts_with("ft-synth-targets:"))?;
-    let key_line = fm[key_idx];
-    let after_key = key_line
-        .trim_start()
-        .strip_prefix("ft-synth-targets:")
-        .unwrap_or("");
-
-    // Flow sequence on the same line: `["[[Foo]]", "[[Bar]]"]`.
-    let trimmed_inline = after_key.trim();
-    if trimmed_inline.starts_with('[') {
-        let close = trimmed_inline.rfind(']')?;
-        let inner = &trimmed_inline[1..close];
-        let items = parse_flow_seq_items(inner);
-        if items.is_empty() {
-            return Some(Vec::new());
-        }
-        return Some(items);
-    }
-    // Block sequence: subsequent `- <item>` lines until a non-dash line.
-    let mut items: Vec<String> = Vec::new();
-    for line in fm.iter().skip(key_idx + 1) {
-        let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("-") {
-            let val = rest.trim();
-            if val.is_empty() {
-                // An empty dash entry — skip rather than push an empty target.
-                continue;
-            }
-            items.push(strip_yaml_scalar_quotes(val).to_string());
-        } else if t.is_empty() {
-            // Blank lines within a block sequence are tolerated.
-            continue;
-        } else {
-            // First non-dash, non-blank line ends the sequence.
-            break;
-        }
-    }
-    if items.is_empty() {
-        return Some(Vec::new());
-    }
-    Some(items)
+    crate::frontmatter::ft_synth_targets(content)
 }
 
-/// Parse the inner portion of a YAML flow sequence `[a, b, c]` into
-/// scalar strings, stripping surrounding quotes. Commas inside quotes
-/// are respected.
-fn parse_flow_seq_items(inner: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let chars = inner.chars();
-    let mut cur = String::new();
-    let mut in_quote: Option<char> = None;
-    for c in chars {
-        match in_quote {
-            Some(q) => {
-                if c == q {
-                    in_quote = None;
-                } else {
-                    cur.push(c);
-                }
-            }
-            None => {
-                if c == '"' || c == '\'' {
-                    in_quote = Some(c);
-                } else if c == ',' {
-                    let trimmed = cur.trim();
-                    if !trimmed.is_empty() {
-                        out.push(trimmed.to_string());
-                    }
-                    cur.clear();
-                } else {
-                    cur.push(c);
-                }
-            }
-        }
-    }
-    let trimmed = cur.trim();
-    if !trimmed.is_empty() {
-        out.push(strip_yaml_scalar_quotes(trimmed).to_string());
-    }
-    out
-}
-
-/// Strip surrounding single or double quotes from a YAML scalar value.
-/// Internal quotes are preserved.
-fn strip_yaml_scalar_quotes(s: &str) -> &str {
-    let s = s.trim();
-    if s.len() >= 2 {
-        let bytes = s.as_bytes();
-        let first = bytes[0] as char;
-        let last = bytes[s.len() - 1] as char;
-        if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-            return &s[1..s.len() - 1];
-        }
-    }
-    s
-}
-
-/// Pure transform: idempotently ensure the result has `ft-synth: true`
-/// in YAML frontmatter and, when `targets` is `Some`, an
-/// `ft-synth-targets` key whose value is the YAML flow sequence of the
-/// given strings. Existing frontmatter keys (including an existing
-/// `ft-synth-targets`) are preserved or replaced in place; the marker is
-/// replaced/inserted when missing or false. Unrelated body content is
-/// unchanged. When `targets` is `None`, the `ft-synth-targets` key is
-/// left untouched (not removed) — callers wanting removal handle that
-/// separately.
+/// Pure transform: idempotently ensure the result has the nested
+/// `ft:` frontmatter map with `synth.enabled: true` and, when `targets`
+/// is `Some`, `synth.targets` set to the YAML flow sequence of the
+/// given strings. Existing frontmatter keys are preserved or replaced
+/// in place; the `ft:` map is inserted when missing. Legacy flat
+/// `ft-synth:` / `ft-synth-targets:` lines are removed (orphan
+/// cleanup) so the note is left in canonical nested form. Unrelated
+/// body content is unchanged. When `targets` is `None`, the
+/// `synth.targets` key is left untouched (not removed) — callers
+/// wanting removal handle that separately.
 ///
 /// This supersedes the older `upsert_ft_synth_marker` in the TUI layer,
 /// which is refactored to delegate here so the marker and targets keys
 /// compose without clobbering each other.
 pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> String {
-    // Serialize the targets as a YAML flow sequence, e.g. `["[[Foo]]", "[[Bar]]"]`.
-    let targets_line = targets.map(|ts| {
+    // The canonical nested block we want on disk:
+    //   ft:
+    //     synth:
+    //       enabled: true
+    //       targets: ["[[Foo]]", ...]   (only when `targets` is Some)
+    let synth_targets_line = targets.map(|ts| {
         let items: String = ts
             .iter()
             .map(|t| {
@@ -411,18 +292,23 @@ pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> St
             })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("ft-synth-targets: [{items}]")
+        format!("    targets: [{items}]")
     });
+    let nested_block: String = {
+        let mut b = String::from("ft:\n  synth:\n    enabled: true");
+        if let Some(tl) = &synth_targets_line {
+            b.push('\n');
+            b.push_str(tl);
+        }
+        b
+    };
 
     let lines: Vec<&str> = content.split('\n').collect();
     let has_fm = lines.first() == Some(&"---");
     if !has_fm {
-        // No frontmatter: build a fresh block with both keys (if present).
-        let mut fm = String::from("---\nft-synth: true");
-        if let Some(tl) = &targets_line {
-            fm.push('\n');
-            fm.push_str(tl);
-        }
+        // No frontmatter: build a fresh block.
+        let mut fm = String::from("---\n");
+        fm.push_str(&nested_block);
         fm.push_str("\n---\n");
         if !content.starts_with('\n') {
             fm.push('\n');
@@ -434,66 +320,83 @@ pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> St
     let end_idx = fm_close_index(&lines);
     let Some(end_idx) = end_idx else {
         // Unterminated frontmatter — bail and just prepend a fresh block.
-        let mut fm = String::from("---\nft-synth: true");
-        if let Some(tl) = &targets_line {
-            fm.push('\n');
-            fm.push_str(tl);
-        }
+        let mut fm = String::from("---\n");
+        fm.push_str(&nested_block);
         fm.push_str("\n---\n\n");
         fm.push_str(content);
         return fm;
     };
+
+    // Work on an owned vec. First pass: drop legacy flat synth keys
+    // (orphan cleanup) and any existing `ft:` block so we can write a
+    // clean canonical one. We track the indent of the `ft:` block we
+    // remove so we can re-insert at the same place.
     let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
 
-    // --- ft-synth: true ---
-    let marker_idx = new_lines
+    // --- remove legacy `ft-synth:` / `ft-synth-targets:` (+block children) ---
+    let mut i = 1; // skip opening `---`
+    while i < end_idx && i < new_lines.len() {
+        let t = new_lines[i].trim_start();
+        if t.starts_with("ft-synth:") || t.starts_with("ft-synth-targets:") {
+            let key_indent = new_lines[i]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            new_lines.remove(i);
+            // Drop indented block-sequence children (`- item`) of a
+            // removed `ft-synth-targets:`.
+            while i < new_lines.len() {
+                let line = &new_lines[i];
+                let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+                let lt = line.trim_start();
+                if indent > key_indent && lt.strip_prefix('-').is_some() {
+                    new_lines.remove(i);
+                } else {
+                    break;
+                }
+            }
+            // Don't advance i — re-check the line now at this index.
+            continue;
+        }
+        i += 1;
+    }
+
+    // Recompute the closing fence after removals.
+    let end_idx = fm_close_index(&new_lines).unwrap_or(end_idx);
+
+    // --- remove an existing `ft:` block (and all its children) ---
+    let ft_idx = new_lines
         .iter()
         .take(end_idx)
         .skip(1)
-        .position(|l| l.trim_start().starts_with("ft-synth:"));
-    match marker_idx {
-        Some(i) => {
-            // i is offset from skip(1), so the real index is i+1.
-            new_lines[i + 1] = "ft-synth: true".to_string();
+        .position(|l| l.trim_start() == "ft:" || l.trim_start().starts_with("ft: "));
+    let insert_at = if let Some(ft_off) = ft_idx {
+        let ft_real = ft_off + 1;
+        let ft_indent = new_lines[ft_real]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .count();
+        // Remove the `ft:` line and every more-indented child.
+        new_lines.remove(ft_real);
+        let j = ft_real;
+        while j < new_lines.len() {
+            let line = &new_lines[j];
+            let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+            if indent > ft_indent {
+                new_lines.remove(j);
+            } else {
+                break;
+            }
         }
-        None => {
-            new_lines.insert(end_idx, "ft-synth: true".to_string());
-        }
-    }
+        ft_real
+    } else {
+        // No existing `ft:` block — insert just before the closing fence.
+        end_idx
+    };
 
-    // --- ft-synth-targets --- (only when `Some`)
-    if let Some(tl) = targets_line {
-        // Recompute the frontmatter close after the potential marker insert.
-        let end_idx2 = fm_close_index(&new_lines).unwrap_or(end_idx);
-        let targets_idx = new_lines
-            .iter()
-            .take(end_idx2)
-            .skip(1)
-            .position(|l| l.trim_start().starts_with("ft-synth-targets:"));
-        match targets_idx {
-            Some(i) => {
-                let real = i + 1;
-                new_lines[real] = tl;
-                // Drop any immediately-following indented `- item` lines
-                // that belonged to the old block-sequence value.
-                let j = real + 1;
-                while j < new_lines.len() {
-                    let line = &new_lines[j];
-                    let t = line.trim_start();
-                    if t.strip_prefix('-').is_some()
-                        && (line.starts_with(' ') || line.starts_with('\t'))
-                    {
-                        new_lines.remove(j);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            None => {
-                let end = fm_close_index(&new_lines).unwrap_or(end_idx);
-                new_lines.insert(end, tl);
-            }
-        }
+    // Insert the canonical nested block at `insert_at`.
+    for (offset, line) in nested_block.split('\n').enumerate() {
+        new_lines.insert(insert_at + offset, line.to_string());
     }
 
     new_lines.join("\n")
@@ -681,16 +584,19 @@ after
 
     #[test]
     fn is_synth_note_detects_marker() {
-        let with_marker = "---\nft-synth: true\n---\n# body\n";
+        let with_marker = "---\nft:\n  synth:\n    enabled: true\n---\n# body\n";
         assert!(is_synth_note(with_marker));
-        let with_quoted = "---\nft-synth: \"true\"\n---\n";
+        let with_quoted = "---\nft:\n  synth:\n    enabled: \"true\"\n---\n";
         assert!(is_synth_note(with_quoted));
-        let false_value = "---\nft-synth: false\n---\n";
+        let false_value = "---\nft:\n  synth:\n    enabled: false\n---\n";
         assert!(!is_synth_note(false_value));
         let no_marker = "---\nfoo: bar\n---\n";
         assert!(!is_synth_note(no_marker));
         let no_frontmatter = "# just a body\n";
         assert!(!is_synth_note(no_frontmatter));
+        // Legacy flat `ft-synth:` is no longer recognized.
+        let legacy_flat = "---\nft-synth: true\n---\n# body\n";
+        assert!(!is_synth_note(legacy_flat));
     }
 
     #[test]
@@ -705,11 +611,11 @@ after
         assert!(!path_excluded(Path::new("PeriodicX/foo.md"), &prefixes));
     }
 
-    // ── ft-synth-targets frontmatter ──────────────────────────────────
+    // ── ft.synth.targets frontmatter ──────────────────────────────────
 
     #[test]
     fn parse_synth_targets_absent_returns_none() {
-        let content = "---\nft-synth: true\n---\nbody\n";
+        let content = "---\nft:\n  synth:\n    enabled: true\n---\nbody\n";
         assert!(parse_synth_targets(content).is_none());
     }
 
@@ -720,7 +626,8 @@ after
 
     #[test]
     fn parse_synth_targets_flow_sequence_quoted() {
-        let content = "---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\", \"[[Bar]]\"]\n---\n";
+        let content =
+            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\", \"[[Bar]]\"]\n---\n";
         let got = parse_synth_targets(content).unwrap();
         assert_eq!(got, vec!["[[Foo]]", "[[Bar]]"]);
     }
@@ -728,22 +635,28 @@ after
     #[test]
     fn parse_synth_targets_flow_sequence_bare() {
         // Bare (unquoted) values are accepted.
-        let content = "---\nft-synth-targets: [Foo, Bar]\n---\n";
+        let content = "---\nft:\n  synth:\n    targets: [Foo, Bar]\n---\n";
         let got = parse_synth_targets(content).unwrap();
         assert_eq!(got, vec!["Foo", "Bar"]);
     }
 
     #[test]
     fn parse_synth_targets_block_sequence() {
-        let content = "---\nft-synth: true\nft-synth-targets:\n  - \"[[Foo]]\"\n  - Bar\n---\n";
+        let content = "---\nft:\n  synth:\n    enabled: true\n    targets:\n      - \"[[Foo]]\"\n      - Bar\n---\n";
         let got = parse_synth_targets(content).unwrap();
         assert_eq!(got, vec!["[[Foo]]", "Bar"]);
     }
 
     #[test]
     fn parse_synth_targets_empty_flow_sequence() {
-        let content = "---\nft-synth-targets: []\n---\n";
+        let content = "---\nft:\n  synth:\n    targets: []\n---\n";
         assert_eq!(parse_synth_targets(content), Some(Vec::new()));
+    }
+
+    #[test]
+    fn parse_synth_targets_legacy_flat_ignored() {
+        let content = "---\nft-synth-targets: [\"[[Foo]]\"]\n---\n";
+        assert!(parse_synth_targets(content).is_none());
     }
 
     #[test]
@@ -752,7 +665,7 @@ after
         let targets = vec!["[[Foo]]".to_string(), "[[Bar]]".to_string()];
         let out = upsert_synth_frontmatter(content, Some(&targets));
         assert!(out.starts_with(
-            "---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\", \"[[Bar]]\"]\n---\n"
+            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\", \"[[Bar]]\"]\n---\n"
         ));
         assert!(out.contains("# heading"));
     }
@@ -761,47 +674,48 @@ after
     fn upsert_inserts_marker_into_existing_frontmatter_no_targets() {
         let content = "---\ntitle: Foo\n---\n\nbody\n";
         let out = upsert_synth_frontmatter(content, None);
-        assert!(out.contains("ft-synth: true"));
+        assert!(out.contains("ft:\n  synth:\n    enabled: true"));
         assert!(out.contains("title: Foo"));
         assert!(out.contains("body"));
         // No targets key requested → none added.
-        assert!(!out.contains("ft-synth-targets"));
+        assert!(!out.contains("targets:"));
     }
 
     #[test]
     fn upsert_replaces_false_marker() {
-        let content = "---\nft-synth: false\n---\n";
+        let content = "---\nft:\n  synth:\n    enabled: false\n---\n";
         let out = upsert_synth_frontmatter(content, None);
-        assert!(out.contains("ft-synth: true"));
-        assert!(!out.contains("ft-synth: false"));
+        assert!(out.contains("ft:\n  synth:\n    enabled: true"));
+        assert!(!out.contains("enabled: false"));
     }
 
     #[test]
     fn upsert_adds_targets_key_when_absent() {
-        let content = "---\nft-synth: true\ntitle: T\n---\nbody\n";
+        let content = "---\nft:\n  synth:\n    enabled: true\ntitle: T\n---\nbody\n";
         let targets = vec!["[[Baz]]".to_string()];
         let out = upsert_synth_frontmatter(content, Some(&targets));
-        assert!(out.contains("ft-synth-targets: [\"[[Baz]]\"]"));
+        assert!(out.contains("targets: [\"[[Baz]]\"]"));
         assert!(out.contains("title: T"));
         assert!(out.contains("body"));
     }
 
     #[test]
     fn upsert_replaces_existing_targets() {
-        let content = "---\nft-synth: true\nft-synth-targets: [\"[[Old]]\"]\n---\nbody\n";
+        let content =
+            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Old]]\"]\n---\nbody\n";
         let targets = vec!["[[New]]".to_string()];
         let out = upsert_synth_frontmatter(content, Some(&targets));
-        assert!(out.contains("ft-synth-targets: [\"[[New]]\"]"));
+        assert!(out.contains("targets: [\"[[New]]\"]"));
         assert!(!out.contains("[[Old]]"));
     }
 
     #[test]
     fn upsert_replaces_existing_block_targets() {
-        // Old block-sequence form collapses to flow form on replace.
-        let content = "---\nft-synth: true\nft-synth-targets:\n  - \"[[Old]]\"\n  - \"[[AlsoOld]]\"\n---\nbody\n";
+        // Block-sequence form collapses to flow form on replace.
+        let content = "---\nft:\n  synth:\n    enabled: true\n    targets:\n      - \"[[Old]]\"\n      - \"[[AlsoOld]]\"\n---\nbody\n";
         let targets = vec!["[[New]]".to_string()];
         let out = upsert_synth_frontmatter(content, Some(&targets));
-        assert!(out.contains("ft-synth-targets: [\"[[New]]\"]"));
+        assert!(out.contains("targets: [\"[[New]]\"]"));
         assert!(!out.contains("[[Old]]"));
         assert!(!out.contains("[[AlsoOld]]"));
         assert!(out.contains("body"));
@@ -814,16 +728,32 @@ after
         let out = upsert_synth_frontmatter(content, Some(&targets));
         assert!(out.contains("title: My Note"));
         assert!(out.contains("tags: [a, b]"));
-        assert!(out.contains("ft-synth: true"));
-        assert!(out.contains("ft-synth-targets: [\"[[Foo]]\"]"));
+        assert!(out.contains("ft:\n  synth:\n    enabled: true"));
+        assert!(out.contains("targets: [\"[[Foo]]\"]"));
     }
 
     #[test]
     fn upsert_is_idempotent() {
-        let content = "---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\"]\n---\nbody\n";
+        let content =
+            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\nbody\n";
         let targets = vec!["[[Foo]]".to_string()];
         let out = upsert_synth_frontmatter(content, Some(&targets));
         assert_eq!(out, content);
+    }
+
+    #[test]
+    fn upsert_strips_legacy_flat_keys() {
+        // A legacy flat-keyed note is canonicalized on touch: the
+        // nested form replaces the flat `ft-synth:` / `ft-synth-targets:`.
+        let content = "---\nft-synth: true\nft-synth-targets: [\"[[Old]]\"]\ntitle: T\n---\nbody\n";
+        let targets = vec!["[[New]]".to_string()];
+        let out = upsert_synth_frontmatter(content, Some(&targets));
+        assert!(out.contains("ft:\n  synth:\n    enabled: true"));
+        assert!(out.contains("targets: [\"[[New]]\"]"));
+        assert!(out.contains("title: T"));
+        assert!(out.contains("body"));
+        assert!(!out.contains("ft-synth:"));
+        assert!(!out.contains("[[Old]]"));
     }
 
     // ── Property: parse(serialize(s)) preserves all fields ────────────

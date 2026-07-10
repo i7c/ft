@@ -2377,12 +2377,12 @@ fn promote_ghost_creates_seeded_synth_note() -> Result<()> {
     assert!(promoted.exists(), "promote should create busy.md");
     let content = std::fs::read_to_string(&promoted).unwrap();
     assert!(
-        content.contains("ft-synth: true"),
+        content.contains("ft:\n  synth:\n    enabled: true"),
         "missing synth marker:\n{content}"
     );
     assert!(
-        content.contains("ft-synth-targets") && content.contains("[[busy]]"),
-        "missing ft-synth-targets:\n{content}"
+        content.contains("targets:") && content.contains("[[busy]]"),
+        "missing ft.synth.targets:\n{content}"
     );
     assert_eq!(
         content.matches("[!ft-source]").count(),

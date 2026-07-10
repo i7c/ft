@@ -8,10 +8,9 @@
 //!   body — i.e. immediately before the next heading of equal-or-higher level
 //!   (or end of file).
 //!
-//! A per-note frontmatter key `ft-append-section` provides the default section
-//! name when the caller doesn't supply an explicit override. Use
-//! [`frontmatter_append_section`] to read it, then pass the result to
-//! [`append_template`] as `section_heading`.
+//! The default section name is read from the nested `ft.append.section`
+//! frontmatter key by the caller via [`crate::frontmatter::ft_append_section`],
+//! then passed to [`append_template`] as `section_heading`.
 
 use crate::error::{Error, Result};
 use crate::markdown::extract_headings;
@@ -42,63 +41,7 @@ pub fn append_template(
     }
 }
 
-/// Read the `ft-append-section` value from YAML frontmatter.
-///
-/// Returns `None` when there is no frontmatter block or the key is absent.
-pub fn frontmatter_append_section(content: &str) -> Option<String> {
-    frontmatter_value(content, "ft-append-section")
-}
-
-/// Read the `ft-tasks-section` value from YAML frontmatter — the heading new
-/// tasks land under in this note when no explicit position is given.
-///
-/// Returns `None` when there is no frontmatter block or the key is absent.
-pub fn frontmatter_tasks_section(content: &str) -> Option<String> {
-    frontmatter_value(content, "ft-tasks-section")
-}
-
-/// Read a single scalar `key:` value from YAML frontmatter.
-///
-/// This is a lightweight string-level extraction — we don't pull in a full
-/// YAML parser for one key. The frontmatter block is the leading
-/// `---\n...\n---` region. Optional surrounding quotes are stripped.
-fn frontmatter_value(content: &str, key: &str) -> Option<String> {
-    let fm = extract_frontmatter_block(content)?;
-    let prefix = format!("{key}:");
-    for line in fm.lines() {
-        let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix(&prefix) {
-            let val = val.trim();
-            // Strip optional surrounding quotes.
-            let val = val.strip_prefix('"').unwrap_or(val);
-            let val = val.strip_suffix('"').unwrap_or(val);
-            let val = val.strip_prefix('\'').unwrap_or(val);
-            let val = val.strip_suffix('\'').unwrap_or(val);
-            let val = val.trim();
-            if !val.is_empty() {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
-}
-
 // ── helpers ───────────────────────────────────────────────────────────
-
-/// Extract the raw frontmatter block from `content` if it starts with
-/// `---\n`. Returns the inner text between the opening and closing `---`.
-/// Returns `None` if the first line is not `---` or there is no closing
-/// `---`.
-fn extract_frontmatter_block(content: &str) -> Option<&str> {
-    let rest = content.strip_prefix("---")?;
-    // The opening `---` must be the first line or immediately followed
-    // by `\n` (Obsidian also accepts `---\r\n`).
-    let rest = rest
-        .strip_prefix('\n')
-        .or_else(|| rest.strip_prefix("\r\n"))?;
-    let end = rest.find("\n---")?;
-    Some(&rest[..end])
-}
 
 /// Append `rendered` to the end of `content`. Returns `(new_content, line_number)`.
 fn append_to_end(content: &str, rendered: &str) -> (String, usize) {
@@ -304,92 +247,5 @@ mod tests {
             "## Parent\nparent body\n### Child\nchild body\ninserted\n## Sibling\nsib body\n"
         );
         assert_eq!(line, 5);
-    }
-
-    // ── frontmatter_append_section ─────────────────────────────────────
-
-    #[test]
-    fn frontmatter_extracts_section() {
-        let content = "---\nft-append-section: Daily Log\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_append_section(content),
-            Some("Daily Log".to_string())
-        );
-    }
-
-    #[test]
-    fn frontmatter_quoted_value() {
-        let content = "---\nft-append-section: \"Daily Log\"\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_append_section(content),
-            Some("Daily Log".to_string())
-        );
-    }
-
-    #[test]
-    fn frontmatter_single_quoted_value() {
-        let content = "---\nft-append-section: 'Daily Log'\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_append_section(content),
-            Some("Daily Log".to_string())
-        );
-    }
-
-    #[test]
-    fn frontmatter_no_block() {
-        let content = "# Just a heading\n";
-        assert_eq!(frontmatter_append_section(content), None);
-    }
-
-    #[test]
-    fn frontmatter_key_absent() {
-        let content = "---\ntitle: My Note\n---\n# Title\n";
-        assert_eq!(frontmatter_append_section(content), None);
-    }
-
-    #[test]
-    fn frontmatter_empty_value_returns_none() {
-        let content = "---\nft-append-section:\n---\n# Title\n";
-        assert_eq!(frontmatter_append_section(content), None);
-    }
-
-    #[test]
-    fn frontmatter_dash_in_value() {
-        let content = "---\nft-append-section: Multi-word Section\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_append_section(content),
-            Some("Multi-word Section".to_string())
-        );
-    }
-
-    // ── frontmatter_tasks_section ──────────────────────────────────────
-
-    #[test]
-    fn frontmatter_tasks_section_extracts() {
-        let content = "---\nft-tasks-section: Tasks\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_tasks_section(content),
-            Some("Tasks".to_string())
-        );
-    }
-
-    #[test]
-    fn frontmatter_tasks_section_quoted() {
-        let content = "---\nft-tasks-section: \"My Tasks\"\n---\n# Title\n";
-        assert_eq!(
-            frontmatter_tasks_section(content),
-            Some("My Tasks".to_string())
-        );
-    }
-
-    #[test]
-    fn frontmatter_tasks_section_absent() {
-        let content = "---\nft-append-section: Log\n---\n# Title\n";
-        assert_eq!(frontmatter_tasks_section(content), None);
-    }
-
-    #[test]
-    fn frontmatter_tasks_section_no_block() {
-        assert_eq!(frontmatter_tasks_section("# Just a heading\n"), None);
     }
 }

@@ -59,11 +59,13 @@ land directly on new content — not the top of the file.
 Three ways to choose *where* in the file the template lands:
 
 1. **End of file** — the default when nothing else is configured.
-2. **Frontmatter key** — set `ft-append-section` in the target note's YAML frontmatter:
+2. **Frontmatter key** — set `ft.append.section` in the target note's YAML frontmatter:
 
    ```yaml
    ---
-   ft-append-section: Sessions
+   ft:
+     append:
+       section: Sessions
    ---
    # Journal
    ## Sessions
@@ -91,7 +93,7 @@ headings share the same text, the first one (in document order) wins.
 | Graph tab | `A`   | Append with template to the **selected note**. Opens the template picker; on Enter, renders and appends, then opens the editor at the insertion line. |
 | Notes tab | `a`   | Append with template. Opens the template picker, then the vault file picker to choose the target note. |
 
-Both flows respect the target note's `ft-append-section` frontmatter.
+Both flows respect the target note's `ft.append.section` frontmatter.
 
 ---
 
@@ -125,7 +127,7 @@ folder = "Inbox"
 | `action`   | yes      | both          | `"append"` or `"create"`.                                                                      |
 | `template` | yes      | both          | Template name resolved under `[notes].templates_dir`. `.md` auto-appended.                      |
 | `note`     | no       | append        | Hardcoded target note (vault-relative path). Supports strftime tokens (`%Y`, `%m`, `%d`, etc.). When absent, the target comes from tab context.     |
-| `section`  | no       | append        | Section heading to append under. Case-insensitive, any ATX level. Takes precedence over `ft-append-section` frontmatter. |
+| `section`  | no       | append        | Section heading to append under. Case-insensitive, any ATX level. Takes precedence over `ft.append.section` frontmatter. |
 | `path`     | no       | create        | Filename pattern with strftime tokens (`%Y`, `%m`, `%d`, `%q`, `%Q`). `.md` auto-appended. When absent, opens a filename prompt. |
 | `folder`   | no       | create        | Target folder (vault-relative). Defaults to vault root when absent.                             |
 
@@ -141,7 +143,7 @@ surface immediately.
    - **Graph tab** → uses the currently selected note.
    - **Notes tab** → opens the vault file picker to choose the target.
 3. If `section` is set, append under that heading. Otherwise, read
-   `ft-append-section` from the target note's frontmatter. If neither,
+   `ft.append.section` from the target note's frontmatter. If neither,
    append to end of file.
 
 #### Create presets
@@ -285,7 +287,9 @@ section = "Review"
 
 ```yaml
 ---
-ft-append-section: Review
+ft:
+  append:
+    section: Review
 ---
 ```
 

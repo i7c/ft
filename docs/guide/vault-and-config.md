@@ -73,7 +73,7 @@ templates_dir = "templates-ft"
 
 [tasks]
 # Heading new tasks land under when the target note has no
-# `ft-tasks-section` frontmatter and you don't pass --under-heading/--append.
+# `ft.tasks.section` frontmatter and you don't pass --under-heading/--append.
 default_section = "Tasks"
 
 [periodic_notes.daily]
@@ -195,6 +195,32 @@ ignored_paths = ["archive/", "drafts/**", "*.tmp.md"]
 
 Useful for excluding archive folders from `ft tasks list` and the
 graph build without deleting them.
+
+## Note frontmatter
+
+ft reads a small set of optional keys from a note's YAML
+frontmatter block. They all live under one `ft:` map:
+
+```yaml
+---
+ft:
+  tasks:
+    section: Tasks        # heading new tasks land under (no explicit position)
+  append:
+    section: Sessions     # default heading for template-append flows
+  synth:
+    enabled: true        # marks the note as a synthesis note
+    targets: ["[[Foo]]", "[[Bar]]"]   # source set for the synth workflow
+---
+```
+
+All keys are optional; notes with no `ft:` map behave exactly as
+notes with no ft keys (tasks append to file end, not a synth note,
+etc.). The flat `ft-tasks-section` / `ft-append-section` /
+`ft-synth` / `ft-synth-targets` keys are no longer recognized — use
+the nested form above. Writers (`ft notes synth scaffold`, `grow`,
+the gather tab's mark-and-append) emit only the nested form and will
+strip any legacy flat synth keys from a note they touch.
 
 ## Environment variables
 

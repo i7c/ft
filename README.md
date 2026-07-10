@@ -101,8 +101,10 @@ write, with each excerpt pinned to the commit it came from:
 
 ```markdown
 ---
-ft-synth: true
-ft-synth-targets: ["[[onboarding]]", "[[analytics migration]]"]
+ft:
+  synth:
+    enabled: true
+    targets: ["[[onboarding]]", "[[analytics migration]]"]
 ---
 
 Onboarding and the analytics migration keep colliding.
@@ -114,6 +116,12 @@ Onboarding and the analytics migration keep colliding.
 
 … which is really a question about activation, not setup …
 ```
+
+> **Breaking change:** ft's frontmatter keys now live under one `ft:`
+> map (see the block above). The flat `ft-synth:` / `ft-synth-targets:` /
+> `ft-tasks-section:` / `ft-append-section:` keys are no longer read.
+> Any note ft writes is auto-converted; existing flat-keyed notes need
+> hand-editing to be recognized.
 
 ## What `ft` is (and is not)
 

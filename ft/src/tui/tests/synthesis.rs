@@ -1034,7 +1034,7 @@ fn journal_tab_send_to_synth_new_opens_folder_picker_on_shift_s() -> Result<()> 
 
 // The pure `upsert_ft_synth_marker` transform has moved to
 // `ft_core::synth::callout::upsert_synth_frontmatter` (which also handles
-// the `ft-synth-targets` key). These three tests now exercise the core
+// the `ft.synth.targets` key). These three tests now exercise the core
 // helper to keep coverage of the marker-only behavior the TUI relied on.
 
 #[test]
@@ -1042,7 +1042,7 @@ fn upsert_ft_synth_marker_inserts_into_existing_frontmatter() {
     use ft_core::synth::callout::upsert_synth_frontmatter;
     let input = "---\ntitle: Foo\n---\n\nbody\n";
     let out = upsert_synth_frontmatter(input, None);
-    assert!(out.contains("ft-synth: true"));
+    assert!(out.contains("ft:\n  synth:\n    enabled: true"));
     assert!(out.contains("title: Foo"));
     assert!(out.contains("body"));
 }
@@ -1052,17 +1052,17 @@ fn upsert_ft_synth_marker_adds_fresh_frontmatter_when_missing() {
     use ft_core::synth::callout::upsert_synth_frontmatter;
     let input = "# heading\n\nbody\n";
     let out = upsert_synth_frontmatter(input, None);
-    assert!(out.starts_with("---\nft-synth: true\n---\n"));
+    assert!(out.starts_with("---\nft:\n  synth:\n    enabled: true\n---\n"));
     assert!(out.contains("# heading"));
 }
 
 #[test]
 fn upsert_ft_synth_marker_replaces_false_value() {
     use ft_core::synth::callout::upsert_synth_frontmatter;
-    let input = "---\nft-synth: false\n---\n";
+    let input = "---\nft:\n  synth:\n    enabled: false\n---\n";
     let out = upsert_synth_frontmatter(input, None);
-    assert!(out.contains("ft-synth: true"));
-    assert!(!out.contains("ft-synth: false"));
+    assert!(out.contains("ft:\n  synth:\n    enabled: true"));
+    assert!(!out.contains("enabled: false"));
 }
 
 // ── Sources strip & manager modal ────────────────────────────────────
@@ -1602,7 +1602,7 @@ fn journal_send_to_synth_new_only_empty_note_falls_back() -> Result<()> {
     // An empty synth note (no callouts → no watermark).
     let abs = vault_path.join("Synth/empty.md");
     std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    std::fs::write(&abs, "---\nft-synth: true\n---\n\n").unwrap();
+    std::fs::write(&abs, "---\nft:\n  synth:\n    enabled: true\n---\n\n").unwrap();
 
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     let request = MultiTargetRequest {
@@ -1648,7 +1648,7 @@ fn citation_vault() -> (TempDir, Vault) {
     std::fs::write(
         vp.join("Synth.md"),
         format!(
-            "---\nft-synth: true\nft-synth-targets: [\"[[Target]]\"]\n---\n\n\
+            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Target]]\"]\n---\n\n\
              > [!ft-source] \"DailyA.md\" L1-1 @abc1234 #{hash}\n> {body}\n"
         ),
     )
@@ -1742,7 +1742,7 @@ fn journal_context_note_flow_badges_in_note_vs_missing() -> Result<()> {
     app.switch_to(gather_tab_idx())?;
 
     // `o` opens the synth-note picker; Enter takes the only hit
-    // (Synth.md), which loads its ft-synth-targets ([[Target]]) as the
+    // (Synth.md), which loads its ft.synth.targets ([[Target]]) as the
     // source set and installs it as the badge context.
     app.dispatch(key('o'))?;
     app.dispatch(Event::Key(KeyEvent::new(

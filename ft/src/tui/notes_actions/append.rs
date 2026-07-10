@@ -7,7 +7,7 @@
 //!    vault. Skipped when the tab already knows the target (graph tab).
 //! 3. **VarPrompt** — if the template references `{{ vars.KEY }}`,
 //!    prompt for each one in sequence before committing.
-//! 4. **Commit** — render the template, read `ft-append-section` from the
+//! 4. **Commit** — render the template, read `ft.append.section` from the
 //!    target note's frontmatter (unless a section override is supplied),
 //!    append, write atomically, open editor at the insertion line.
 //!
@@ -22,8 +22,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent};
+use ft_core::frontmatter::ft_append_section;
 use ft_core::fs::write_atomic;
-use ft_core::notes::append::{append_template as core_append_template, frontmatter_append_section};
+use ft_core::notes::append::append_template as core_append_template;
 use ft_core::notes::template::render as render_template;
 
 use crate::tui::{
@@ -350,7 +351,7 @@ fn commit_append(
     // Determine section heading: explicit override > frontmatter > None.
     let section_heading = section_override
         .map(String::from)
-        .or_else(|| frontmatter_append_section(&file_content));
+        .or_else(|| ft_append_section(&file_content));
 
     // Append.
     let (new_content, insert_line) =

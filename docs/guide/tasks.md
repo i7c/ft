@@ -161,11 +161,13 @@ reproducible scripts.
 When you don't pass an explicit position flag, `ft` resolves a target
 *section* in this order:
 
-1. The target note's `ft-tasks-section:` frontmatter, e.g.
+1. The target note's `ft.tasks.section` frontmatter key, e.g.
 
    ```yaml
    ---
-   ft-tasks-section: Tasks
+   ft:
+     tasks:
+       section: Tasks
    ---
    ```
 

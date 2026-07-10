@@ -159,7 +159,7 @@ fn load_sections(ctx: &TabCtx, note_rel: &std::path::Path) -> Result<Vec<Section
     let abs = ctx.vault.path.join(note_rel);
     let content = std::fs::read_to_string(&abs).map_err(|e| format!("could not read note: {e}"))?;
     if !ft_core::synth::callout::is_synth_note(&content) {
-        return Err("not a synth note (missing ft-synth: true)".to_string());
+        return Err("not a synth note (missing ft.synth.enabled: true)".to_string());
     }
     let results =
         verify_synth_note(ctx.vault, note_rel).map_err(|e| format!("could not read note: {e}"))?;

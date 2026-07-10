@@ -443,7 +443,7 @@ exclude_prefixes = ["journal/"]
 ```
 
 Both keys are optional. Synth notes themselves are identified by
-`ft-synth: true` in their YAML frontmatter, not by location — they
+`ft.synth.enabled: true` in their YAML frontmatter, not by location — they
 can live anywhere in the vault regardless of `folder`.
 
 ## Discovery and merge

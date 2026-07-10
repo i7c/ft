@@ -150,7 +150,7 @@ pub struct CapturePreset {
     #[serde(default)]
     pub note: Option<String>,
     /// Section heading to append under (for append presets). Overrides
-    /// any `ft-append-section` frontmatter in the target note.
+    /// any `ft.append.section` frontmatter in the target note.
     #[serde(default)]
     pub section: Option<String>,
     /// Filename pattern for create presets. Supports strftime `%Y`, `%m`,
@@ -187,7 +187,7 @@ pub struct Git {
 #[serde(deny_unknown_fields)]
 pub struct Tasks {
     /// Heading new tasks land under when the target note has no
-    /// `ft-tasks-section` frontmatter and no explicit position is given.
+    /// `ft.tasks.section` frontmatter and no explicit position is given.
     /// When unset, new tasks append at file end (the historical default).
     pub default_section: Option<String>,
 }
@@ -239,7 +239,7 @@ pub struct PeriodicPeriod {
 /// `folder` is the convenience default location for new synth notes
 /// created via `ft synth <name>` without a path-bearing target. It is
 /// NOT enforcement: any `.md` anywhere in the vault marked with
-/// `ft-synth: true` in frontmatter is treated as a synth note.
+/// `ft.synth.enabled: true` in frontmatter is treated as a synth note.
 ///
 /// `exclude_prefixes` filters the link-review (`ft review`): added
 /// `[[wikilinks]]` whose source file's vault-relative path starts with

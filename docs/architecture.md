@@ -101,7 +101,7 @@ inserting its next instance above). Pass `None` only when no scanned
 - `create_task(path, format, input, opts)` — insert a new task at append /
   under-heading / at-line position; refuses duplicates unless `--force`.
   When no explicit position is given, `auto_position(path, default)`
-  resolves the target section: the note's `ft-tasks-section` frontmatter
+  resolves the target section: the note's `ft.tasks.section` frontmatter
   wins, then `[tasks] default_section` from config, else plain append.
   The CLI `--append` flag forces append, overriding any default section.
 - `complete_task(path, line, format, expected, opts)` — mark a task done;
@@ -160,7 +160,7 @@ instead of a bare file. Every creator goes through it (`ft tasks create`,
 the TUI task popup/quickline, `ft timeblocks add`, the timeblocks tab's
 add path); explicit `--file` paths are resolved but never auto-templated.
 This composes with task-section resolution: the template renders the note
-(with its `## Tasks` heading + `ft-tasks-section` frontmatter) first, then
+(with its `## Tasks` heading + `ft.tasks.section` frontmatter) first, then
 `ops::auto_position` reads that file to place the task.
 
 ### Graph query DSL (`graph::query`)
@@ -280,7 +280,7 @@ round-trip cleanly; `verify_synth_note` strips the `> ` prefix from the
 body and compares against the git blob slice at the pinned commit,
 reporting `Ok` / `Drifted` / `SourceMissing` / `Malformed` per section.
 
-A synth note is identified by an `ft-synth: true` frontmatter marker.
+A synth note is identified by an `ft.synth.enabled: true` frontmatter marker.
 This lets the pulse skip wikilinks quoted inside `[!ft-source]`
 callouts of a synth note (recycled material doesn't double-count on
 the next pulse) while still counting links the user wrote in their
@@ -323,7 +323,7 @@ top of the unchanged `build_gather` + `plan_synth_scaffold` machinery:
   `--new-only` to "all missing" with a warning.
 
 A synth note MAY self-describe its gather target(s) in frontmatter via
-`ft-synth-targets: ["[[Foo]]", "[[Bar]]"]` (a YAML sequence; helpers
+`ft.synth.targets: ["[[Foo]]", "[[Bar]]"]` (a YAML sequence; helpers
 `callout::parse_synth_targets` / `upsert_synth_frontmatter`). When
 `--link` is supplied, scaffold/grow write the key on create (or upsert
 when absent on append); when `--link`/`--from` are absent, `grow` reads

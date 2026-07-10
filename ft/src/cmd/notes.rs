@@ -17,7 +17,7 @@ use ft_core::fs::write_atomic;
 use ft_core::graph::rename::{apply_rename_plan, plan_rename, RenamePlan};
 use ft_core::graph::{EdgeKind, Graph, NodeKind, NoteId};
 use ft_core::markdown::{extract_headings, Heading};
-use ft_core::notes::append::{self, append_template as core_append_template};
+use ft_core::notes::append::append_template as core_append_template;
 use ft_core::notes::template::{render as render_template, TemplateContext};
 use ft_core::notes::{
     move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
@@ -659,7 +659,7 @@ pub struct AppendArgs {
     pub template: PathBuf,
 
     /// Section heading to append under. Case-insensitive, any ATX level.
-    /// When absent, reads `ft-append-section` from the target's frontmatter;
+    /// When absent, reads `ft.append.section` from the target's frontmatter;
     /// when that's also absent, appends to end of file.
     #[arg(long, value_name = "TEXT")]
     pub section: Option<String>,
@@ -830,7 +830,7 @@ fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         .section
         .as_deref()
         .map(String::from)
-        .or_else(|| append::frontmatter_append_section(&file_content));
+        .or_else(|| ft_core::frontmatter::ft_append_section(&file_content));
 
     // 6. Append.
     let (new_content, insert_line) =
@@ -1814,7 +1814,7 @@ pub struct RecentArgs {
     #[arg(long, value_name = "X..Y", conflicts_with = "since")]
     pub range: Option<String>,
 
-    /// Include paragraphs from synth notes (`ft-synth: true`), which are
+    /// Include paragraphs from synth notes (`ft.synth.enabled: true`), which are
     /// excluded by default.
     #[arg(long)]
     pub include_synth: bool,

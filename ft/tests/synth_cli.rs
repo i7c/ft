@@ -64,8 +64,8 @@ fn scaffold_create_writes_frontmatter_and_callouts() {
     let written = tmp.child("Synthesis/topic.md");
     written.assert(predicates::path::is_file());
     let body = std::fs::read_to_string(written.path()).unwrap();
-    assert!(body.starts_with("---\nft-synth: true\n"));
-    assert!(body.contains("ft-synth-targets: [\"[[Foo]]\"]"));
+    assert!(body.starts_with("---\nft:\n  synth:\n    enabled: true\n"));
+    assert!(body.contains("targets: [\"[[Foo]]\"]"));
     assert!(body.contains("---\n"));
     assert!(body.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
     assert!(body.contains("> First paragraph mentions [[Foo]]."));
@@ -78,7 +78,7 @@ fn scaffold_append_preserves_existing_content() {
     let tmp = make_source_vault();
     // Pre-create the synth note with user prose.
     tmp.child("Synthesis/topic.md")
-        .write_str("---\nft-synth: true\n---\n\nUser prose written earlier.\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nUser prose written earlier.\n")
         .unwrap();
 
     ft().args([
@@ -775,7 +775,7 @@ fn grow_new_only_on_brand_new_note_falls_back_with_warning() {
     let tmp = make_grow_vault();
     // Create an empty synth note (no callouts → no watermark).
     tmp.child("Synthesis/topic.md")
-        .write_str("---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\"]\n---\n\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
         .unwrap();
     let assert = ft()
         .args([
@@ -849,9 +849,9 @@ fn grow_reads_targets_from_frontmatter() {
 fn grow_no_targets_errors_clearly() {
     use assert_fs::prelude::*;
     let tmp = make_grow_vault();
-    // A synth note with NO ft-synth-targets frontmatter.
+    // A synth note with NO ft.synth.targets frontmatter.
     tmp.child("Synthesis/topic.md")
-        .write_str("---\nft-synth: true\n---\n\nUser prose.\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nUser prose.\n")
         .unwrap();
     let assert = ft()
         .args([
@@ -902,7 +902,7 @@ fn grow_limit_caps_appended_sections() {
     let tmp = make_grow_vault();
     // Empty synth note with frontmatter target → all missing, then limit to 1.
     tmp.child("Synthesis/topic.md")
-        .write_str("---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\"]\n---\n\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
         .unwrap();
     let assert = ft()
         .args([
@@ -941,7 +941,7 @@ fn grow_no_edit_suppresses_editor() {
     use assert_fs::prelude::*;
     let tmp = make_grow_vault();
     tmp.child("Synthesis/topic.md")
-        .write_str("---\nft-synth: true\nft-synth-targets: [\"[[Foo]]\"]\n---\n\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
         .unwrap();
     ft().env("EDITOR", "false")
         .args([

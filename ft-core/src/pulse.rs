@@ -702,7 +702,9 @@ mod tests {
         // [[Foo]], and a prose paragraph mentioning [[Bar]].
         let synth_body = "\
 ---
-ft-synth: true
+ft:
+  synth:
+    enabled: true
 ---
 
 > [!ft-source] \"notes/x.md\" L1-1 @aaaaaaa #aaaaaa

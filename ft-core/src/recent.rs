@@ -61,7 +61,7 @@ pub struct RecentReport {
 /// Behavioral knobs for [`build_recent`].
 #[derive(Debug, Clone, Default)]
 pub struct RecentOptions {
-    /// Include paragraphs from synth notes (`ft-synth: true`). Off by
+    /// Include paragraphs from synth notes (`ft.synth.enabled: true`). Off by
     /// default so the synth flow does not feed itself.
     pub include_synth: bool,
 }
@@ -276,7 +276,7 @@ mod tests {
             .write_str("# Plain\n\nPlain para.\n")
             .unwrap();
         tmp.child("Synth.md")
-            .write_str("---\nft-synth: true\n---\n\nSynth para.\n")
+            .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nSynth para.\n")
             .unwrap();
         init_git_repo(tmp.path());
         // Base empty commit so HEAD~1 exists and the window covers c2.
@@ -285,7 +285,7 @@ mod tests {
             .write_str("# Plain\n\nPlain para.\n\nMore plain.\n")
             .unwrap();
         tmp.child("Synth.md")
-            .write_str("---\nft-synth: true\n---\n\nSynth para.\n\nMore synth.\n")
+            .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nSynth para.\n\nMore synth.\n")
             .unwrap();
         commit_all_dated(tmp.path(), "c2", "2025-02-01T00:00:00");
 

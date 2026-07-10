@@ -125,7 +125,7 @@ pub fn plan_synth_repair(vault: &Vault, note: &Path) -> Result<SynthRepairPlan> 
 }
 
 /// Plan repairs for every synth note in the vault (files carrying the
-/// `ft-synth: true` frontmatter marker), in vault-walk order. Notes
+/// `ft.synth.enabled: true` frontmatter marker), in vault-walk order. Notes
 /// whose sections all verify still appear (with `AlreadyOk` entries) so
 /// callers can report a complete sweep.
 pub fn plan_repair_all(vault: &Vault) -> Result<Vec<SynthRepairPlan>> {

@@ -206,7 +206,7 @@ fn cited_recent_vault() -> (TempDir, Vault) {
     std::fs::write(
         vault.path.join("Synth.md"),
         format!(
-            "---\nft-synth: true\n---\n\n\
+            "---\nft:\n  synth:\n    enabled: true\n---\n\n\
              > [!ft-source] \"Daily.md\" L5-5 @abc1234 #{hash}\n> {body}\n"
         ),
     )

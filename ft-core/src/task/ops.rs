@@ -56,7 +56,7 @@ pub enum Position {
 }
 
 /// Pick the [`Position`] for a new task when the caller has no explicit
-/// position to apply. Precedence: the target note's `ft-tasks-section`
+/// position to apply. Precedence: the target note's `ft.tasks.section`
 /// frontmatter, then `config_default_section`, else [`Position::Append`].
 ///
 /// `target_path` is read to inspect frontmatter; a read error (e.g. the
@@ -67,7 +67,7 @@ pub enum Position {
 pub fn auto_position(target_path: &Path, config_default_section: Option<&str>) -> Position {
     let from_frontmatter = std::fs::read_to_string(target_path)
         .ok()
-        .and_then(|content| crate::notes::append::frontmatter_tasks_section(&content));
+        .and_then(|content| crate::frontmatter::ft_tasks_section(&content));
     match from_frontmatter.or_else(|| config_default_section.map(str::to_string)) {
         Some(section) => Position::UnderHeading(section),
         None => Position::Append,
@@ -1048,7 +1048,7 @@ mod tests {
     fn auto_position_frontmatter_wins_over_config() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("note.md");
-        std::fs::write(&p, "---\nft-tasks-section: Inbox\n---\n# Note\n").unwrap();
+        std::fs::write(&p, "---\nft:\n  tasks:\n    section: Inbox\n---\n# Note\n").unwrap();
         match auto_position(&p, Some("Tasks")) {
             Position::UnderHeading(h) => assert_eq!(h, "Inbox"),
             other => panic!("expected UnderHeading(Inbox), got {other:?}"),

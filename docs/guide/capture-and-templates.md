@@ -66,7 +66,7 @@ The rendered template lands at one of three places, in priority order:
 
 1. **`--section "Heading"`** — explicit flag. Renders after the body
    of the named section (case-insensitive, any ATX level).
-2. **`ft-append-section: Heading`** in the target's YAML frontmatter.
+2. **`ft.append.section: Heading`** in the target's YAML frontmatter.
    When set, you can `ft notes append note.md --template X` without
    passing `--section` every time.
 3. **End of file** — if neither is configured.
@@ -106,7 +106,7 @@ target comes from context:
 - **Notes tab** — opens a fuzzy file picker.
 
 When `section` is set, the template lands there. When it's absent,
-`ft-append-section` frontmatter is consulted. When that's also absent,
+`ft.append.section` frontmatter is consulted. When that's also absent,
 end-of-file.
 
 `note` accepts strftime tokens, so you can always append to today's

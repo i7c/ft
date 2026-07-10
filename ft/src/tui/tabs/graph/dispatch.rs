@@ -749,7 +749,7 @@ impl GraphTab {
 
     /// `P` — promote the selected ghost into a synth note scaffolded
     /// with every paragraph mentioning it: journal feed → synth
-    /// scaffold at the ghost's path, `ft-synth-targets` set, graph
+    /// scaffold at the ghost's path, `ft.synth.targets` set, graph
     /// refreshed, editor opened. The ghost node disappears on refresh
     /// because the note now exists.
     fn promote_ghost(&mut self, ctx: &mut TabCtx) {

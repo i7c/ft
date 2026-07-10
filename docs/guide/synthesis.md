@@ -141,7 +141,7 @@ ft notes recent --since 7d --uncited
 In the TUI, the Gather and Recent tabs show the same badges and
 toggle the uncited-only filter with `u`. The Gather tab additionally
 has a **context-note mode**: press `o` and pick a synth note — its
-`ft-synth-targets` frontmatter loads as the source set, the sources
+`ft.synth.targets` frontmatter loads as the source set, the sources
 strip shows `[context: <note>]`, and every entry badges as `in note`
 or `missing` *relative to that note*. That is the "grow" workflow
 made visible: you see exactly which material the note already holds
@@ -152,7 +152,7 @@ the background graph refresh the shipped entries visibly flip to
 
 ## Step 3: synthesis
 
-A **synth note** is a regular `.md` file with `ft-synth: true` in its
+A **synth note** is a regular `.md` file with `ft.synth.enabled: true` in its
 frontmatter. It contains **protected sections** — quoted source
 paragraphs wrapped in an Obsidian-style callout that pins the excerpt
 to a specific git commit. Between callouts, you write whatever prose
@@ -160,7 +160,9 @@ you want:
 
 ```markdown
 ---
-ft-synth: true
+ft:
+  synth:
+    enabled: true
 ---
 
 I keep coming back to this idea that …
@@ -271,9 +273,9 @@ From there, the synth keys take over:
 | `s` | append to an **existing** note (fuzzy picker) |
 | `Shift+s` | create a **new** synth note (folder picker → title prompt) |
 
-If you press `s` and pick a note that doesn't have `ft-synth: true` in
+If you press `s` and pick a note that doesn't have `ft.synth.enabled: true` in
 its frontmatter, a small 3-way prompt asks whether to append anyway,
-mark and append (insert `ft-synth: true` first), or cancel.
+mark and append (insert the marker first), or cancel.
 
 If you press `Shift+s`, the folder picker comes up; `.` is the vault
 root. Pick a folder, type a title, hit Enter. The note is created
@@ -286,7 +288,7 @@ scaffold. With no selection, the whole displayed feed is sent.
 One more entry point: on a **ghost row in the Graph tab**, `Shift+p`
 promotes the ghost into a synth note in one keystroke — the note is
 created at the ghost's path, scaffolded with every paragraph that
-mentions it, `ft-synth-targets` set. The CLI equivalent is
+mentions it, `ft.synth.targets` set. The CLI equivalent is
 `ft notes synth scaffold <path>.md --link "[[ghost]]"`. See
 [notes.md](notes.md#ghosts-concepts-that-earned-a-note) for the
 ranked ghost list that tells you which concepts are ready.
@@ -364,7 +366,7 @@ Possible per-section statuses:
   rejected).
 
 ```sh
-ft notes synth verify --all          # sweep every ft-synth: true note in the vault
+ft notes synth verify --all          # sweep every ft.synth.enabled: true note in the vault
 ft notes synth verify --all --json   # script-friendly
 ```
 

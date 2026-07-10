@@ -522,7 +522,7 @@ pub struct CreateArgs {
     pub at_line: Option<usize>,
 
     /// Force appending at file end, overriding any configured default
-    /// section (`ft-tasks-section` frontmatter or `[tasks] default_section`).
+    /// section (`ft.tasks.section` frontmatter or `[tasks] default_section`).
     #[arg(long, conflicts_with_all = ["under_heading", "at_line"])]
     pub append: bool,
 

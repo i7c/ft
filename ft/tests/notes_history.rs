@@ -153,7 +153,7 @@ fn history_excludes_synth_notes_by_default() {
         .write_str("# Plain\n\nPlain body.\n")
         .unwrap();
     tmp.child("Synth.md")
-        .write_str("---\nft-synth: true\n---\n\nSynth body.\n")
+        .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nSynth body.\n")
         .unwrap();
     commit_all_dated(repo, "c2", "2025-02-01T00:00:00");
 

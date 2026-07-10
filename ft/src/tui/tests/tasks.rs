@@ -1222,7 +1222,7 @@ fn quickline_enter_writes_to_daily_note() -> Result<()> {
 fn quickline_honors_default_section_and_frontmatter() -> Result<()> {
     // Vault with a configured `[tasks] default_section`. A quickline write
     // into the daily note lands under that heading; a write into a note
-    // whose frontmatter pins `ft-tasks-section` uses that instead.
+    // whose frontmatter pins `ft.tasks.section` uses that instead.
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("test-vault");
     std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
@@ -1234,7 +1234,7 @@ fn quickline_honors_default_section_and_frontmatter() -> Result<()> {
     .unwrap();
     std::fs::write(
         vault_path.join("Inbox.md"),
-        "---\nft-tasks-section: Captured\n---\n# Inbox\n\n## Captured\n",
+        "---\nft:\n  tasks:\n    section: Captured\n---\n# Inbox\n\n## Captured\n",
     )
     .unwrap();
     let vault = Vault::discover(Some(vault_path)).unwrap();

@@ -55,7 +55,9 @@ fn append_to_section_via_frontmatter() {
     let dir = vault_with_template("meeting.md", "## Meeting\n\n- Agenda\n");
     let target = dir.child("gather.md");
     target
-        .write_str("---\nft-append-section: Daily Log\n---\n# Journal\n## Daily Log\nentry\n")
+        .write_str(
+            "---\nft:\n  append:\n    section: Daily Log\n---\n# Journal\n## Daily Log\nentry\n",
+        )
         .unwrap();
 
     ft().args([
@@ -84,7 +86,7 @@ fn append_with_explicit_section_override() {
     let dir = vault_with_template("meeting.md", "## Meeting\n\n- Agenda\n");
     let target = dir.child("gather.md");
     target
-        .write_str("---\nft-append-section: Daily Log\n---\n# Journal\n## Daily Log\ndaily\n## Notes\nnotes\n")
+        .write_str("---\nft:\n  append:\n    section: Daily Log\n---\n# Journal\n## Daily Log\ndaily\n## Notes\nnotes\n")
         .unwrap();
 
     ft().args([

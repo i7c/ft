@@ -2,6 +2,7 @@ pub mod blame_cache;
 pub mod config;
 pub mod dates;
 pub mod error;
+pub mod frontmatter;
 pub mod fs;
 pub mod gather;
 pub mod git;
