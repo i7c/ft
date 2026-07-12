@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 119
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
@@ -9,12 +8,12 @@ expression: frame
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ tasks ───────────────────────────────────────────────────────────────────────┐
 │ ── overdue (2) ──                                                            │
-│▶   !!  Pay rent                                     📅  2d ago                │
-│    !   Renew passport                               📅  yesterday             │
+│▶   !!  Pay rent                                📅  2d ago                     │
+│    !   Renew passport                          📅  yesterday                  │
 │ ── upcoming (3) ──                                                           │
-│        Reply to Sara                                📅  today                 │
-│    !!  Submit Q2 report                             📅  in 2d      ⏳  tomorrow│
-│    v   Buy birthday gift                            📅  in 5d                 │
+│        Reply to Sara                           📅  today                      │
+│    !!  Submit Q2 report                        📅  in 2d      ⏳  tomorrow     │
+│    v   Buy birthday gift                       📅  in 5d                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │

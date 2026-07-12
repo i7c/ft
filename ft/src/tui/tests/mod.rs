@@ -120,6 +120,37 @@ fn tasks_tab_populated_renders_overdue_and_upcoming() -> Result<()> {
     Ok(())
 }
 
+/// Vault with tasks at each age band (anchored to `fixed_clock` =
+/// 2026-05-10), all due today so they pass the default query. Covers
+/// Fresh / Aging / Stale / Rotten / Unknown in one frame.
+fn aged_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    // created dates step through each band; the last row has no ➕.
+    let body = "\
+- [ ] Fresh today ➕ 2026-05-10 📅 2026-05-10
+- [ ] Fresh 2d ➕ 2026-05-08 📅 2026-05-10
+- [ ] Aging 6d ➕ 2026-05-04 📅 2026-05-10
+- [ ] Stale 20d ➕ 2026-04-20 📅 2026-05-10
+- [ ] Rotten 56d ➕ 2026-03-15 📅 2026-05-10
+- [ ] Unknown age 📅 2026-05-10
+";
+    std::fs::write(vault_path.join("tasks.md"), body).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn tasks_tab_renders_age_badge_bands() -> Result<()> {
+    let (_dir, vault) = aged_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    let frame = render(&mut app, 100, 24);
+    assert_tui_snapshot!("tasks_tab_age_bands_100x24", frame);
+    Ok(())
+}
+
 /// Vault with a nested task tree whose top-level parents pass the default
 /// query (Open + due soon) while the indented subtasks have no due date, so
 /// they only surface when the user expands a parent.
@@ -251,7 +282,7 @@ fn create_subtask_nests_under_selected_and_auto_expands() -> Result<()> {
     // subtasks (which sit at two spaces).
     let content = std::fs::read_to_string(&task_file)?;
     assert!(
-        content.contains("  - [ ] Pipes and plumbing\n  - [ ] Wiring\n"),
+        content.contains("  - [ ] Pipes and plumbing\n  - [ ] Wiring ➕ 2026-05-10\n"),
         "subtask should be written indented at the end of the parent block:\n{content}"
     );
 

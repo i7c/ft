@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 168
 expression: expanded
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
@@ -9,10 +8,10 @@ expression: expanded
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ tasks ───────────────────────────────────────────────────────────────────────┐
 │ ── upcoming (2) ──                                                           │
-│▶       ▾ Build a house                              📅  in 2d                 │
+│▶       ▾ Build a house                         📅  in 2d                      │
 │          ▸ Build the walls                                                   │
 │          · Pipes and plumbing                                                │
-│        Buy groceries                                📅  in 3d                 │
+│        Buy groceries                           📅  in 3d                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │

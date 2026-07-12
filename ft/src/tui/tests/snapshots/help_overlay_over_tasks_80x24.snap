@@ -12,7 +12,7 @@ expression: frame
 │    !   R│  Tab         Switch to the next tab                      │         │
 │ ── upcom│  BackTab     Switch to the previous tab                  │         │
 │        R│  1..9        Switch to the tab at the given 0-based index│         │
-│    !!  S│                                                          │ tomorrow│
+│    !!  S│                                                          │rrow     │
 │    v   B│  ↑/↓ or j/k scroll · PgUp/PgDn · g/G · ?/Esc/q close     │         │
 │         │                                                          │         │
 │         │                                                          │         │

@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/tasks.rs
-assertion_line: 552
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
@@ -13,7 +12,7 @@ expression: frame
 │    !   Re│  description : Pay rent                                │          │
 │ ── upcomi│          due : not-a-date│                             │          │
 │        Re│    scheduled :                                         │          │
-│    !!  Su│     priority : high                                    │  tomorrow│
+│    !!  Su│     priority : high                                    │orrow     │
 │    v   Bu│         tags :                                         │          │
 │          │   recurrence :                                         │          │
 │          │                                                        │          │

@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests/mod.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│status in {Open, InProgress} and due < 2026-05-18                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ── upcoming (6) ──                                                                               │
+│▶       Fresh today                                                 📅  today        0d            │
+│        Fresh 2d                                                    📅  today        2d            │
+│        Aging 6d                                                    📅  today        6d            │
+│        Stale 20d                                                   📅  today       20d            │
+│        Rotten 56d                                                  📅  today       56d            │
+│        Unknown age                                                 📅  today                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                       refreshed [HH:MM:SS]             mode: normal

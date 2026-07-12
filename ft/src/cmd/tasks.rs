@@ -551,7 +551,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         status: Status::Open,
         priority: args.priority.map(Into::into),
         tags: args.tag,
-        created: None,
+        created: Some(today),
         start: args
             .start
             .as_deref()

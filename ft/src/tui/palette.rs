@@ -48,3 +48,18 @@ pub const SUCCESS: Color = Color::Green;
 
 /// Error toasts, parse error text, invalid input feedback.
 pub const ERROR: Color = Color::Red;
+
+// ── Age-band greys (Tasks SearchView age badge) ────────────────────
+// Four absolute shades for task aging: lightest = freshest, darkest =
+// most stale. Applied as a span-scoped background on the age badge
+// column only, so they never collide with the selected-row brown or
+// the done/cancelled DIM modifier.
+
+/// `Fresh` band (0–3 days): lightest grey.
+pub const AGE_FRESH: Color = Color::Rgb(70, 66, 60);
+/// `Aging` band (4–10 days).
+pub const AGE_AGING: Color = Color::Rgb(90, 84, 76);
+/// `Stale` band (11–30 days).
+pub const AGE_STALE: Color = Color::Rgb(120, 112, 100);
+/// `Rotten` band (>30 days): darkest grey.
+pub const AGE_ROTTEN: Color = Color::Rgb(150, 140, 125);

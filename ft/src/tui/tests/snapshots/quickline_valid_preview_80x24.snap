@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/tasks.rs
-assertion_line: 1708
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
@@ -10,7 +9,7 @@ expression: frame
 ┌ new task ────────────────────────────────────────────────────────────────────┐
 │buy milk due:tomorrow pri:high #grocery│                                      │
 └──────────────────────────────────────────────────────────────────────────────┘
-  → - [ ] buy milk #grocery ⏫  📅  2026-05-11   → Daily/2026-05-10.md            
+  → - [ ] buy milk #grocery ⏫  ➕  2026-05-10 📅  2026-05-11   → Daily/2026-05-10.
 ┌ tasks ───────────────────────────────────────────────────────────────────────┐
 │                               no matching tasks                              │
 │                                                                              │

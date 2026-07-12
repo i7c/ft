@@ -8,6 +8,7 @@ use ft_core::{
     },
     query::sort::{sort_by_keys, SortKey, SortOrder},
     task::{
+        aging::{age_band, AgeBand},
         ops::{self, CompleteOptions, CreateInput},
         Priority, Status, Task,
     },
@@ -644,9 +645,9 @@ impl SearchView {
 
         // Inner width inside the borders. Fixed columns: cursor(2)
         // + status glyph(2) + priority label(4) + due block(13)
-        // + scheduled block(13) = 34. Description column flexes.
+        // + scheduled block(13) + age badge(5) = 39. Description flexes.
         let inner_width = area.width.saturating_sub(2);
-        let desc_width = inner_width.saturating_sub(34).max(16) as usize;
+        let desc_width = inner_width.saturating_sub(39).max(16) as usize;
 
         let lines = self.build_lines(today, desc_width);
         let scroll = self.scroll;
@@ -1348,7 +1349,7 @@ impl SearchView {
             status: ft_core::task::Status::Open,
             priority,
             tags,
-            created: None,
+            created: Some(ctx.today),
             start: None,
             scheduled,
             due,
@@ -1517,7 +1518,7 @@ impl SearchView {
             status: ft_core::task::Status::Open,
             priority: parse.priority,
             tags: parse.tags.clone(),
-            created: None,
+            created: Some(ctx.today),
             start: parse.start,
             scheduled: parse.scheduled,
             due: parse.due,
@@ -1618,7 +1619,7 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
         status: Status::Open,
         priority: parse.priority,
         tags: parse.tags.clone(),
-        created: None,
+        created: Some(ctx.today),
         start: parse.start,
         scheduled: parse.scheduled,
         due: parse.due,
@@ -1754,7 +1755,52 @@ fn task_line(
         let cell = format!(" ⏳ {:<10}", sch);
         spans.push(Span::styled(cell, row_style.fg(palette::PRIMARY)));
     }
+
+    // Age badge: span-scoped grey background keyed to an absolute age band.
+    // Carries its own `bg` (not derived from `row_style`) so it never
+    // collides with the selected-row brown or the done/cancelled DIM —
+    // ratatui composes it cell-by-cell over just this span. Keeps its
+    // grey even on the selected row (age stays visible while inspecting).
+    spans.push(age_badge_span(task, today));
     Line::from(spans)
+}
+
+/// Fixed width (chars) of the age badge cell, including the leading
+/// separator space. Every row renders the badge at this width so column
+/// alignment stays stable whether or not `created` is present.
+const AGE_BADGE_WIDTH: usize = 5;
+
+/// Build the age badge span for a task row. Known ages render `{days}d`
+/// right-aligned on a grey background whose shade reflects the band;
+/// `Unknown` (no `created`) renders a blank cell of the same width with
+/// no background.
+fn age_badge_span(task: &Task, today: NaiveDate) -> Span<'static> {
+    let band = age_band(task.created, today);
+    match band {
+        AgeBand::Unknown => Span::styled(" ".repeat(AGE_BADGE_WIDTH), Style::default()),
+        _ => {
+            let days = today
+                .signed_duration_since(task.created.expect("non-Unknown band has a date"))
+                .num_days()
+                .max(0);
+            let text = format!(" {:>3}d", days);
+            Span::styled(
+                text,
+                Style::default().bg(age_band_color(band)).fg(palette::WHITE),
+            )
+        }
+    }
+}
+
+/// Map an age band to its grey palette constant.
+fn age_band_color(band: AgeBand) -> Color {
+    match band {
+        AgeBand::Fresh => palette::AGE_FRESH,
+        AgeBand::Aging => palette::AGE_AGING,
+        AgeBand::Stale => palette::AGE_STALE,
+        AgeBand::Rotten => palette::AGE_ROTTEN,
+        AgeBand::Unknown => palette::STATUS_BG,
+    }
 }
 
 /// Single-char status glyph + color. Open is a blank space so the row reads
@@ -1786,5 +1832,97 @@ fn priority_color(p: Option<Priority>) -> Color {
         Some(Priority::Medium) => palette::SECONDARY,
         Some(Priority::Low | Priority::Lowest) => palette::PRIMARY,
         None => palette::DIM,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ft_core::task::aging::AgeBand;
+
+    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn task_with_created(created: Option<NaiveDate>) -> Task {
+        Task {
+            created,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn age_badge_text_shows_days() {
+        let today = date(2026, 5, 10);
+        // 2 days old → "  2d"
+        let span = age_badge_span(&task_with_created(Some(date(2026, 5, 8))), today);
+        assert_eq!(span.content, "   2d");
+        // 56 days old → " 56d"
+        let span = age_badge_span(&task_with_created(Some(date(2026, 3, 15))), today);
+        assert_eq!(span.content, "  56d");
+    }
+
+    #[test]
+    fn age_badge_band_maps_to_grey_shade() {
+        let today = date(2026, 5, 10);
+        let cases = [
+            (date(2026, 5, 8), AgeBand::Fresh, palette::AGE_FRESH),
+            (date(2026, 5, 4), AgeBand::Aging, palette::AGE_AGING),
+            (date(2026, 4, 20), AgeBand::Stale, palette::AGE_STALE),
+            (date(2026, 3, 15), AgeBand::Rotten, palette::AGE_ROTTEN),
+        ];
+        for (created, band, expected_bg) in cases {
+            let task = task_with_created(Some(created));
+            assert_eq!(age_band(task.created, today), band);
+            let span = age_badge_span(&task, today);
+            assert_eq!(span.style.bg, Some(expected_bg), "band {band:?} bg");
+        }
+    }
+
+    #[test]
+    fn age_badge_unknown_has_no_background() {
+        let today = date(2026, 5, 10);
+        let span = age_badge_span(&task_with_created(None), today);
+        assert_eq!(span.content, "     ");
+        assert_eq!(span.style.bg, None);
+    }
+
+    #[test]
+    fn age_badge_width_is_stable_across_bands() {
+        let today = date(2026, 5, 10);
+        let unknown = age_badge_span(&task_with_created(None), today);
+        let fresh = age_badge_span(&task_with_created(Some(today)), today);
+        let rotten = age_badge_span(&task_with_created(Some(date(2025, 1, 1))), today);
+        assert_eq!(unknown.content.chars().count(), AGE_BADGE_WIDTH);
+        assert_eq!(fresh.content.chars().count(), AGE_BADGE_WIDTH);
+        assert_eq!(rotten.content.chars().count(), AGE_BADGE_WIDTH);
+    }
+
+    #[test]
+    fn age_badge_keeps_grey_on_selected_row_style() {
+        // The badge span builds its own Style (bg = band grey) and does
+        // NOT derive from a selected row_style. This is the contract that
+        // keeps age visible while inspecting a selected row: the badge
+        // span's bg is the band grey, not the warm-brown selection bg.
+        let today = date(2026, 5, 10);
+        let selected_row_bg = Color::Rgb(50, 38, 30);
+        let span = age_badge_span(&task_with_created(Some(date(2026, 4, 20))), today);
+        assert_eq!(span.style.bg, Some(palette::AGE_STALE));
+        assert_ne!(span.style.bg, Some(selected_row_bg));
+    }
+
+    #[test]
+    fn age_badge_renders_for_done_task() {
+        // Done/cancelled rows get a row-level DIM modifier, but the badge
+        // span is built independently and still carries its grey bg.
+        let today = date(2026, 5, 10);
+        let task = Task {
+            status: Status::Done,
+            created: Some(date(2026, 4, 20)),
+            ..Default::default()
+        };
+        let span = age_badge_span(&task, today);
+        assert_eq!(span.style.bg, Some(palette::AGE_STALE));
+        assert_eq!(span.content, "  20d");
     }
 }

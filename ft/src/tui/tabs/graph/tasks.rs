@@ -278,6 +278,7 @@ impl GraphTab {
             due,
             tags,
             recurrence,
+            created: Some(ctx.today),
             ..Default::default()
         };
 

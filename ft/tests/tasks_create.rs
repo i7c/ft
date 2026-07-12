@@ -41,7 +41,10 @@ fn create_simple_task_in_daily_note() {
     // The daily note didn't exist, so it's created from the daily stub
     // (`# <date>`) first — matching what `ft notes today` would produce.
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk 📅 2026-05-10\n");
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\n- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n"
+    );
 }
 
 #[test]
@@ -61,7 +64,10 @@ fn create_with_priority_and_tags() {
     )
     .success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "# 2026-05-09\n\n- [ ] Read book #work #books ⏫\n");
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\n- [ ] Read book #work #books ⏫ ➕ 2026-05-09\n"
+    );
 }
 
 #[test]
@@ -73,7 +79,7 @@ fn create_with_explicit_file_relative_to_vault() {
     )
     .success();
     let content = std::fs::read_to_string(dir.path().join("inbox/calls.md")).unwrap();
-    assert_eq!(content, "- [ ] Take call 📅 2026-05-16\n");
+    assert_eq!(content, "- [ ] Take call ➕ 2026-05-09 📅 2026-05-16\n");
 }
 
 #[test]
@@ -117,7 +123,7 @@ fn create_at_line_inserts_at_position() {
     )
     .success();
     let content = std::fs::read_to_string(f.path()).unwrap();
-    assert_eq!(content, "a\n- [ ] New task\nb\nc\n");
+    assert_eq!(content, "a\n- [ ] New task ➕ 2026-05-09\nb\nc\n");
 }
 
 #[test]
@@ -135,7 +141,12 @@ fn duplicate_inserted_with_force() {
     run(dir.path(), &["Buy milk", "--due", "tomorrow"]).success();
     run(dir.path(), &["Buy milk", "--due", "tomorrow", "--force"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content.matches("- [ ] Buy milk 📅 2026-05-10").count(), 2);
+    assert_eq!(
+        content
+            .matches("- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10")
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -231,7 +242,10 @@ format = "%Y-%m-%d"
 
     run(dir.path(), &["Buy milk", "--due", "tomorrow"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026/2026-05-09.md")).unwrap();
-    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk 📅 2026-05-10\n");
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\n- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n"
+    );
 }
 
 #[test]
@@ -270,7 +284,10 @@ fn description_collected_from_multiple_args() {
     let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
     run(dir.path(), &["Buy", "milk", "and", "bread"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "# 2026-05-09\n\n- [ ] Buy milk and bread\n");
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\n- [ ] Buy milk and bread ➕ 2026-05-09\n"
+    );
 }
 
 #[test]
@@ -322,7 +339,7 @@ fn default_section_lands_task_under_heading() {
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
     assert_eq!(
         content,
-        "# 2026-05-09\n\nNotes.\n\n## Tasks\n- [ ] Buy milk\n"
+        "# 2026-05-09\n\nNotes.\n\n## Tasks\n- [ ] Buy milk ➕ 2026-05-09\n"
     );
 }
 
@@ -346,7 +363,10 @@ fn append_flag_overrides_default_section() {
         .unwrap();
     run(dir.path(), &["Raw append", "--append"]).success();
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
-    assert_eq!(content, "# 2026-05-09\n\nNotes.\n- [ ] Raw append\n");
+    assert_eq!(
+        content,
+        "# 2026-05-09\n\nNotes.\n- [ ] Raw append ➕ 2026-05-09\n"
+    );
 }
 
 #[test]
@@ -394,6 +414,6 @@ fn missing_daily_note_is_created_from_template() {
     let content = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
     assert_eq!(
         content,
-        "---\nft:\n  tasks:\n    section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk\n\n## Log\n"
+        "---\nft:\n  tasks:\n    section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk ➕ 2026-05-09\n\n## Log\n"
     );
 }

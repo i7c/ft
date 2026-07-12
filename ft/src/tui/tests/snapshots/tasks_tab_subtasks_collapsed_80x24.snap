@@ -1,6 +1,5 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 155
 expression: collapsed
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
@@ -9,8 +8,8 @@ expression: collapsed
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ tasks ───────────────────────────────────────────────────────────────────────┐
 │ ── upcoming (2) ──                                                           │
-│▶       ▸ Build a house                              📅  in 2d                 │
-│        Buy groceries                                📅  in 3d                 │
+│▶       ▸ Build a house                         📅  in 2d                      │
+│        Buy groceries                           📅  in 3d                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │

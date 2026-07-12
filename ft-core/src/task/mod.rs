@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+pub mod aging;
 pub mod emoji;
 pub mod format;
 pub mod hierarchy;
