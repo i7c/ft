@@ -320,7 +320,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
 /// Look up a preset by name, preferring the user's config over built-ins.
 fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {
-    if let Some(user) = vault.config.config.presets.get(name) {
+    if let Some(user) = vault.config.config.tasks.presets.get(name) {
         return Some(user.clone());
     }
     preset::builtin(name).map(|s| s.to_string())

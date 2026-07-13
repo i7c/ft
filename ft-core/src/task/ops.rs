@@ -564,6 +564,69 @@ where
     Ok(task)
 }
 
+/// A standalone `#tag` word: starts with `#` and the remainder is non-empty
+/// and entirely `alphanumeric | _ | - | /`. Matches the char set accepted by
+/// [`super::emoji::extract_tags`] so what retag sees as "a tag" is exactly
+/// what the system parsed into `Task.tags`.
+///
+/// Public so the TUI retag picker can reuse the same definition.
+pub fn is_tag_word(w: &str) -> bool {
+    let Some(rest) = w.strip_prefix('#') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
+}
+
+/// Rewrite the task's description so every inline `#tag` word whose bare
+/// form is in `list` is removed, then `#<tag>` is appended (when `tag` is
+/// non-empty). Tags not in `list` and all non-tag description text are
+/// preserved verbatim. `tag == ""` clears every list-member tag without
+/// appending a replacement.
+///
+/// `expected` guards against stale line numbers — see [`complete_task`].
+///
+/// Tags are a derived index rebuilt from the description on parse; the
+/// serializer emits `description` verbatim, so a tag edit MUST rewrite the
+/// description rather than `Task.tags` (the latter is a silent no-op on
+/// disk — see `emoji::serialize_line`).
+pub fn retag_task(
+    target_path: &Path,
+    line: usize,
+    format: &dyn TaskFormat,
+    expected: Option<&Task>,
+    list: &[String],
+    tag: &str,
+) -> Result<Task, UpdateError> {
+    let list_set: std::collections::HashSet<&str> = list.iter().map(|s| s.as_str()).collect();
+    update_task_line(target_path, line, format, expected, |t| {
+        let mut kept: Vec<&str> = Vec::new();
+        for word in t.description.split_whitespace() {
+            // Drop list-member tags; keep everything else (non-tags and
+            // tags outside the configured switchable set).
+            let is_list_tag = is_tag_word(word)
+                && word
+                    .strip_prefix('#')
+                    .is_some_and(|bare| list_set.contains(bare));
+            if !is_list_tag {
+                kept.push(word);
+            }
+        }
+        let mut out = kept.join(" ");
+        let bare = tag.trim_start_matches('#');
+        if !bare.is_empty() {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push('#');
+            out.push_str(bare);
+        }
+        t.description = out;
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum CancelError {
     #[error(transparent)]
@@ -2030,5 +2093,91 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, MoveError::LineChanged { .. }), "{err:?}");
         assert_eq!(std::fs::read_to_string(&src).unwrap(), "- [ ] other task\n");
+    }
+
+    // ── retag_task ───────────────────────────────────────────────────
+
+    fn retag_round_trip(initial: &str, list: &[&str], tag: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, format!("{initial}\n")).unwrap();
+        let expected = parsed(initial);
+        let list_owned: Vec<String> = list.iter().map(|s| s.to_string()).collect();
+        retag_task(&p, 1, &EmojiFormat, Some(&expected), &list_owned, tag).unwrap();
+        std::fs::read_to_string(&p).unwrap().trim_end().to_string()
+    }
+
+    #[test]
+    fn retag_swaps_prior_list_tag_preserves_others() {
+        // list = {wait, computer, physical}; #computer is a member, #finance is not.
+        let out = retag_round_trip(
+            "- [ ] Pay invoice #finance #computer",
+            &["wait", "computer", "physical"],
+            "wait",
+        );
+        assert_eq!(out, "- [ ] Pay invoice #finance #wait");
+    }
+
+    #[test]
+    fn retag_appends_when_no_list_tag_present() {
+        let out = retag_round_trip(
+            "- [ ] Email Sarah #finance",
+            &["wait", "computer", "physical"],
+            "computer",
+        );
+        assert_eq!(out, "- [ ] Email Sarah #finance #computer");
+    }
+
+    #[test]
+    fn retag_preserves_glued_or_nonmember_tags() {
+        // `#computer-thing` is a single tag word whose bare form is
+        // `computer-thing` — not `computer`, so it is not matched/removed.
+        let out = retag_round_trip("- [ ] fix #computer-thing", &["computer"], "wait");
+        assert_eq!(out, "- [ ] fix #computer-thing #wait");
+    }
+
+    #[test]
+    fn retag_empty_tag_clears_list_members_only() {
+        // `tag == ""` clears every list-member tag and appends nothing.
+        let out = retag_round_trip(
+            "- [ ] Pay invoice #finance #computer",
+            &["wait", "computer", "physical"],
+            "",
+        );
+        assert_eq!(out, "- [ ] Pay invoice #finance");
+    }
+
+    #[test]
+    fn retag_non_list_tag_preserved_when_swapping() {
+        // #finance stays; #wait (a list member) is replaced by #computer.
+        let out = retag_round_trip(
+            "- [ ] Email #finance #wait",
+            &["wait", "computer", "physical"],
+            "computer",
+        );
+        assert_eq!(out, "- [ ] Email #finance #computer");
+    }
+
+    #[test]
+    fn retag_strips_leading_hash_from_tag_argument() {
+        // The picker passes a bare name, but a stray leading `#` is tolerated.
+        let out = retag_round_trip(
+            "- [ ] thing #computer",
+            &["wait", "computer", "physical"],
+            "#wait",
+        );
+        assert_eq!(out, "- [ ] thing #wait");
+    }
+
+    #[test]
+    fn retag_with_stale_expected_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, "- [ ] other task\n").unwrap();
+        let expected = parsed("- [ ] Pay invoice #computer");
+        let list = vec!["wait".to_string(), "computer".to_string()];
+        let err = retag_task(&p, 1, &EmojiFormat, Some(&expected), &list, "wait").unwrap_err();
+        assert!(matches!(err, UpdateError::LineChanged { .. }), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "- [ ] other task\n");
     }
 }

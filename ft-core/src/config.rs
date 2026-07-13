@@ -33,9 +33,6 @@ pub struct Config {
     /// Glob patterns (relative to vault root) to exclude from scanning.
     #[serde(default)]
     pub ignored_paths: Vec<String>,
-    /// Named task queries (presets). Keys are preset names; values are DSL strings.
-    #[serde(default)]
-    pub presets: HashMap<String, String>,
     /// Note-creation settings.
     #[serde(default)]
     pub notes: Notes,
@@ -190,6 +187,15 @@ pub struct Tasks {
     /// `ft.tasks.section` frontmatter and no explicit position is given.
     /// When unset, new tasks append at file end (the historical default).
     pub default_section: Option<String>,
+    /// Named task queries (presets). Keys are preset names; values are
+    /// task-DSL strings. Serialized as `[tasks.presets]`. User presets
+    /// shadow built-ins of the same name.
+    #[serde(default)]
+    pub presets: HashMap<String, String>,
+    /// Bare tag names (no leading `#`) offered by the TUI retag picker.
+    /// Empty by default; the picker no-ops (with a toast) when empty.
+    #[serde(default)]
+    pub retag_tags: Vec<String>,
 }
 
 /// Settings for `ft notes create` and the TUI create flows.
@@ -672,7 +678,7 @@ typo_field = "oops"
         let user = tmp.child("user.toml");
         user.write_str(
             r#"
-[presets]
+[tasks.presets]
 work = "tag is #work and not done"
 "#,
         )
@@ -680,9 +686,68 @@ work = "tag is #work and not done"
 
         let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
         assert_eq!(
-            lc.config.presets.get("work").map(|s| s.as_str()),
+            lc.config.tasks.presets.get("work").map(|s| s.as_str()),
             Some("tag is #work and not done")
         );
+    }
+
+    #[test]
+    fn legacy_top_level_presets_section_is_rejected() {
+        // The pre-change location was a top-level `[presets]` section.
+        // After the move to `[tasks.presets]`, `Config`'s
+        // `deny_unknown_fields` rejects the stray field at load time so
+        // the user gets a loud error rather than a silent ignore.
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[presets]
+work = "tag is #work and not done"
+"#,
+        )
+        .unwrap();
+
+        let r = load(user.path(), &tmp.path().join("no-vault.toml"));
+        assert!(r.is_err(), "legacy top-level [presets] must be rejected");
+        let msg = r.unwrap_err().to_string();
+        assert!(
+            msg.contains("presets"),
+            "error should name the stray field `presets`: {msg}"
+        );
+    }
+
+    #[test]
+    fn retag_tags_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[tasks]
+retag_tags = ["wait", "computer", "physical"]
+"#,
+        )
+        .unwrap();
+
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        assert_eq!(
+            lc.config.tasks.retag_tags,
+            vec![
+                "wait".to_string(),
+                "computer".to_string(),
+                "physical".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn retag_tags_defaults_empty() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.tasks.retag_tags.is_empty());
     }
 
     // ── [editor] block (plan 011 session 1) ──────────────────────────────

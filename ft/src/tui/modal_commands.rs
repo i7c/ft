@@ -300,6 +300,7 @@ const SEARCH_SCOPE: CommandScope = CommandScope::Modal("search");
 const PRESET_PICKER_SCOPE: CommandScope = CommandScope::Modal("preset-picker");
 const CAPTURE_PICKER_SCOPE: CommandScope = CommandScope::Modal("capture-picker");
 const TASK_PRESET_PICKER_SCOPE: CommandScope = CommandScope::Modal("task-preset-picker");
+const TASK_RETAG_PICKER_SCOPE: CommandScope = CommandScope::Modal("task-retag-picker");
 
 pub static SEARCH_COMMANDS: &[CommandDef] = &[
     confirm_def("search.confirm", SEARCH_SCOPE),
@@ -368,6 +369,29 @@ pub static TASK_PRESET_PICKER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Esc", "task-preset-picker.cancel")
         .bind("Up", "task-preset-picker.cursor-up")
         .bind("Down", "task-preset-picker.cursor-down")
+});
+
+pub static TASK_RETAG_PICKER_COMMANDS: &[CommandDef] = &[
+    confirm_def("task-retag-picker.confirm", TASK_RETAG_PICKER_SCOPE),
+    cancel_def("task-retag-picker.cancel", TASK_RETAG_PICKER_SCOPE),
+    nav_def(
+        "task-retag-picker.cursor-up",
+        "Select the previous retag tag",
+        TASK_RETAG_PICKER_SCOPE,
+    ),
+    nav_def(
+        "task-retag-picker.cursor-down",
+        "Select the next retag tag",
+        TASK_RETAG_PICKER_SCOPE,
+    ),
+];
+
+pub static TASK_RETAG_PICKER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "task-retag-picker.confirm")
+        .bind("Esc", "task-retag-picker.cancel")
+        .bind("Up", "task-retag-picker.cursor-up")
+        .bind("Down", "task-retag-picker.cursor-down")
 });
 
 pub static CAPTURE_PICKER_COMMANDS: &[CommandDef] = &[
@@ -744,6 +768,7 @@ mod tests {
             SEARCH_COMMANDS,
             PRESET_PICKER_COMMANDS,
             TASK_PRESET_PICKER_COMMANDS,
+            TASK_RETAG_PICKER_COMMANDS,
             CAPTURE_PICKER_COMMANDS,
             RELATED_COMMANDS,
             MOVE_OUTER_COMMANDS,
@@ -782,6 +807,7 @@ mod tests {
             (&SEARCH_KEYMAP, SEARCH_COMMANDS),
             (&PRESET_PICKER_KEYMAP, PRESET_PICKER_COMMANDS),
             (&TASK_PRESET_PICKER_KEYMAP, TASK_PRESET_PICKER_COMMANDS),
+            (&TASK_RETAG_PICKER_KEYMAP, TASK_RETAG_PICKER_COMMANDS),
             (&CAPTURE_PICKER_KEYMAP, CAPTURE_PICKER_COMMANDS),
             (&RELATED_KEYMAP, RELATED_COMMANDS),
             (&MOVE_OUTER_KEYMAP, MOVE_OUTER_COMMANDS),

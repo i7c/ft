@@ -200,6 +200,12 @@ pub enum TasksRequest {
     /// Enter. Parsed under `Profile::Tasks` (the same profile the inline
     /// query bar uses).
     ApplyPreset(String),
+    /// Retag the Tasks SearchView's selected task. Raised by the
+    /// task-retag-picker modal on Enter. `tag` is the bare name (no
+    /// leading `#`) picked from `config.tasks.retag_tags`; the view's
+    /// `apply_retag` writes it via `ops::retag_task`, swapping out any
+    /// prior tag from the same configured list.
+    RetagSelected(String),
 }
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate

@@ -58,14 +58,14 @@ pub fn run(_args: VaultArgs, vault_flag: Option<PathBuf>) -> Result<()> {
     } else {
         println!("  ignored_paths = {:?}", cfg.ignored_paths);
     }
-    if cfg.presets.is_empty() {
-        println!("  presets = {{}}");
+    if cfg.tasks.presets.is_empty() {
+        println!("  tasks.presets = {{}}");
     } else {
-        println!("  presets:");
-        let mut keys: Vec<&String> = cfg.presets.keys().collect();
+        println!("  tasks.presets:");
+        let mut keys: Vec<&String> = cfg.tasks.presets.keys().collect();
         keys.sort();
         for k in keys {
-            println!("    {} = {:?}", k, cfg.presets[k]);
+            println!("    {} = {:?}", k, cfg.tasks.presets[k]);
         }
     }
 

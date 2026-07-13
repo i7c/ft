@@ -37,4 +37,10 @@ pub trait View {
     /// so the owning tab can call through `Box<dyn View>` without
     /// downcasting.
     fn apply_preset(&mut self, _dsl: &str, _today: NaiveDate) {}
+
+    /// Retag the selected task with `tag` (bare name, no leading `#`),
+    /// swapping out any prior tag from `config.tasks.retag_tags`. Raised
+    /// by the task-retag-picker modal via `TasksTab::handle_tasks_request`.
+    /// Default: no-op (only `SearchView` overrides).
+    fn apply_retag(&mut self, _tag: &str, _ctx: &mut TabCtx) {}
 }

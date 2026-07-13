@@ -36,7 +36,10 @@ use crate::tui::{
             parse_optional_date, parse_priority, parse_tags_field, relative_date,
             render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
         },
-        modals::{TaskPresetPickerModal, TaskPresetPickerSource},
+        modals::{
+            TaskPresetPickerModal, TaskPresetPickerSource, TaskRetagPickerModal,
+            TaskRetagPickerSource,
+        },
         quickline::parse_quickline,
         view::View,
     },
@@ -75,6 +78,7 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("x", "tasks.complete")
         .bind("X", "tasks.cancel")
         .bind("t", "tasks.due-today")
+        .bind("T", "tasks.retag")
         .bind("e", "tasks.edit-popup")
         // Create / edit
         .bind("c", "tasks.quickline")
@@ -501,6 +505,22 @@ impl SearchView {
         self.recompute_matches(today);
     }
 
+    /// Retag the selected task: swap any prior tag from
+    /// `config.tasks.retag_tags` for `tag` (bare name). Raised by the
+    /// task-retag-picker modal via `TasksRequest::RetagSelected` →
+    /// `TasksTab::handle_tasks_request`. Errors (e.g. the stale-line
+    /// guard) are surfaced as a toast by `with_selected_task`, which
+    /// also handles the anchor restore + graph refresh.
+    fn apply_retag(&mut self, tag: &str, ctx: &mut TabCtx) {
+        let format = ctx.vault.task_format();
+        let list = ctx.vault.config.config.tasks.retag_tags.clone();
+        let tag = tag.to_string();
+        let _ = self.with_selected_task(ctx, |path, task, _today| {
+            ops::retag_task(path, task.source_line, format, Some(task), &list, &tag)?;
+            Ok(())
+        });
+    }
+
     // --- rendering helpers -------------------------------------------------
 
     fn render_query_bar(&self, frame: &mut Frame, area: Rect) {
@@ -788,6 +808,10 @@ impl View for SearchView {
         SearchView::apply_preset(self, dsl, today)
     }
 
+    fn apply_retag(&mut self, tag: &str, ctx: &mut TabCtx) {
+        SearchView::apply_retag(self, tag, ctx)
+    }
+
     fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
         let _ = self.adopt_snapshot(ctx);
     }
@@ -870,6 +894,20 @@ impl SearchView {
             }
             "tasks.edit-popup" => {
                 self.open_edit_popup();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.retag" => {
+                let src = TaskRetagPickerSource::new(ctx.vault);
+                if src.items.is_empty() {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                        text: "no retag tags configured — add [tasks.retag_tags]".into(),
+                        style: ToastStyle::Error,
+                    });
+                    return Ok(CommandOutcome::Handled);
+                }
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::TaskRetagPicker(TaskRetagPickerModal::new(src)),
+                )));
                 Ok(CommandOutcome::Handled)
             }
             "tasks.quickline" => {

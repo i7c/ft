@@ -2150,3 +2150,118 @@ fn ctrl_p_does_not_open_picker_while_editing_query() -> Result<()> {
     );
     Ok(())
 }
+
+// ── T retag picker ───────────────────────────────────────────────────
+
+/// Vault preconfigured with `[tasks.retag_tags]` so the retag picker has
+/// entries to show.
+fn retag_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[tasks]\nretag_tags = [\"wait\", \"computer\", \"physical\"]\n",
+    )
+    .unwrap();
+    // A task already carrying a list-member tag (#computer) plus a
+    // non-list tag (#finance) so the swap is observable. Due 2026-05-08
+    // (overdue under the fixed test clock 2026-05-09) so it matches the
+    // default query.
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay invoice #finance #computer 📅 2026-05-08\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// `T` opens the retag picker over `config.tasks.retag_tags`.
+#[test]
+fn t_opens_retag_picker() -> Result<()> {
+    let mut app = App::for_test_with_clock(
+        {
+            let (_dir, vault) = retag_vault();
+            vault
+        },
+        fixed_clock,
+    );
+    app.switch_to(5)?;
+    app.dispatch(key('T'))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("task-retag-picker"),
+        "T must open the task-retag-picker modal"
+    );
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("tasks_tab_retag_picker_open_80x24", frame);
+    Ok(())
+}
+
+/// Selecting a tag swaps it in, replacing the prior list-member tag and
+/// preserving non-list tags. The file on disk is rewritten.
+#[test]
+fn retag_selecting_tag_swaps_and_preserves_others() -> Result<()> {
+    let (dir, vault) = retag_vault();
+    let task_path = dir.path().join("test-vault/tasks.md");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    // Pump so the snapshot is installed and the task list is loaded
+    // before we open the picker.
+    app.pump_graph_rebuild_for_test();
+    app.dispatch(key('T'))?;
+    assert_eq!(app.active_modal_name(), Some("task-retag-picker"));
+    // First item is `wait` (config order). Enter commits.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    assert_eq!(app.active_modal_name(), None, "Enter must close the picker");
+    // The retag posts a graph refresh; pump it so the view re-derives.
+    app.pump_graph_rebuild_for_test();
+    let after = std::fs::read_to_string(&task_path).unwrap();
+    assert!(
+        after.contains("#finance #wait"),
+        "#computer should be swapped for #wait, #finance preserved:\n{after}"
+    );
+    assert!(
+        !after.contains("#computer"),
+        "#computer (list member) should be removed:\n{after}"
+    );
+    Ok(())
+}
+
+/// Esc dismisses the retag picker without writing.
+#[test]
+fn retag_cancel_leaves_file_unchanged() -> Result<()> {
+    let (dir, vault) = retag_vault();
+    let task_path = dir.path().join("test-vault/tasks.md");
+    let before = std::fs::read_to_string(&task_path).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.dispatch(key('T'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    assert_eq!(app.active_modal_name(), None);
+    let after = std::fs::read_to_string(&task_path).unwrap();
+    assert_eq!(before, after, "Esc must not write");
+    Ok(())
+}
+
+/// `T` with an empty `retag_tags` list shows a toast instead of opening a
+/// picker.
+#[test]
+fn retag_with_empty_list_shows_toast() -> Result<()> {
+    let mut app = tasks_app_populated(); // no retag_tags configured
+    app.dispatch(key('T'))?;
+    assert_eq!(
+        app.active_modal_name(),
+        None,
+        "no picker should open when retag_tags is empty"
+    );
+    // The toast text is surfaced via the pending-request channel; pump to
+    // settle and confirm the app didn't open a modal or crash.
+    app.pump_graph_rebuild_for_test();
+    Ok(())
+}

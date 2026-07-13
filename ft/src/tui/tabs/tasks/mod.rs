@@ -257,6 +257,15 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "tasks.retag",
+        description: "Swap a configured tag into the selected task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "tasks.edit-popup",
         description: "Open the edit-popup for the selected task",
         scope: CommandScope::Tab("tasks"),
@@ -382,6 +391,11 @@ impl Tab for TasksTab {
                     v.apply_preset(&dsl, ctx.today);
                 }
             }
+            TasksRequest::RetagSelected(tag) => {
+                if let Some(v) = self.views.get_mut(self.active_view) {
+                    v.apply_retag(&tag, ctx);
+                }
+            }
         }
     }
 
@@ -406,6 +420,7 @@ impl Tab for TasksTab {
                     ("t", "set due to today"),
                     ("p / P", "priority cycle fwd / back"),
                     ("x / X", "complete / cancel"),
+                    ("T", "retag (swap configured tag)"),
                 ],
             ),
             HelpSection::new(

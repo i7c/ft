@@ -63,7 +63,7 @@ use crate::tui::tabs::notes::view::{
     render_append_overlay, render_capture_var_prompt, render_create_overlay, render_move_overlay,
     render_periodic_leader,
 };
-use crate::tui::tabs::tasks::modals::TaskPresetPickerModal;
+use crate::tui::tabs::tasks::modals::{TaskPresetPickerModal, TaskRetagPickerModal};
 use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
 use crate::tui::widgets::{FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PickerOutcome};
 
@@ -289,6 +289,11 @@ pub enum ActiveModal {
     /// `query::preset::builtin`), hosted by the Tasks tab. On Enter
     /// posts `AppRequest::Tasks(TasksRequest::ApplyPreset(dsl))`.
     TaskPresetPicker(TaskPresetPickerModal),
+    /// Fuzzy picker over `config.tasks.retag_tags`, hosted by the Tasks
+    /// tab. On Enter posts
+    /// `AppRequest::Tasks(TasksRequest::RetagSelected(tag))`; on Esc
+    /// closes with no write.
+    TaskRetagPicker(TaskRetagPickerModal),
 }
 
 impl Modal for ActiveModal {
@@ -316,6 +321,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.handle_event(ev, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -343,6 +349,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.render(frame, area, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.render(frame, area, ctx),
             ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -368,6 +375,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.keymap_help(),
             ActiveModal::GatherAppendOrReplace(s) => s.keymap_help(),
             ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
+            ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
         }
     }
 
@@ -393,6 +401,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(_) => "journal-sources",
             ActiveModal::GatherAppendOrReplace(_) => "journal-append-or-replace",
             ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
+            ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
         }
     }
 
@@ -418,6 +427,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.commands(),
             ActiveModal::GatherAppendOrReplace(s) => s.commands(),
             ActiveModal::TaskPresetPicker(s) => s.commands(),
+            ActiveModal::TaskRetagPicker(s) => s.commands(),
         }
     }
 
@@ -443,6 +453,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.keymap(),
             ActiveModal::GatherAppendOrReplace(s) => s.keymap(),
             ActiveModal::TaskPresetPicker(s) => s.keymap(),
+            ActiveModal::TaskRetagPicker(s) => s.keymap(),
         }
     }
 
@@ -468,6 +479,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherSources(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::GatherAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }

@@ -442,7 +442,7 @@ fn user_preset_shadows_builtin() {
         // Shadow the built-in `today` preset with one that matches a tag
         // present in our notes.
         r#"
-[presets]
+[tasks.presets]
 today = "tags includes \"marker\""
 "#,
     )
