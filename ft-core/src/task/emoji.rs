@@ -259,11 +259,17 @@ fn fields_boundary(content: &str) -> usize {
     }
     for &emoji in DATE_EMOJIS {
         check(emoji, &|after| {
-            after
-                .strip_prefix(' ')
-                .and_then(|s| s.get(..10))
-                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-                .is_some()
+            let (spaces, rest) = take_leading_spaces(after);
+            // Require a separator (≥1 space) so `📅 today` stays in the
+            // description. Stripping all leading spaces before the 10-byte
+            // slice also prevents chrono's greedy %Y scanner from tolerating
+            // a residual space — the bug that turned `📅  2026-05-17` into
+            // `due = 2026-05-01` with "7" leaking into raw_trailing.
+            spaces >= 1
+                && rest
+                    .get(..10)
+                    .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                    .is_some()
         });
     }
     for &emoji in TEXT_EMOJIS {
@@ -344,27 +350,30 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
 
         // Recurrence: 🔁 <text until next field emoji>.
         if let Some(after) = rest.strip_prefix(RECURRENCE) {
-            if let Some(text) = after.strip_prefix(' ') {
+            let (spaces, text) = take_leading_spaces(after);
+            if spaces >= 1 {
                 let end = next_field_boundary(text);
                 fields.recurrence = Some(text[..end].trim_end().to_string());
-                pos += RECURRENCE.len() + 1 + end;
+                pos += RECURRENCE.len() + spaces + end;
                 continue;
             }
         }
 
         // ID: 🆔 <non-whitespace>.
         if let Some(after) = rest.strip_prefix(ID) {
-            if let Some(value) = after.strip_prefix(' ') {
+            let (spaces, value) = take_leading_spaces(after);
+            if spaces >= 1 {
                 let end = next_field_boundary(value);
                 fields.id = Some(value[..end].trim_end().to_string());
-                pos += ID.len() + 1 + end;
+                pos += ID.len() + spaces + end;
                 continue;
             }
         }
 
         // Depends on: ⛔ <comma-separated IDs>.
         if let Some(after) = rest.strip_prefix(DEPENDS_ON) {
-            if let Some(value) = after.strip_prefix(' ') {
+            let (spaces, value) = take_leading_spaces(after);
+            if spaces >= 1 {
                 let end = next_field_boundary(value);
                 let ids_str = value[..end].trim_end();
                 fields.depends_on = ids_str
@@ -373,7 +382,7 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .collect();
-                pos += DEPENDS_ON.len() + 1 + end;
+                pos += DEPENDS_ON.len() + spaces + end;
                 continue;
             }
         }
@@ -398,13 +407,28 @@ fn try_priority(s: &str) -> Option<(Priority, usize)> {
         .map(|(emoji, priority)| (*priority, emoji.len()))
 }
 
+/// Count leading ASCII spaces. Returns `(count, remainder)`; `remainder`
+/// begins at the first non-space byte. Spaces are single-byte, so the count
+/// is also a valid char-boundary index.
+fn take_leading_spaces(s: &str) -> (usize, &str) {
+    let n = s.bytes().take_while(|b| *b == b' ').count();
+    (n, &s[n..])
+}
+
 fn try_date_field(s: &str, emoji: &str) -> Option<(NaiveDate, usize)> {
     let after = s.strip_prefix(emoji)?;
-    let after = after.strip_prefix(' ')?;
+    let (spaces, rest) = take_leading_spaces(after);
+    // Require a separator (≥1 space) so `➕2025-11-17` is not misread as a
+    // field. Stripping all leading spaces before the 10-byte slice means
+    // chrono's greedy %Y never sees a leading space (which it would
+    // otherwise tolerate, e.g. ` 2025-11-1` → 2025-11-01).
+    if spaces == 0 {
+        return None;
+    }
     // A date is exactly 10 bytes: YYYY-MM-DD.
-    let date_str = after.get(..10)?;
+    let date_str = rest.get(..10)?;
     let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
-    Some((date, emoji.len() + 1 + 10))
+    Some((date, emoji.len() + spaces + 10))
 }
 
 /// Extract inline hashtags from `description` (e.g. `#work`, `#t`).
@@ -799,6 +823,115 @@ mod tests {
     fn wikilink_does_not_confuse_status_parser() {
         // The `[[` in a wikilink must not be mistaken for a task status.
         assert!(EmojiFormat.parse_line("See [[my note]]", ctx()).is_none());
+    }
+
+    // ── separator lenience (one-or-more spaces after a field emoji) ───────────
+    //
+    // The parser must accept any non-zero run of spaces between a field emoji
+    // and its value. Previously it stripped exactly one space then took a
+    // fixed 10-byte slice for dates, so `➕  2025-11-17` (two spaces) became
+    // `created = 2025-11-01` with "7" leaking into raw_trailing — a silently
+    // wrong date rather than a clean parse failure. These guard against that
+    // regression for every field family.
+
+    #[test]
+    fn created_double_space_parses() {
+        let task = parse("- [ ] task ➕  2025-11-17");
+        assert_eq!(task.created, Some(date(2025, 11, 17)));
+        assert_eq!(task.raw_trailing, None);
+        assert_eq!(task.description, "task");
+    }
+
+    #[test]
+    fn due_double_space_parses() {
+        let task = parse("- [ ] task 📅  2026-05-10");
+        assert_eq!(task.due, Some(date(2026, 5, 10)));
+        assert_eq!(task.raw_trailing, None);
+        assert_eq!(task.description, "task");
+    }
+
+    #[test]
+    fn all_date_markers_double_space() {
+        // Every date-field emoji must tolerate a doubled separator.
+        let cases: &[(&str, &str, NaiveDate)] = &[
+            ("- [ ] task ➕  2025-11-17", "created", date(2025, 11, 17)),
+            ("- [ ] task 🛫  2025-10-01", "start", date(2025, 10, 1)),
+            ("- [ ] task ⏳  2025-12-29", "scheduled", date(2025, 12, 29)),
+            ("- [ ] task 📅  2026-05-10", "due", date(2026, 5, 10)),
+            ("- [x] task ✅  2026-04-01", "done", date(2026, 4, 1)),
+            ("- [-] task ❌  2026-02-01", "cancelled", date(2026, 2, 1)),
+        ];
+        for (line, name, want) in cases {
+            let task = parse(line);
+            let got = match *name {
+                "created" => task.created,
+                "start" => task.start,
+                "scheduled" => task.scheduled,
+                "due" => task.due,
+                "done" => task.done,
+                "cancelled" => task.cancelled,
+                _ => unreachable!(),
+            };
+            assert_eq!(got, Some(*want), "{name}: {line:?}");
+            assert!(
+                task.raw_trailing.is_none(),
+                "{name}: trailing leaked: {line:?}"
+            );
+            assert_eq!(task.description, "task", "{name}: {line:?}");
+        }
+    }
+
+    #[test]
+    fn date_triple_space_parses() {
+        // One-or-more, not exactly two.
+        let task = parse("- [ ] task ➕   2025-11-17");
+        assert_eq!(task.created, Some(date(2025, 11, 17)));
+        assert!(task.raw_trailing.is_none());
+    }
+
+    #[test]
+    fn date_no_space_stays_in_description() {
+        // No separator → not a field. Guards against over-lenience.
+        let task = parse("- [ ] task ➕2025-11-17");
+        assert!(task.created.is_none());
+        assert!(task.raw_trailing.is_none());
+        assert_eq!(task.description, "task ➕2025-11-17");
+    }
+
+    #[test]
+    fn date_double_space_preserves_following_field() {
+        // A doubled separator on an early field must not corrupt a later one.
+        let task = parse("- [x] task ➕  2025-11-17 📅 2026-05-10 ✅ 2026-05-09");
+        assert_eq!(task.created, Some(date(2025, 11, 17)));
+        assert_eq!(task.due, Some(date(2026, 5, 10)));
+        assert_eq!(task.done, Some(date(2026, 5, 9)));
+        assert!(task.raw_trailing.is_none());
+    }
+
+    #[test]
+    fn text_fields_double_space() {
+        // The 🔁/🆔/⛔ text fields share the same one-space root cause;
+        // relaxing them prevents a leading space from leaking into the value.
+        let rec = parse("- [ ] task 🔁  every day 📅 2026-05-10");
+        assert_eq!(rec.recurrence.as_deref(), Some("every day"));
+        assert_eq!(rec.due, Some(date(2026, 5, 10)));
+
+        let id = parse("- [ ] task 🆔  abc123");
+        assert_eq!(id.id.as_deref(), Some("abc123"));
+
+        let dep = parse("- [ ] task ⛔  id1,id2");
+        assert_eq!(dep.depends_on, vec!["id1", "id2"]);
+    }
+
+    #[test]
+    fn double_space_normalizes_on_serialize() {
+        // Canonical serializer emits exactly one space, so doubled-space
+        // input round-trips to single-space output (normalization).
+        let task = parse("- [ ] task ➕  2025-11-17 📅  2026-05-10");
+        assert_eq!(
+            EmojiFormat.serialize_line(&task),
+            "- [ ] task ➕ 2025-11-17 📅 2026-05-10"
+        );
     }
 
     // ── proptest round-trips ──────────────────────────────────────────────────
