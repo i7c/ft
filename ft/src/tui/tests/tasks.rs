@@ -286,8 +286,9 @@ fn quick_key_x_completes_selected_task() -> Result<()> {
     app.pump_graph_rebuild_for_test();
     let frame = render(&mut app, 80, 24);
     assert!(
-        !frame.contains("Pay rent"),
-        "completed task should disappear from default `not done` query: \n{frame}"
+        frame.contains("Pay rent"),
+        "completed-today task stays visible under the default query's \
+         `completed = today` clause: \n{frame}"
     );
     Ok(())
 }
@@ -2087,9 +2088,9 @@ fn ctrl_p_selecting_preset_replaces_query_and_stays_in_normal_mode() -> Result<(
         frame.contains("(status in {Open, InProgress}) and due < today"),
         "query bar should show the overdue preset DSL:\n{frame}"
     );
-    // The default query (due < <date>) is no longer present.
+    // The default query (due < +1w, completed = today) is no longer present.
     assert!(
-        !frame.contains("due < 2026-05-18"),
+        !frame.contains("completed = today"),
         "default query should be replaced by the preset:\n{frame}"
     );
     Ok(())
@@ -2103,7 +2104,7 @@ fn ctrl_p_cancel_leaves_query_unchanged() -> Result<()> {
     let before = render(&mut app, 80, 24);
     let default_query = before
         .lines()
-        .find(|l| l.contains("due < 2026"))
+        .find(|l| l.contains("completed = today"))
         .expect("default query should be visible before Ctrl+P");
 
     app.dispatch(Event::Key(KeyEvent::new(
@@ -2117,7 +2118,7 @@ fn ctrl_p_cancel_leaves_query_unchanged() -> Result<()> {
     let after = render(&mut app, 80, 24);
     let after_query = after
         .lines()
-        .find(|l| l.contains("due < 2026"))
+        .find(|l| l.contains("completed = today"))
         .expect("default query should still be visible after cancel");
     assert_eq!(
         default_query, after_query,

@@ -210,16 +210,14 @@ impl SearchView {
         }
     }
 
-    /// Default DSL: tasks that are still actionable, due before `today + 8`.
-    /// The literal date keeps the bar copy-pastable and round-trippable
-    /// through the parser. Sorting is applied by the view independently;
+    /// Default DSL: actionable tasks due within the next week, plus
+    /// anything completed today. Relative offsets (`+1w`) and the
+    /// `today` keyword keep the bar copy-pastable and round-trippable
+    /// through the parser without a date literal, so the default stays
+    /// correct across days. Sorting is applied by the view independently;
     /// the unified DSL does not carry sort clauses.
-    fn default_query(today: NaiveDate) -> String {
-        let upper = today + Duration::days(8);
-        format!(
-            "status in {{Open, InProgress}} and due < {}",
-            upper.format("%Y-%m-%d")
-        )
+    fn default_query() -> String {
+        "(status in {Open, InProgress} and due < +1w) or (completed = today)".to_string()
     }
 
     /// Adopt `ctx.snapshot` when it is newer than the one this view
@@ -256,7 +254,7 @@ impl SearchView {
         self.tasks = snap.scan.tasks.clone();
         self.loaded = true;
         if self.query_text.is_empty() {
-            self.query_text = Self::default_query(ctx.today);
+            self.query_text = Self::default_query();
         }
         self.recompile(ctx.today);
         self.recompute_matches(ctx.today);

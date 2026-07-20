@@ -1,11 +1,10 @@
 ---
 source: ft/src/tui/tests/tasks.rs
-assertion_line: 1694
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Ti
 ┌ query ───────────────────────────────────────────────────────────────────────┐
-│status in {Open, InProgress} and due < 2026-05-18                             │
+│(status in {Open, InProgress} and due < +1w) or (completed = today)           │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ new task ────────────────────────────────────────────────────────────────────┐
 │type a task — e.g. "email Sarah due:tomorrow pri:high #work"                  │
