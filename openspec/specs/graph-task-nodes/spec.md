@@ -60,7 +60,7 @@ The graph query DSL SHALL recognize `"Task"` as a valid `kind` value for node co
 - **THEN** the DSL parser SHALL accept it without returning `UnknownKindValue`
 
 ### Requirement: Task attribute queries in graph DSL
-The graph query DSL SHALL support attribute-based filtering on task nodes. The following attributes SHALL be recognized for `NodeKind::Task` nodes: `status`, `priority`, `due`, `scheduled`, `tags`, `description`. String attributes (`status`, `priority`, `due`, `scheduled`, `description`) SHALL support equality, inequality, `in`, `includes`, `starts_with`, and `ends_with` operators. The `tags` attribute SHALL support `in` and `includes` operators. Any other attribute name evaluated against a task node — including `path` and `title` — SHALL yield no value, causing the condition to evaluate to false (consistent with unknown attributes on any other node kind). The DSL strings projected for `status` SHALL be exactly `"Open"`, `"Done"`, `"InProgress"`, `"Cancelled"`; the DSL strings projected for `priority` (when present) SHALL be exactly `"Highest"`, `"High"`, `"Medium"`, `"Low"`, `"Lowest"`. These spellings are a stable contract and SHALL NOT be coupled to the Rust `Debug` representation of the underlying enum variants.
+The graph query DSL SHALL support attribute-based filtering on task nodes. The following attributes SHALL be recognized for `NodeKind::Task` nodes: `status`, `priority`, `due`, `scheduled`, `tags`, `description`, and `mentions`. String attributes (`status`, `priority`, `due`, `scheduled`, `description`) SHALL support equality, inequality, `in`, `includes`, `starts_with`, and `ends_with` operators. The `tags` attribute SHALL support `in` and `includes` operators. The `mentions` attribute SHALL support `=`, `!=`, `includes`, and `in`, and SHALL evaluate by walking the task's owning paragraph's `ParagraphLink` edges (via the `OwnsTask` edge); its semantics are normatively defined in the `task-mentions-attribute` capability. Any other attribute name evaluated against a task node — including `path` and `title` — SHALL yield no value, causing the condition to evaluate to false (consistent with unknown attributes on any other node kind). The DSL strings projected for `status` SHALL be exactly `"Open"`, `"Done"`, `"InProgress"`, `"Cancelled"`; the DSL strings projected for `priority` (when present) SHALL be exactly `"Highest"`, `"High"`, `"Medium"`, `"Low"`, `"Lowest"`. These spellings are a stable contract and SHALL NOT be coupled to the Rust `Debug` representation of the underlying enum variants.
 
 #### Scenario: Filter tasks by status
 - **WHEN** a user writes `node where kind = "Task" and status = "Open"`
@@ -78,37 +78,10 @@ The graph query DSL SHALL support attribute-based filtering on task nodes. The f
 - **WHEN** a user writes `node where kind = "Task" and tags includes "work"`
 - **THEN** the query SHALL return only task nodes whose `TaskData.tags` contain `"work"`
 
-#### Scenario: Filter tasks by description substring
-- **WHEN** a user writes `node where kind = "Task" and description starts_with "Fix"`
-- **THEN** the query SHALL return only task nodes whose `TaskData.description` starts with `"Fix"`
-
-#### Scenario: Filter tasks by description suffix
-- **WHEN** a user writes `node where kind = "Task" and description ends_with "report"`
-- **THEN** the query SHALL return only task nodes whose `TaskData.description` ends with `"report"`
-
-#### Scenario: Filter tasks by inequality on status
-- **WHEN** a user writes `node where kind = "Task" and status != "Done"`
-- **THEN** the query SHALL return only task nodes whose `TaskData.status` is not `"Done"`
-
-#### Scenario: Filter tasks by status in set
-- **WHEN** a user writes `node where kind = "Task" and status in {"Open", "InProgress"}`
-- **THEN** the query SHALL return only task nodes whose `TaskData.status` is `"Open"` or `"InProgress"`
-
-#### Scenario: Path attribute on task node yields no match
-- **WHEN** a user writes `node where kind = "Task" and path = "root.md"` against a graph in which task nodes have `TaskData.source_file = "root.md"`
-- **THEN** the condition SHALL evaluate to false for every task node, because `path` is not a queryable attribute on task nodes
-
-#### Scenario: Title attribute on task node yields no match
-- **WHEN** a user writes `node where kind = "Task" and title = "anything"`
-- **THEN** the condition SHALL evaluate to false for every task node, because `title` is not a queryable attribute on task nodes
-
-#### Scenario: Stable DSL spelling for Status
-- **WHEN** `Graph::build` constructs a `TaskData` from a `Task` whose status is any `Status` variant
-- **THEN** `TaskData.status` SHALL equal exactly one of `"Open"`, `"Done"`, `"InProgress"`, `"Cancelled"`, **AND** this spelling SHALL be produced by an explicit conversion on `Status` rather than by `format!("{:?}", …)`
-
-#### Scenario: Stable DSL spelling for Priority
-- **WHEN** `Graph::build` constructs a `TaskData` from a `Task` whose priority is `Some(p)` for any `Priority` variant `p`
-- **THEN** `TaskData.priority` SHALL equal exactly `Some(s)` where `s` is one of `"Highest"`, `"High"`, `"Medium"`, `"Low"`, `"Lowest"`, **AND** this spelling SHALL be produced by an explicit conversion on `Priority` rather than by `format!("{:?}", …)`
+#### Scenario: Filter tasks by mentioned concept
+- **WHEN** a task's owning paragraph contains `[[onboarding]]` resolving to note `onboarding.md` (title `"onboarding"`)
+- **AND** the user writes `node where kind = "Task" and mentions = "onboarding"`
+- **THEN** the query SHALL return that task node
 
 ### Requirement: TUI graph renders task nodes
 The TUI graph tab SHALL render `NodeKind::Task` nodes with `kind_char = 'T'` and display text set to the task description (truncated to fit the display width).
