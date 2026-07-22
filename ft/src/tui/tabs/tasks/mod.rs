@@ -301,6 +301,15 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         opens_modal: true,
         is_primary: false,
     },
+    CommandDef {
+        name: "tasks.move",
+        description: "Move the selected task to another file / heading",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
 ];
 
 pub struct TasksTab {
@@ -421,6 +430,7 @@ impl Tab for TasksTab {
                     ("p / P", "priority cycle fwd / back"),
                     ("x / X", "complete / cancel"),
                     ("T", "retag (swap configured tag)"),
+                    ("M", "move to another file / heading"),
                 ],
             ),
             HelpSection::new(

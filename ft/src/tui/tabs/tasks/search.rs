@@ -84,6 +84,8 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("c", "tasks.quickline")
         .bind("C", "tasks.new-blank-form")
         .bind("s", "tasks.new-subtask")
+        // Move
+        .bind("M", "tasks.move")
 });
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -938,6 +940,32 @@ impl SearchView {
             }
             "tasks.open-in-editor" => {
                 self.request_editor_open(ctx);
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.move" => {
+                // Open the file+heading picker seeded with the selected
+                // task's identity. No selection ⇒ toast and bail.
+                match self.selected_task_idx() {
+                    Some(i) => {
+                        let t = &self.tasks[i];
+                        let source_path = ctx.vault.path.join(&t.source_file);
+                        let modal = crate::tui::tabs::tasks::modals::TaskMoveModal::new(
+                            ctx,
+                            source_path,
+                            t.source_line,
+                            t.clone(),
+                        );
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                            ActiveModal::TaskMove(Box::new(modal)),
+                        )));
+                    }
+                    None => {
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                            text: "select a task first".into(),
+                            style: ToastStyle::Error,
+                        });
+                    }
+                }
                 Ok(CommandOutcome::Handled)
             }
             _ => Ok(CommandOutcome::NotHandled),

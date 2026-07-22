@@ -1,12 +1,16 @@
-//! Modal state hosted by the Tasks tab: the task-preset picker. Kept
-//! next to the tab because it reaches `SearchView`/`Config::presets`
-//! types and posts a Tasks-targeted `AppRequest`. A parallel of the
-//! Graph tab's `tabs/graph/modals.rs` `PresetPickerSource` /
-//! `PresetPickerModal`, reading the *task* preset maps
-//! (`Config::presets` + `query::preset::builtin`) rather than the graph
-//! maps.
+//! Modal state hosted by the Tasks tab: the task-preset picker, the
+//! retag picker, and the task-move picker. Kept next to the tab because
+//! each reaches `SearchView`/`Config` types and posts a
+//! Tasks-targeted `AppRequest`. A parallel of the Graph tab's
+//! `tabs/graph/modals.rs` `PresetPickerSource` / `PresetPickerModal`,
+//! reading the *task* preset maps (`Config::presets` +
+//! `query::preset::builtin`) rather than the graph maps.
+
+use std::path::PathBuf;
 
 use ft_core::query::preset;
+use ft_core::task::ops::{self, MoveSource, MoveTarget};
+use ft_core::task::Task;
 use ratatui::layout::Rect;
 use ratatui::widgets::Clear;
 use ratatui::Frame;
@@ -16,8 +20,10 @@ use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::KeyMap;
 use crate::tui::modal_commands as mc;
-use crate::tui::tab::{AppRequest, TabCtx, TasksRequest};
-use crate::tui::widgets::{FuzzyPicker, PickerItem, PickerOutcome, PickerSource};
+use crate::tui::tab::{AppRequest, TabCtx, TasksRequest, ToastStyle};
+use crate::tui::widgets::{
+    FuzzyPicker, PickerItem, PickerOutcome, PickerSource, VaultFilePickerSource,
+};
 
 /// Fuzzy-picker source over task presets: user-defined
 /// `Config::presets` (shadowing) followed by the built-ins from
@@ -309,6 +315,167 @@ impl crate::tui::modal::Modal for TaskRetagPickerModal {
 
     fn keymap(&self) -> &KeyMap {
         &mc::TASK_RETAG_PICKER_KEYMAP
+    }
+
+    fn dispatch_command(
+        &mut self,
+        _cmd: &crate::tui::command::Command,
+        _ctx: &TabCtx,
+    ) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
+}
+
+// ── Task-move picker ─────────────────────────────────────────────────
+
+/// Modal wrapper around the file+heading fuzzy picker for the
+/// `tasks.move` flow. Captures the source task identity at open time
+/// (path + line + scanned `Task` for the `LineChanged` guard); on
+/// `Enter` builds a `MoveTarget` from the picked `Hit` and runs
+/// `ops::plan_move` + `ops::apply_move_plan`, then requests a graph
+/// refresh. Same-file targets are rejected with a toast and the picker
+/// stays open. On `Esc` the modal closes with no write.
+///
+/// Reuses `VaultFilePickerSource` (the same picker new-task creation
+/// uses) rather than introducing a new source — the `Hit` already
+/// carries `path` + optional `heading`, which is exactly the
+/// `MoveTarget::{Append, UnderHeading}` shape.
+pub struct TaskMoveModal {
+    inner: FuzzyPicker<VaultFilePickerSource>,
+    /// Absolute path of the file the source task currently lives in.
+    source_path: PathBuf,
+    /// 1-indexed source line of the task to move.
+    source_line: usize,
+    /// The scanned task at `source_line`, passed as `expected` so
+    /// `plan_move` fails with `MoveError::LineChanged` if the line
+    /// shifted on disk.
+    task: Task,
+}
+
+impl TaskMoveModal {
+    pub(crate) fn new(ctx: &TabCtx, source_path: PathBuf, source_line: usize, task: Task) -> Self {
+        let source = VaultFilePickerSource::new(
+            std::sync::Arc::clone(ctx.vault),
+            std::sync::Arc::clone(ctx.recents),
+        );
+        Self {
+            inner: FuzzyPicker::new(source),
+            source_path,
+            source_line,
+            task,
+        }
+    }
+}
+
+/// Build a `MoveTarget` from a picker `Hit`: `UnderHeading` when the
+/// hit carries a heading, `Append` otherwise. The path is resolved
+/// absolute against the vault root. Pure / testable in isolation from
+/// the modal state.
+pub(crate) fn hit_to_move_target(
+    hit: &ft_core::search::Hit,
+    vault_root: &std::path::Path,
+) -> MoveTarget {
+    let abs = vault_root.join(&hit.path);
+    match &hit.heading {
+        Some(h) => MoveTarget::UnderHeading(abs, h.text.clone()),
+        None => MoveTarget::Append(abs),
+    }
+}
+
+impl crate::tui::modal::Modal for TaskMoveModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> crate::tui::modal::ModalOutcome {
+        let Event::Key(k) = ev else {
+            return crate::tui::modal::ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(hit) => {
+                let target = hit_to_move_target(&hit, &ctx.vault.path);
+
+                // Same-file guard: reject and keep the picker open so
+                // the user can pick a different target.
+                if target.path() == self.source_path {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                        text: "can't move to the same file — pick a different target".into(),
+                        style: ToastStyle::Error,
+                    });
+                    return crate::tui::modal::ModalOutcome::Consumed;
+                }
+
+                let source = MoveSource {
+                    path: self.source_path.clone(),
+                    line: self.source_line,
+                    expected: Some(self.task.clone()),
+                };
+                let format = ctx.vault.task_format();
+                match ops::plan_move(&[source], &target, format) {
+                    Ok(plan) => {
+                        if let Err(e) = ops::apply_move_plan(&plan) {
+                            *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                                text: format!("move failed: {e}"),
+                                style: ToastStyle::Error,
+                            });
+                            ctx.request_graph_refresh();
+                            return crate::tui::modal::ModalOutcome::Closed;
+                        }
+                        let label = match &target {
+                            MoveTarget::UnderHeading(p, h) => {
+                                format!("moved to {}#{}", p.display(), h)
+                            }
+                            MoveTarget::Append(p) => format!("moved to {}", p.display()),
+                        };
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                            text: label,
+                            style: ToastStyle::Success,
+                        });
+                        ctx.request_graph_refresh();
+                        crate::tui::modal::ModalOutcome::Closed
+                    }
+                    Err(e) => {
+                        // `LineChanged` (drift) and other plan errors:
+                        // surface, refresh, close. The user should rescan.
+                        *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                            text: format!("{e}"),
+                            style: ToastStyle::Error,
+                        });
+                        ctx.request_graph_refresh();
+                        crate::tui::modal::ModalOutcome::Closed
+                    }
+                }
+            }
+            PickerOutcome::Cancelled => crate::tui::modal::ModalOutcome::Closed,
+            PickerOutcome::StillOpen => crate::tui::modal::ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => crate::tui::modal::ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        let popup_area = super::edit_popup::centered_rect(60, 60, area);
+        frame.render_widget(Clear, popup_area);
+        self.inner.render(frame, popup_area);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Task move",
+            &[
+                ("Type", "filter files / headings"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "move task to file / heading"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-move"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_MOVE_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_MOVE_KEYMAP
     }
 
     fn dispatch_command(

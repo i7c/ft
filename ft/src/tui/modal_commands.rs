@@ -394,6 +394,33 @@ pub static TASK_RETAG_PICKER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Down", "task-retag-picker.cursor-down")
 });
 
+// ── Task-move picker (tui-tasks-move) ───────────────────────────────
+
+const TASK_MOVE_SCOPE: CommandScope = CommandScope::Modal("task-move");
+
+pub static TASK_MOVE_COMMANDS: &[CommandDef] = &[
+    confirm_def("task-move.confirm", TASK_MOVE_SCOPE),
+    cancel_def("task-move.cancel", TASK_MOVE_SCOPE),
+    nav_def(
+        "task-move.cursor-up",
+        "Select the previous file / heading",
+        TASK_MOVE_SCOPE,
+    ),
+    nav_def(
+        "task-move.cursor-down",
+        "Select the next file / heading",
+        TASK_MOVE_SCOPE,
+    ),
+];
+
+pub static TASK_MOVE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "task-move.confirm")
+        .bind("Esc", "task-move.cancel")
+        .bind("Up", "task-move.cursor-up")
+        .bind("Down", "task-move.cursor-down")
+});
+
 pub static CAPTURE_PICKER_COMMANDS: &[CommandDef] = &[
     confirm_def("capture-picker.confirm", CAPTURE_PICKER_SCOPE),
     cancel_def("capture-picker.cancel", CAPTURE_PICKER_SCOPE),
@@ -770,6 +797,7 @@ mod tests {
             TASK_PRESET_PICKER_COMMANDS,
             TASK_RETAG_PICKER_COMMANDS,
             CAPTURE_PICKER_COMMANDS,
+            TASK_MOVE_COMMANDS,
             RELATED_COMMANDS,
             MOVE_OUTER_COMMANDS,
             CONFIRM_DELETE_COMMANDS,
@@ -808,6 +836,7 @@ mod tests {
             (&PRESET_PICKER_KEYMAP, PRESET_PICKER_COMMANDS),
             (&TASK_PRESET_PICKER_KEYMAP, TASK_PRESET_PICKER_COMMANDS),
             (&TASK_RETAG_PICKER_KEYMAP, TASK_RETAG_PICKER_COMMANDS),
+            (&TASK_MOVE_KEYMAP, TASK_MOVE_COMMANDS),
             (&CAPTURE_PICKER_KEYMAP, CAPTURE_PICKER_COMMANDS),
             (&RELATED_KEYMAP, RELATED_COMMANDS),
             (&MOVE_OUTER_KEYMAP, MOVE_OUTER_COMMANDS),

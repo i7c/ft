@@ -294,6 +294,11 @@ pub enum ActiveModal {
     /// `AppRequest::Tasks(TasksRequest::RetagSelected(tag))`; on Esc
     /// closes with no write.
     TaskRetagPicker(TaskRetagPickerModal),
+    /// File+heading fuzzy picker for the `tasks.move` flow, hosted by
+    /// the Tasks tab. On Enter builds a `MoveTarget` from the picked
+    /// `Hit` and runs `ops::plan_move` + `ops::apply_move_plan`; on Esc
+    /// closes with no write.
+    TaskMove(Box<crate::tui::tabs::tasks::modals::TaskMoveModal>),
 }
 
 impl Modal for ActiveModal {
@@ -322,6 +327,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskMove(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -350,6 +356,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.render(frame, area, ctx),
             ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskMove(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -376,6 +383,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.keymap_help(),
             ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
             ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
+            ActiveModal::TaskMove(s) => s.keymap_help(),
         }
     }
 
@@ -402,6 +410,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(_) => "journal-append-or-replace",
             ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
             ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
+            ActiveModal::TaskMove(_) => "task-move",
         }
     }
 
@@ -428,6 +437,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.commands(),
             ActiveModal::TaskPresetPicker(s) => s.commands(),
             ActiveModal::TaskRetagPicker(s) => s.commands(),
+            ActiveModal::TaskMove(s) => s.commands(),
         }
     }
 
@@ -454,6 +464,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.keymap(),
             ActiveModal::TaskPresetPicker(s) => s.keymap(),
             ActiveModal::TaskRetagPicker(s) => s.keymap(),
+            ActiveModal::TaskMove(s) => s.keymap(),
         }
     }
 
@@ -480,6 +491,7 @@ impl Modal for ActiveModal {
             ActiveModal::GatherAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskMove(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }

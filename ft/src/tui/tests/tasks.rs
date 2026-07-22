@@ -2266,3 +2266,285 @@ fn retag_with_empty_list_shows_toast() -> Result<()> {
     app.pump_graph_rebuild_for_test();
     Ok(())
 }
+
+// --- tui-tasks-move: move the selected task to another file ---------------
+
+/// `hit_to_move_target` maps a file-only `Hit` to `MoveTarget::Append` and
+/// a file+heading `Hit` to `MoveTarget::UnderHeading`. Pure unit test —
+/// no vault / no App.
+#[test]
+fn hit_to_move_target_file_only_is_append() {
+    use ft_core::search::Hit;
+    use ft_core::task::ops::MoveTarget;
+    use std::path::PathBuf;
+
+    let hit = Hit {
+        path: PathBuf::from("Inbox.md"),
+        file_score: 0,
+        heading: None,
+        heading_score: None,
+        total_score: 0,
+    };
+    let target =
+        crate::tui::tabs::tasks::modals::hit_to_move_target(&hit, std::path::Path::new("/vault"));
+    match target {
+        MoveTarget::Append(p) => assert_eq!(p, PathBuf::from("/vault/Inbox.md")),
+        other => panic!("expected Append, got {other:?}"),
+    }
+}
+
+#[test]
+fn hit_to_move_target_with_heading_is_under_heading() {
+    use ft_core::markdown::Heading;
+    use ft_core::search::Hit;
+    use ft_core::task::ops::MoveTarget;
+    use std::path::PathBuf;
+
+    let hit = Hit {
+        path: PathBuf::from("Projects/Alpha.md"),
+        file_score: 0,
+        heading: Some(Heading {
+            text: "Triage".into(),
+            level: 2,
+            line: 4,
+        }),
+        heading_score: None,
+        total_score: 0,
+    };
+    let target =
+        crate::tui::tabs::tasks::modals::hit_to_move_target(&hit, std::path::Path::new("/vault"));
+    match target {
+        MoveTarget::UnderHeading(p, h) => {
+            assert_eq!(p, PathBuf::from("/vault/Projects/Alpha.md"));
+            assert_eq!(h, "Triage");
+        }
+        other => panic!("expected UnderHeading, got {other:?}"),
+    }
+}
+
+/// `M` with no task selected toasts and opens no modal.
+#[test]
+fn move_with_no_task_selected_toasts() -> Result<()> {
+    // Empty vault → no tasks → no selection.
+    let (_dir, vault) = test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.pump_graph_rebuild_for_test();
+
+    app.dispatch(key('M'))?;
+    assert_eq!(
+        app.active_modal_name(),
+        None,
+        "no move modal should open without a selected task"
+    );
+    app.service_pending_requests()?;
+    let toast = app
+        .current_toast()
+        .expect("an error toast should be queued");
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Error);
+    assert!(
+        toast.text.contains("select a task"),
+        "toast: {}",
+        toast.text
+    );
+    Ok(())
+}
+
+/// `M` opens the file+heading picker modal.
+#[test]
+fn move_opens_picker_on_m() -> Result<()> {
+    let mut app = tasks_app_populated();
+    app.dispatch(key('M'))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("task-move"),
+        "M should open the task-move picker"
+    );
+    Ok(())
+}
+
+/// Snapshot of the move picker frame.
+#[test]
+fn move_picker_renders_snapshot() -> Result<()> {
+    let mut app = tasks_app_populated();
+    app.dispatch(key('M'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("move_picker_80x24", frame);
+    Ok(())
+}
+
+/// Picking a different file moves the task: source loses the line, target
+/// gains it, a success toast fires, and the graph refreshes.
+#[test]
+fn move_commits_to_a_different_file() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent ⏫ 📅 2026-05-08\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("Inbox.md"), "# Inbox\n\n## Backlog\n")?;
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.dispatch(key('M'))?;
+    // Type the target file name; the picker fuzzy-matches it.
+    for c in "Inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_requests()?;
+
+    let source = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert!(
+        !source.contains("Pay rent"),
+        "source file should lose the moved task: {source}"
+    );
+    let target = std::fs::read_to_string(dir.path().join("test-vault/Inbox.md")).unwrap();
+    assert!(
+        target.contains("Pay rent"),
+        "target file should gain the moved task: {target}"
+    );
+    let toast = app
+        .current_toast()
+        .expect("a success toast should fire after the move");
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Success);
+    assert!(toast.text.contains("moved to"), "toast: {}", toast.text);
+    Ok(())
+}
+
+/// Picking a heading lands the task under it.
+#[test]
+fn move_commits_under_a_heading() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent ⏫ 📅 2026-05-08\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("Inbox.md"),
+        "# Inbox\n\n## Backlog\n\n## Done\n",
+    )?;
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.dispatch(key('M'))?;
+    // `Inbox#Backlog` — the picker splits on `#` and matches the heading.
+    for c in "Inbox#Backlog".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_requests()?;
+
+    let target = std::fs::read_to_string(dir.path().join("test-vault/Inbox.md")).unwrap();
+    let backlog_idx = target
+        .find("## Backlog")
+        .expect("Backlog heading should exist");
+    let done_idx = target.find("## Done").expect("Done heading should exist");
+    let task_idx = target
+        .find("Pay rent")
+        .expect("moved task should be in Inbox.md");
+    assert!(
+        backlog_idx < task_idx && task_idx < done_idx,
+        "task should land under ## Backlog and before ## Done: {target}"
+    );
+    let toast = app.current_toast().expect("a success toast should fire");
+    assert!(
+        toast.text.contains("#Backlog"),
+        "toast should name the heading: {}",
+        toast.text
+    );
+    Ok(())
+}
+
+/// Same-file target is rejected: no write, error toast, picker stays open.
+#[test]
+fn move_same_file_is_rejected() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    // Two tasks in tasks.md so the picker can match `tasks` as a target.
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent ⏫ 📅 2026-05-08\n- [ ] Other task\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let before = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.dispatch(key('M'))?;
+    // Target the same file the task lives in.
+    for c in "tasks".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_requests()?;
+
+    assert_eq!(
+        app.active_modal_name(),
+        Some("task-move"),
+        "picker should stay open after a same-file rejection"
+    );
+    let after = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert_eq!(before, after, "same-file move must not touch disk");
+    let toast = app
+        .current_toast()
+        .expect("an error toast should fire on same-file");
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Error);
+    assert!(
+        toast.text.contains("same file"),
+        "toast should explain the same-file rejection: {}",
+        toast.text
+    );
+    Ok(())
+}
+
+/// Esc cancels the picker with no write and no graph refresh.
+#[test]
+fn move_cancel_on_esc_writes_nothing() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent ⏫ 📅 2026-05-08\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("Inbox.md"), "# Inbox\n")?;
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let before_tasks = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    let before_inbox = std::fs::read_to_string(dir.path().join("test-vault/Inbox.md")).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.dispatch(key('M'))?;
+    for c in "Inbox".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    assert_eq!(app.active_modal_name(), None, "Esc should close the picker");
+
+    let after_tasks = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    let after_inbox = std::fs::read_to_string(dir.path().join("test-vault/Inbox.md")).unwrap();
+    assert_eq!(before_tasks, after_tasks, "Esc must not touch the source");
+    assert_eq!(before_inbox, after_inbox, "Esc must not touch the target");
+    Ok(())
+}
