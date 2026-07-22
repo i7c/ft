@@ -31,6 +31,7 @@ fn every_edge_kind_is_a_queryable_value() {
         EdgeKind::LinksInto,
         EdgeKind::OwnsParagraph,
         EdgeKind::OwnsHeading,
+        EdgeKind::OwnsTask,
     ];
     for e in &all {
         let name = edge_kind_str(e);
@@ -323,6 +324,79 @@ mod parser {
         // after `expand`.
         let err = parse("node; expand over e(n, m) with e.kind = directory-contains;").unwrap_err();
         assert!(matches!(err, DslError::TrailingInput { .. }));
+    }
+
+    // ── `mentions` attribute parsing ─────────────────────────────────────────
+
+    #[test]
+    fn parse_mentions_eq() {
+        let q = parse(r#"node where kind = Task and mentions = "onboarding";"#).unwrap();
+        let conds = q.initial[0].conditions();
+        // conditions: [kind = Task, mentions = "onboarding"]
+        let mentions_cond = conds
+            .iter()
+            .find(|c| matches!(c.attr, Attr::Mentions))
+            .expect("mentions condition present");
+        assert!(matches!(mentions_cond.op, Op::Eq));
+        assert!(
+            matches!(&mentions_cond.value, Value::Single(Literal::Str(s)) if s == "onboarding")
+        );
+    }
+
+    #[test]
+    fn parse_mentions_not_eq() {
+        let q = parse(r#"node where mentions != "finance";"#).unwrap();
+        let conds = q.initial[0].conditions();
+        let mentions_cond = conds
+            .iter()
+            .find(|c| matches!(c.attr, Attr::Mentions))
+            .unwrap();
+        assert!(matches!(mentions_cond.op, Op::NotEq));
+    }
+
+    #[test]
+    fn parse_mentions_in_set() {
+        let q = parse(r#"node where mentions in {"onboarding", "analytics"};"#).unwrap();
+        let conds = q.initial[0].conditions();
+        let mentions_cond = conds
+            .iter()
+            .find(|c| matches!(c.attr, Attr::Mentions))
+            .unwrap();
+        assert!(matches!(mentions_cond.op, Op::In));
+        assert!(matches!(&mentions_cond.value, Value::Set(_)));
+    }
+
+    #[test]
+    fn parse_mentions_includes() {
+        let q = parse(r#"node where mentions includes "onboarding";"#).unwrap();
+        let conds = q.initial[0].conditions();
+        let mentions_cond = conds
+            .iter()
+            .find(|c| matches!(c.attr, Attr::Mentions))
+            .unwrap();
+        assert!(matches!(mentions_cond.op, Op::Includes));
+    }
+
+    #[test]
+    fn mentions_is_null_rejected() {
+        // `mentions` is not optional, so `is null` / `is not null` are
+        // rejected at parse time with a TypeMismatch error.
+        let err = parse(r#"node where mentions is null;"#).unwrap_err();
+        assert!(
+            matches!(err, DslError::TypeMismatch { .. }),
+            "expected TypeMismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn mentions_on_edge_subject_rejected() {
+        // `mentions` is node-only; using it on `edge.` in an expand block
+        // must fail with a ScopeError.
+        let err = parse(r#"node; expand where edge.mentions = "Foo";"#).unwrap_err();
+        assert!(
+            matches!(err, DslError::ScopeError { .. }),
+            "expected ScopeError, got: {err}"
+        );
     }
 }
 
@@ -1963,6 +2037,247 @@ mod task_queries {
         if let NodeKind::Task(td) = g.node(results[0]) {
             assert_eq!(td.description, "Fix login bug");
         }
+    }
+
+    // ── mentions attribute ─────────────────────────────────────────────────
+    //
+    // `mentions` is a generalized concept-existence predicate. For Task it
+    // walks the owning paragraph's ParagraphLink edges (via OwnsTask); for
+    // Paragraph/Heading/Note it walks that node's own link edges. Matches
+    // concept identity (note title / ghost raw / heading text), NOT alias.
+
+    /// Build a vault where a task's paragraph mentions a resolved note
+    /// (`[[onboarding]]`) and an unresolved ghost (`[[analytics-migration]]`).
+    fn vault_with_task_mentions() -> (assert_fs::TempDir, Scan) {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // The task at line 1 shares its paragraph with the two wikilinks
+        // on line 2 (no blank line separates them, so they form one
+        // paragraph).
+        tmp.child("note.md")
+            .write_str(
+                "- [ ] chase Priya re: onboarding metrics\n[[onboarding]] [[analytics-migration]]\n",
+            )
+            .unwrap();
+        tmp.child("onboarding.md")
+            .write_str("# Onboarding\n")
+            .unwrap();
+        // No `analytics-migration.md` — that link stays a ghost.
+        let scan = Vault::discover(Some(tmp.path().to_path_buf()))
+            .unwrap()
+            .scan();
+        (tmp, scan)
+    }
+
+    #[test]
+    fn dsl_task_mentions_via_owning_paragraph_resolved_target() {
+        let (_tmp, scan) = vault_with_task_mentions();
+        let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Task and mentions = "onboarding";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(results.len(), 1, "task whose paragraph mentions onboarding");
+        if let NodeKind::Task(td) = g.node(results[0]) {
+            assert_eq!(td.description, "chase Priya re: onboarding metrics");
+        }
+    }
+
+    #[test]
+    fn dsl_task_mentions_via_owning_paragraph_unresolved_ghost() {
+        let (_tmp, scan) = vault_with_task_mentions();
+        let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        // Unresolved target matches via the ghost's `raw`.
+        let q = parse(r#"node where kind = Task and mentions = "analytics-migration";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn dsl_task_mentions_with_no_concept_context_is_false() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // Task line alone, no wikilinks in its paragraph.
+        tmp.child("plain.md")
+            .write_str("- [ ] plain task with no links\n")
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Task and mentions = "onboarding";"#).unwrap();
+        let results = q.select(&g);
+        assert!(
+            results.is_empty(),
+            "task with no links in its paragraph must not match"
+        );
+    }
+
+    #[test]
+    fn dsl_task_mentions_not_equal_matches_when_concept_absent() {
+        let (_tmp, scan) = vault_with_task_mentions();
+        let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        // The task's paragraph mentions onboarding + analytics-migration,
+        // but NOT "finance". `mentions != "finance"` is true.
+        let q = parse(r#"node where kind = Task and mentions != "finance";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn dsl_task_mentions_in_set_matches_any() {
+        let (_tmp, scan) = vault_with_task_mentions();
+        let v = Vault::discover(Some(_tmp.path().to_path_buf())).unwrap();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q =
+            parse(r#"node where kind = Task and mentions in {"onboarding", "other"};"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(
+            results.len(),
+            1,
+            "in-set match when any mentioned concept is in the set"
+        );
+    }
+
+    #[test]
+    fn dsl_task_mentions_does_not_match_alias() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // `[[onboarding|onboarding-flow]]` resolves to note `onboarding.md`
+        // (title "onboarding"), but the alias is "onboarding-flow".
+        tmp.child("note.md")
+            .write_str("- [ ] task\n[[onboarding|onboarding-flow]]\n")
+            .unwrap();
+        tmp.child("onboarding.md")
+            .write_str("# Onboarding\n")
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        // Alias is NOT matched.
+        let q = parse(r#"node where kind = Task and mentions = "onboarding-flow";"#).unwrap();
+        assert!(q.select(&g).is_empty(), "alias must not match");
+
+        // Concept identity IS matched.
+        let q = parse(r#"node where kind = Task and mentions = "onboarding";"#).unwrap();
+        assert_eq!(q.select(&g).len(), 1, "concept identity must match");
+    }
+
+    #[test]
+    fn dsl_mentions_on_paragraph_directly() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("note.md")
+            .write_str("Some prose about [[Foo]].\n")
+            .unwrap();
+        tmp.child("Foo.md").write_str("# Foo\n").unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Paragraph and mentions = "Foo";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(
+            results.len(),
+            1,
+            "paragraph directly mentions Foo via ParagraphLink"
+        );
+    }
+
+    #[test]
+    fn dsl_mentions_on_note_via_note_link() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("note.md")
+            .write_str("See [[Bar]] for details.\n")
+            .unwrap();
+        tmp.child("Bar.md").write_str("# Bar\n").unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Note and mentions = "Bar";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(results.len(), 1, "note mentions Bar via NoteLink");
+    }
+
+    #[test]
+    fn dsl_mentions_on_heading_via_heading_link() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // A heading line that contains a wikilink.
+        tmp.child("note.md")
+            .write_str("## See [[Baz]]\nbody\n")
+            .unwrap();
+        tmp.child("Baz.md").write_str("# Baz\n").unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Heading and mentions = "Baz";"#).unwrap();
+        let results = q.select(&g);
+        assert_eq!(results.len(), 1, "heading mentions Baz via HeadingLink");
+    }
+
+    #[test]
+    fn dsl_mentions_on_ghost_is_always_false() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // An unresolved link creates a ghost node.
+        tmp.child("note.md")
+            .write_str("Link to [[NonExistent]].\n")
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        let q = parse(r#"node where kind = Ghost and mentions = "NonExistent";"#).unwrap();
+        let results = q.select(&g);
+        assert!(
+            results.is_empty(),
+            "ghost nodes have no outgoing link edges"
+        );
+    }
+
+    #[test]
+    fn dsl_mentions_under_tasks_profile() {
+        // Under Profile::Tasks, `mentions = "X" and due < today` becomes
+        // `node where kind = Task and mentions = "X" and due < today`.
+        use chrono::NaiveDate;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        // Task at line 1 with a past due date; paragraph also
+        // mentions [[onboarding]].
+        tmp.child("note.md")
+            .write_str("- [ ] chase Priya [[onboarding]] 📅 2020-01-01\n")
+            .unwrap();
+        tmp.child("onboarding.md")
+            .write_str("# Onboarding\n")
+            .unwrap();
+        let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+        let scan = v.scan();
+        let g = Graph::build(&v, &scan).unwrap();
+
+        // FT_TODAY-independent parse: use parse_with with a fixed today.
+        let today = NaiveDate::from_ymd_opt(2026, 7, 19).unwrap();
+        let q = parse_with(
+            r#"mentions = "onboarding" and due < today"#,
+            crate::graph::query::Profile::Tasks,
+            today,
+        )
+        .unwrap();
+        let results = q.select(&g);
+        assert_eq!(
+            results.len(),
+            1,
+            "overdue task mentioning onboarding matches under Profile::Tasks"
+        );
     }
 }
 

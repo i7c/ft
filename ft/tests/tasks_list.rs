@@ -26,7 +26,6 @@ fn run_list(args: &[&str]) -> assert_cmd::assert::Assert {
 fn pathological_vault() -> std::path::PathBuf {
     workspace_root().join("tests/fixtures/pathological")
 }
-
 fn run_list_in(vault: &std::path::Path, args: &[&str]) -> assert_cmd::assert::Assert {
     let mut full = vec!["--vault", vault.to_str().unwrap(), "tasks", "list"];
     full.extend(args);
@@ -35,6 +34,10 @@ fn run_list_in(vault: &std::path::Path, args: &[&str]) -> assert_cmd::assert::As
         .env("FT_TODAY", "2026-05-09")
         .args(&full)
         .assert()
+}
+
+fn tiny_vault() -> std::path::PathBuf {
+    workspace_root().join("tests/fixtures/tiny")
 }
 
 fn json_tasks(args: &[&str]) -> serde_json::Value {
@@ -736,4 +739,112 @@ fn has_due_and_no_due_are_mutually_exclusive() {
         ])
         .assert()
         .failure();
+}
+
+// ── mentions attribute (task-mentions-attribute) ──────────────────────────
+//
+// `mentions = "X"` filters tasks whose owning paragraph links to concept X.
+// This is the §2 gap from the 2026-07-19 premise review made queryable.
+
+/// `[[some/note]]` appears in `weird-unicode.md` line 7. All seven task lines
+/// in that file (lines 3-9) share one paragraph (no blank lines between
+/// them), so `mentions = "some/note"` returns every task in the file — the
+/// wikilink's concept context propagates to sibling tasks in the same
+/// paragraph, which is exactly the "tasks arise during note-taking" thesis.
+#[test]
+fn mentions_filters_tasks_by_paragraph_concept_pathological() {
+    let v = json_tasks_in(
+        &pathological_vault(),
+        &["--query", r#"mentions = "some/note""#],
+    );
+    let arr = v.as_array().expect("json array");
+    // All 7 tasks in weird-unicode.md share the paragraph containing
+    // `[[some/note]]`. Other files in the pathological fixture don't link
+    // to `some/note`, so the count should be exactly 7.
+    let weird_tasks: Vec<_> = arr
+        .iter()
+        .filter(|t| {
+            t["source_file"]
+                .as_str()
+                .unwrap_or("")
+                .ends_with("weird-unicode.md")
+        })
+        .collect();
+    assert_eq!(
+        weird_tasks.len(),
+        7,
+        "all 7 tasks in weird-unicode.md share the paragraph with [[some/note]]"
+    );
+}
+
+/// A `mentions` query against a concept no task mentions returns nothing.
+#[test]
+fn mentions_with_no_match_returns_empty() {
+    let v = json_tasks_in(
+        &pathological_vault(),
+        &[
+            "--allow-empty",
+            "--query",
+            r#"mentions = "nonexistent-concept""#,
+        ],
+    );
+    let arr = v.as_array().expect("json array");
+    assert!(arr.is_empty(), "no task mentions a nonexistent concept");
+}
+
+/// `mentions` composes with task-field predicates under Profile::Tasks.
+/// `mentions = "some/note" and status = Done` returns only the done task in
+/// the paragraph that mentions `some/note`.
+#[test]
+fn mentions_composes_with_status_filter() {
+    let v = json_tasks_in(
+        &pathological_vault(),
+        &["--query", r#"mentions = "some/note" and status = Done"#],
+    );
+    let arr = v.as_array().expect("json array");
+    // Exactly one task in weird-unicode.md is `[x]` ("Long line with many fields").
+    assert_eq!(
+        arr.len(),
+        1,
+        "only the done task in the mentioning paragraph"
+    );
+    assert_eq!(arr[0]["status"], "Done", "the matched task must be Done");
+}
+
+/// The tiny fixture has `[[John True]]` on a task line with no backing note,
+/// so it's a ghost. `mentions = "John True"` should match via the ghost's raw.
+/// The wikilink is in the "Done tasks" section (lines 16-24), which forms one
+/// paragraph, so all 9 tasks in that section match — the concept propagates
+/// to sibling tasks in the same paragraph.
+#[test]
+fn mentions_matches_unresolved_ghost_target() {
+    let v = json_tasks_in(&tiny_vault(), &["--query", r#"mentions = "John True""#]);
+    let arr = v.as_array().expect("json array");
+    // The `[[John True]]` wikilink is on line 18 of sample-tasks.md, in the
+    // "Done tasks" section. All 9 task lines in that section (lines 16-24)
+    // share one paragraph, so all 9 match.
+    assert_eq!(
+        arr.len(),
+        9,
+        "all 9 done-tasks-section tasks share the paragraph with [[John True]]"
+    );
+    // And the task that actually carries the wikilink is among them.
+    let has_john_true_task = arr.iter().any(|t| {
+        t["description"]
+            .as_str()
+            .unwrap_or("")
+            .contains("John True")
+    });
+    assert!(
+        has_john_true_task,
+        "the task carrying [[John True]] must be in the results"
+    );
+}
+
+fn json_tasks_in(vault: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    let mut full: Vec<&str> = vec!["--format", "json", "--no-color"];
+    full.extend(args);
+    let assert = run_list_in(vault, &full).success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    serde_json::from_str(&stdout).expect("ft tasks list --format json must produce valid JSON")
 }

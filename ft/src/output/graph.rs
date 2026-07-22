@@ -286,5 +286,6 @@ fn edge_kind_label(e: &EdgeKind) -> &'static str {
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
         EdgeKind::OwnsHeading => "owns-heading",
+        EdgeKind::OwnsTask => "owns-task",
     }
 }

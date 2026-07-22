@@ -100,6 +100,8 @@ Attribute compatibility:
 | `form`      | edge             | `wiki` or `md` (link form, link/embed edges only) |
 | `indegree`  | self only        | Count of incoming edges (integer)          |
 | `outdegree` | self only        | Count of outgoing edges (integer)          |
+| `status`, `priority`, `due`, `scheduled`, `created`, `start`, `completed`, `description`, `tags` | self, from, to | Task fields — see [Task attributes](#task-attributes) |
+| `mentions`  | self, from, to   | Concept-existence predicate — see [`mentions`](#mentions) |
 
 `indegree` / `outdegree` are selection-time properties only — they
 cannot appear in `expand` (which is per-hop) or in neighbor filters.
@@ -127,7 +129,7 @@ For `indegree` / `outdegree`, only `=`, `!=`, and `in` are meaningful
 | Attribute            | Allowed values                                |
 |----------------------|-----------------------------------------------|
 | `self.kind` / `from.kind` / `to.kind` | `Note`, `Directory`, `Ghost`, `Task`, `Paragraph`, `Heading` |
-| `edge.kind`          | `note-link`, `heading-link`, `paragraph-link`, `directory-contains`, `has-task`, `subtask`, `links-into`, `owns-paragraph`, `owns-heading` |
+| `edge.kind`          | `note-link`, `heading-link`, `paragraph-link`, `directory-contains`, `has-task`, `subtask`, `links-into`, `owns-paragraph`, `owns-heading`, `owns-task` |
 | `edge.form`          | `wiki`, `md`                                  |
 | `edge.embed`         | `true`, `false`                               |
 
@@ -137,13 +139,80 @@ share one `LinkEdge` payload and identical resolution semantics
 anchor handling). Embed-ness is a property of the link occurrence
 (`edge.embed`), not a separate edge kind — `![[Foo]]` is a link edge
 with `edge.embed = true`. See `docs/graph-semantics.md` for the full
-model. `owns-heading` and `owns-paragraph` are exclusive containment
-edges (heading/paragraph owned by nearest container); `has-task` runs
-note → task and `subtask` runs parent task → child task (indentation-
-derived, always intra-file). All containment edges point from
-container to contained, so the same expand/walk machinery follows them.
+model. `owns-heading`, `owns-paragraph`, and `owns-task` are exclusive
+containment edges (heading/paragraph/task owned by nearest container);
+`has-task` runs note → top-level task and `subtask` runs parent task →
+child task (indentation-derived, always intra-file). All containment
+edges point from container to contained, so the same expand/walk
+machinery follows them.
 
 Unknown values fail at parse time with a hint listing the allowed set.
+
+## Task attributes
+
+Task nodes (`kind = Task`) expose their fields as filterable
+attributes. Under `Profile::Tasks` these are the attributes you type
+bare (e.g. `priority = High`); under `Profile::Default` qualify with
+`self.` / `from.` / `to.` as usual.
+
+| Attribute      | Type   | Operators                                  |
+|----------------|--------|--------------------------------------------|
+| `status`       | enum   | `=`, `!=`, `in`, `includes`, `starts_with`, `ends_with` (values: `Open`, `Done`, `InProgress`, `Cancelled`) |
+| `priority`     | enum   | same as `status` (values: `Highest`, `High`, `Medium`, `Low`, `Lowest`); `is null` / `is not null` also valid |
+| `due`          | date   | `=`, `!=`, `<`, `<=`, `>`, `>=`, `in`; `is null` / `is not null` |
+| `scheduled`    | date   | same as `due`                              |
+| `created`      | date   | same as `due`                              |
+| `start`        | date   | same as `due`                              |
+| `completed`    | date   | same as `due`                              |
+| `description`  | string | `=`, `!=`, `in`, `includes`, `starts_with`, `ends_with` |
+| `tags`         | set    | `includes`, `in`                           |
+
+The `status` and `priority` string spellings are a stable contract
+and are NOT the Rust `Debug` of the underlying enum variants.
+
+## mentions
+
+`mentions` is a concept-existence predicate: "does this node (or, for
+a `Task`, its owning paragraph) link to a concept whose identity matches
+the value?" It is generalized across node kinds — the same attribute
+name means the same thing whether you're querying tasks, paragraphs,
+headings, or notes.
+
+| Node kind   | Edges walked to determine the concept-target set                       |
+|-------------|------------------------------------------------------------------------|
+| `Task`      | `incoming(OwnsTask)` → owning paragraph's `outgoing(ParagraphLink)`   |
+| `Paragraph` | `outgoing(ParagraphLink)`                                               |
+| `Heading`   | `outgoing(HeadingLink)`                                                |
+| `Note`      | `outgoing(NoteLink)`                                                   |
+| `Ghost`, `Directory` | (none — the concept-target set is empty, so `mentions` is always `false` under `=` and `true` under `!=`) |
+
+Concept identity is matched by:
+
+- `Note.title` for resolved targets,
+- `Ghost.raw` for unresolved targets (so `[[NonExistent]]` still counts),
+- `Heading.text` for heading-anchor targets.
+
+The wikilink display alias (`[[onboarding|onboarding-flow]]`'s
+`onboarding-flow`) is **not** matched — `mentions` answers "which
+concept," not "which spelling." If alias matching is wanted, it is a
+separate future attribute.
+
+Operators: `=` (existence), `!=` (absence), `includes` (synonym for
+`=`), `in` (any of a set). `is null` / `is not null` are rejected at
+parse time (`mentions` is not optional).
+
+This attribute closes the task-thesis gap from the 2026-07-19 premise
+review: tasks belong in `ft` because they arise during note-taking, so
+a task should be queryable by the concept it arose from.
+
+```dsl
+-- Under Profile::Tasks (the prelude adds `kind = Task`):
+mentions = "onboarding" and due < today
+
+-- Under Profile::Default (explicit):
+node where kind = Task and mentions = "onboarding" and due < today;
+node where kind = Paragraph and mentions = "onboarding";
+```
 
 ## Worked examples
 

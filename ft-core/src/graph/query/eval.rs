@@ -317,6 +317,39 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
                 _ => false,
             }
         }
+        // `mentions` — generalized concept-existence predicate. Walks the
+        // link edges originating from this node (or, for `Task`, from its
+        // owning paragraph via the `OwnsTask` edge) and matches the value
+        // against each target's concept identity (note title / ghost raw /
+        // heading text). The wikilink display alias is intentionally NOT
+        // matched.
+        Attr::Mentions => {
+            let mentioned = mentioned_targets(graph, id);
+            match c.op {
+                Op::Eq | Op::Includes => {
+                    let want = match &c.value {
+                        Value::Single(lit) => literal_as_str(lit),
+                        _ => return false,
+                    };
+                    mentioned.iter().any(|m| m == want)
+                }
+                Op::NotEq => {
+                    let want = match &c.value {
+                        Value::Single(lit) => literal_as_str(lit),
+                        _ => return false,
+                    };
+                    !mentioned.iter().any(|m| m == want)
+                }
+                Op::In => {
+                    let wants: Vec<&str> = match &c.value {
+                        Value::Set(lits) => lits.iter().map(literal_as_str).collect(),
+                        _ => return false,
+                    };
+                    mentioned.iter().any(|m| wants.contains(&m.as_str()))
+                }
+                _ => false,
+            }
+        }
         Attr::Indegree => {
             let count = graph.incoming(id).count() as i64;
             eval_int_op(count, c.op, &c.value)
@@ -364,6 +397,71 @@ fn literal_as_date(lit: &Literal) -> Option<chrono::NaiveDate> {
     match lit {
         Literal::Date(d) => Some(*d),
         _ => None,
+    }
+}
+
+// ── `mentions` helpers ───────────────────────────────────────────────────
+//
+// `mentions` is a generalized concept-existence predicate. For most node
+// kinds it walks the link edges originating from the node; for `Task` it
+// first hops up to the owning paragraph via `incoming(OwnsTask)`, then
+// walks that paragraph's `ParagraphLink` edges. Targets are matched by
+// concept identity (note title / ghost raw / heading text), NOT by
+// wikilink display alias.
+
+/// The set of concept-identity strings this node mentions. Empty for
+/// `Ghost` / `Directory`. For `Task`, walks the owning paragraph's
+/// `ParagraphLink` edges (via the `OwnsTask` edge); for `Paragraph` /
+/// `Heading` / `Note`, walks that node's own link edges.
+fn mentioned_targets(graph: &Graph, id: NoteId) -> HashSet<String> {
+    let mut out = HashSet::new();
+    match graph.node(id) {
+        NodeKind::Task(_) => {
+            // Up to owning paragraph via incoming OwnsTask, then out via
+            // that paragraph's ParagraphLink edges. A task has exactly one
+            // owning paragraph (ownership is exclusive), so the loop runs
+            // at most once.
+            for (owner, edge) in graph.incoming(id) {
+                if !matches!(edge, EdgeKind::OwnsTask) {
+                    continue;
+                }
+                if !matches!(graph.node(owner), NodeKind::Paragraph(_)) {
+                    continue;
+                }
+                collect_link_targets(graph, owner, &mut out);
+            }
+        }
+        NodeKind::Paragraph(_) | NodeKind::Heading(_) | NodeKind::Note(_) => {
+            collect_link_targets(graph, id, &mut out);
+        }
+        NodeKind::Ghost(_) | NodeKind::Directory(_) => {}
+    }
+    out
+}
+
+/// Walk `outgoing(id)` and insert each link edge target's concept identity
+/// string into `out`. Filters to the three link kinds (`NoteLink`,
+/// `HeadingLink`, `ParagraphLink`) via `EdgeKind::link()`. Concept identity
+/// is `NoteData.title` for resolved notes, `GhostData.raw` for unresolved
+/// targets, and `HeadingData.text` for heading-anchor targets. Aliases are
+/// intentionally not collected.
+fn collect_link_targets(graph: &Graph, id: NoteId, out: &mut HashSet<String>) {
+    for (target, edge) in graph.outgoing(id) {
+        if edge.link().is_none() {
+            continue;
+        }
+        match graph.node(target) {
+            NodeKind::Note(n) => {
+                out.insert(n.title.clone());
+            }
+            NodeKind::Ghost(g) => {
+                out.insert(g.raw.clone());
+            }
+            NodeKind::Heading(h) => {
+                out.insert(h.text.clone());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -471,6 +569,7 @@ pub(crate) const EDGE_KIND_VALUES: &[&str] = &[
     "links-into",
     "owns-paragraph",
     "owns-heading",
+    "owns-task",
 ];
 
 pub(crate) fn edge_kind_str(e: &EdgeKind) -> &'static str {
@@ -484,6 +583,7 @@ pub(crate) fn edge_kind_str(e: &EdgeKind) -> &'static str {
         EdgeKind::LinksInto => "links-into",
         EdgeKind::OwnsParagraph => "owns-paragraph",
         EdgeKind::OwnsHeading => "owns-heading",
+        EdgeKind::OwnsTask => "owns-task",
     }
 }
 

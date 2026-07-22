@@ -8,7 +8,7 @@ use crate::{
     config::{self, LayeredConfig},
     error::{Error, Result, ScanError},
     graph::parser::{extract_links, RawLink},
-    markdown::{extract_headings, extract_paragraphs, Heading, Paragraph},
+    markdown::{extract_headings, extract_paragraphs, Heading, LineSkipState, Paragraph},
     task::{
         emoji::EmojiFormat,
         format::{ParseContext, TaskFormat},
@@ -364,8 +364,18 @@ fn parse_file(
         }
     };
 
+    // Task scan uses the same `LineSkipState` as `extract_paragraphs` /
+    // `extract_headings`, so a `- [ ]` line inside a fenced code block or
+    // YAML frontmatter is not recognized as a task. This keeps the invariant
+    // that every task lands in exactly one paragraph (required for the
+    // `OwnsTask` edge to be total) and avoids parsing code-block examples as
+    // phantom tasks.
     let mut tasks = Vec::new();
+    let mut skip_state = LineSkipState::new();
     for (lineno, line) in content.lines().enumerate() {
+        if skip_state.skip_line(line) {
+            continue;
+        }
         let ctx = ParseContext {
             source_file: rel.clone(),
             source_line: lineno + 1,
@@ -751,6 +761,83 @@ mod tests {
         let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
         assert!(descs.contains(&"visible task".to_string()));
         assert!(!descs.contains(&"hidden ft task".to_string()));
+    }
+
+    // ── task scanner skip rules ───────────────────────────────────────────────
+    //
+    // The task scan in `parse_file` uses `LineSkipState` so a `- [ ]` line
+    // inside a fenced code block or YAML frontmatter is not parsed as a
+    // task. This is the invariant the `OwnsTask` edge depends on (every
+    // task lands in exactly one paragraph) and also a latent bug fix:
+    // `- [ ]` lines in code blocks are examples, not tasks.
+
+    #[test]
+    fn scan_skips_task_lines_inside_fenced_code_blocks() {
+        let (_dir, vault) = make_vault_with(&[(
+            "note.md",
+            "```
+- [ ] example task in code block
+```
+
+- [ ] real task after code block
+",
+        )]);
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(
+            descs.contains(&"real task after code block".to_string()),
+            "real task after the code block must be parsed"
+        );
+        assert!(
+            !descs.contains(&"example task in code block".to_string()),
+            "task line inside a fenced code block must not be parsed"
+        );
+        assert_eq!(scan.tasks.len(), 1, "expected exactly one task");
+    }
+
+    #[test]
+    fn scan_skips_task_lines_inside_frontmatter() {
+        let (_dir, vault) = make_vault_with(&[(
+            "note.md",
+            "---
+title: note
+- [ ] fake task in frontmatter
+---
+
+- [ ] real task in body
+",
+        )]);
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(
+            descs.contains(&"real task in body".to_string()),
+            "real task in body must be parsed"
+        );
+        assert!(
+            !descs.contains(&"fake task in frontmatter".to_string()),
+            "task line inside frontmatter must not be parsed"
+        );
+        assert_eq!(scan.tasks.len(), 1, "expected exactly one task");
+    }
+
+    #[test]
+    fn scan_parses_real_task_directly_after_code_block() {
+        // The real task after the closing fence lands in its own paragraph
+        // (single-line). Confirms the scanner re-engages after the fence
+        // closes, not just that it skipped the fence.
+        let (_dir, vault) = make_vault_with(&[(
+            "note.md",
+            "```
+- [ ] inside
+```
+- [ ] immediately after
+",
+        )]);
+        let scan = vault.scan();
+        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
+        assert!(descs.contains(&"immediately after".to_string()));
+        assert!(!descs.contains(&"inside".to_string()));
+        assert_eq!(scan.tasks.len(), 1);
     }
 
     #[test]

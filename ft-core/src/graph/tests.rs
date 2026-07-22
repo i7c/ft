@@ -53,6 +53,7 @@ fn outgoing_targets(graph: &Graph, src: NoteId) -> Vec<String> {
                 EdgeKind::LinksInto => "links-into",
                 EdgeKind::OwnsParagraph => "owns-paragraph",
                 EdgeKind::OwnsHeading => "owns-heading",
+                EdgeKind::OwnsTask => "owns-task",
             };
             let l = edge.link()?;
             Some(format!(
@@ -1925,5 +1926,123 @@ fn links_into_refresh_note() {
     assert!(
         cleared.is_empty(),
         "no links should mean no LinksInto edges"
+    );
+}
+
+// ── OwnsTask edge ────────────────────────────────────────────────────────────
+//
+// OwnsTask is a Paragraph → Task edge, mirroring the existing ownership
+// family (OwnsParagraph / OwnsHeading / HasTask / Subtask). It is total
+// over tasks once the task scanner shares LineSkipState semantics with
+// extract_paragraphs (every task lands in exactly one paragraph).
+
+/// A paragraph owns every task line within its `[line_start, line_end]`
+/// range, including subtasks. Edge direction is `Paragraph → Task`.
+#[test]
+fn ownstask_edge_paragraph_owns_its_tasks() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    // One paragraph spanning lines 1-3 (no blank line separates the tasks
+    // from the prose, so they share a paragraph). Tasks at lines 1 and 2;
+    // line 2 is a subtask of line 1.
+    tmp.child("note.md")
+        .write_str("- [ ] top task [[onboarding]]\n  - [ ] subtask\nmore text\n")
+        .unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let scan = v.scan();
+    let g = Graph::build(&v, &scan).unwrap();
+
+    // The paragraph at line 1 should own BOTH tasks (top-level + subtask).
+    let paragraph_id = g.paragraph_by_loc(Path::new("note.md"), 1).unwrap();
+    let ownstask: Vec<_> = g
+        .outgoing(paragraph_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::OwnsTask))
+        .collect();
+    assert_eq!(
+        ownstask.len(),
+        2,
+        "paragraph should own both the top-level task and the subtask"
+    );
+
+    // Direction: each edge target is a Task node.
+    for (target, _) in &ownstask {
+        assert!(
+            matches!(g.node(*target), NodeKind::Task(_)),
+            "OwnsTask edge must target a Task node"
+        );
+    }
+}
+
+/// A top-level task has BOTH an incoming `HasTask` edge (from its note)
+/// and an incoming `OwnsTask` edge (from its owning paragraph). The two
+/// are distinct relations, not redundant.
+#[test]
+fn ownstask_and_hastask_coexist_on_top_level_task() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("note.md")
+        .write_str("- [ ] top-level task\n")
+        .unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+    let scan = v.scan();
+    let g = Graph::build(&v, &scan).unwrap();
+
+    let task_id = g.task_by_loc(Path::new("note.md"), 1).unwrap();
+
+    // Incoming HasTask (from note).
+    let hastask_count = g
+        .incoming(task_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::HasTask))
+        .count();
+    assert_eq!(
+        hastask_count, 1,
+        "top-level task has one HasTask edge from note"
+    );
+
+    // Incoming OwnsTask (from paragraph).
+    let ownstask_count = g
+        .incoming(task_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::OwnsTask))
+        .count();
+    assert_eq!(
+        ownstask_count, 1,
+        "top-level task also has one OwnsTask edge from its owning paragraph"
+    );
+}
+
+/// A task whose `source_line` falls outside any paragraph range receives
+/// no `OwnsTask` edge. This should not occur in practice after the
+/// scanner-skip fix (every task lands in a paragraph), but the edge
+/// creation must not panic and must simply skip the task.
+#[test]
+fn ownstask_edge_skips_task_with_no_owning_paragraph() {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("note.md").write_str("- [ ] real task\n").unwrap();
+    let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+    // Hand-craft a scan with a task at a line that no paragraph covers.
+    // Line 99 is past the end of the file; no paragraph will span it.
+    let orphan_task = Task {
+        description: "orphan".into(),
+        source_file: PathBuf::from("note.md"),
+        source_line: 99,
+        ..Default::default()
+    };
+    let mut scan = v.scan();
+    scan.tasks.push(orphan_task);
+    let g = Graph::build(&v, &scan).unwrap();
+
+    let orphan_id = g.task_by_loc(Path::new("note.md"), 99).unwrap();
+    let ownstask_count = g
+        .incoming(orphan_id)
+        .filter(|(_, e)| matches!(e, EdgeKind::OwnsTask))
+        .count();
+    assert_eq!(
+        ownstask_count, 0,
+        "task outside any paragraph range must have no OwnsTask edge"
     );
 }

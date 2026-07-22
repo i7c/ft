@@ -252,6 +252,18 @@ pub enum EdgeKind {
     /// heading. Models the heading section tree: a heading at level `L`
     /// is owned by the nearest heading of level `< L`, or by the note.
     OwnsHeading,
+    /// A paragraph owns a task line within its `[line_start, line_end]`
+    /// range. Edge from paragraph → task. Total over tasks once the task
+    /// scanner shares `LineSkipState` semantics with `extract_paragraphs`
+    /// (every task lands in exactly one paragraph): each task receives
+    /// exactly one incoming `OwnsTask` edge. Distinct from `HasTask`
+    /// (note → top-level task only) and `Subtask` (task → task): a
+    /// top-level task may have both an incoming `HasTask` edge (from its
+    /// note) and an incoming `OwnsTask` edge (from its owning paragraph),
+    /// and a subtask has both an incoming `Subtask` edge (from its
+    /// parent) and an incoming `OwnsTask` edge (from its owning
+    /// paragraph). Unit variant — no textual link to rewrite.
+    OwnsTask,
 }
 
 impl EdgeKind {
@@ -267,7 +279,8 @@ impl EdgeKind {
             | EdgeKind::Subtask
             | EdgeKind::LinksInto
             | EdgeKind::OwnsParagraph
-            | EdgeKind::OwnsHeading => None,
+            | EdgeKind::OwnsHeading
+            | EdgeKind::OwnsTask => None,
         }
     }
 }
@@ -445,6 +458,11 @@ impl Graph {
 
         // Create Subtask edges from parent tasks to their subtasks.
         graph.insert_subtask_edges(&scan.tasks);
+
+        // Create OwnsTask edges from paragraphs to the task lines they
+        // contain. Runs after HasTask/Subtask so task nodes exist; runs
+        // after paragraph insertion (above) so paragraph nodes exist.
+        graph.insert_ownstask_edges(&scan.tasks);
 
         // Create LinksInto edges from notes to directories they link into.
         graph.insert_links_into_edges();
@@ -1019,6 +1037,10 @@ impl Graph {
     /// The parent relationship is the `Task.parent` line pointer resolved at
     /// scan time; both endpoints live in the same file, so we look the parent
     /// up by `(source_file, parent_line)` in the task index.
+    /// Create Subtask edges from each parent task to its direct subtasks.
+    /// The parent relationship is the `Task.parent` line pointer resolved at
+    /// scan time; both endpoints live in the same file, so we look the parent
+    /// up by `(source_file, parent_line)` in the task index.
     fn insert_subtask_edges(&mut self, tasks: &[Task]) {
         for task in tasks {
             let Some(parent_line) = task.parent else {
@@ -1036,6 +1058,67 @@ impl Graph {
                 .get(&(task.source_file.clone(), parent_line))
             {
                 self.g.add_edge(parent.0, child.0, EdgeKind::Subtask);
+            }
+        }
+    }
+
+    /// Create `OwnsTask` edges from each paragraph to the task lines whose
+    /// `source_line` falls within the paragraph's `[line_start, line_end]`
+    /// range (within the same `source_file`). Total over tasks once the
+    /// task scanner shares `LineSkipState` semantics with `extract_paragraphs`
+    /// (every task lands in exactly one paragraph). Distinct from `HasTask`
+    /// (note → top-level task only): a top-level task receives both an
+    /// incoming `HasTask` edge (from its note) and an incoming `OwnsTask`
+    /// edge (from its owning paragraph), and a subtask receives both an
+    /// incoming `Subtask` edge (from its parent) and an incoming `OwnsTask`
+    /// edge (from its owning paragraph).
+    ///
+    /// Groups tasks by normalized source file so each note's paragraphs
+    /// are walked once via `note_paragraphs`. For each paragraph, every
+    /// task in the same file whose `source_line` falls in
+    /// `[line_start, line_end]` gets an `OwnsTask` edge from the paragraph
+    /// to the task (looked up via `task_index`).
+    fn insert_ownstask_edges(&mut self, tasks: &[Task]) {
+        use std::collections::HashMap;
+        let mut by_file: HashMap<PathBuf, Vec<&Task>> = HashMap::new();
+        for task in tasks {
+            by_file
+                .entry(normalize_path(&task.source_file))
+                .or_default()
+                .push(task);
+        }
+        for (file, file_tasks) in by_file {
+            let Some(&note_id) = self.path_index.get(&file) else {
+                continue;
+            };
+            // `note_paragraphs` walks OwnsParagraph/OwnsHeading edges and
+            // returns all paragraphs under the note (transitively through
+            // headings). Iteration order is not guaranteed, but the
+            // range match below is order-independent.
+            let paragraphs = self.note_paragraphs(note_id);
+            // Snapshot each paragraph's line range up front so we don't
+            // hold an immutable borrow of `self` across `add_edge`.
+            let paragraph_ranges: Vec<(NoteId, u32, u32)> = paragraphs
+                .into_iter()
+                .filter_map(|p_id| match self.node(p_id) {
+                    NodeKind::Paragraph(p) => Some((p_id, p.line_start, p.line_end)),
+                    _ => None,
+                })
+                .collect();
+            for (p_id, line_start, line_end) in paragraph_ranges {
+                for task in &file_tasks {
+                    let line = task.source_line as u32;
+                    if line < line_start || line > line_end {
+                        continue;
+                    }
+                    let Some(&task_id) = self
+                        .task_index
+                        .get(&(task.source_file.clone(), task.source_line))
+                    else {
+                        continue;
+                    };
+                    self.g.add_edge(p_id.0, task_id.0, EdgeKind::OwnsTask);
+                }
             }
         }
     }

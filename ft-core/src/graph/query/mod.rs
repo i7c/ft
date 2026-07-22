@@ -196,6 +196,17 @@ pub enum Attr {
     Description,
     /// Task-specific: tags (Vec<String>)
     Tags,
+    /// Does this node (or, for `Task`, its owning paragraph via the
+    /// `OwnsTask` edge) link to a target whose concept identity matches
+    /// the value? Concept identity is `Note.title` for resolved targets,
+    /// `Ghost.raw` for unresolved targets, and `Heading.text` for
+    /// heading-anchor targets — the wikilink display alias is NOT matched.
+    /// Generalized across node kinds: `Paragraph` walks its
+    /// `ParagraphLink` edges, `Heading` its `HeadingLink` edges, `Note`
+    /// its `NoteLink` edges, `Ghost`/`Directory` return empty, and `Task`
+    /// walks its owning paragraph's `ParagraphLink` edges (via the
+    /// `OwnsTask` edge).
+    Mentions,
 }
 
 /// Value-type classification for an attribute. Drives parse-time
@@ -218,7 +229,7 @@ impl Attr {
             Attr::Kind | Attr::Form | Attr::Status | Attr::Priority | Attr::Embed => {
                 ValueType::Enum
             }
-            Attr::Path | Attr::Title | Attr::Description => ValueType::Str,
+            Attr::Path | Attr::Title | Attr::Description | Attr::Mentions => ValueType::Str,
             Attr::Indegree | Attr::Outdegree => ValueType::Int,
             Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed => {
                 ValueType::Date

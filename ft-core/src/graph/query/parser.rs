@@ -653,6 +653,7 @@ fn parse_attr(s: &str, position: usize) -> Result<Attr, DslError> {
         "completed" => Ok(Attr::Completed),
         "description" => Ok(Attr::Description),
         "tags" => Ok(Attr::Tags),
+        "mentions" => Ok(Attr::Mentions),
         _ => Err(DslError::UnknownAttribute {
             attr: s.to_string(),
             position,
@@ -712,7 +713,8 @@ fn validate_attr_subject(
             | Attr::Start
             | Attr::Completed
             | Attr::Description
-            | Attr::Tags,
+            | Attr::Tags
+            | Attr::Mentions,
             Subject::Edge,
         ) => Err(DslError::ScopeError {
             entity: "edge".into(),
@@ -728,7 +730,8 @@ fn validate_attr_subject(
             | Attr::Start
             | Attr::Completed
             | Attr::Description
-            | Attr::Tags,
+            | Attr::Tags
+            | Attr::Mentions,
             _,
         ) => Ok(()),
     }

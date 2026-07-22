@@ -164,6 +164,7 @@ pub(crate) fn attr_name(a: Attr) -> &'static str {
         Attr::Completed => "completed",
         Attr::Description => "description",
         Attr::Tags => "tags",
+        Attr::Mentions => "mentions",
     }
 }
 

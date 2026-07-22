@@ -57,8 +57,8 @@ The model rests on a clean asymmetry:
 
 - **Structure (containment) edges** model document topology. Each node
   has **one** owner (nearest container). Exclusive, tree-shaped.
-  Kinds: `Contains`, `OwnsHeading`, `OwnsParagraph`, `HasTask`,
-  `Subtask`, `LinksInto` (derived).
+  Kinds: `Contains`, `OwnsHeading`, `OwnsParagraph`, `OwnsTask`,
+  `HasTask`, `Subtask`, `LinksInto` (derived).
 
 - **Reference (link) edges** model citations between notes. Naturally
   many-to-many and **duplicated across the three container levels**.
@@ -116,13 +116,20 @@ with the heading line).
 
 ### Task
 
-Unchanged and **intentionally outside the heading/paragraph containment
-hierarchy.** Tasks carry their own `HasTask` (note → top-level task) and
-`Subtask` (task → task, indentation-derived) tree. A task that
-physically appears under a heading is *not* given a heading→task edge in
-this revision. Folding tasks into the heading tree is a possible future
-extension but is out of scope here; it would interact with the
-emoji-format task model and is deferred.
+Tasks participate in two containment relations: a **note-level**
+`HasTask` edge (note → top-level task only; subtasks reached via the
+`Subtask` chain) and a **paragraph-level** `OwnsTask` edge (paragraph →
+task, every task including subtasks). The two are distinct: a top-level
+task has both an incoming `HasTask` (from its note) and an incoming
+`OwnsTask` (from its owning paragraph); a subtask has both an incoming
+`Subtask` (from its parent) and an incoming `OwnsTask` (from its owning
+paragraph). Tasks are intentionally **outside the heading containment
+hierarchy** — a task under a heading is *not* given a heading→task
+edge; only the paragraph that contains the task gets `OwnsTask`.
+
+The `OwnsTask` edge is total over tasks once the task scanner shares
+`LineSkipState` semantics with `extract_paragraphs` (every task lands
+in exactly one paragraph). See `vault::parse_file`.
 
 ### Ghost, Directory
 
@@ -182,7 +189,31 @@ models them faithfully per Fork A2.
 
 ### `HasTask` — note → task
 
-Unchanged. Note → its top-level tasks only.
+Unchanged. Note → its top-level tasks only. Subtasks are reachable via
+the `Subtask` chain. Distinct from `OwnsTask` (paragraph → task): a
+top-level task receives both a `HasTask` edge (from its note) and an
+`OwnsTask` edge (from its owning paragraph).
+
+### `OwnsTask` — paragraph → task (*Status: new*)
+
+A paragraph owns every task line within its `[line_start, line_end]`
+range. Edge from paragraph → task. Total over tasks once the task
+scanner shares `LineSkipState` semantics with `extract_paragraphs`
+(every task lands in exactly one paragraph — frontmatter and fenced
+ code blocks are skipped by both, so a ` - [ ]` line in a code block
+is not parsed as a task and does not break the invariant).
+
+Build-time rule: for each note, walk its paragraphs (via
+`note_paragraphs`); for each paragraph `P` with range `[s, e]`, for
+each task in `P.source_file` whose `source_line ∈ [s, e]`, add
+`OwnsTask(P → task)`. Subtasks are included: a paragraph owns every
+task line in its range, top-level and subtask alike.
+
+This edge is what makes the task-thesis queryable: a `Task`'s concept
+context is reached by walking `incoming(OwnsTask)` to the owning
+paragraph, then `outgoing(ParagraphLink)` to the concepts that
+paragraph mentions. See the `mentions` attribute in
+`docs/graph-query-dsl.md`.
 
 ### `Subtask` — task → task
 
