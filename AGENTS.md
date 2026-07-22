@@ -183,3 +183,13 @@ change, check `openspec/changes/` for prior context and consider
 running the proposal flow (`.pi/skills/openspec-propose`) rather than
 ad-hoc editing. Skills: `openspec-propose`, `openspec-apply-change`,
 `openspec-archive-change`, `openspec-explore`.
+
+- **Explore first, build on confirmation.** In a fresh session, assume
+  the task is exploration and design — read the code, reason about
+  options, surface trade-offs — until the user explicitly asks to move
+  to implementation. Confirm with the user before writing a spec and
+  applying it. Do not jump to code on the first message.
+- **Commit the spec before applying.** After creating an openspec change
+  (proposal + design + specs + tasks), commit it as its own commit
+  before running `/opsx-apply`. The implementation lands as a separate,
+  follow-up commit. Do this without being asked.
