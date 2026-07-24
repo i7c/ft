@@ -2528,3 +2528,210 @@ fn notes_periodic_leader_modal_snapshot() -> Result<()> {
     assert_tui_snapshot!("notes_periodic_leader_80x24", frame);
     Ok(())
 }
+
+// ── Paragraph-synth flow (paragraph-synth-flow change) ────────────────
+
+/// Build a vault with a git repo + one commit so the clean-tree guard
+/// passes. `Topics.md` has multiple paragraphs (the source we'll pick).
+fn synth_test_vault() -> (TempDir, Vault) {
+    use std::process::Command as StdCommand;
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("Topics.md"),
+        "# Topics\n\nFirst topic paragraph.\nWith a second line.\n\nSecond topic.\n\nThird topic here.\n",
+    )
+    .unwrap();
+    std::fs::write(vault_path.join("Synthesis"), "").unwrap_or(());
+    let run_git = |args: &[&str]| {
+        let out = StdCommand::new("git")
+            .current_dir(&vault_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git binary on PATH");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["config", "user.name", "T"]);
+    run_git(&["config", "user.email", "t@e.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "init"]);
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn paragraph_synth_dirty_tree_aborts_on_notes_tab() -> Result<()> {
+    // No git repo at all → guard refuses with a toast, no modal opens.
+    let (_dir, vault) = notes_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('y'))?;
+    assert!(
+        app.active_modal_name().is_none(),
+        "dirty tree must not open the paragraph-synth modal"
+    );
+    Ok(())
+}
+
+#[test]
+fn paragraph_synth_multiselect_step_renders() -> Result<()> {
+    let (_dir, vault) = synth_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    // `y` opens the source picker; the fuzzy picker's first item is the
+    // first .md file (Topics.md here, alphabetically after any dir).
+    app.dispatch(key('y'))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("paragraph-synth"),
+        "y opens the paragraph-synth modal at the source picker"
+    );
+    // Pick the first note (Topics.md).
+    app.dispatch(key_event(KeyCode::Enter))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("paragraph-synth"),
+        "modal advances to paragraph multi-select"
+    );
+    let frame = render(&mut app, 100, 30);
+    assert_tui_snapshot!("paragraph_synth_multiselect_100x30", frame);
+    Ok(())
+}
+
+#[test]
+fn paragraph_synth_shrink_adjust_updates_preview_header() -> Result<()> {
+    let (_dir, vault) = synth_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('y'))?;
+    // Pick Topics.md (first .md).
+    app.dispatch(key_event(KeyCode::Enter))?;
+    // Move focus to the second paragraph (L3-4), then shrink top with `[`.
+    app.dispatch(key_event(KeyCode::Down))?;
+    app.dispatch(key('['))?;
+    let frame = render(&mut app, 100, 30);
+    // The list row for the focused paragraph should now show an adjusted range.
+    assert!(
+        frame.contains("adj L4"),
+        "shrink should surface the adjusted range in the list row:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn paragraph_synth_source_equals_target_rejected() -> Result<()> {
+    let (_dir, vault) = synth_test_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('y'))?;
+    app.dispatch(key_event(KeyCode::Enter))?;
+    // Select the first paragraph (the heading at L1) with Space.
+    app.dispatch(key_event(KeyCode::Char(' ')))?;
+    // Enter → existing-note target picker.
+    app.dispatch(key_event(KeyCode::Enter))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("paragraph-synth"),
+        "target picker is still the paragraph-synth modal"
+    );
+    // The fuzzy picker's first item is Topics.md (the source). Selecting it
+    // must be rejected inline with an error, keeping the modal open.
+    app.dispatch(key_event(KeyCode::Enter))?;
+    assert_eq!(
+        app.active_modal_name(),
+        Some("paragraph-synth"),
+        "source==target must keep the modal open (rejected inline)"
+    );
+    let frame = render(&mut app, 100, 30);
+    assert!(
+        frame.contains("source cannot also be the synth target"),
+        "source-equals-target must surface an inline error:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn paragraph_synth_commit_writes_adjusted_callout_pinned_to_head() -> Result<()> {
+    let (dir, vault) = synth_test_vault();
+    let vault_root = vault.path.to_path_buf();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('y'))?;
+    app.dispatch(key_event(KeyCode::Enter))?; // pick Topics.md
+                                              // Focus the second paragraph (L3-4) and shrink the top by one line.
+    app.dispatch(key_event(KeyCode::Down))?;
+    app.dispatch(key('['))?;
+    // Select it, then open the existing-note target picker.
+    app.dispatch(key_event(KeyCode::Char(' ')))?;
+    app.dispatch(key_event(KeyCode::Enter))?;
+    // Pick "Topics.md" as the target would be source==target. Instead
+    // type a query for a new target: press Esc back, then `S` to create
+    // a new note, pick the root folder `.`, and title it `topic`.
+    // Esc back to multiselect, then `S`.
+    app.dispatch(key_event(KeyCode::Esc))?;
+    app.dispatch(key('S'))?;
+    // Folder picker: the first item is typically `.` (vault root). Pick it.
+    app.dispatch(key_event(KeyCode::Enter))?;
+    // Title prompt: type "topic" then Enter.
+    for ch in "topic".chars() {
+        app.dispatch(key(ch))?;
+    }
+    app.dispatch(key_event(KeyCode::Enter))?;
+
+    // The commit writes topic.md (or Synthesis/topic.md depending on
+    // folder enumeration order). The flow hands off to $EDITOR, which
+    // is deferred — the file is already on disk. Find the written note.
+    let written = find_written_synth_note(&vault_root);
+    let Some(path) = written else {
+        // If no note was written, surface the rendered frame for debugging.
+        let frame = render(&mut app, 100, 30);
+        panic!("no synth note written after commit:\n{frame}");
+    };
+    let body = std::fs::read_to_string(&path).unwrap();
+    // The callout pins the ADJUSTED range (L4-4, since L3-4 trimmed top → L4-4).
+    assert!(
+        body.contains("> [!ft-source] \"Topics.md\" L4-4 @"),
+        "expected adjusted-range callout pinning L4-4 to HEAD:\n{body}"
+    );
+    // The body is the single trimmed line.
+    assert!(
+        body.contains("> With a second line."),
+        "expected the trimmed body line in the callout:\n{body}"
+    );
+    // It's marked as a synth note.
+    assert!(
+        body.contains("synth:"),
+        "target should be marked synth:\n{body}"
+    );
+    let _ = dir;
+    Ok(())
+}
+
+/// Find the first `.md` note under `root` whose body contains a
+/// `[!ft-source]` callout (the written synth note). Returns its path.
+fn find_written_synth_note(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Ok(body) = std::fs::read_to_string(&p) {
+                    if body.contains("[!ft-source]") {
+                        found.push(p);
+                    }
+                }
+            }
+        }
+    }
+    found.into_iter().next()
+}

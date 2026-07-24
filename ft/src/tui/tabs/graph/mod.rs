@@ -872,6 +872,13 @@ impl Tab for GraphTab {
                 ],
             ),
             HelpSection::new(
+                "Paragraph synth",
+                &[(
+                    "y",
+                    "pick paragraphs from focused note → protected sections",
+                )],
+            ),
+            HelpSection::new(
                 "Periodic notes",
                 &[
                     ("t", "open today's daily note"),

@@ -21,13 +21,13 @@ use std::path::Path;
 use chrono::NaiveDate;
 
 use crate::error::{Error, Result};
-use crate::gather::GatherEntry;
 use crate::git;
 use crate::synth::callout::{compute_section_hash, ParsedCallout, CONTENT_HASH_PREFIX_LEN};
+use crate::synth::source::SynthSource;
 
 /// Drop journal entries whose `(source_path, body)` is already pinned in
 /// `existing`. The dedup key is the pair of the vault-relative source
-/// path and the entry's `section_text` compared byte-for-byte against a
+/// path and the entry's `body` compared byte-for-byte against a
 /// callout's unprefixed body. The 6-hex `content_hash` is used as a fast
 /// pre-filter (a `hash → Vec<(&path, &body)>` map) before the exact body
 /// compare; the body compare is the source of truth (the 6-hex prefix
@@ -38,7 +38,7 @@ use crate::synth::callout::{compute_section_hash, ParsedCallout, CONTENT_HASH_PR
 /// flow). Input order is preserved among the survivors.
 ///
 /// Pure: no I/O, no git. Cheap (bodies are small).
-pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<GatherEntry>) -> Vec<GatherEntry> {
+pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<SynthSource>) -> Vec<SynthSource> {
     // hash-prefix → list of (path, body) for that prefix. The prefix is
     // a fast reject; the body compare below is exact.
     let mut by_hash: HashMap<&str, Vec<(&Path, &str)>> = HashMap::new();
@@ -52,7 +52,7 @@ pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<GatherEntry>) -> 
     entries
         .into_iter()
         .filter(|e| {
-            let h = compute_section_hash(&e.section_text);
+            let h = compute_section_hash(&e.body);
             let prefix = &h[..CONTENT_HASH_PREFIX_LEN.min(h.len())];
             // No existing callout with this hash prefix → definitely new.
             let Some(cands) = by_hash.get(prefix) else {
@@ -61,7 +61,7 @@ pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<GatherEntry>) -> 
             // Hash matched: confirm via exact (path, body) compare.
             !cands
                 .iter()
-                .any(|(p, b)| *p == e.source_path.as_path() && *b == e.section_text)
+                .any(|(p, b)| *p == e.source_path.as_path() && *b == e.body)
         })
         .collect()
 }
@@ -155,15 +155,12 @@ mod tests {
         }
     }
 
-    fn entry(path: &str, body: &str, date: &str) -> GatherEntry {
-        GatherEntry {
-            source_title: path.to_string(),
+    fn entry(path: &str, body: &str, _date: &str) -> SynthSource {
+        SynthSource {
             source_path: PathBuf::from(path),
             line_start: 1,
             line_end: 1,
-            section_text: body.to_string(),
-            date: NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
-            matched: vec![],
+            body: body.to_string(),
         }
     }
 
@@ -200,7 +197,7 @@ mod tests {
             entry("notes/c.md", "C body", "2026-06-03"),
         ];
         let out = filter_missing(&existing, entries);
-        let bodies: Vec<&str> = out.iter().map(|e| e.section_text.as_str()).collect();
+        let bodies: Vec<&str> = out.iter().map(|e| e.body.as_str()).collect();
         assert_eq!(bodies, vec!["A body", "C body"], "order must be preserved");
     }
 

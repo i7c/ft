@@ -12,6 +12,7 @@
 pub mod append;
 pub mod capture;
 pub mod create;
+pub mod paragraph_synth;
 pub mod periodic;
 pub mod reslice;
 pub mod section_move;

@@ -30,7 +30,6 @@ use ratatui::{
 };
 
 use ft_core::blame_cache::BlameCache;
-use ft_core::gather::GatherEntry;
 use ft_core::git::discover_repo;
 use ft_core::pulse::WindowRange;
 use ft_core::recent::{build_recent, RecentEntry, RecentOptions};
@@ -406,11 +405,10 @@ impl RecentTab {
         self.synth_send = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
     }
 
-    /// Entries to ship to the scaffold, as `GatherEntry` (the type the
+    /// Entries to ship to the scaffold, as `SynthSource` (the type the
     /// core scaffold planner consumes). Selected rows when any are
-    /// selected, otherwise the whole feed. `matched` is always empty —
-    /// History has no link target.
-    fn entries_to_send(&self) -> Vec<GatherEntry> {
+    /// selected, otherwise the whole feed.
+    fn entries_to_send(&self) -> Vec<ft_core::synth::source::SynthSource> {
         let chosen: Vec<&RecentEntry> = if self.entry_selected.is_empty() {
             self.entries.iter().collect()
         } else {
@@ -421,18 +419,7 @@ impl RecentTab {
                 .map(|(_, e)| e)
                 .collect()
         };
-        chosen
-            .into_iter()
-            .map(|e| GatherEntry {
-                source_title: e.source_title.clone(),
-                source_path: e.source_path.clone(),
-                line_start: e.line_start,
-                line_end: e.line_end,
-                section_text: e.section_text.clone(),
-                date: e.date,
-                matched: Vec::new(),
-            })
-            .collect()
+        chosen.into_iter().map(Into::into).collect()
     }
 
     /// Drive the send-to-synth overlay. History omits the Journal tab's

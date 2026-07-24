@@ -208,11 +208,10 @@ fn resolve_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gather::GatherEntry;
     use crate::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
+    use crate::synth::source::SynthSource;
     use crate::synth::verify::{verify_synth_note, SectionStatus};
     use assert_fs::prelude::*;
-    use chrono::NaiveDate;
     use std::process::Command;
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -247,14 +246,11 @@ mod tests {
         run_git(&repo, &["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = GatherEntry {
-            source_title: "source".into(),
+        let entry = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 2,
             line_end: 3,
-            section_text: "line two\nline three".into(),
-            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "line two\nline three".into(),
         };
         let target = PathBuf::from("Synth/topic.md");
         let plan =
@@ -412,14 +408,11 @@ mod tests {
     fn ambiguous_without_at_errors() {
         let (tmp, vault, target) = setup();
         // Append a second section to the same note.
-        let entry = GatherEntry {
-            source_title: "source".into(),
+        let entry = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 5,
             line_end: 5,
-            section_text: "line five".into(),
-            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "line five".into(),
         };
         // Source must be clean to scaffold; it is (committed in setup).
         let plan =

@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use ft_core::markdown::Heading;
+use ft_core::markdown::{Heading, Paragraph as MdParagraph};
 use ft_core::synth::verify::SectionStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -16,6 +16,7 @@ use ratatui::{
 
 use crate::tui::notes_actions::append::AppendState;
 use crate::tui::notes_actions::create::CreateState;
+use crate::tui::notes_actions::paragraph_synth::{Adjust, ParagraphSynthState};
 use crate::tui::notes_actions::reslice::{Edge, EditBoundary, ResliceState, SectionRow};
 use crate::tui::notes_actions::section_move::{
     is_implicitly_selected, ClipboardItem, ComposeRow, NewTargetState, RenameBuffer,
@@ -64,6 +65,30 @@ const OPEN_PICKER_KEYS: &[(&str, &str)] = &[
 
 /// Footer keymap for step 1/4 of the section-move flow.
 const MOVE_STEP_1_KEYS: &[(&str, &str)] = &[("Enter", "use source"), ("Esc", "cancel move")];
+
+/// Footer keymap for paragraph-synth source pick.
+const SYNTH_STEP_SOURCE_KEYS: &[(&str, &str)] = &[("Enter", "use source"), ("Esc", "cancel")];
+
+/// Footer keymap for paragraph-synth multi-select.
+const SYNTH_STEP_MULTI_KEYS: &[(&str, &str)] = &[
+    ("↑/↓", "focus"),
+    ("Space", "toggle"),
+    ("[/]", "shrink top/bot"),
+    ("r", "reset"),
+    ("s/S", "target ex/new"),
+    ("Enter", "target ex"),
+    ("Esc", "back"),
+];
+
+/// Footer keymap for paragraph-synth target pick (existing).
+const SYNTH_STEP_TARGET_KEYS: &[(&str, &str)] =
+    &[("Enter", "commit"), ("Esc", "back"), ("S", "new note")];
+
+/// Footer keymap for paragraph-synth new-target folder pick.
+const SYNTH_STEP_FOLDER_KEYS: &[(&str, &str)] = &[("Enter", "select folder"), ("Esc", "back")];
+
+/// Footer keymap for paragraph-synth new-target title prompt.
+const SYNTH_STEP_TITLE_KEYS: &[(&str, &str)] = &[("Enter", "create + commit"), ("Esc", "back")];
 
 /// Footer keymap for step 2/4 (heading multi-select).
 const MOVE_STEP_2_KEYS: &[(&str, &str)] = &[
@@ -806,6 +831,242 @@ pub(crate) fn render_move_overlay(frame: &mut Frame, area: Rect, ms: &mut Sectio
         }
         SectionMoveState::NewTargetCreating(nts) => render_new_target_overlay(frame, area, nts),
     }
+}
+
+/// Render the active step of the paragraph-synth flow.
+pub(crate) fn render_paragraph_synth_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut ParagraphSynthState,
+) {
+    match state {
+        ParagraphSynthState::SourcePicking { picker } => render_picker_popup(
+            frame,
+            area,
+            " synth · 1/3 source note ",
+            picker,
+            SYNTH_STEP_SOURCE_KEYS,
+            None,
+        ),
+        ParagraphSynthState::ParagraphMultiSelect {
+            source_rel,
+            source_content,
+            paragraphs,
+            selected,
+            adjust,
+            focus,
+            ..
+        } => render_synth_multiselect(
+            frame,
+            area,
+            &source_rel.display().to_string(),
+            source_content,
+            paragraphs,
+            selected,
+            adjust,
+            *focus,
+        ),
+        ParagraphSynthState::TargetPicking { picker, error, .. } => render_picker_popup(
+            frame,
+            area,
+            " synth · 3/3 target note ",
+            picker,
+            SYNTH_STEP_TARGET_KEYS,
+            error.as_deref(),
+        ),
+        ParagraphSynthState::NewTargetFolder { picker, .. } => render_picker_popup(
+            frame,
+            area,
+            " synth · 3/3 new-target folder ",
+            picker,
+            SYNTH_STEP_FOLDER_KEYS,
+            None,
+        ),
+        ParagraphSynthState::NewTargetTitle {
+            folder, buf, error, ..
+        } => render_synth_title_prompt(
+            frame,
+            area,
+            &folder.display().to_string(),
+            buf,
+            error.as_deref(),
+        ),
+    }
+}
+
+/// Render the paragraph multi-select step: a list of paragraphs on top
+/// (cursor + selection marker + line range) and a preview of the
+/// focused paragraph on the bottom, with the effective (post-adjust)
+/// range highlighted and trimmed lines dimmed.
+#[allow(clippy::too_many_arguments)]
+fn render_synth_multiselect(
+    frame: &mut Frame,
+    area: Rect,
+    source_label: &str,
+    source_content: &str,
+    paragraphs: &[MdParagraph],
+    selected: &BTreeSet<usize>,
+    adjust: &std::collections::BTreeMap<usize, Adjust>,
+    focus: usize,
+) {
+    let popup = centered_rect(72, 80, area);
+    frame.render_widget(Clear, popup);
+    let title = format!(" synth · 2/3 select paragraphs · {source_label} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    // List pane.
+    let n = paragraphs.len();
+    let visible = (chunks[0].height as usize).min(n).max(1);
+    let scroll = compute_scroll(focus, visible, n);
+    let end = (scroll + visible).min(n);
+    let mut list_lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(scroll));
+    for (i, p) in paragraphs.iter().enumerate().take(end).skip(scroll) {
+        let marker = if selected.contains(&i) { "●" } else { "○" };
+        let cursor = if i == focus { "▶ " } else { "  " };
+        let adj = adjust.get(&i).copied().unwrap_or_default();
+        let (eff_s, eff_e) = adj.effective(p);
+        let range = if (eff_s, eff_e) == (p.line_start, p.line_end) {
+            format!("L{}–{}", p.line_start, p.line_end)
+        } else {
+            format!(
+                "L{}–{} (adj L{}–{})",
+                p.line_start, p.line_end, eff_s, eff_e
+            )
+        };
+        let preview: String = p
+            .text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(40)
+            .collect();
+        let style = if i == focus {
+            Style::default()
+                .bg(Color::Rgb(50, 38, 30))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        list_lines.push(Line::from(vec![
+            Span::styled(format!("{cursor}{marker} "), style),
+            Span::styled(format!("{range:<20} "), style.fg(palette::DIM)),
+            Span::styled(preview, style.fg(palette::PRIMARY)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(list_lines), chunks[0]);
+
+    // Preview pane: the focused paragraph with effective range highlighted.
+    let preview_lines = build_synth_preview(source_content, paragraphs, focus, adjust);
+    frame.render_widget(Paragraph::new(preview_lines), chunks[1]);
+
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(""), keymap_line(SYNTH_STEP_MULTI_KEYS)])
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+/// Build the preview body for the focused paragraph: each source line
+/// in the paragraph's full range is a row; lines inside the effective
+/// range are highlighted, trimmed lines are dimmed, with a line-number
+/// prefix. Lines outside the focused paragraph are not shown.
+fn build_synth_preview(
+    source_content: &str,
+    paragraphs: &[MdParagraph],
+    focus: usize,
+    adjust: &std::collections::BTreeMap<usize, Adjust>,
+) -> Vec<Line<'static>> {
+    let Some(p) = paragraphs.get(focus) else {
+        return vec![];
+    };
+    let adj = adjust.get(&focus).copied().unwrap_or_default();
+    let (eff_s, eff_e) = adj.effective(p);
+    let lines: Vec<&str> = source_content.lines().collect();
+    let mut out = Vec::new();
+    for ln in p.line_start..=p.line_end {
+        let idx = (ln as usize).saturating_sub(1);
+        let text = lines.get(idx).copied().unwrap_or("");
+        let in_range = ln >= eff_s && ln <= eff_e;
+        let marker = if in_range { "▶ " } else { "  " };
+        let style = if in_range {
+            Style::default()
+                .fg(palette::PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette::DIM)
+        };
+        out.push(Line::from(vec![
+            Span::styled(format!("{marker}L{ln:<4} "), style),
+            Span::styled(text.to_string(), style),
+        ]));
+    }
+    out
+}
+
+/// Inline single-line title prompt for the create-new-target path.
+fn render_synth_title_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    folder_label: &str,
+    buf: &mut EditBuffer,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(60, 12, area);
+    frame.render_widget(Clear, popup);
+    let title = format!(" synth · new note in {folder_label} ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(palette::PRIMARY))
+        .style(Style::default().bg(palette::BLACK));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let footer_height = if error.is_some() { 3 } else { 2 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
+        .split(inner);
+
+    render_inline_input(
+        frame,
+        chunks[0],
+        InlineInput::new(
+            buf,
+            CursorMode::Block(Style::default().fg(palette::PRIMARY)),
+        ),
+    );
+
+    let mut footer: Vec<Line> = Vec::with_capacity(2);
+    if let Some(msg) = error {
+        footer.push(Line::from(Span::styled(
+            msg.to_string(),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    footer.push(keymap_line(SYNTH_STEP_TITLE_KEYS));
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        chunks[1],
+    );
 }
 
 fn render_new_target_overlay(frame: &mut Frame, area: Rect, nts: &mut NewTargetState) {

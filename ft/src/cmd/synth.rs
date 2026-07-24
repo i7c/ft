@@ -231,7 +231,9 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     // multiple --link targets shouldn't double up in the scaffold.
     entries = dedup_entries(entries);
 
-    let plan = plan_synth_scaffold(&vault, &target, &entries).context("planning synth scaffold")?;
+    let sources: Vec<ft_core::synth::source::SynthSource> =
+        entries.iter().map(Into::into).collect();
+    let plan = plan_synth_scaffold(&vault, &target, &sources).context("planning synth scaffold")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth scaffold")?;
 
     // When --link was supplied, persist the targets into frontmatter
@@ -442,7 +444,9 @@ fn run_grow_with_targets(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let plan = plan_synth_scaffold(&vault, &target, &entries).context("planning synth grow")?;
+    let sources: Vec<ft_core::synth::source::SynthSource> =
+        entries.iter().map(Into::into).collect();
+    let plan = plan_synth_scaffold(&vault, &target, &sources).context("planning synth grow")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth grow")?;
 
     // Persist explicit --link targets into frontmatter (upsert when the

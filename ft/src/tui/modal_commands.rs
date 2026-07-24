@@ -162,6 +162,93 @@ pub static SECTION_MOVE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Space", "section-move.toggle")
 });
 
+// ── Paragraph-synth modal ──────────────────────────────────────────
+
+const PARAGRAPH_SYNTH_SCOPE: CommandScope = CommandScope::Modal("paragraph-synth");
+
+pub static PARAGRAPH_SYNTH_COMMANDS: &[CommandDef] = &[
+    confirm_def("paragraph-synth.confirm", PARAGRAPH_SYNTH_SCOPE),
+    cancel_def("paragraph-synth.cancel", PARAGRAPH_SYNTH_SCOPE),
+    nav_def(
+        "paragraph-synth.cursor-up",
+        "Focus the previous paragraph",
+        PARAGRAPH_SYNTH_SCOPE,
+    ),
+    nav_def(
+        "paragraph-synth.cursor-down",
+        "Focus the next paragraph",
+        PARAGRAPH_SYNTH_SCOPE,
+    ),
+    CommandDef {
+        name: "paragraph-synth.toggle",
+        description: "Toggle the focused paragraph's selection",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Flow",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: true,
+    },
+    CommandDef {
+        name: "paragraph-synth.trim-top",
+        description: "Shrink the focused paragraph's top line",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Range",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "paragraph-synth.trim-bottom",
+        description: "Shrink the focused paragraph's bottom line",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Range",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "paragraph-synth.reset",
+        description: "Reset the focused paragraph to its full range",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Range",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "paragraph-synth.target-existing",
+        description: "Pick an existing note as the synth target",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Target",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "paragraph-synth.target-new",
+        description: "Create a new note as the synth target",
+        scope: PARAGRAPH_SYNTH_SCOPE,
+        group: "Target",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+];
+
+pub static PARAGRAPH_SYNTH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "paragraph-synth.confirm")
+        .bind("Esc", "paragraph-synth.cancel")
+        .bind("Up", "paragraph-synth.cursor-up")
+        .bind("Down", "paragraph-synth.cursor-down")
+        .bind("Space", "paragraph-synth.toggle")
+        .bind("[", "paragraph-synth.trim-top")
+        .bind("]", "paragraph-synth.trim-bottom")
+        .bind("r", "paragraph-synth.reset")
+        .bind("s", "paragraph-synth.target-existing")
+        .bind("S", "paragraph-synth.target-new")
+});
+
 // ── Capture-var prompt ──────────────────────────────────────────────
 
 const CAPTURE_VAR_SCOPE: CommandScope = CommandScope::Modal("capture-var");
@@ -788,6 +875,7 @@ mod tests {
             CREATE_COMMANDS,
             APPEND_COMMANDS,
             SECTION_MOVE_COMMANDS,
+            PARAGRAPH_SYNTH_COMMANDS,
             CAPTURE_VAR_COMMANDS,
             PERIODIC_LEADER_COMMANDS,
             QUERY_BAR_COMMANDS,
@@ -828,6 +916,7 @@ mod tests {
             (&CREATE_KEYMAP, CREATE_COMMANDS),
             (&APPEND_KEYMAP, APPEND_COMMANDS),
             (&SECTION_MOVE_KEYMAP, SECTION_MOVE_COMMANDS),
+            (&PARAGRAPH_SYNTH_KEYMAP, PARAGRAPH_SYNTH_COMMANDS),
             (&CAPTURE_VAR_KEYMAP, CAPTURE_VAR_COMMANDS),
             (&PERIODIC_LEADER_KEYMAP, PERIODIC_LEADER_COMMANDS),
             (&QUERY_BAR_KEYMAP, QUERY_BAR_COMMANDS),

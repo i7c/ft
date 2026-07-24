@@ -1,0 +1,35 @@
+---
+source: ft/src/tui/tests/notes.rs
+assertion_line: 2601
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Timeblocks            
+┌ notes ───────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Notes — Obsidian-flavoured editing                                                              │
+│             ┌ synth · 2/3 select paragraphs · Topics.md ───────────────────────────┐             │
+│  o     open │▶ ○ L1–1                 # Topics                                     │             │
+│  m     move │  ○ L3–4                 First topic paragraph.                       │             │
+│  r     resli│  ○ L6–6                 Second topic.                                │             │
+│  c     creat│  ○ L8–8                 Third topic here.                            │             │
+│  C     creat│                                                                      │             │
+│  t     open │                                                                      │             │
+│  p     perio│                                                                      │             │
+│  ?     show │                                                                      │             │
+│  Esc   close│▶ L1    # Topics                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │ ↑/↓ focus   Space toggle   [/] shrink top/bot   r reset   s/S target │             │
+│             └──────────────────────────────────────────────────────────────────────┘             │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Notes                        not yet refreshed      modal: paragraph-syn

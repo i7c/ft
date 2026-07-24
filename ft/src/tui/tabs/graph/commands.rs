@@ -282,6 +282,15 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "graph.synth-from-note",
+        description: "Pick paragraphs from the focused note to pin as protected sections",
+        scope: CommandScope::Tab("graph"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "graph.rename-or-multi-move",
         description: "Rename the selected node (or move multi-selection)",
         scope: CommandScope::Tab("graph"),
@@ -525,6 +534,7 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("A", "graph.append")
         .bind("Q", "graph.quick-capture")
         .bind("m", "graph.move")
+        .bind("y", "graph.synth-from-note")
         .bind("r", "graph.rename-or-multi-move")
         .bind("Ctrl+r", "graph.refresh")
         .bind("d", "graph.delete")

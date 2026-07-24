@@ -534,6 +534,25 @@ impl GraphTab {
                 )));
                 CommandOutcome::Handled
             }
+            "graph.synth-from-note" => {
+                let Some(hit) = self.selected_note_hit() else {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                        text: "select a note row to source paragraphs from".into(),
+                        style: ToastStyle::Error,
+                    });
+                    return CommandOutcome::Handled;
+                };
+                if let Some(state) =
+                    crate::tui::notes_actions::paragraph_synth::begin_for_source(ctx, hit.path)
+                {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                        ActiveModal::ParagraphSynth(state),
+                    )));
+                    // begin_for_source returns None only after queuing a
+                    // toast (dirty tree, unreadable source, no paragraphs).
+                }
+                CommandOutcome::Handled
+            }
             "graph.refresh" => {
                 ctx.request_graph_refresh();
                 CommandOutcome::Handled
@@ -817,11 +836,10 @@ impl GraphTab {
         }
 
         let target = std::path::Path::new(&raw).with_extension("md");
-        let plan = match ft_core::synth::scaffold::plan_synth_scaffold(
-            ctx.vault,
-            &target,
-            &report.entries,
-        ) {
+        let entries: Vec<ft_core::synth::source::SynthSource> =
+            report.entries.iter().map(Into::into).collect();
+        let plan = match ft_core::synth::scaffold::plan_synth_scaffold(ctx.vault, &target, &entries)
+        {
             Ok(p) => p,
             Err(e) => {
                 queue_toast(

@@ -1615,14 +1615,11 @@ fn reslice_vault() -> (TempDir, Vault) {
     run_git(&["commit", "-m", "c1"]);
 
     let vault = Vault::discover(Some(vault_path)).unwrap();
-    let entry = ft_core::gather::GatherEntry {
-        source_title: "source".into(),
+    let entry = ft_core::synth::source::SynthSource {
         source_path: std::path::PathBuf::from("notes/source.md"),
         line_start: 2,
         line_end: 3,
-        section_text: "bravo\ncharlie".into(),
-        date: chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-        matched: vec![],
+        body: "bravo\ncharlie".into(),
     };
     let target = std::path::PathBuf::from("Synth/topic.md");
     let plan = ft_core::synth::scaffold::plan_synth_scaffold(
@@ -1769,11 +1766,13 @@ fn journal_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
     let mut cache = ft_core::blame_cache::BlameCache::default();
     let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;
     // Pin only the first entry (DailyA) — leave DailyB missing.
-    let first = vec![report.entries[0].clone()];
+    let first: Vec<ft_core::synth::source::SynthSource> =
+        report.entries.iter().map(Into::into).collect();
+    let first = first.into_iter().next().unwrap();
     let plan = ft_core::synth::scaffold::plan_synth_scaffold(
         &vault,
         std::path::Path::new("Synth/topic.md"),
-        &first,
+        std::slice::from_ref(&first),
     )?;
     ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
 
@@ -1815,10 +1814,12 @@ fn journal_send_to_synth_new_only_scopes_to_watermark() -> Result<()> {
     let foo = graph.ghost_by_raw("Foo").unwrap();
     let mut cache = ft_core::blame_cache::BlameCache::default();
     let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;
+    let sources: Vec<ft_core::synth::source::SynthSource> =
+        report.entries.iter().map(Into::into).collect();
     let plan = ft_core::synth::scaffold::plan_synth_scaffold(
         &vault,
         std::path::Path::new("Synth/topic.md"),
-        &report.entries,
+        &sources,
     )?;
     ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
 

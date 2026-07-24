@@ -61,6 +61,15 @@ pub(crate) static NOTES_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "notes.synth-from-note",
+        description: "Pick paragraphs from a note to pin as protected sections",
+        scope: CommandScope::Tab("notes"),
+        group: "Synth",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "notes.reslice",
         description: "Reslice a synth note's protected section (grow/shrink its range)",
         scope: CommandScope::Tab("notes"),
@@ -131,6 +140,7 @@ pub(crate) static NOTES_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         .bind("o", "notes.open-picker")
         .bind("m", "notes.move-section")
+        .bind("y", "notes.synth-from-note")
         .bind("r", "notes.reslice")
         .bind("c", "notes.create-blank")
         .bind("a", "notes.append")
@@ -229,6 +239,16 @@ impl NotesTab {
             }
             "notes.move-section" => {
                 self.state = NotesState::MoveSection(section_move::begin_with_picker(ctx));
+                EventOutcome::Consumed
+            }
+            "notes.synth-from-note" => {
+                if let Some(state) =
+                    crate::tui::notes_actions::paragraph_synth::begin_with_picker(ctx)
+                {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                        crate::tui::modal::ActiveModal::ParagraphSynth(state),
+                    )));
+                }
                 EventOutcome::Consumed
             }
             "notes.reslice" => {
@@ -544,6 +564,7 @@ impl Tab for NotesTab {
                 &[
                     ("o", "open file / heading picker"),
                     ("m", "move section(s) to another file"),
+                    ("y", "pick paragraphs → pin as protected sections"),
                     ("r", "reslice a synth note's protected section"),
                     ("c", "create note (blank)"),
                     ("Shift+C", "create note from template"),

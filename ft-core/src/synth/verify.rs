@@ -218,10 +218,9 @@ pub(crate) fn walk_markdown_files(vault_root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gather::GatherEntry;
     use crate::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
+    use crate::synth::source::SynthSource;
     use assert_fs::prelude::*;
-    use chrono::NaiveDate;
     use std::process::Command;
 
     fn setup_repo_with_synth_note() -> (assert_fs::TempDir, Vault, PathBuf) {
@@ -248,14 +247,11 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = GatherEntry {
-            source_title: "source".into(),
+        let entry = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,
             line_end: 2,
-            section_text: "Original paragraph line 1.\nOriginal paragraph line 2.".into(),
-            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "Original paragraph line 1.\nOriginal paragraph line 2.".into(),
         };
         let target = PathBuf::from("Synthesis/topic.md");
         let plan =

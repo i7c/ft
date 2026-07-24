@@ -311,9 +311,9 @@ mod tests {
     fn lookup_agrees_with_filter_missing() {
         // Spec "Consistency with scaffold dedup": for a note's callout
         // set, lookup == Cited-in-note ⇔ filter_missing drops the entry.
-        use crate::gather::GatherEntry;
         use crate::synth::accrete::filter_missing;
         use crate::synth::callout::parse as parse_callouts;
+        use crate::synth::source::SynthSource;
 
         let note = Path::new("Synthesis/foo.md");
         let pinned = "pinned paragraph";
@@ -325,14 +325,11 @@ mod tests {
         idx.add_note(note, &content);
         let callouts = parse_callouts(&content);
 
-        let entry = |path: &str, lines: (u32, u32), text: &str| GatherEntry {
-            source_title: "t".into(),
+        let entry = |path: &str, lines: (u32, u32), text: &str| SynthSource {
             source_path: PathBuf::from(path),
             line_start: lines.0,
             line_end: lines.1,
-            section_text: text.into(),
-            date: chrono::NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
-            matched: Vec::new(),
+            body: text.into(),
         };
 
         let cases = vec![
@@ -345,7 +342,7 @@ mod tests {
         for e in &cases {
             let dropped = !kept.contains(e);
             let cited = idx
-                .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
+                .lookup(&e.source_path, (e.line_start, e.line_end), &e.body)
                 .cited_in(note);
             assert_eq!(
                 cited, dropped,

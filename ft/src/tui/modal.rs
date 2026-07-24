@@ -49,6 +49,9 @@ use crate::tui::modal_commands as mc;
 use crate::tui::notes_actions::append::{handle_key as append_handle_key, AppendState, AppendStep};
 use crate::tui::notes_actions::capture::{handle_capture_var_key, CaptureVarPromptState};
 use crate::tui::notes_actions::create::{handle_key as create_handle_key, CreateState, CreateStep};
+use crate::tui::notes_actions::paragraph_synth::{
+    handle_key as paragraph_synth_handle_key, ParagraphSynthState, SynthStep,
+};
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
@@ -299,6 +302,11 @@ pub enum ActiveModal {
     /// `Hit` and runs `ops::plan_move` + `ops::apply_move_plan`; on Esc
     /// closes with no write.
     TaskMove(Box<crate::tui::tabs::tasks::modals::TaskMoveModal>),
+    /// Multi-step "pick paragraphs from a note → pin as protected
+    /// sections" flow. Source-driven copy-to-synth (the gather/recent
+    /// feeds' sibling). Driven via the shared
+    /// [`ParagraphSynthState`] step machine.
+    ParagraphSynth(ParagraphSynthState),
 }
 
 impl Modal for ActiveModal {
@@ -328,6 +336,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskMove(s) => s.handle_event(ev, ctx),
+            ActiveModal::ParagraphSynth(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -357,6 +366,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskMove(s) => s.render(frame, area, ctx),
+            ActiveModal::ParagraphSynth(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -384,6 +394,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
             ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
             ActiveModal::TaskMove(s) => s.keymap_help(),
+            ActiveModal::ParagraphSynth(s) => s.keymap_help(),
         }
     }
 
@@ -411,6 +422,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
             ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
             ActiveModal::TaskMove(_) => "task-move",
+            ActiveModal::ParagraphSynth(_) => "paragraph-synth",
         }
     }
 
@@ -438,6 +450,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.commands(),
             ActiveModal::TaskRetagPicker(s) => s.commands(),
             ActiveModal::TaskMove(s) => s.commands(),
+            ActiveModal::ParagraphSynth(s) => s.commands(),
         }
     }
 
@@ -465,6 +478,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.keymap(),
             ActiveModal::TaskRetagPicker(s) => s.keymap(),
             ActiveModal::TaskMove(s) => s.keymap(),
+            ActiveModal::ParagraphSynth(s) => s.keymap(),
         }
     }
 
@@ -492,6 +506,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskMove(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::ParagraphSynth(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }
@@ -630,6 +645,54 @@ impl Modal for SectionMoveState {
 
     fn keymap(&self) -> &KeyMap {
         &mc::SECTION_MOVE_KEYMAP
+    }
+}
+
+impl Modal for ParagraphSynthState {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
+        let Event::Key(k) = ev else {
+            return ModalOutcome::NotHandled;
+        };
+        match paragraph_synth_handle_key(self, k, ctx) {
+            SynthStep::Stay => ModalOutcome::Consumed,
+            SynthStep::Transition(next) => {
+                *self = next;
+                ModalOutcome::Consumed
+            }
+            SynthStep::Finished => ModalOutcome::Closed,
+            SynthStep::NotHandled => ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        crate::tui::tabs::notes::view::render_paragraph_synth_overlay(frame, area, self);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Paragraph synth",
+            &[
+                ("Space", "toggle paragraph"),
+                ("↑ / ↓", "navigate"),
+                ("[ / ]", "shrink top / bottom"),
+                ("r", "reset range"),
+                ("s / S", "target: existing / new"),
+                ("Enter", "target existing"),
+                ("Esc", "cancel / back"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "paragraph-synth"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::PARAGRAPH_SYNTH_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::PARAGRAPH_SYNTH_KEYMAP
     }
 }
 

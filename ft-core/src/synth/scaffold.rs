@@ -1,7 +1,7 @@
 //! Plan + apply for synth-note scaffolding.
 //!
 //! `plan_synth_scaffold` is a pure function: given a list of
-//! [`crate::gather::GatherEntry`] values and a target path, it returns
+//! [`crate::synth::source::SynthSource`] values and a target path, it returns
 //! a [`SynthScaffoldPlan`] describing the file mutation without
 //! performing any I/O writes. `apply_synth_scaffold` consumes a plan
 //! and writes the file atomically via [`crate::fs::write_atomic`].
@@ -14,9 +14,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::gather::GatherEntry;
 use crate::git;
 use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection, SHORT_SHA_LEN};
+use crate::synth::source::SynthSource;
 use crate::vault::Vault;
 
 /// Frontmatter block prepended to a freshly-created synth note.
@@ -73,7 +73,7 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 /// Build a [`SynthScaffoldPlan`] from a list of journal entries.
 ///
 /// For each entry:
-/// 1. The source paragraph text is taken verbatim from `entry.section_text`.
+/// 1. The source paragraph text is taken verbatim from `entry.body`.
 /// 2. The pinned commit SHA is the vault's enclosing-repo HEAD. The entry's `source_path`,
 ///    line range, and body all come from the working-tree scan (= HEAD),
 ///    so HEAD is the only commit where `git show <sha>:<source_path>`
@@ -96,7 +96,7 @@ fn render_sections(sections: &[ProtectedSection]) -> String {
 pub fn plan_synth_scaffold(
     vault: &Vault,
     target: &Path,
-    entries: &[GatherEntry],
+    entries: &[SynthSource],
 ) -> Result<SynthScaffoldPlan> {
     let repo = git::RepoMap::discover(&vault.path)?;
 
@@ -137,7 +137,7 @@ pub fn plan_synth_scaffold(
     // pinned in the note. Read + parse the existing callouts, then run
     // the pure filter. The create path skips this (no existing note to
     // dedup against).
-    let (entries_owned, dedup_skipped): (Vec<GatherEntry>, usize) = if exists {
+    let (entries_owned, dedup_skipped): (Vec<SynthSource>, usize) = if exists {
         let existing_content = std::fs::read_to_string(&absolute).map_err(|e| Error::Io {
             path: absolute.clone(),
             source: e,
@@ -153,7 +153,7 @@ pub fn plan_synth_scaffold(
 
     let mut sections = Vec::with_capacity(entries_owned.len());
     for entry in entries_owned {
-        let hash = compute_section_hash(&entry.section_text);
+        let hash = compute_section_hash(&entry.body);
 
         sections.push(ProtectedSection {
             source_path: entry.source_path.clone(),
@@ -161,7 +161,7 @@ pub fn plan_synth_scaffold(
             line_end: entry.line_end,
             commit_sha: short_sha.clone(),
             content_hash: hash,
-            body: entry.section_text.clone(),
+            body: entry.body.clone(),
         });
     }
 
@@ -223,12 +223,11 @@ pub fn apply_synth_scaffold(vault: &Vault, plan: &SynthScaffoldPlan) -> Result<P
 mod tests {
     use super::*;
     use assert_fs::prelude::*;
-    use chrono::NaiveDate;
     use std::process::Command;
 
-    /// Build a repo with one note + one commit, return a journal entry
+    /// Build a repo with one note + one commit, return a `SynthSource`
     /// referencing the first paragraph.
-    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, GatherEntry) {
+    fn make_repo_with_entry() -> (assert_fs::TempDir, Vault, SynthSource) {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
         tmp.child("notes/source.md")
@@ -252,14 +251,11 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry = GatherEntry {
-            source_title: "source".into(),
+        let entry = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,
             line_end: 2,
-            section_text: "First paragraph here.\nLine two of first.".into(),
-            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "First paragraph here.\nLine two of first.".into(),
         };
         (tmp, vault, entry)
     }
@@ -352,7 +348,7 @@ mod tests {
             std::slice::from_ref(&entry),
         )
         .unwrap();
-        let expected_hash = compute_section_hash(&entry.section_text);
+        let expected_hash = compute_section_hash(&entry.body);
         assert_eq!(plan.sections[0].content_hash, expected_hash);
     }
 
@@ -401,14 +397,11 @@ mod tests {
         tmp.child("notes/new.md")
             .write_str("Fresh untracked paragraph.\n")
             .unwrap();
-        let entry = GatherEntry {
-            source_title: "new".into(),
+        let entry = SynthSource {
             source_path: PathBuf::from("notes/new.md"),
             line_start: 1,
             line_end: 1,
-            section_text: "Fresh untracked paragraph.".into(),
-            date: NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "Fresh untracked paragraph.".into(),
         };
         let err = plan_synth_scaffold(
             &vault,
@@ -475,23 +468,17 @@ mod tests {
         run_git(&["commit", "-m", "c1"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let entry_a = GatherEntry {
-            source_title: "source".into(),
+        let entry_a = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 1,
             line_end: 1,
-            section_text: "Original paragraph.".into(),
-            date: chrono::NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "Original paragraph.".into(),
         };
-        let entry_b = GatherEntry {
-            source_title: "source".into(),
+        let entry_b = SynthSource {
             source_path: PathBuf::from("notes/source.md"),
             line_start: 3,
             line_end: 3,
-            section_text: "Second para.".into(),
-            date: chrono::NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            matched: vec![],
+            body: "Second para.".into(),
         };
         let target = Path::new("Synthesis/topic.md");
         // Create with A, then append [A, B].

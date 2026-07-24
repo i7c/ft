@@ -1048,6 +1048,8 @@ impl GatherTab {
             }
         }
 
+        let entries: Vec<ft_core::synth::source::SynthSource> =
+            entries.iter().map(Into::into).collect();
         let plan = match plan_synth_scaffold(ctx.vault, vault_rel_path, &entries) {
             Ok(p) => p,
             Err(e) => {
