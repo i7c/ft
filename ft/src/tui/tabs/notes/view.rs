@@ -176,6 +176,14 @@ pub(super) fn render(frame: &mut Frame, area: Rect, _ctx: &TabCtx, state: &mut N
             &[("Enter", "run"), ("Esc", "cancel")],
             None,
         ),
+        NotesState::CaptureFilePicking(ts) => render_picker_popup(
+            frame,
+            area,
+            " quick capture · pick target note ",
+            &mut ts.picker,
+            &[("Enter", "append"), ("Esc", "cancel")],
+            None,
+        ),
         NotesState::CaptureVarPrompt(vs) => render_capture_var_prompt(frame, area, vs),
         NotesState::PeriodicLeader => render_periodic_leader(frame, area),
     }

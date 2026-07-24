@@ -297,6 +297,13 @@ impl Modal for CapturePickerModal {
                     Ok(capture::CaptureResult::NeedsVars(vs)) => {
                         ModalOutcome::OpenSibling(Box::new(ActiveModal::CaptureVar(vs)))
                     }
+                    Ok(capture::CaptureResult::NeedsTarget(_)) => {
+                        // Unreachable: the graph tab always supplies a
+                        // selected note as the override. Guard keeps the
+                        // match exhaustive if a future caller drops it.
+                        queue_toast(ctx, "no target note for append preset", ToastStyle::Error);
+                        ModalOutcome::Closed
+                    }
                     Err(e) => {
                         queue_toast(ctx, &e, ToastStyle::Error);
                         ModalOutcome::Closed

@@ -23,7 +23,9 @@ use crate::tui::{
     keymap::{KeyChord, KeyMap},
     notes_actions::{
         append::{self, AppendState, AppendStep},
-        capture::{self, CapturePresetPickerSource, CaptureVarPromptState},
+        capture::{
+            self, CapturePresetPickerSource, CaptureTargetPromptState, CaptureVarPromptState,
+        },
         create::{self, begin_folder_picking, begin_template_picking, CreateState, CreateStep},
         periodic::run_periodic_open,
         reslice::{self, ResliceState, ResliceStep},
@@ -165,6 +167,9 @@ pub enum NotesState {
     CapturePicking {
         picker: FuzzyPicker<CapturePresetPickerSource>,
     },
+    /// Quick capture target-note picker — an append preset with no
+    /// `note` field was selected; the user picks which note to append to.
+    CaptureFilePicking(CaptureTargetPromptState),
     /// Quick capture var prompt (template has `vars.*` references).
     CaptureVarPrompt(CaptureVarPromptState),
     /// Plan 010 session 3 — transient modal entered by pressing `p` from
@@ -360,6 +365,9 @@ impl NotesTab {
                     Ok(capture::CaptureResult::NeedsVars(vs)) => {
                         self.state = NotesState::CaptureVarPrompt(vs);
                     }
+                    Ok(capture::CaptureResult::NeedsTarget(ts)) => {
+                        self.state = NotesState::CaptureFilePicking(ts);
+                    }
                     Err(e) => {
                         self.state = NotesState::Idle;
                         crate::tui::notes_actions::queue_toast(
@@ -388,6 +396,56 @@ impl NotesTab {
             self.state = NotesState::Idle;
         }
         EventOutcome::Consumed
+    }
+
+    fn handle_capture_file_picker_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
+        let NotesState::CaptureFilePicking(ts) = &mut self.state else {
+            return EventOutcome::NotHandled;
+        };
+        match ts.picker.handle_key(k) {
+            PickerOutcome::Selected(hit) => {
+                // Move the partial state out so we can borrow `self`
+                // mutably again for the transition.
+                let ts = match std::mem::replace(&mut self.state, NotesState::Idle) {
+                    NotesState::CaptureFilePicking(ts) => ts,
+                    _ => unreachable!(),
+                };
+                let target_path = ctx.vault.path.join(&hit.path);
+                match capture::resume_with_target(
+                    ctx,
+                    ts.template_source,
+                    ts.section_override,
+                    ts.vars_needed,
+                    target_path,
+                ) {
+                    Ok(capture::CaptureResult::Executed) => {
+                        self.state = NotesState::Idle;
+                    }
+                    Ok(capture::CaptureResult::NeedsVars(vs)) => {
+                        self.state = NotesState::CaptureVarPrompt(vs);
+                    }
+                    Ok(capture::CaptureResult::NeedsTarget(_)) => {
+                        // Unreachable: resume_with_target is given a path.
+                        self.state = NotesState::Idle;
+                    }
+                    Err(e) => {
+                        self.state = NotesState::Idle;
+                        crate::tui::notes_actions::queue_toast(
+                            ctx,
+                            &e,
+                            crate::tui::tab::ToastStyle::Error,
+                        );
+                    }
+                }
+                EventOutcome::Consumed
+            }
+            PickerOutcome::Cancelled => {
+                self.state = NotesState::Idle;
+                EventOutcome::Consumed
+            }
+            PickerOutcome::StillOpen => EventOutcome::Consumed,
+            PickerOutcome::NotHandled => EventOutcome::NotHandled,
+        }
     }
 
     fn handle_move_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
@@ -468,6 +526,7 @@ impl Tab for NotesTab {
             NotesState::Creating(_) => self.handle_create_key(k, ctx),
             NotesState::Appending(_) => self.handle_append_key(k, ctx),
             NotesState::CapturePicking { .. } => self.handle_capture_picker_key(k, ctx),
+            NotesState::CaptureFilePicking(_) => self.handle_capture_file_picker_key(k, ctx),
             NotesState::CaptureVarPrompt(_) => self.handle_capture_var_key(k, ctx),
             NotesState::PeriodicLeader => self.handle_periodic_leader_key(k, ctx),
         };

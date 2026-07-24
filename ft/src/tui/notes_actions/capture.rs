@@ -23,7 +23,7 @@ use crate::tui::{
         queue_toast,
     },
     tab::{AppRequest, TabCtx, ToastStyle},
-    widgets::{EditBuffer, PickerItem, PickerSource},
+    widgets::{EditBuffer, FuzzyPicker, PickerItem, PickerSource, VaultFilePickerSource},
 };
 
 // ── Picker source ────────────────────────────────────────────────────
@@ -138,6 +138,28 @@ pub enum CaptureResult {
     Executed,
     /// Template has vars — the caller must enter var prompting.
     NeedsVars(CaptureVarPromptState),
+    /// Append preset has no `note` field and no caller-supplied target —
+    /// the caller must open a vault file picker, then resume via
+    /// [`resume_with_target`].
+    NeedsTarget(CaptureTargetPromptState),
+}
+
+/// Partial capture state for an append preset awaiting a target note.
+///
+/// Carries everything needed to commit once a note is chosen except the
+/// target path itself (which is the whole point of the picker). Built by
+/// [`try_execute_preset`] when an append preset has no `note` field and
+/// no `target_note_override`; consumed by [`resume_with_target`].
+pub struct CaptureTargetPromptState {
+    /// Template source text.
+    pub template_source: String,
+    /// Section override for the append (from preset config).
+    pub section_override: Option<String>,
+    /// Vars that need values before rendering. Empty when the template
+    /// has no `vars.*` references.
+    pub vars_needed: Vec<String>,
+    /// Vault file picker the caller renders and feeds keys to.
+    pub picker: FuzzyPicker<VaultFilePickerSource>,
 }
 
 // ── Public entry points ──────────────────────────────────────────────
@@ -175,7 +197,23 @@ pub fn try_execute_preset(
 
     match preset.action {
         CaptureAction::Append => {
-            let target_path = resolve_append_target(ctx, &preset, target_note_override)?;
+            // Resolve the target. When the preset has no `note` field and
+            // the caller supplied no override, return `NeedsTarget` so the
+            // caller can open a vault file picker instead of erroring.
+            let target_path = match resolve_append_target(ctx, &preset, target_note_override) {
+                Ok(path) => path,
+                Err(ResolveTarget::Missing) => {
+                    return Ok(CaptureResult::NeedsTarget(CaptureTargetPromptState {
+                        template_source: source,
+                        section_override: preset.section.clone(),
+                        vars_needed: vars_needed.clone(),
+                        picker: FuzzyPicker::new(VaultFilePickerSource::new(
+                            std::sync::Arc::clone(ctx.vault),
+                            std::sync::Arc::clone(ctx.recents),
+                        )),
+                    }));
+                }
+            };
 
             if !target_path.exists() {
                 return Err(format!(
@@ -235,6 +273,48 @@ pub fn try_execute_preset(
                 }))
             }
         }
+    }
+}
+
+/// Resume a capture flow after the user picked a target note in the
+/// vault file picker. Consumes the [`CaptureTargetPromptState`] fields
+/// and either commits immediately (no vars) or returns [`NeedsVars`] so
+/// the caller can prompt for each template var.
+///
+/// `target_path` must be absolute (the caller joins the vault root with
+/// the picker hit's relative path).
+pub fn resume_with_target(
+    ctx: &TabCtx,
+    template_source: String,
+    section_override: Option<String>,
+    vars_needed: Vec<String>,
+    target_path: PathBuf,
+) -> Result<CaptureResult, String> {
+    if !target_path.exists() {
+        return Err(format!(
+            "target note does not exist: {}",
+            target_path.display()
+        ));
+    }
+
+    let commit = CaptureCommit {
+        action: CaptureAction::Append,
+        template_source,
+        target_path,
+        section_override,
+        vars_needed: vars_needed.clone(),
+    };
+
+    if vars_needed.is_empty() {
+        commit_capture(ctx, &commit, &BTreeMap::new())?;
+        Ok(CaptureResult::Executed)
+    } else {
+        Ok(CaptureResult::NeedsVars(CaptureVarPromptState {
+            commit,
+            vars_so_far: BTreeMap::new(),
+            next_idx: 0,
+            buf: EditBuffer::default(),
+        }))
     }
 }
 
@@ -386,15 +466,22 @@ fn resolve_template_for_preset(vault: &Vault, template_name: &str) -> Result<Pat
     ))
 }
 
+/// Outcome of resolving an append preset's target. `Err(Missing)` is the
+/// non-error signal that the caller should open a vault file picker.
+enum ResolveTarget {
+    /// No `note` field and no caller override — caller must prompt.
+    Missing,
+}
+
 fn resolve_append_target(
     ctx: &TabCtx,
     preset: &CapturePreset,
     target_note_override: Option<PathBuf>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ResolveTarget> {
     match (preset.note.as_deref(), target_note_override) {
         (Some(note), _) => Ok(resolve_note_path(&ctx.vault.path, note, ctx.today)),
         (None, Some(path)) => Ok(path),
-        (None, None) => Err("no target note for append preset".to_string()),
+        (None, None) => Err(ResolveTarget::Missing),
     }
 }
 

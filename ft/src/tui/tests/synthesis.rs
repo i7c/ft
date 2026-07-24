@@ -248,8 +248,7 @@ fn capture_preset_vault() -> (TempDir, Vault) {
     // Config with a create preset and an append preset.
     let config_dir = vault_path.join(".ft");
     std::fs::create_dir_all(&config_dir).unwrap();
-    let config_toml = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+    let config_toml = [
         "[capture_presets.log]",
         "action = \"append\"",
         "template = \"log-entry\"",
@@ -261,7 +260,18 @@ fn capture_preset_vault() -> (TempDir, Vault) {
         "template = \"meeting\"",
         "path = \"%Y-%m-%d-meeting\"",
         "folder = \"meetings\"",
-    );
+        "",
+        "[capture_presets.jot]",
+        "action = \"append\"",
+        "template = \"quick-log\"",
+        "section = \"Log\"",
+        "",
+        "[capture_presets.noted]",
+        "action = \"append\"",
+        "template = \"quick-note\"",
+        "section = \"Log\"",
+    ]
+    .join("\n");
     std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
 
     // Templates directory.
@@ -282,12 +292,31 @@ fn capture_preset_vault() -> (TempDir, Vault) {
     )
     .unwrap();
 
+    // Template without vars, used by the `jot` preset (no `note` field)
+    // to exercise the Notes-tab file-picker path.
+    std::fs::write(tmpl_dir.join("quick-log.md"), "- Jot for {{ today }}\n").unwrap();
+
+    // Template with vars, used by a no-`note` append preset to exercise
+    // the picker-then-var-prompt path.
+    std::fs::write(
+        tmpl_dir.join("quick-note.md"),
+        "- {{ vars.text }} ({{ today }})\n",
+    )
+    .unwrap();
+
     // Target note for append preset.
     let daily_dir = vault_path.join("daily");
     std::fs::create_dir_all(&daily_dir).unwrap();
     std::fs::write(
         daily_dir.join("log.md"),
         "# Daily Log\n## Log\nexisting line\n",
+    )
+    .unwrap();
+
+    // A second note the `jot` preset can append to via the file picker.
+    std::fs::write(
+        vault_path.join("scratch.md"),
+        "# Scratch\n## Log\nold jot\n",
     )
     .unwrap();
 
@@ -338,7 +367,14 @@ fn capture_append_no_vars_executes_immediately() -> Result<()> {
         "capture picker should list meeting preset: {frame}"
     );
 
-    // Select "log" (first item).
+    // Select "log" by typing to filter (order is alphabetical and
+    // other presets now share the fixture).
+    for c in "log".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -378,8 +414,14 @@ fn capture_create_with_vars_prompts_before_committing() -> Result<()> {
         KeyModifiers::SHIFT,
     )))?;
 
-    // Move down to select "meeting" (second item).
-    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    // Select "meeting" by typing to filter (order is alphabetical and
+    // other presets now share the fixture).
+    for c in "meeting".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
 
     // Select "meeting".
     app.dispatch(Event::Key(KeyEvent::new(
@@ -457,7 +499,12 @@ fn capture_var_prompt_esc_cancels() -> Result<()> {
         KeyCode::Char('Q'),
         KeyModifiers::SHIFT,
     )))?;
-    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    for c in "meeting".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -500,7 +547,12 @@ fn capture_var_prompt_snapshot() -> Result<()> {
         KeyCode::Char('Q'),
         KeyModifiers::SHIFT,
     )))?;
-    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    for c in "meeting".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -508,6 +560,208 @@ fn capture_var_prompt_snapshot() -> Result<()> {
 
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("capture_var_prompt_80x24", frame);
+    Ok(())
+}
+
+// ── Notes-tab file-picker path (append preset without `note`) ────────
+
+/// Press Q from the Notes tab and select the `jot` preset (no `note`
+/// field). Instead of erroring, a vault file picker should open to choose
+/// the target note.
+#[test]
+fn capture_append_no_note_opens_file_picker() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?; // Notes tab.
+
+    // Q opens the preset picker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+
+    // `jot` sorts first alphabetically (jot, log, meeting, noted).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // A vault file picker should be open — not an error toast.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("pick target note"),
+        "should open the target-note file picker, not error: {frame}"
+    );
+    Ok(())
+}
+
+/// Selecting a note in the file picker appends the rendered template
+/// under the preset's `section`, and the picker is dismissed.
+#[test]
+fn capture_append_no_note_picks_target_and_appends() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?; // Notes tab.
+
+    // Q → select `jot` (first preset).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // File picker is open. Type to surface `scratch.md`.
+    for c in "scratch".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Picker dismissed, editor open requested.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("pick target note"),
+        "picker should be dismissed after selecting a note: {frame}"
+    );
+    assert!(
+        app.take_pending_request().is_some(),
+        "selecting a target should queue an editor-open request"
+    );
+
+    // The rendered template landed under the `## Log` section.
+    let content = std::fs::read_to_string(vault_path.join("scratch.md"))?;
+    assert!(
+        content.contains("- Jot for"),
+        "target should contain rendered jot entry: {content}"
+    );
+    // Section placement: the jot line should come after the `## Log`
+    // heading and the existing `old jot` line, not before the heading.
+    let log_idx = content.find("## Log").unwrap();
+    let jot_idx = content.find("- Jot for").unwrap();
+    assert!(
+        jot_idx > log_idx,
+        "jot entry should be under the Log section: {content}"
+    );
+    Ok(())
+}
+
+/// Esc in the file picker returns to idle with no append and no toast.
+#[test]
+fn capture_append_no_note_esc_cancels() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?; // Notes tab.
+
+    // Q → select `jot` → file picker opens.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    assert!(
+        render(&mut app, 80, 24).contains("pick target note"),
+        "file picker should be open"
+    );
+
+    // Esc cancels.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("pick target note"),
+        "picker should be dismissed after Esc: {frame}"
+    );
+    assert!(
+        app.take_pending_request().is_none(),
+        "Esc should not queue any request"
+    );
+
+    // No append happened.
+    let content = std::fs::read_to_string(vault_path.join("scratch.md"))?;
+    assert!(
+        !content.contains("- Jot for"),
+        "no jot entry should have been written after cancel: {content}"
+    );
+    Ok(())
+}
+
+/// A no-`note` append preset whose template has `{{ vars.* }}` opens the
+/// file picker first, then the var prompt, then commits.
+#[test]
+fn capture_append_no_note_with_vars_prompts_after_picker() -> Result<()> {
+    let (_dir, vault) = capture_preset_vault();
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?; // Notes tab.
+
+    // Q → pick `noted` (4th: jot, log, meeting, noted).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('Q'),
+        KeyModifiers::SHIFT,
+    )))?;
+    for _ in 0..3 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // File picker first.
+    assert!(
+        render(&mut app, 80, 24).contains("pick target note"),
+        "file picker should open before var prompt"
+    );
+
+    // Pick scratch.md.
+    for c in "scratch".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Now the var prompt for `text`.
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("text"),
+        "should show var prompt after picking target: {frame}"
+    );
+
+    // Type the var and commit.
+    for c in "hello world".chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // The rendered var landed in scratch.md under Log.
+    let content = std::fs::read_to_string(vault_path.join("scratch.md"))?;
+    assert!(
+        content.contains("- hello world ("),
+        "target should contain the rendered var: {content}"
+    );
     Ok(())
 }
 
