@@ -265,13 +265,15 @@ pub fn parse_synth_targets(content: &str) -> Option<Vec<String>> {
 /// Pure transform: idempotently ensure the result has the nested
 /// `ft:` frontmatter map with `synth.enabled: true` and, when `targets`
 /// is `Some`, `synth.targets` set to the YAML flow sequence of the
-/// given strings. Existing frontmatter keys are preserved or replaced
-/// in place; the `ft:` map is inserted when missing. Legacy flat
-/// `ft-synth:` / `ft-synth-targets:` lines are removed (orphan
-/// cleanup) so the note is left in canonical nested form. Unrelated
-/// body content is unchanged. When `targets` is `None`, the
-/// `synth.targets` key is left untouched (not removed) — callers
-/// wanting removal handle that separately.
+/// given strings. The upsert is *surgical*: when an `ft:` map already
+/// exists, only the `ft.synth` sub-block is touched — sibling `ft.*`
+/// sub-maps (e.g. `ft.tasks.section`, `ft.append.section`) and all
+/// their children are preserved untouched. The `ft:` map is inserted
+/// when missing. Legacy flat `ft-synth:` / `ft-synth-targets:` lines
+/// are removed (orphan cleanup) so the note is left in canonical
+/// nested form. Unrelated body content is unchanged. When `targets`
+/// is `None`, any existing `synth.targets` key is left untouched (not
+/// removed) — callers wanting removal handle that separately.
 ///
 /// This supersedes the older `upsert_ft_synth_marker` in the TUI layer,
 /// which is refactored to delegate here so the marker and targets keys
@@ -292,12 +294,13 @@ pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> St
             })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("    targets: [{items}]")
+        // Indent-agnostic body; callers prepend the proper indent.
+        format!("targets: [{items}]")
     });
     let nested_block: String = {
         let mut b = String::from("ft:\n  synth:\n    enabled: true");
         if let Some(tl) = &synth_targets_line {
-            b.push('\n');
+            b.push_str("\n    ");
             b.push_str(tl);
         }
         b
@@ -328,9 +331,8 @@ pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> St
     };
 
     // Work on an owned vec. First pass: drop legacy flat synth keys
-    // (orphan cleanup) and any existing `ft:` block so we can write a
-    // clean canonical one. We track the indent of the `ft:` block we
-    // remove so we can re-insert at the same place.
+    // (orphan cleanup). The nested `ft:` map is left intact so its
+    // sibling sub-maps survive — we only touch the `ft.synth` sub-block.
     let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
 
     // --- remove legacy `ft-synth:` / `ft-synth-targets:` (+block children) ---
@@ -364,42 +366,224 @@ pub fn upsert_synth_frontmatter(content: &str, targets: Option<&[String]>) -> St
     // Recompute the closing fence after removals.
     let end_idx = fm_close_index(&new_lines).unwrap_or(end_idx);
 
-    // --- remove an existing `ft:` block (and all its children) ---
+    // --- surgically merge `ft.synth` into the existing `ft:` map ---
+    //
+    // If there's no `ft:` map, insert a fresh canonical block before the
+    // closing fence. If there is one, find the `ft.synth` sub-block and
+    // replace *only* it — leaving sibling sub-maps (tasks, append, …)
+    // and all their children physically untouched.
     let ft_idx = new_lines
         .iter()
         .take(end_idx)
         .skip(1)
         .position(|l| l.trim_start() == "ft:" || l.trim_start().starts_with("ft: "));
-    let insert_at = if let Some(ft_off) = ft_idx {
+    if let Some(ft_off) = ft_idx {
         let ft_real = ft_off + 1;
         let ft_indent = new_lines[ft_real]
             .chars()
             .take_while(|c| c.is_whitespace())
             .count();
-        // Remove the `ft:` line and every more-indented child.
-        new_lines.remove(ft_real);
-        let j = ft_real;
-        while j < new_lines.len() {
-            let line = &new_lines[j];
-            let indent = line.chars().take_while(|c| c.is_whitespace()).count();
-            if indent > ft_indent {
-                new_lines.remove(j);
-            } else {
-                break;
-            }
+        // Build the canonical `synth:` block at the existing indent.
+        let synth_indent_str = " ".repeat(ft_indent + 2);
+        let prop_indent_str = " ".repeat(ft_indent + 4);
+        let mut block_lines = vec![format!("{synth_indent_str}synth:")];
+        block_lines.push(format!("{prop_indent_str}enabled: true"));
+        if let Some(tl) = &synth_targets_line {
+            block_lines.push(format!("{prop_indent_str}{tl}"));
         }
-        ft_real
+        if let Some((synth_line_idx, synth_child_end)) =
+            fm_synth_block_range(&new_lines, ft_real, ft_indent)
+        {
+            // When `targets` is `None`, carry over any existing `targets:`
+            // line(s) verbatim (contract: None ⇒ don't touch targets).
+            // Capture before draining.
+            let preserved_targets: Vec<String> = if targets.is_none() {
+                extract_synth_targets_lines(&new_lines, synth_line_idx, synth_child_end)
+            } else {
+                Vec::new()
+            };
+            // Replace the `synth:` line through the end of its children
+            // with the canonical block. synth_child_end is exclusive.
+            let drain_count = synth_child_end - synth_line_idx;
+            for _ in 0..drain_count {
+                new_lines.remove(synth_line_idx);
+            }
+            for (offset, line) in block_lines.iter().enumerate() {
+                new_lines.insert(synth_line_idx + offset, line.clone());
+            }
+            // Re-append preserved targets after `enabled: true`.
+            for (offset, line) in preserved_targets.iter().enumerate() {
+                new_lines.insert(synth_line_idx + block_lines.len() + offset, line.clone());
+            }
+        } else {
+            // No `synth:` sub-block yet — insert a fresh one as the last
+            // child of `ft:` (just before the next sibling / closing fence).
+            let insert_at = fm_insert_after_children(&new_lines, ft_real, ft_indent);
+            // Insert in reverse so `synth:` ends up first.
+            if let Some(tl) = &synth_targets_line {
+                new_lines.insert(insert_at, format!("{prop_indent_str}{tl}"));
+            }
+            new_lines.insert(insert_at, format!("{prop_indent_str}enabled: true"));
+            new_lines.insert(insert_at, format!("{synth_indent_str}synth:"));
+        }
     } else {
-        // No existing `ft:` block — insert just before the closing fence.
-        end_idx
-    };
-
-    // Insert the canonical nested block at `insert_at`.
-    for (offset, line) in nested_block.split('\n').enumerate() {
-        new_lines.insert(insert_at + offset, line.to_string());
+        // No existing `ft:` block — insert a fresh canonical block just
+        // before the closing fence.
+        let insert_at = end_idx;
+        for (offset, line) in nested_block.split('\n').enumerate() {
+            new_lines.insert(insert_at + offset, line.to_string());
+        }
     }
 
     new_lines.join("\n")
+}
+
+/// Byte offset in `new_lines` that is *just past* the last child of the
+/// `ft:` map starting at `ft_real` (the `ft:` line's index) — i.e. the
+/// spot to insert a *new* last child of `ft:`. Sibling `ft.*` sub-maps
+/// and the closing fence both count as "past the children".
+///
+/// `ft_indent` is the leading-whitespace width of the `ft:` line.
+fn fm_insert_after_children(new_lines: &[String], ft_real: usize, ft_indent: usize) -> usize {
+    let mut j = ft_real + 1;
+    while j < new_lines.len() {
+        let line = &new_lines[j];
+        if line.trim().is_empty() {
+            break;
+        }
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        if indent <= ft_indent {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// Find the `synth:` direct child of the `ft:` map at `ft_real`, and
+/// return `(synth_line_idx, child_end)` where `synth_line_idx` is the
+/// index of the `synth:` line and `child_end` is exclusive (one past the
+/// last child of `synth:`, or the next sibling / closing fence / EOF).
+///
+/// `ft_indent` is the leading-whitespace width of the `ft:` line; a
+/// direct child of `ft:` is indented strictly more than `ft_indent`.
+/// Returns `None` when there is no `synth:` direct child.
+fn fm_synth_block_range(
+    new_lines: &[String],
+    ft_real: usize,
+    ft_indent: usize,
+) -> Option<(usize, usize)> {
+    let mut j = ft_real + 1;
+    while j < new_lines.len() {
+        let line = &new_lines[j];
+        if line.trim().is_empty() {
+            j += 1;
+            continue;
+        }
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        if indent <= ft_indent {
+            // First non-blank line at or below `ft:` indent — we've left
+            // the `ft:` children without finding `synth:`.
+            return None;
+        }
+        let lt = line.trim_start();
+        if lt
+            .strip_prefix("synth:")
+            .is_some_and(|r| r.is_empty() || r.starts_with(' '))
+        {
+            let synth_indent = indent;
+            let synth_line_idx = j;
+            // Children: subsequent lines indented strictly more than
+            // `synth:` (blank lines tolerated).
+            let mut k = j + 1;
+            while k < new_lines.len() {
+                let cl = &new_lines[k];
+                if cl.trim().is_empty() {
+                    k += 1;
+                    continue;
+                }
+                let cindent = cl.chars().take_while(|c| c.is_whitespace()).count();
+                if cindent > synth_indent {
+                    k += 1;
+                } else {
+                    break;
+                }
+            }
+            return Some((synth_line_idx, k));
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Extract any existing `targets:` child line(s) from a `synth:` block,
+/// for carry-over when `targets` is `None` (contract: leave targets
+/// untouched). `synth_line_idx` is the `synth:` line; `synth_child_end`
+/// is the exclusive end of the synth block (as returned by
+/// [`fm_synth_block_range`]).
+///
+/// Returns the raw lines (with their original indentation) covering the
+/// `targets:` key and any block-sequence children it has. Flow-sequence
+/// form (`targets: [a, b]` on one line) returns just that one line.
+/// Returns an empty vec when there is no `targets:` child.
+fn extract_synth_targets_lines(
+    new_lines: &[String],
+    synth_line_idx: usize,
+    synth_child_end: usize,
+) -> Vec<String> {
+    // Find the `targets:` direct child of `synth:`.
+    let mut targets_idx = None;
+    let mut k = synth_line_idx + 1;
+    while k < synth_child_end {
+        let line = &new_lines[k];
+        if line.trim().is_empty() {
+            k += 1;
+            continue;
+        }
+        let lt = line.trim_start();
+        if lt
+            .strip_prefix("targets:")
+            .is_some_and(|r| r.is_empty() || r.starts_with(' '))
+        {
+            targets_idx = Some(k);
+            break;
+        }
+        k += 1;
+    }
+    let Some(targets_idx) = targets_idx else {
+        return Vec::new();
+    };
+    let target_indent = new_lines[targets_idx]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .count();
+    // Inline flow sequence → just the one line.
+    let inline_has_value = !new_lines[targets_idx][target_indent..]
+        .trim_start_matches("targets:")
+        .trim()
+        .is_empty();
+    if inline_has_value {
+        return vec![new_lines[targets_idx].clone()];
+    }
+    // Block-sequence form → the `targets:` line plus any `- item` children
+    // that are indented strictly more than the `targets:` line.
+    let mut out = vec![new_lines[targets_idx].clone()];
+    let mut m = targets_idx + 1;
+    while m < synth_child_end {
+        let line = &new_lines[m];
+        if line.trim().is_empty() {
+            m += 1;
+            continue;
+        }
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        if indent > target_indent {
+            out.push(line.clone());
+            m += 1;
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 /// Index (in the split-by-`\n` lines vec) of the frontmatter closing
@@ -754,6 +938,143 @@ after
         assert!(out.contains("body"));
         assert!(!out.contains("ft-synth:"));
         assert!(!out.contains("[[Old]]"));
+    }
+
+    // ── Regression: sibling `ft.*` keys must survive a synth upsert ──
+    //
+    // The TUI "mark and add" flow (and the synth promote flow) calls
+    // `upsert_synth_frontmatter` on a note that is not yet a synth note
+    // but may already carry other ft-owned frontmatter such as
+    // `ft.tasks.section` or `ft.append.section`. The upsert must add /
+    // fix the `ft.synth.*` keys *without* clobbering those siblings.
+    #[test]
+    fn upsert_preserves_sibling_ft_tasks_section() {
+        let content = "---\nft:\n  tasks:\n    section: Tasks\ntitle: T\n---\nbody\n";
+        let out = upsert_synth_frontmatter(content, None);
+        // The synth marker is added.
+        assert!(out.contains("  synth:\n    enabled: true"));
+        // The sibling ft.tasks.section key survives.
+        assert!(out.contains("tasks:"));
+        assert!(out.contains("section: Tasks"));
+        // Unrelated frontmatter and body survive.
+        assert!(out.contains("title: T"));
+        assert!(out.contains("body"));
+        // And round-trips through the readers.
+        assert_eq!(
+            crate::frontmatter::ft_tasks_section(&out),
+            Some("Tasks".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+    }
+
+    #[test]
+    fn upsert_preserves_sibling_ft_append_section_with_targets() {
+        let content = "---\nft:\n  append:\n    section: Sessions\ntitle: T\n---\nbody\n";
+        let targets = vec!["[[Foo]]".to_string()];
+        let out = upsert_synth_frontmatter(content, Some(&targets));
+        assert!(out.contains("  synth:\n    enabled: true"));
+        assert!(out.contains("targets: [\"[[Foo]]\"]"));
+        // The sibling ft.append.section key survives.
+        assert!(out.contains("append:"));
+        assert!(out.contains("section: Sessions"));
+        assert!(out.contains("title: T"));
+        assert!(out.contains("body"));
+        assert_eq!(
+            crate::frontmatter::ft_append_section(&out),
+            Some("Sessions".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+        assert_eq!(
+            crate::frontmatter::ft_synth_targets(&out),
+            Some(vec!["[[Foo]]".to_string()])
+        );
+    }
+
+    #[test]
+    fn upsert_preserves_all_sibling_ft_keys_round_trip() {
+        // A note already carrying tasks + append sections gets the synth
+        // marker added; all three ft sub-maps must be present afterwards.
+        let content = "---\nft:\n  tasks:\n    section: Tasks\n  append:\n    section: Log\ntitle: T\n---\nbody\n";
+        let out = upsert_synth_frontmatter(content, None);
+        assert_eq!(
+            crate::frontmatter::ft_tasks_section(&out),
+            Some("Tasks".to_string())
+        );
+        assert_eq!(
+            crate::frontmatter::ft_append_section(&out),
+            Some("Log".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+    }
+
+    #[test]
+    fn upsert_replaces_synth_block_between_siblings() {
+        // `synth:` sits between `tasks:` and `append:` siblings. Replacing
+        // the synth sub-block must leave both siblings (and their children)
+        // intact, and update synth.enabled from false → true + new targets.
+        let content = "---\nft:\n  tasks:\n    section: Tasks\n  synth:\n    enabled: false\n    targets: [\"[[Old]]\"]\n  append:\n    section: Log\ntitle: T\n---\nbody\n";
+        let targets = vec!["[[New]]".to_string()];
+        let out = upsert_synth_frontmatter(content, Some(&targets));
+        assert_eq!(
+            crate::frontmatter::ft_tasks_section(&out),
+            Some("Tasks".to_string())
+        );
+        assert_eq!(
+            crate::frontmatter::ft_append_section(&out),
+            Some("Log".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+        assert_eq!(
+            crate::frontmatter::ft_synth_targets(&out),
+            Some(vec!["[[New]]".to_string()])
+        );
+        assert!(!out.contains("[[Old]]"));
+        assert!(out.contains("title: T"));
+        assert!(out.contains("body"));
+    }
+
+    #[test]
+    fn upsert_preserves_siblings_when_only_marker_flipped() {
+        // `targets: None` with an existing `synth:` (enabled: false)
+        // flanked by siblings: enabled flips true, targets left alone,
+        // siblings untouched.
+        let content = "---\nft:\n  tasks:\n    section: Tasks\n  synth:\n    enabled: false\n    targets: [\"[[Keep]]\"]\n  append:\n    section: Log\n---\nbody\n";
+        let out = upsert_synth_frontmatter(content, None);
+        assert_eq!(
+            crate::frontmatter::ft_tasks_section(&out),
+            Some("Tasks".to_string())
+        );
+        assert_eq!(
+            crate::frontmatter::ft_append_section(&out),
+            Some("Log".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+        // targets not requested → preserved.
+        assert_eq!(
+            crate::frontmatter::ft_synth_targets(&out),
+            Some(vec!["[[Keep]]".to_string()])
+        );
+    }
+
+    #[test]
+    fn upsert_preserves_block_targets_when_targets_none() {
+        // Block-sequence `targets:` (multi-line) is carried over verbatim
+        // when `targets: None`, alongside preserved siblings.
+        let content = "---\nft:\n  tasks:\n    section: Tasks\n  synth:\n    enabled: false\n    targets:\n      - \"[[Keep]]\"\n      - \"[[AlsoKeep]]\"\n  append:\n    section: Log\n---\nbody\n";
+        let out = upsert_synth_frontmatter(content, None);
+        assert_eq!(
+            crate::frontmatter::ft_tasks_section(&out),
+            Some("Tasks".to_string())
+        );
+        assert_eq!(
+            crate::frontmatter::ft_append_section(&out),
+            Some("Log".to_string())
+        );
+        assert_eq!(crate::frontmatter::ft_synth_enabled(&out), Some(true));
+        assert_eq!(
+            crate::frontmatter::ft_synth_targets(&out),
+            Some(vec!["[[Keep]]".to_string(), "[[AlsoKeep]]".to_string()])
+        );
     }
 
     // ── Property: parse(serialize(s)) preserves all fields ────────────
