@@ -128,7 +128,7 @@ The scaffold's per-section body text SHALL be taken verbatim from `JournalEntry.
 - **THEN** the scaffolded callout body begins with `## Section` (the heading line is part of `ParagraphData.text`, per Fork A2)
 
 ### Requirement: Plan/apply split for synth mutations
-A pure planner `plan_synth_scaffold(graph, vault, repo, target, entries) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
+A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), NOT `GatherEntry`; feed callers (`GatherEntry`, `RecentEntry`) SHALL lower into `SynthSource` via `From` at the call boundary. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
 
 #### Scenario: Planner does no I/O
 - **WHEN** `plan_synth_scaffold` is invoked
@@ -137,6 +137,10 @@ A pure planner `plan_synth_scaffold(graph, vault, repo, target, entries) -> Synt
 #### Scenario: Applier uses write_atomic
 - **WHEN** `apply_synth_scaffold` writes the scaffold
 - **THEN** the write goes through `ft_core::fs::write_atomic` (same-dir tempfile + rename)
+
+#### Scenario: Planner accepts SynthSource inputs
+- **WHEN** `plan_synth_scaffold` is called with a slice of `SynthSource` values
+- **THEN** it builds one `ProtectedSection` per `SynthSource`, pinning that source's `source_path`, `line_start`, `line_end`, and a blake3 hash of `body` to the repo HEAD commit SHA
 
 ### Requirement: Synth configuration
 The `Config` struct SHALL gain a `synth: Synth` sub-struct with two fields: `folder: String` (default `"Synthesis/"`) and `exclude_prefixes: Vec<String>` (default contains the configured periodic-notes folder prefix when one is configured, else empty). Unknown keys under `[synth]` SHALL be rejected per the existing `deny_unknown_fields` convention.
