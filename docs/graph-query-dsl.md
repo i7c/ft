@@ -279,6 +279,50 @@ node where kind = Note;
 expand where edge.kind in {has-task, subtask};
 ```
 
+## Sigil interpolation
+
+Before the DSL parser runs, `@`-sigil placeholders are expanded into
+ordinary string literals, resolved against today's date and the vault's
+`[periodic_notes.<period>]` config. This lets you filter by the current
+daily/weekly note without typing — or hard-coding — an ISO date, and it
+makes such filters usable inside stored presets (the sigil re-resolves
+on every run).
+
+| Sigil | Expands to | Needs periodic config? |
+|---|---|---|
+| `@today` | ISO date `YYYY-MM-DD` for today | no |
+| `@daily` / `@weekly` / `@monthly` / `@quarterly` / `@yearly` | vault-relative path of today's periodic note | the matching `[periodic_notes.<period>]` |
+
+Each sigil takes an optional signed integer offset (in the period's own
+units — days for `@today`/`@daily`, weeks for `@weekly`, months for
+`@monthly`/`@quarterly`/`@yearly`):
+
+```dsl
+path includes @today            -- path includes "2026-07-29"
+path = @daily                   -- path = "journal/2026/2026-07-29.md"
+path = @daily-1                 -- yesterday's daily note
+path includes @today+7          -- a week out
+path = @weekly-2                -- two weeks ago's weekly note
+```
+
+A `@` inside an existing string literal (`"…"`) is left untouched, so
+`title includes "me@you"` still works. A `@` outside a string that isn't
+a recognized sigil is a hard error (exit code 2 from the CLI, an inline
+error in the TUI), as is a period sigil whose `[periodic_notes.<period>]`
+block is missing.
+
+Because interpolation runs on the resolved preset string too, you can
+store a dynamic preset:
+
+```toml
+[tasks.presets]
+daily-open = "path includes @daily and status in {Open, InProgress}"
+```
+
+`ft tasks list daily-open` then always refers to the current daily note.
+The sigil layer is outside the predicate grammar — the parser only ever
+sees the expanded string, so the DSL itself is unchanged.
+
 ## Errors
 
 | Variant              | Condition                                            |

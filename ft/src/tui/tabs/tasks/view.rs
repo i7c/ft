@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::NaiveDate;
 use ratatui::{layout::Rect, Frame};
 
 use crate::tui::{
@@ -36,7 +35,7 @@ pub trait View {
     /// `on_graph_ready` / `refresh` are default-no-op `View` methods
     /// so the owning tab can call through `Box<dyn View>` without
     /// downcasting.
-    fn apply_preset(&mut self, _dsl: &str, _today: NaiveDate) {}
+    fn apply_preset(&mut self, _dsl: &str, _ctx: &mut TabCtx) {}
 
     /// Retag the selected task with `tag` (bare name, no leading `#`),
     /// swapping out any prior tag from `config.tasks.retag_tags`. Raised

@@ -2,6 +2,8 @@
 //!
 //! - [`preset`] — named built-in / user query strings, parsed under
 //!   [`crate::graph::query::Profile::Tasks`].
+//! - [`interpolate`] — `@`-sigil pre-parse expansion (`@today`,
+//!   `@daily`, …) into DSL string literals.
 //! - [`sort`] — sort key compilation and `Vec<&Task>` sort helpers.
 //!
 //! Task predicate evaluation lives entirely in [`crate::graph::query`]:
@@ -11,7 +13,9 @@
 //! No separate `Filter` type — the DSL is the single source of truth
 //! for what predicates exist.
 
+pub mod interpolate;
 pub mod preset;
 pub mod sort;
 
+pub use interpolate::{interpolate, InterpolationError, SigilCtx};
 pub use sort::{default_sort, parse_sort_key, sort_by_keys, SortKey, SortOrder};

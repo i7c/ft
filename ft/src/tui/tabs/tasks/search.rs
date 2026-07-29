@@ -258,19 +258,33 @@ impl SearchView {
         if self.query_text.is_empty() {
             self.query_text = Self::default_query();
         }
-        self.recompile(ctx.today);
+        self.recompile(ctx);
         self.recompute_matches(ctx.today);
         ctx.last_refresh.set(Some(Local::now()));
         Ok(())
     }
 
-    fn recompile(&mut self, today: NaiveDate) {
+    fn recompile(&mut self, ctx: &TabCtx) {
         let trimmed = self.query_text.trim();
         if trimmed.is_empty() {
             self.parse_state = ParseState::Ok(None);
             return;
         }
-        match parse_query(trimmed, Profile::Tasks, today) {
+        let expanded = match ft_core::query::interpolate(
+            trimmed,
+            ft_core::query::SigilCtx {
+                today: ctx.today,
+                vault_root: &ctx.vault.path,
+                periodic: &ctx.vault.config.config.periodic_notes,
+            },
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                self.parse_state = ParseState::Err(e.to_string());
+                return;
+            }
+        };
+        match parse_query(&expanded, Profile::Tasks, ctx.today) {
             Ok(q) => self.parse_state = ParseState::Ok(Some(q)),
             Err(e) => self.parse_state = ParseState::Err(e.to_string()),
         }
@@ -490,7 +504,7 @@ impl SearchView {
     fn apply_edit(&mut self, ctx: &mut TabCtx) {
         if let Some(buf) = self.edit_state.take() {
             self.query_text = buf.text;
-            self.recompile(ctx.today);
+            self.recompile(ctx);
             self.recompute_matches(ctx.today);
         }
     }
@@ -499,10 +513,10 @@ impl SearchView {
     /// the current snapshot, leaving the view in normal mode (not query
     /// edit). Raised by the task-preset-picker modal commit via
     /// `TasksRequest::ApplyPreset` → `TasksTab::handle_tasks_request`.
-    fn apply_preset(&mut self, dsl: &str, today: NaiveDate) {
+    fn apply_preset(&mut self, dsl: &str, ctx: &mut TabCtx) {
         self.query_text = dsl.to_string();
-        self.recompile(today);
-        self.recompute_matches(today);
+        self.recompile(ctx);
+        self.recompute_matches(ctx.today);
     }
 
     /// Retag the selected task: swap any prior tag from
@@ -804,8 +818,8 @@ impl View for SearchView {
         SearchView::refresh(self, ctx)
     }
 
-    fn apply_preset(&mut self, dsl: &str, today: chrono::NaiveDate) {
-        SearchView::apply_preset(self, dsl, today)
+    fn apply_preset(&mut self, dsl: &str, ctx: &mut TabCtx) {
+        SearchView::apply_preset(self, dsl, ctx)
     }
 
     fn apply_retag(&mut self, tag: &str, ctx: &mut TabCtx) {

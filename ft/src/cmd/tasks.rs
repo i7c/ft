@@ -94,6 +94,11 @@ impl From<PriorityFlag> for Priority {
 pub struct ListArgs {
     /// Preset name (built-in or from config). If no preset of this name
     /// exists, the value is parsed as a query DSL string instead.
+    ///
+    /// Both the preset value and a raw DSL string accept `@`-sigil
+    /// interpolation (`@today`, `@daily`, `@weekly`, … with optional
+    /// offsets like `@daily-1`); see docs/graph-query-dsl.md §"Sigil
+    /// interpolation".
     #[arg(value_name = "PRESET_OR_QUERY")]
     pub preset_or_query: Option<String>,
 
@@ -101,7 +106,9 @@ pub struct ListArgs {
     /// additional `and` clauses). See docs/graph-query-dsl.md for the
     /// grammar; tasks queries run under `Profile::Tasks` so bare
     /// predicates like `priority = high` desugar to
-    /// `node where kind = Task and self.priority = high`.
+    /// `node where kind = Task and self.priority = high`. `@`-sigils
+    /// (`@today`, `@daily`, …) are expanded before parsing; see
+    /// docs/graph-query-dsl.md §"Sigil interpolation".
     #[arg(long, value_name = "DSL")]
     pub query: Option<String>,
 
@@ -219,6 +226,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let flag_dsl = lower_flags_to_dsl(&args);
 
     let mut graph_queries: Vec<GraphQuery> = Vec::new();
+    let sctx = crate::cmd::common::sigil_ctx(&vault, today);
     for src in [
         positional_dsl.as_deref(),
         args.query.as_deref(),
@@ -227,8 +235,20 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     .into_iter()
     .flatten()
     {
-        let q = parse_query(src, Profile::Tasks, today)
-            .map_err(|e| anyhow!("invalid query `{src}`: {e}"))?;
+        let expanded = match ft_core::query::interpolate(src, sctx) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("invalid query `{src}`: {e}");
+                return Ok(ExitCode::from(2));
+            }
+        };
+        let q = match parse_query(&expanded, Profile::Tasks, today) {
+            Ok(q) => q,
+            Err(e) => {
+                eprintln!("invalid query `{src}`: {e}");
+                return Ok(ExitCode::from(2));
+            }
+        };
         graph_queries.push(q);
     }
 
@@ -319,6 +339,9 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 }
 
 /// Look up a preset by name, preferring the user's config over built-ins.
+/// The returned DSL string is **not** yet sigil-interpolated; callers
+/// interpolate it (with `dates::today()` + the vault) before parsing so
+/// stored presets may contain dynamic `@…` placeholders.
 fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {
     if let Some(user) = vault.config.config.tasks.presets.get(name) {
         return Some(user.clone());
@@ -703,7 +726,8 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     // Bulk mode: complete every task matched by the query (skipping those
     // already done). Mirrors `ft tasks move --query`.
     if let Some(q) = args.query.as_deref() {
-        let parsed = parse_query(q, Profile::Tasks, today)
+        let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
+        let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
         let graph = crate::cmd::common::build_graph(&vault, &scan)?;
         let keys = resolve::by_query(&graph, &parsed);
@@ -1001,7 +1025,8 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let target = parse_move_target(&args.to, &vault.path);
 
     let chosen: Vec<&Task> = if let Some(q) = args.query.as_deref() {
-        let parsed = parse_query(q, Profile::Tasks, today)
+        let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
+        let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
         let graph = crate::cmd::common::build_graph(&vault, &scan)?;
         let keys = resolve::by_query(&graph, &parsed);
@@ -1426,7 +1451,8 @@ fn resolve_targets<'a>(
     today: NaiveDate,
 ) -> Result<Vec<&'a Task>> {
     if let Some(q) = query {
-        let parsed = parse_query(q, Profile::Tasks, today)
+        let expanded = crate::cmd::common::interpolate_query(q, vault, today)?;
+        let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
         let graph = crate::cmd::common::build_graph(vault, scan)?;
         let keys = resolve::by_query(&graph, &parsed);

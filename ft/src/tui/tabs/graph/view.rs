@@ -16,6 +16,13 @@ pub struct ExpandedView {
     pub(crate) query_buf: EditBuffer,
     pub(crate) parse_error: Option<String>,
     pub(crate) query: Option<GraphQuery>,
+    /// `@`-sigil interpolation inputs for this view's query buffer.
+    /// Seeded by the owning tab from `ctx.vault` when a view is
+    /// created/owned; `Default` (empty periodic config, empty root)
+    /// means sigils never resolve — tests that build a view with
+    /// `..Default::default()` and no sigils are unaffected.
+    pub(crate) vault_root: std::path::PathBuf,
+    pub(crate) periodic: ft_core::config::PeriodicNotes,
     /// Root-anchored paths the user has expanded. Each path is the
     /// sequence of [`NodeKey`]s from a root (inclusive) down to the
     /// expanded node (inclusive). Closed under prefixes by
@@ -60,7 +67,21 @@ impl ExpandedView {
             self.scroll_offset = 0;
             return;
         }
-        match parse_query(&self.query_buf.text) {
+        let expanded = match ft_core::query::interpolate(
+            &self.query_buf.text,
+            ft_core::query::SigilCtx {
+                today,
+                vault_root: &self.vault_root,
+                periodic: &self.periodic,
+            },
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                self.parse_error = Some(e.to_string());
+                return;
+            }
+        };
+        match parse_query(&expanded) {
             Ok(q) => {
                 self.query = Some(q);
                 self.expanded_paths.clear();

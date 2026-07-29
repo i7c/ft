@@ -157,6 +157,14 @@ impl GraphTab {
             return;
         }
         self.snapshot = Some(std::sync::Arc::clone(snap));
+        // Seed every view's `@`-sigil interpolation inputs from the
+        // vault so user-typed queries / presets can use `@daily` etc.
+        // Re-seeding on every snapshot is cheap and catches views
+        // created mid-session (Ctrl+N) that weren't seeded at birth.
+        for v in &mut self.views {
+            v.vault_root = ctx.vault.path.clone();
+            v.periodic = ctx.vault.config.config.periodic_notes.clone();
+        }
         if !self.seeded {
             self.seeded = true;
             // First snapshot: seed the FIRST view only — additional

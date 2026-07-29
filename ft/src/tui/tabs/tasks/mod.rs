@@ -397,7 +397,7 @@ impl Tab for TasksTab {
         match req {
             TasksRequest::ApplyPreset(dsl) => {
                 if let Some(v) = self.views.get_mut(self.active_view) {
-                    v.apply_preset(&dsl, ctx.today);
+                    v.apply_preset(&dsl, ctx);
                 }
             }
             TasksRequest::RetagSelected(tag) => {

@@ -45,6 +45,8 @@ pub enum GraphCommand {
 #[derive(Args, Debug)]
 pub struct QueryArgs {
     /// DSL source. Mutually exclusive with `--query` / `--from-file` / `--preset`.
+    /// `@`-sigils (`@today`, `@daily`, …) are expanded before parsing; see
+    /// docs/graph-query-dsl.md §"Sigil interpolation".
     #[arg(value_name = "QUERY", conflicts_with_all = ["query_opt", "from_file", "preset"])]
     pub query: Option<String>,
 
@@ -64,6 +66,8 @@ pub struct QueryArgs {
 
     /// Resolve a named graph-query preset (built-in or from config)
     /// to its DSL string. User presets shadow built-ins of the same name.
+    /// The resolved string is `@`-sigil-interpolated before parsing, so
+    /// presets may contain dynamic placeholders like `@today` or `@daily`.
     #[arg(long, value_name = "NAME", conflicts_with_all = ["query", "query_opt", "from_file"])]
     pub preset: Option<String>,
 
@@ -136,7 +140,16 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     let today = ft_core::dates::today();
 
-    let query = match parse_with(&src, args.profile.into(), today) {
+    let expanded =
+        match ft_core::query::interpolate(&src, crate::cmd::common::sigil_ctx(&vault, today)) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return Ok(ExitCode::from(2));
+            }
+        };
+
+    let query = match parse_with(&expanded, args.profile.into(), today) {
         Ok(q) => q,
         Err(e) => {
             eprintln!("{e}");
@@ -234,6 +247,10 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     Ok(ExitCode::SUCCESS)
 }
 
+/// Look up a preset by name, preferring the user's config over built-ins.
+/// The returned DSL string is **not** yet sigil-interpolated; callers
+/// interpolate it (with `dates::today()` + the vault) before parsing so
+/// stored presets may contain dynamic `@…` placeholders.
 fn resolve_preset(name: &str, vault: &Vault) -> Option<String> {
     if let Some(user) = vault.config.config.graph.presets.get(name) {
         return Some(user.clone());
