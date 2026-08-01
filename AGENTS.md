@@ -17,6 +17,28 @@ Two crates, one workspace:
 The TUI depends only on `ft-core`. If the TUI needs something new, add it
 to `ft-core` first so the CLI benefits too.
 
+## Editor integrations
+
+The primary editor integration is the Neovim plugin **`ft.nvim`**, a
+standalone repo at `../ft.nvim` (sibling of this workspace, installed by
+its own repo URL). It is a thin client: every feature shells out to the
+`ft` CLI and parses machine-readable output — no domain logic in Lua.
+The plugin's protocol contract (the exact CLI surface it depends on)
+is documented in its own `ARCHITECTURE.md`.
+
+**ft-core and the ft TUI must stay compatible with *any* editor.**
+Neovim + ft.nvim is the primary poweruser path, but nothing may restrict
+support for other editors: keep the CLI the contract (machine-readable
+output, `--json-errors`, stable `--format` variants), keep editor
+handoff generic (the `$EDITOR`/`$VISUAL` chain, terminal-agnostic
+strategies), and add ft.nvim-requested surfaces as general CLI features
+rather than editor-specific hooks.
+
+Openspec proposals may refer to code and functionality in `ft.nvim`.
+Tasks that land in that repo are tagged `[ft.nvim]` in the change's task
+list; the openspec change in this repo remains the coordination
+artifact, and the archive note records the paired commit sha.
+
 ## Load-bearing patterns
 
 - **Plan/apply split for mutations.** Pure planners produce a `*Plan`
@@ -182,7 +204,9 @@ lists under `openspec/changes/` (active) and `openspec/changes/archive/`
 change, check `openspec/changes/` for prior context and consider
 running the proposal flow (`.pi/skills/openspec-propose`) rather than
 ad-hoc editing. Skills: `openspec-propose`, `openspec-apply-change`,
-`openspec-archive-change`, `openspec-explore`.
+`openspec-archive-change`, `openspec-explore`. Proposals may also
+refer to code and functionality in the sibling `ft.nvim` repo — tasks
+that land there are tagged `[ft.nvim]` (see §Editor integrations).
 
 - **Explore first, build on confirmation.** In a fresh session, assume
   the task is exploration and design — read the code, reason about
