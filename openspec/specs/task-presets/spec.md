@@ -35,7 +35,11 @@ unknown field.
 a preset name by checking `config.tasks.presets` first, then the built-in
 task presets (`ft_core::query::preset::builtin`). User presets SHALL shadow
 built-ins of the same name. If no preset matches, the CLI SHALL exit with
-code 2 and print an error message.
+code 2 and print an error message. The resolved preset DSL string SHALL be
+run through sigil interpolation (`query-sigil-interpolation`) before
+parsing, so stored presets MAY contain dynamic `@`-sigil placeholders
+(`@today`, `@daily`, …) that resolve fresh on every run. Built-in presets
+contain no sigils and are unaffected by interpolation.
 
 #### Scenario: Resolve user-defined preset from CLI
 - **WHEN** `ft tasks list --preset work` is run and `[tasks.presets.work]` is defined in config
@@ -57,6 +61,17 @@ code 2 and print an error message.
 - **WHEN** the user opens the task-preset picker (`Ctrl+P`) in the Tasks tab
 - **THEN** the picker lists user presets from `config.tasks.presets` (first, shadowing) followed by built-in task presets
 
+#### Scenario: Stored preset with a sigil resolves dynamically
+- **WHEN** `config.tasks.presets["daily-open"]` is `path includes @daily and status in {Open, InProgress}` and the user runs `ft tasks list --preset daily-open` with `FT_TODAY=2026-07-29` and `[periodic_notes.daily]` resolving to `journal/2026/2026-07-29.md`
+- **THEN** the query used is `path includes "journal/2026/2026-07-29.md" and status in {Open, InProgress}` (the `@daily` sigil expanded at run time)
+
+#### Scenario: Stored preset with a sigil re-resolves the next day
+- **WHEN** the same `daily-open` preset is run with `FT_TODAY=2026-07-30`
+- **THEN** the query used references `journal/2026/2026-07-30.md`, not the previous day's path
+
+#### Scenario: Stored preset whose sigil lacks periodic config exits with code 2
+- **WHEN** `config.tasks.presets["daily-open"]` contains `@daily` and the vault has no `[periodic_notes.daily]` block and the user runs `ft tasks list --preset daily-open`
+- **THEN** the command exits with code 2 and prints an error naming the missing `[periodic_notes.daily]` config
 ### Requirement: `ft vault config` dumps task presets under the new key
 
 The `ft vault config` command SHALL report task presets from
