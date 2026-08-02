@@ -417,3 +417,207 @@ fn missing_daily_note_is_created_from_template() {
         "---\nft:\n  tasks:\n    section: Tasks\n---\n# 2026-05-09\n\n## Tasks\n- [ ] Buy milk ➕ 2026-05-09\n\n## Log\n"
     );
 }
+
+// ── ft tasks create --parent ────────────────────────────────────────────────
+
+#[test]
+fn create_subtask_by_file_line() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk\n- [ ] Walk dog\n").unwrap();
+
+    run(dir.path(), &["Oat milk", "--parent", "inbox.md:1"]).success();
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [ ] Buy milk\n  - [ ] Oat milk ➕ 2026-05-09\n- [ ] Walk dog\n"
+    );
+}
+
+#[test]
+fn create_subtask_by_id() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk 🆔 abc123\n").unwrap();
+
+    run(dir.path(), &["Oat milk", "--parent", "abc123"]).success();
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [ ] Buy milk 🆔 abc123\n  - [ ] Oat milk ➕ 2026-05-09\n"
+    );
+}
+
+#[test]
+fn create_subtask_by_fuzzy_and_id_fallback() {
+    // "build" is id-shaped; no task has that id, so it falls through to
+    // fuzzy matching (mirrors complete/cancel/edit).
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Build a house\n").unwrap();
+
+    run(dir.path(), &["Foundations", "--parent", "build"]).success();
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [ ] Build a house\n  - [ ] Foundations ➕ 2026-05-09\n"
+    );
+}
+
+#[test]
+fn create_subtask_ambiguous_parent_errors_with_candidates() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk\n- [ ] Oat milk\n").unwrap();
+
+    let assert = run(dir.path(), &["X", "--parent", "milk"]).failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("2 candidates match"),
+        "expected ambiguity error listing count; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("inbox.md:1") && stderr.contains("inbox.md:2"),
+        "expected candidate file:lines; got: {stderr}"
+    );
+    // No file was modified.
+    assert_eq!(
+        std::fs::read_to_string(f.path()).unwrap(),
+        "- [ ] Buy milk\n- [ ] Oat milk\n"
+    );
+}
+
+#[test]
+fn create_subtask_parent_not_found_errors() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk\n").unwrap();
+
+    run(dir.path(), &["X", "--parent", "zzzznotatask"])
+        .failure()
+        .stderr(predicate::str::contains(
+            "no tasks match selector `zzzznotatask`",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(f.path()).unwrap(),
+        "- [ ] Buy milk\n"
+    );
+}
+
+#[test]
+fn create_subtask_conflicts_with_placement_flags() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk\n").unwrap();
+
+    // --file
+    run(
+        dir.path(),
+        &["X", "--parent", "inbox.md:1", "--file", "other.md"],
+    )
+    .failure()
+    .stderr(predicate::str::contains("cannot be used with '--file"));
+    // --at-line
+    run(
+        dir.path(),
+        &["X", "--parent", "inbox.md:1", "--at-line", "3"],
+    )
+    .failure()
+    .stderr(predicate::str::contains("cannot be used with '--at-line"));
+    // --under-heading
+    run(
+        dir.path(),
+        &["X", "--parent", "inbox.md:1", "--under-heading", "Tasks"],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "cannot be used with '--under-heading",
+    ));
+    // --append
+    run(dir.path(), &["X", "--parent", "inbox.md:1", "--append"])
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with '--append"));
+
+    // Nothing was written anywhere.
+    assert_eq!(
+        std::fs::read_to_string(f.path()).unwrap(),
+        "- [ ] Buy milk\n"
+    );
+    assert!(!dir.child("other.md").exists());
+}
+
+#[test]
+fn create_subtask_matches_existing_child_indent() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Parent\n    - [ ] Child one\n    - [ ] Child two\n")
+        .unwrap();
+
+    run(dir.path(), &["Child three", "--parent", "inbox.md:1"]).success();
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [ ] Parent\n    - [ ] Child one\n    - [ ] Child two\n    - [ ] Child three ➕ 2026-05-09\n"
+    );
+}
+
+#[test]
+fn create_subtask_duplicate_blocked_then_force() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("inbox.md");
+    f.write_str("- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n- [ ] Parent\n")
+        .unwrap();
+
+    // Duplicate elsewhere in the same file blocks the subtask (file-wide
+    // check, same as the TUI quickline).
+    run(
+        dir.path(),
+        &["Buy milk", "--due", "tomorrow", "--parent", "inbox.md:2"],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "duplicate task already exists at inbox.md:1",
+    ));
+    assert_eq!(
+        std::fs::read_to_string(f.path()).unwrap(),
+        "- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n- [ ] Parent\n"
+    );
+
+    // --force bypasses the check.
+    run(
+        dir.path(),
+        &[
+            "Buy milk",
+            "--due",
+            "tomorrow",
+            "--parent",
+            "inbox.md:2",
+            "--force",
+        ],
+    )
+    .success();
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n- [ ] Parent\n  - [ ] Buy milk ➕ 2026-05-09 📅 2026-05-10\n"
+    );
+}
+
+#[test]
+fn create_subtask_under_done_parent_by_file_line() {
+    let dir = vault_with_daily("journal", Some("YYYY-MM-DD"));
+    let f = dir.child("done.md");
+    f.write_str("- [x] Finished thing\n").unwrap();
+
+    run(dir.path(), &["Follow up", "--parent", "done.md:1"]).success();
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(
+        content,
+        "- [x] Finished thing\n  - [ ] Follow up ➕ 2026-05-09\n"
+    );
+}

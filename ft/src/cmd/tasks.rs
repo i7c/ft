@@ -556,13 +556,48 @@ pub struct CreateArgs {
     /// Insert even if a duplicate task (same description + dates) already exists.
     #[arg(long)]
     pub force: bool,
+
+    /// Create as an indented subtask of the task selected by SELECTOR.
+    /// Selector forms: task id (`abc123`), `<file>:<line>` (relative path +
+    /// 1-indexed line), or fuzzy substring. Must match exactly one task.
+    #[arg(long, value_name = "SELECTOR", conflicts_with_all = ["file", "under_heading", "at_line", "append"])]
+    pub parent: Option<String>,
 }
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let today = dates::today();
 
-    let target = resolve_target_path(&args, &vault, today)?;
+    // `--parent` determines both the target file (the parent's) and the
+    // position (indented subtask); otherwise resolve the usual placement.
+    let (target, position) = match args.parent.as_deref() {
+        Some(sel) => {
+            let scan = vault.scan();
+            for err in &scan.errors {
+                tracing::warn!("{}", err);
+            }
+            let parent = resolve_parent(sel, &scan.tasks)?;
+            let target = vault.path.join(&parent.source_file);
+            let position = Position::Subtask {
+                parent_line: parent.source_line,
+            };
+            (target, position)
+        }
+        None => {
+            let target = resolve_target_path(&args, &vault, today)?;
+            let position = if let Some(h) = args.under_heading {
+                Position::UnderHeading(h)
+            } else if let Some(n) = args.at_line {
+                Position::AtLine(n)
+            } else if args.append {
+                Position::Append
+            } else {
+                let default_section = vault.config.config.tasks.default_section.as_deref();
+                ops::auto_position(&target, default_section)
+            };
+            (target, position)
+        }
+    };
 
     let parse_date = |s: &str, label: &str| -> Result<NaiveDate> {
         dates::parse(s, today).map_err(|e| anyhow!("--{label}: {e}"))
@@ -593,17 +628,6 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         recurrence: args.recurrence,
         id: args.id,
         depends_on: args.depends_on,
-    };
-
-    let position = if let Some(h) = args.under_heading {
-        Position::UnderHeading(h)
-    } else if let Some(n) = args.at_line {
-        Position::AtLine(n)
-    } else if args.append {
-        Position::Append
-    } else {
-        let default_section = vault.config.config.tasks.default_section.as_deref();
-        ops::auto_position(&target, default_section)
     };
 
     let outcome = ops::create_task(
@@ -649,6 +673,46 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
     let (today_n, now_n) = dates::now_pair();
     Ok(vault.ensure_target(today, args.file.as_deref(), today_n, now_n)?)
+}
+
+/// Resolve a `--parent` selector into exactly one task. Zero matches error;
+/// multiple matches error with the candidate list so the user can switch to
+/// a `file:line` or id selector.
+fn resolve_parent<'a>(selector: &str, tasks: &'a [Task]) -> Result<&'a Task> {
+    let sel = selector::parse(selector);
+    let mut matches = selector::resolve(tasks, &sel);
+    if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) {
+        let fuzzy = ft_core::selector::Selector::Fuzzy(selector.to_string());
+        matches = selector::resolve(tasks, &fuzzy);
+    }
+    if matches.is_empty() {
+        return Err(anyhow!("no tasks match selector `{selector}`"));
+    }
+    if matches.len() > 1 {
+        let preview: Vec<String> = matches
+            .iter()
+            .take(5)
+            .map(|t| {
+                format!(
+                    "  {}:{}  {}",
+                    t.source_file.display(),
+                    t.source_line,
+                    t.description
+                )
+            })
+            .collect();
+        let extra = if matches.len() > 5 {
+            format!("\n  … and {} more", matches.len() - 5)
+        } else {
+            String::new()
+        };
+        return Err(anyhow!(
+            "--parent: {} candidates match — be more specific:\n{}{extra}",
+            matches.len(),
+            preview.join("\n")
+        ));
+    }
+    Ok(matches[0])
 }
 
 fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {
