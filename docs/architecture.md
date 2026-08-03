@@ -286,7 +286,9 @@ callouts of a synth note (recycled material doesn't double-count on
 the next pulse) while still counting links the user wrote in their
 own prose between callouts.
 
-CLI surface lives in `ft/src/cmd/{pulse.rs, synth.rs}` and the
+CLI surface lives in `ft/src/cmd/{pulse.rs, synth.rs}` (plus the
+read-only plumbing command `ft notes quote` in `ft/src/cmd/quote.rs`,
+which emits the canonical callout for a file+range to stdout) and the
 extended `ft/src/cmd/notes.rs::run_gather` (which now accepts repeated
 `--link "[[X]]"` flags in addition to the positional note argument).
 The TUI exposes the flow through the `Pulse` tab

@@ -37,6 +37,7 @@ use crate::synth::callout::{
     compute_section_hash, is_synth_note, parse as parse_callouts, serialize, ParsedCallout,
     ProtectedSection, CONTENT_HASH_PREFIX_LEN, SHORT_SHA_LEN,
 };
+use crate::synth::slice;
 use crate::vault::Vault;
 
 /// What repair decided for one section.
@@ -189,12 +190,7 @@ fn plan_one(repo: &git::RepoMap, head: &str, head_short: &str, c: &ParsedCallout
     // Does the pin still hold? (Same checks as the verifier.)
     let pin_blob = git::show_file_at(repo.root(), &c.commit_sha, &repo.to_repo(&c.source_path));
     let body_matches_pin = pin_blob.as_ref().is_ok_and(|blob| {
-        let lines: Vec<&str> = blob.split('\n').collect();
-        let (start, end) = (c.line_start as usize, c.line_end as usize);
-        start >= 1
-            && end >= start
-            && end <= lines.len()
-            && lines[start - 1..end].join("\n") == c.body
+        slice::slice_lines(blob, c.line_start, c.line_end).as_deref() == Some(c.body.as_str())
     });
     let hash_ok = {
         let recomputed = compute_section_hash(&c.body);

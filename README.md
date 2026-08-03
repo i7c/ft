@@ -277,4 +277,6 @@ depth.
   internals of the consolidation flow (`ft notes pulse`, `ft notes
   gather --link`, `ft notes recent`, `ft notes synth scaffold` / `verify`),
   the `[!ft-source]` callout grammar used in synth notes, and the
-  `[synth]` config table
+  `[synth]` config table; `ft notes quote` (the read-only plumbing
+  command behind the same pinning mechanics) is documented in
+  [docs/guide/synthesis.md](docs/guide/synthesis.md)

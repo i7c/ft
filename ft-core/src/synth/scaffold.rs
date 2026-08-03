@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::git;
-use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection, SHORT_SHA_LEN};
+use crate::synth::callout::{compute_section_hash, serialize, ProtectedSection};
 use crate::synth::source::SynthSource;
 use crate::vault::Vault;
 
@@ -103,32 +103,13 @@ pub fn plan_synth_scaffold(
     // A section is pinned to HEAD, so each source file's working-tree
     // content must already match HEAD — otherwise verify would report
     // drift on a freshly created note. Refuse if any source is dirty.
-    // `git status` reports repo-root-relative paths; translate the
-    // entries' vault-relative source paths into the same coordinate
-    // system before intersecting.
-    let status = git::status(repo.root())?;
-    let dirty: HashSet<&Path> = status
-        .modified
-        .iter()
-        .chain(&status.deleted)
-        .chain(&status.conflicted)
-        .chain(&status.untracked)
-        .map(PathBuf::as_path)
-        .collect();
-    let mut offending: Vec<PathBuf> = entries
-        .iter()
-        .map(|e| &e.source_path)
-        .filter(|p| dirty.contains(repo.to_repo(p).as_path()))
-        .cloned()
-        .collect();
-    offending.sort();
-    offending.dedup();
+    let paths: Vec<PathBuf> = entries.iter().map(|e| e.source_path.clone()).collect();
+    let offending = find_dirty_sources(&repo, &paths)?;
     if !offending.is_empty() {
         return Err(Error::SynthDirtySources(offending));
     }
 
-    let head_sha = git::head_hash(repo.root())?;
-    let short_sha = head_sha[..SHORT_SHA_LEN.min(head_sha.len())].to_string();
+    let short_sha = git::head_short_sha(repo.root())?;
 
     let absolute = vault.path.join(target);
     let exists = absolute.exists();
@@ -153,16 +134,7 @@ pub fn plan_synth_scaffold(
 
     let mut sections = Vec::with_capacity(entries_owned.len());
     for entry in entries_owned {
-        let hash = compute_section_hash(&entry.body);
-
-        sections.push(ProtectedSection {
-            source_path: entry.source_path.clone(),
-            line_start: entry.line_start,
-            line_end: entry.line_end,
-            commit_sha: short_sha.clone(),
-            content_hash: hash,
-            body: entry.body.clone(),
-        });
+        sections.push(build_pinned_section(&short_sha, &entry));
     }
 
     Ok(SynthScaffoldPlan {
@@ -176,6 +148,49 @@ pub fn plan_synth_scaffold(
         sections,
         dedup_skipped,
     })
+}
+
+/// Run `git status` once and return the sorted, deduped subset of
+/// `paths` (vault-relative, like `SynthSource.source_path`) that are
+/// modified/deleted/conflicted/untracked in the working tree.
+///
+/// Shared by `plan_synth_scaffold` (batch, all offenders at once) and
+/// single-section producers (`ft notes quote`). The caller decides the
+/// error to raise from a non-empty result.
+pub fn find_dirty_sources(repo: &git::RepoMap, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let status = git::status(repo.root())?;
+    let dirty: HashSet<&Path> = status
+        .modified
+        .iter()
+        .chain(&status.deleted)
+        .chain(&status.conflicted)
+        .chain(&status.untracked)
+        .map(PathBuf::as_path)
+        .collect();
+    let mut offending: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| dirty.contains(repo.to_repo(p).as_path()))
+        .cloned()
+        .collect();
+    offending.sort();
+    offending.dedup();
+    Ok(offending)
+}
+
+/// Build one [`ProtectedSection`] for a source entry: the pure loop
+/// body of `plan_synth_scaffold`'s section construction. The caller
+/// supplies the pinned short SHA (see [`crate::git::head_short_sha`])
+/// so multi-section producers fetch it once.
+pub fn build_pinned_section(short_sha: &str, entry: &SynthSource) -> ProtectedSection {
+    let hash = compute_section_hash(&entry.body);
+    ProtectedSection {
+        source_path: entry.source_path.clone(),
+        line_start: entry.line_start,
+        line_end: entry.line_end,
+        commit_sha: short_sha.to_string(),
+        content_hash: hash,
+        body: entry.body.clone(),
+    }
 }
 
 /// Apply a [`SynthScaffoldPlan`] to disk. Returns the absolute path
@@ -222,6 +237,7 @@ pub fn apply_synth_scaffold(vault: &Vault, plan: &SynthScaffoldPlan) -> Result<P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::synth::callout::SHORT_SHA_LEN;
     use assert_fs::prelude::*;
     use std::process::Command;
 
@@ -410,6 +426,73 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::SynthDirtySources(_)));
+    }
+
+    #[test]
+    fn find_dirty_sources_reports_modified_untracked_but_not_clean() {
+        // Three files: one modified, one untracked, one clean. The
+        // helper must return only the two dirty ones, vault-relative
+        // and sorted, and must not report a clean file even when it is
+        // among the queried paths.
+        let (tmp, vault, _entry) = make_repo_with_entry();
+        tmp.child("notes/modified.md").write_str("v1\n").unwrap();
+        tmp.child("notes/clean.md").write_str("v1\n").unwrap();
+        let repo = tmp.path().to_path_buf();
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(&repo)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        run_git(&["add", "notes/modified.md", "notes/clean.md"]);
+        run_git(&["commit", "-m", "c2"]);
+        // Dirty the working tree after the commit.
+        tmp.child("notes/modified.md").write_str("v2\n").unwrap();
+        tmp.child("notes/untracked.md").write_str("x\n").unwrap();
+
+        let repo_map = crate::git::RepoMap::discover(&vault.path).unwrap();
+        let queried = vec![
+            PathBuf::from("notes/clean.md"),
+            PathBuf::from("notes/modified.md"),
+            PathBuf::from("notes/untracked.md"),
+        ];
+        let dirty = find_dirty_sources(&repo_map, &queried).unwrap();
+        assert_eq!(
+            dirty,
+            vec![
+                PathBuf::from("notes/modified.md"),
+                PathBuf::from("notes/untracked.md")
+            ]
+        );
+    }
+
+    #[test]
+    fn find_dirty_sources_ignores_unrelated_dirty_files() {
+        // A dirty file that is NOT among the queried paths must not
+        // appear in the result (the per-source contract: only the
+        // pinned source matters).
+        let (tmp, vault, _entry) = make_repo_with_entry();
+        tmp.child("notes/other.md").write_str("v1\n").unwrap();
+        let repo = tmp.path().to_path_buf();
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(&repo)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        run_git(&["add", "notes/other.md"]);
+        run_git(&["commit", "-m", "c2"]);
+        tmp.child("notes/other.md").write_str("v2\n").unwrap();
+
+        let repo_map = crate::git::RepoMap::discover(&vault.path).unwrap();
+        let dirty = find_dirty_sources(&repo_map, &[PathBuf::from("notes/source.md")]).unwrap();
+        assert!(dirty.is_empty(), "queried source is clean");
     }
 
     #[test]

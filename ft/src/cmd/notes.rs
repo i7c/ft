@@ -104,6 +104,9 @@ pub enum NotesCommand {
     /// Append a rendered template into an existing note (at end or
     /// after a named section).
     Append(AppendArgs),
+    /// Emit the canonical protected-section callout for a line range of
+    /// a vault file (read-only plumbing; pins to HEAD like `synth`).
+    Quote(crate::cmd::quote::QuoteArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -126,6 +129,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Synth(c) => crate::cmd::synth::run_command(c, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
+        NotesCommand::Quote(q) => crate::cmd::quote::run_quote(q, vault_flag),
     }
 }
 

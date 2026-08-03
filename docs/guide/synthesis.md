@@ -341,6 +341,34 @@ The boundary editor previews the source lines straight from the pinned
 commit, so you see exactly what the resliced excerpt will contain before
 you commit.
 
+## Quoting a section (plumbing)
+
+`ft notes quote` is the read-only plumbing command behind the mechanics
+above: given a file and a 1-indexed inclusive line range, it emits the
+canonical protected-section callout **to stdout** without writing
+anything:
+
+```sh
+ft notes quote notes/spectral.md --lines 42-44
+# > [!ft-source] "notes/spectral.md" L42-44 @abc1234 #7f3a91
+# > The original paragraph text
+# > spanning two lines.
+```
+
+It enforces exactly the prerequisites scaffold/grow enforce for the
+pinned file: the source must be committed at `HEAD` and unmodified in
+the working tree (other dirty files don't block), and the range must
+be inside the file. The section is pinned to `HEAD` with the same
+blake3 content hash, so anything it emits verifies `ok` — paste the
+output into a synth note (or any note) and `ft notes synth verify`
+confirms it. The short flag is `-l` (`ft notes quote notes/spectral.md
+-l 42-44`).
+
+Because it's a plain stdout command with no prompts and no color, it's
+safe to call from scripts and other tools — `ft.nvim` uses it to pin
+editor selections. Absolute paths are accepted; the callout header
+always shows the vault-relative path.
+
 ## Verifying
 
 `ft notes synth verify` checks every protected section in a synth note (or

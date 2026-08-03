@@ -14,7 +14,10 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 /// Number of hex chars used for the short commit SHA in callout headers.
-pub const SHORT_SHA_LEN: usize = 7;
+///
+/// Canonically defined in [`crate::git`]; re-exported here so callout
+/// grammar code reads naturally.
+pub use crate::git::SHORT_SHA_LEN;
 
 /// Number of hex chars used for the blake3 content-hash prefix.
 pub const CONTENT_HASH_PREFIX_LEN: usize = 6;

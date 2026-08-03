@@ -25,6 +25,7 @@ use crate::git;
 use crate::synth::callout::{
     compute_section_hash, parse as parse_callouts, serialize, ParsedCallout, ProtectedSection,
 };
+use crate::synth::slice;
 use crate::vault::Vault;
 
 /// How the new line range is expressed.
@@ -89,24 +90,19 @@ pub fn plan_reslice(
         &repo.to_repo(&target.source_path),
     )
     .map_err(|e| Error::ResliceSourceMissing(e.to_string()))?;
-    let lines: Vec<&str> = blob.split('\n').collect();
-    let file_lines = lines.len() as u32;
+    let file_lines = slice::count_lines(&blob);
 
     let (start, end) = resolve_range(range, target.line_start, target.line_end, file_lines)?;
 
-    let body = lines[(start as usize - 1)..(end as usize)].join("\n");
+    let body = slice::slice_lines(&blob, start, end)
+        .expect("resolve_range guarantees the range is in bounds");
     let content_hash = compute_section_hash(&body);
 
     // Drift = the old on-disk body no longer matched the blob at the
-    // *old* range. Reslicing re-pins from the blob, healing it.
-    let old_start = target.line_start as usize;
-    let old_end = target.line_end as usize;
-    let healed_drift = if old_start >= 1 && old_end >= old_start && old_end <= lines.len() {
-        lines[(old_start - 1)..old_end].join("\n") != target.body
-    } else {
-        // Old range itself is out of bounds at the pin → already broken.
-        true
-    };
+    // *old* range. Reslicing re-pins from the blob, healing it. An old
+    // range that is itself out of bounds at the pin → already broken.
+    let healed_drift = slice::slice_lines(&blob, target.line_start, target.line_end).as_deref()
+        != Some(target.body.as_str());
 
     let old = ProtectedSection {
         source_path: target.source_path.clone(),

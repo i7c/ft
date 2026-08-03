@@ -318,6 +318,20 @@ pub fn head_hash(repo: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Number of hex chars used for short commit SHAs (git's default
+/// abbreviation length). The canonical home of the constant; synth
+/// callout headers re-export it via `synth::callout::SHORT_SHA_LEN`.
+pub const SHORT_SHA_LEN: usize = 7;
+
+/// Return the current HEAD commit hash shortened to the standard
+/// 7-hex prefix. Never panics on short/empty hashes: when `HEAD`
+/// resolves to fewer characters (e.g. an unborn branch), the full
+/// hash is returned.
+pub fn head_short_sha(repo: &Path) -> Result<String> {
+    let full = head_hash(repo)?;
+    Ok(full[..SHORT_SHA_LEN.min(full.len())].to_string())
+}
+
 /// Per-line blame for `rel_path` (vault-relative or relative to `repo`).
 ///
 /// Shells out to `git blame --porcelain`. The porcelain header for each
@@ -1269,6 +1283,27 @@ mod tests {
         run_git(tmp.path(), &["commit", "-m", "init"]);
         let sha = head_hash(tmp.path()).unwrap();
         assert_eq!(sha.len(), 40);
+    }
+
+    #[test]
+    fn head_short_sha_truncates_to_seven() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        fs::write(tmp.path().join("a.md"), "x\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "init"]);
+        let full = head_hash(tmp.path()).unwrap();
+        let short = head_short_sha(tmp.path()).unwrap();
+        assert_eq!(short.len(), SHORT_SHA_LEN);
+        assert_eq!(short, &full[..SHORT_SHA_LEN.min(full.len())]);
+    }
+
+    #[test]
+    fn head_short_sha_survives_unborn_branch() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        // No commits yet: `rev-parse HEAD` fails; head_hash errors.
+        assert!(head_hash(tmp.path()).is_err());
     }
 
     #[test]

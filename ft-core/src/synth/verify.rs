@@ -13,6 +13,7 @@ use crate::synth::callout::{
     compute_section_hash, is_synth_note, parse as parse_callouts, ParsedCallout,
     CONTENT_HASH_PREFIX_LEN,
 };
+use crate::synth::slice;
 use crate::vault::Vault;
 
 /// Per-section verification status.
@@ -119,26 +120,26 @@ fn verify_one(repo: &git::RepoMap, note_path: &Path, c: &ParsedCallout) -> Verif
     };
 
     // Slice lines (1-indexed inclusive).
-    let lines: Vec<&str> = blob.split('\n').collect();
-    let (start, end) = (c.line_start as usize, c.line_end as usize);
-    if start == 0 || start > lines.len() || end < start || end > lines.len() {
-        return VerificationResult {
-            note_path: note_path.to_path_buf(),
-            header_line: c.header_line,
-            source_path: c.source_path.clone(),
-            line_start: c.line_start,
-            line_end: c.line_end,
-            commit_sha: c.commit_sha.clone(),
-            status: SectionStatus::SourceMissing,
-            detail: format!(
-                "line range L{}-{} outside file (file has {} lines)",
-                c.line_start,
-                c.line_end,
-                lines.len()
-            ),
-        };
-    }
-    let expected = lines[(start - 1)..end].join("\n");
+    let expected = match slice::slice_lines(&blob, c.line_start, c.line_end) {
+        Some(body) => body,
+        None => {
+            return VerificationResult {
+                note_path: note_path.to_path_buf(),
+                header_line: c.header_line,
+                source_path: c.source_path.clone(),
+                line_start: c.line_start,
+                line_end: c.line_end,
+                commit_sha: c.commit_sha.clone(),
+                status: SectionStatus::SourceMissing,
+                detail: format!(
+                    "line range L{}-{} outside file (file has {} lines)",
+                    c.line_start,
+                    c.line_end,
+                    slice::count_lines(&blob)
+                ),
+            };
+        }
+    };
 
     if expected != c.body {
         return VerificationResult {

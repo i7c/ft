@@ -24,5 +24,6 @@ pub mod citations;
 pub mod repair;
 pub mod reslice;
 pub mod scaffold;
+pub mod slice;
 pub mod source;
 pub mod verify;
