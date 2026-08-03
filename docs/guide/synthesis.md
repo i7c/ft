@@ -365,8 +365,9 @@ confirms it. The short flag is `-l` (`ft notes quote notes/spectral.md
 -l 42-44`).
 
 Because it's a plain stdout command with no prompts and no color, it's
-safe to call from scripts and other tools — `ft.nvim` uses it to pin
-editor selections. Absolute paths are accepted; the callout header
+safe to call from scripts and other tools — `ft.nvim` is expected to
+use it to pin editor selections (its editor-side integration lands
+separately). Absolute paths are accepted; the callout header
 always shows the vault-relative path.
 
 ## Verifying

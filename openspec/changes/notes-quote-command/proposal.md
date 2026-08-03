@@ -61,5 +61,7 @@ hand-writing callouts by guesswork. We need a plumbing command:
 - `docs/`: new-command coverage in the guide + architecture docs.
 - `ft.nvim`: the motivating consumer — an editor-side task (tagged
   `[ft.nvim]`) in the sibling repo will call `ft notes quote` to pin
-  visual selections; this change only guarantees the stable CLI
-  contract it needs.
+  visual selections. **Deferred:** the editor-side consumption is a
+  separate change in its own session; this change only lands the
+  stable CLI contract it will consume, and leaves the ft.nvim repo
+  untouched.

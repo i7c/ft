@@ -32,4 +32,4 @@
 
 ## 6. [ft.nvim] editor-side consumer (sibling repo)
 
-- [ ] 6.1 In `ft.nvim`, add a pin-selection action that calls `ft notes quote <file> --lines A-B` (via the `ft.rpc` transport seam), inserts the returned callout at the cursor or into a target note, and surfaces errors (dirty source, range out of bounds) as notifications. Update `ft.nvim`'s `ARCHITECTURE.md` with the new CLI contract it depends on. Record the paired commit SHA in the archive note for this change.
+- [x] ~~6.1 In `ft.nvim`, add a pin-selection action that calls `ft notes quote <file> --lines A-B` (via the `ft.rpc` transport seam), inserts the returned callout at the cursor or into a target note, and surfaces errors (dirty source, range out of bounds) as notifications. Update `ft.nvim`'s `ARCHITECTURE.md` with the new CLI contract it depends on. Record the paired commit SHA in the archive note for this change.~~ — **deferred**: the editor-side consumer moves to a separate change in its own session (ft.nvim repo); this change only lands the stable CLI contract it will consume. The ft.nvim repo tree was left untouched.
