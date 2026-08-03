@@ -65,34 +65,48 @@ without altering any of them.
 
 ## Decisions
 
-### D1. New core primitive `synth::slice::slice_lines`
+### D1. New core primitive `synth::slice`
 **Decision:** New `ft_core/src/synth/slice.rs`:
 
 ```rust
+/// Number of lines in `content`. A trailing newline is not an extra
+/// line ("a\nb\n" has 2 lines, "" has 0).
+pub fn count_lines(content: &str) -> u32
+
 /// Slice `content`'s lines `start..=end` (1-indexed inclusive),
-/// rejoined with `\n`, no trailing newline. A trailing newline on
-/// `content` does not count as an extra line. Returns `None` when the
-/// range is empty or out of bounds.
+/// rejoined with `\n`, no trailing newline. Returns `None` when the
+/// range is empty or out of bounds (validate with [`count_lines`]).
 pub fn slice_lines(content: &str, line_start: u32, line_end: u32) -> Option<String>
 ```
 
 Line counting: `split('\n')`, then drop the trailing empty element
-when `content` ends with `'\n'` (so `"a\nb\n"` has 2 lines, `"a\nb"`
-has 2, `""` has 0). Validation: `line_start >= 1`, `line_start <=
+when `content` ends with `'\n'` (so `"a\nb\n"` counts 2 lines, not 3).
+Validation: `line_start >= 1`, `line_start <=
 line_end <= line_count`. Body = `lines[(start-1)..end].join("\n")`.
 
-`verify.rs` is refactored to use it for the blob slice (its
-`SourceMissing` "line range outside file" detail is preserved). `quote`
-uses it working-tree-side. `repair.rs`/`reslice.rs` adopt it where the
-shape matches (they currently assume the range is valid because it came
-from a pin — `slice_lines`'s `None` becomes an unreachable-guard there).
+All four existing slice sites adopt it (user decision: reduce
+code duplication):
+
+- `verify.rs::verify_one` — blob slice; its `SourceMissing` "line
+  range outside file" detail is preserved (message uses `count_lines`).
+- `reslice.rs` — `file_lines` becomes `count_lines(&blob)` (this also
+  fixes its phantom line: `resolve_range` was bounds-checking against
+  a trailing-newline-inflated `lines.len()`); the new body slice and
+  the `healed_drift` comparison both become `slice_lines` calls
+  (`None` for the old range ⇒ already broken ⇒ `healed_drift = true`,
+  matching today's out-of-bounds branch).
+- `repair.rs` — `body_matches_pin`'s manual slice + bounds guard
+  becomes `slice_lines(blob, start, end) == Some(body)` (`None` ⇒ no
+  match, same as today's guard). `find_body`'s needle search is *not*
+  a range slice and stays as-is.
+- `quote` uses it working-tree-side.
 
 **Rationale:** One definition of the semantics, with the trailing-
-newline fix, used by both the emitter (quote) and the checker (verify)
-guarantees that quote's pins always verify `ok` — self-consistency by
-construction. This is also the exact "bundle it in core" the user
-asked for: the slice is domain logic, and four blob-side copies already
-existed before quote.
+newline fix, used by the emitter (quote), the checker (verify), and
+both re-slicers means every consumer agrees on what a "line range"
+means — self-consistency by construction. This is the exact "bundle
+it in core" the user asked for: the slice is domain logic, and four
+blob-side copies already existed before quote.
 
 **Alternatives considered:** *Inline a 4-line slice in `cmd/quote.rs`.*
 Rejected: it would be the 5th copy, with the same trailing-newline
@@ -155,8 +169,9 @@ ft notes quote <FILE> --lines A-B
   auto-append — it is a *source* path like scaffold's `--from`, not a
   target). Absolute paths are accepted and passed through
   `vault.relativize` so the callout header is always vault-relative.
-- `--lines A-B`: required, 1-indexed inclusive, parsed with the same
-  rules as `synth reslice --lines` (positive integers, `A <= B`).
+- `--lines A-B` (short alias `-l A-B`): required, 1-indexed
+  inclusive, parsed with the same rules as `synth reslice --lines`
+  (positive integers, `A <= B`).
 - Output: the canonical callout (`callout::serialize`) plus one
   trailing newline, on stdout. No color, no prompts, no `--json`.
 - Exit: 0 on success; 1 with a message on stderr for: vault has no git
@@ -210,10 +225,11 @@ fine.
 - **[Risk] `verify`'s blob slice behavior changes for pathological
   ranges** (a pin whose range includes the phantom empty line of a
   trailing-newline file would now report out-of-range instead of
-  drifting). → Mitigation: no engine-produced pin can have such a range
-  (bodies never include the phantom line), so this only affects
-  hand-crafted malformed pins; it is the deliberate correctness fix.
-  Verify's round-trip tests cover the normal envelope.
+  drifting; `reslice`'s `resolve_range` similarly rejects such ranges).
+  → Mitigation: no engine-produced pin can have such a range (bodies
+  never include the phantom line), so this only affects hand-crafted
+  malformed pins; it is the deliberate correctness fix. Verify's
+  round-trip tests and reslice's tests cover the normal envelope.
 - **[Risk] ft.nvim builds on an unstable stdout contract.** →
   Mitigation: the `notes-quote` spec pins the exact output (one
   callout, trailing newline, no other bytes), and the ft.nvim change is
@@ -224,11 +240,12 @@ fine.
   (user: "I don't see how json adds value for now"); the header
   grammar is already the machine-readable contract elsewhere
   (`callout::parse` round-trips it).
-- **[Trade-off] `repair`/`reslice` adopt `slice_lines` only
-  opportunistically**, leaving two sites with their own (valid-range-
-  assuming) slicing for now. → Accepted: those paths consume
-  engine-produced ranges and cannot hit the edge cases; unifying them
-  is a follow-up if a third consumer appears.
+- **[Trade-off] `repair`'s `find_body` needle search keeps its own
+  `split('\n')` line-vector handling.** → Accepted: it is a body-search
+  operation (exact/whitespace-insensitive match over the whole blob),
+  not a range slice; forcing `slice_lines` onto it would be wrong.
+  Everything that *slices a range* — verify, reslice, repair's
+  `body_matches_pin`, quote — now shares one helper.
 
 ## Migration Plan
 
@@ -239,9 +256,6 @@ pins.
 
 ## Open Questions
 
-- **Short flag for `--lines`?** Lean: long-only (`--lines A-B`),
-  matching `synth reslice --lines`. Confirm during implementation.
-- **`repair.rs`/`reslice.rs` adoption of `slice_lines`:** in scope for
-  this change or a follow-up? Lean: adopt in `reslice` only if its
-  slice is trivially replaceable; leave `repair` (needle-search is a
-  different operation). Decide at implementation.
+None — both implementation-time questions are resolved: `--lines` gets
+the short alias `-l` (user decision), and `reslice` + `repair` adopt
+`slice_lines` in this change (user decision, see D1).

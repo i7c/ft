@@ -19,7 +19,8 @@ section for the given vault file and line range. `<FILE>` SHALL be a
 vault-relative path (absolute paths SHALL be accepted and relativized
 for the callout header; the `.md` extension SHALL NOT be auto-appended).
 `--lines A-B` SHALL be required, 1-indexed inclusive, with `A` and `B`
-positive integers and `A <= B`. The command SHALL be read-only: it
+positive integers and `A <= B`; the short alias `-l A-B` SHALL be
+accepted in place of `--lines`. The command SHALL be read-only: it
 SHALL NOT write, create, or modify any file, SHALL NOT launch an
 editor, and SHALL NOT prompt. The exit code SHALL be 0 on success and
 1 on any error, with a human-readable message on stderr.
@@ -38,6 +39,12 @@ editor, and SHALL NOT prompt. The exit code SHALL be 0 on success and
   --lines 1-1`
 - **THEN** the callout header contains the vault-relative path
   `notes/foo.md`
+
+#### Scenario: Short flag alias
+- **WHEN** the user runs `ft notes quote notes/foo.md -l 1-2` on a
+  clean, committed file
+- **THEN** the output is byte-identical to running the same command
+  with `--lines 1-2`, and the exit code is 0
 
 #### Scenario: Read-only guarantee
 - **WHEN** the command runs successfully in a vault
