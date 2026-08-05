@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.1.5
+
+### Added
+
+- `ft notes quote <file> --lines A-B` (`-l` alias): read-only plumbing
+  that validates the source note is committed and unmodified at HEAD,
+  slices the 1-indexed inclusive line range from the working tree, and
+  emits the canonical `[!ft-source]` callout to stdout. It reuses the
+  pinning mechanics scaffold/grow share, exposed for scripts and
+  ft.nvim. See `docs/guide/synthesis.md` → "Quoting a section
+  (plumbing)".
+- New `synth::slice::{count_lines, slice_lines}` core helper (1-indexed
+  inclusive range; trailing newline is not a line), now shared by
+  verify, reslice, repair (`body_matches_pin`) and quote.
+- `head_short_sha` + `SHORT_SHA_LEN` moved from the callout module to
+  `ft-core::git`.
+
+## 0.1.4
+
 ### Hard break: task DSL replaced by unified graph DSL under `Profile::Tasks`
 
 `ft tasks list` and the TUI Tasks tab now use the graph DSL parser
