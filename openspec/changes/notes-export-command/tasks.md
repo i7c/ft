@@ -1,0 +1,29 @@
+# notes-export-command — tasks
+
+## 1. Core: export module + target trait
+
+- [ ] 1.1 Add `ft-core/src/export.rs` with the `ExportTarget` trait — `fn name(&self) -> &'static str` and `fn transform_line(&self, line: &str) -> Option<String>` (`None` = drop the line) — and the `CommonMarkExport` v1 impl. Register the module in `ft-core/src/lib.rs`.
+- [ ] 1.2 Add `pub fn frontmatter_end_line(content: &str) -> Option<u32>` to `ft-core/src/frontmatter.rs` — the 1-indexed line number of the closing fence of a well-formed leading frontmatter block (line 1 `---` opens; first later line trimming to `---` or `...` closes), `None` when absent. Unit tests: canonical block, no frontmatter, `...` closer, CRLF, `---` mid-file is not frontmatter, unterminated block.
+- [ ] 1.3 Implement `export_content(content, range: Option<(u32, u32)>, target: &dyn ExportTarget) -> Result<ExportOutcome, ExportError>` in `export.rs` (with `ExportOutcome { text }` and `ExportError::RangePastEnd { file_lines, requested_end }`): default range = whole file; validate `B <= count_lines(content)` (raw count) else `RangePastEnd`; clamp start to `max(A, frontmatter_end_line + 1)` (1 when no frontmatter); empty result when start > end; slice via `synth::slice::slice_lines`; transform each line, dropping `None`s; join with `\n`. Unit tests: clamp scenarios (range after frontmatter, mixed range, all-frontmatter → empty text, no-frontmatter no-clamp), `RangePastEnd` (raw count), trailing-newline files.
+- [ ] 1.4 Add the module-private per-line wikilink/embed scanner for CommonMark in `export.rs` (walk the line, skip inline code spans — single/double/triple backtick runs, same convention as `graph::parser` — rewrite `[[…]]` / `![[…]]`): `[[T]]` → `T`, `[[T|D]]` → `D`, `[[T#A]]` → `T`, `[[T#A|D]]` → `D`, `[[#A]]` → `#A`, `[[#A|D]]` → `D`, `![[T]]` → `![T](href)`, `![[T|D]]` → `![D](href)`, `![[T#A]]` → `![T](href)`, `![[T#A|D]]` → `![D](href)`; embed href wrapped in `<…>` when it contains whitespace; `[[]]`, `[[|D]]`, and unterminated `[[` left verbatim; markdown links/images never touched. Unit tests: every table row, whitespace href, code spans untouched, multiple links per line, blockquote-line conversion (`> [[Foo]]` → `> Foo`), non-link edges.
+- [ ] 1.5 Implement `CommonMarkExport::transform_line`: drop lines matching `synth::callout::header_regex()` (canonical `> [!ft-source] "…" L…-… @… #…`); otherwise run the wikilink scanner. Unit tests: canonical header dropped, body `>` lines kept verbatim, malformed header (missing tokens) kept, adjacent callouts, nested-blockquote header (`> > [!ft-source]`) kept.
+
+## 2. CLI: shared parse_range + export command
+
+- [ ] 2.1 Extract `parse_range` from `ft/src/cmd/quote.rs` into `cmd::common::parse_line_range(spec: &str) -> Result<(u32, u32)>` (same messages: `A-B` form, positive integers, `A >= 1`, `A <= B`); refactor `quote.rs` to call it; existing `ft/tests/notes_quote.rs` tests stay green unchanged.
+- [ ] 2.2 Add `ft/src/cmd/export.rs` with `ExportArgs { file: PathBuf, lines: Option<String> (short -l), format: ExportFormat }` and `#[derive(ValueEnum)] pub enum ExportFormat { #[default] CommonMark }` (value name `commonmark`); `run_export(args, vault_flag) -> Result<ExitCode>`: discover vault → relativize file (no `.md` auto-append) → read file (error naming file) → `parse_line_range` when `--lines` given → map format to `&dyn ExportTarget` → `export_content` → `RangePastEnd` mapped to the quote-style message ("line range L…-… outside file `…` (file has N lines)") → print transformed text with one trailing newline (no bytes when empty). Register module in `ft/src/cmd/mod.rs`; add `NotesCommand::Export(ExportArgs)` variant with help string + dispatch arm in `ft/src/cmd/notes.rs`.
+- [ ] 2.3 Unit-check the value mapping: `ExportFormat::CommonMark` → `&CommonMarkExport`, and clap rejects unknown `--format` values (covered by integration tests in 3.1).
+
+## 3. Integration tests
+
+- [ ] 3.1 Add `ft/tests/notes_export.rs` (assert_cmd + assert_fs fixture vault; no git needed — only `.obsidian` + files): whole-file export is exact expected bytes with single trailing newline; `-l` byte-identical to `--lines`; `--format commonmark` accepted and `--format plaintext` rejected; frontmatter clamp (range after frontmatter, mixed range clamps, all-frontmatter range → empty stdout + exit 0, blank line after frontmatter respected, no-frontmatter no clamp); callout → blockquote (header dropped, body kept, malformed header kept, partial range through a callout); wikilink conversion table incl. embeds and whitespace href; code spans untouched; conversion inside `> [!note]` blockquotes; markdown links/images preserved; task lines with emoji preserved; missing file; non-UTF8 file; no vault; no `.md` auto-append; `B` past end errors naming file + raw line count; invalid `--lines` values (`1`, `a-b`, `0-1`, `2-1`, `1-0`, `-1-2`) fail; trailing-newline-not-a-line; read-only (no files created/modified).
+- [ ] 3.2 Round-trip sanity: a fixture note combining frontmatter + callout + wikilinks + embeds + code fence + task + markdown link exports to a byte-exact expected CommonMark document (all constructs in one file).
+
+## 4. Docs
+
+- [ ] 4.1 Document `ft notes export` in `docs/guide/notes.md` (plumbing surface: original-file `--lines` semantics + frontmatter start-clamp, stripping rules, `--format commonmark` target seam, read-only, no git); add a line to the CLI surface list in `docs/architecture.md`; update the README command list if it enumerates `ft notes` subcommands.
+
+## 5. Verification
+
+- [ ] 5.1 Run the five build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`.
+- [ ] 5.2 Commit the implementation as its own commit (the spec commit already lands separately).
