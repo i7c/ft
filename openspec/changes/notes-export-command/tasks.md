@@ -26,4 +26,4 @@
 ## 5. Verification
 
 - [x] 5.1 Run the five build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`.
-- [ ] 5.2 Commit the implementation as its own commit (the spec commit already lands separately).
+- [x] 5.2 Commit the implementation as its own commit (the spec commit already lands separately).
