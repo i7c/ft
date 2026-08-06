@@ -292,7 +292,7 @@ impl GraphTab {
             },
         ) {
             Ok(outcome) => {
-                let rel = ctx.vault.relativize(&resolved).to_path_buf();
+                let rel = ctx.vault.relativize(&resolved);
                 // Lands on the new task when it's already visible (a
                 // top-level task in an expanded note, say); a subtask of
                 // a collapsed parent stays hidden until the user expands.

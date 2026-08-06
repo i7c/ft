@@ -1177,7 +1177,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
                 continue;
             }
             let rel = vault.relativize(&edit.path);
-            print_diff(rel, &edit.original, &edit.new);
+            print_diff(&rel, &edit.original, &edit.new);
         }
         return Ok(ExitCode::SUCCESS);
     }

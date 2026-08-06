@@ -188,7 +188,7 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             ));
         }
         doc.blocks.push(block);
-        print_diff(vault.relativize(&path), &doc.source_content, &doc.render());
+        print_diff(&vault.relativize(&path), &doc.source_content, &doc.render());
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -286,7 +286,7 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         for (i, b) in doc.blocks.iter_mut().enumerate() {
             b.source_line = i + 1;
         }
-        print_diff(vault.relativize(&path), &doc.source_content, &doc.render());
+        print_diff(&vault.relativize(&path), &doc.source_content, &doc.render());
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -442,7 +442,7 @@ fn run_delete(args: DeleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         let mut new_doc = doc.clone();
         new_doc.blocks.remove(idx);
         print_diff(
-            vault.relativize(&path),
+            &vault.relativize(&path),
             &doc.source_content,
             &new_doc.render(),
         );

@@ -237,10 +237,17 @@ impl Vault {
 
     /// Return `path` stripped of the vault root prefix, or `path`
     /// verbatim when it already is vault-relative (or sits outside the
-    /// vault). The result borrows from `path`; clone if you need to
-    /// store it. Used for user-facing display of absolute paths.
-    pub fn relativize<'a>(&self, path: &'a Path) -> &'a Path {
-        path.strip_prefix(&self.path).unwrap_or(path)
+    /// vault). Used for user-facing display of absolute paths. The
+    /// incoming `path` is canonicalized first so that a symlinked or
+    /// differently-lexical form of the same absolute file still
+    /// relativizes against the (canonicalized) vault root — e.g. on
+    /// macOS where `/tmp` and `/var` are symlinks to `/private/...`.
+    pub fn relativize(&self, path: &Path) -> PathBuf {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        canonical
+            .strip_prefix(&self.path)
+            .map(Path::to_path_buf)
+            .unwrap_or(canonical)
     }
 
     /// Vault-relative path that holds ft note templates. Defaults to

@@ -500,8 +500,8 @@ fn run_move_section(args: MoveSectionArgs, vault_flag: Option<PathBuf>) -> Resul
 
     let (new_source, new_target) = move_sections(&source_content, &picks, &target_content, &plan)?;
 
-    let source_rel = vault.relativize(&source_abs).to_path_buf();
-    let target_rel = vault.relativize(&target_abs).to_path_buf();
+    let source_rel = vault.relativize(&source_abs);
+    let target_rel = vault.relativize(&target_abs);
     print_diff(&source_rel, &source_content, &new_source);
     print_diff(&target_rel, &target_content, &new_target);
 
@@ -775,7 +775,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     // 8. Post-create handoff: obsidian URL or editor.
     if args.obsidian {
-        let rel = vault.relativize(&abs_dest).to_path_buf();
+        let rel = vault.relativize(&abs_dest);
         let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");
@@ -859,7 +859,7 @@ fn run_append(args: AppendArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     // 9. Post-append handoff.
     if args.obsidian {
-        let rel_p = vault.relativize(&abs_target).to_path_buf();
+        let rel_p = vault.relativize(&abs_target);
         let url = obsidian_url(args.vault_name.as_deref(), &vault.path, &rel_p, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");
@@ -1149,7 +1149,7 @@ fn run_periodic_inner(
 
     // 5. Post-create handoff: obsidian URL or editor (skipped under --no-open).
     if obsidian {
-        let rel_p = vault.relativize(&abs_path).to_path_buf();
+        let rel_p = vault.relativize(&abs_path);
         let url = obsidian_url(vault_name, &vault.path, &rel_p, None);
         if std::env::var_os("FT_OBSIDIAN_DRY_RUN").is_some() {
             println!("{url}");

@@ -39,7 +39,7 @@ pub fn run_quote(args: QuoteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
         anyhow!("vault is not inside a git repository — `ft notes quote` pins to HEAD and needs git history")
     })?;
 
-    let rel = vault.relativize(&args.file).to_path_buf();
+    let rel = vault.relativize(&args.file);
     let absolute = vault.path.join(&rel);
     let content = std::fs::read_to_string(&absolute)
         .with_context(|| format!("cannot read source file `{}`", rel.display()))?;
