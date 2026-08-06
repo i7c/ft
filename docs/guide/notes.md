@@ -345,3 +345,54 @@ For appending pre-rendered content into existing notes — log
 templates, session entries, meeting boilerplate — see
 [capture-and-templates.md](capture-and-templates.md). Both `ft notes
 append` and the TUI's quick-capture key (`Q`) are documented there.
+## Exporting a note as clean markdown
+
+`ft notes export` is the read-only plumbing command that renders a
+note as clean, portable markdown — the vault stripped away, ready to
+paste, publish, or pipe to another tool. It is the inverse of `ft
+notes quote` (which wraps a raw range *into* a pinned `[!ft-source]`
+callout); export never touches git and never writes anything.
+
+```sh
+ft notes export notes/spectral.md
+```
+
+The v1 target is **CommonMark**, selected with `--format commonmark`
+(the default; `plaintext` and `slack` targets are planned — the
+stripping rules live behind an extensible seam, so future targets are
+new implementations, not a different command). Export strips exactly
+the vault-specific structure:
+
+- **Frontmatter** — the whole leading `--- … ---` block is dropped.
+- **`[!ft-source]` callouts** — the header line (path, range, SHA,
+  hash) is provenance plumbing and drops; the `> body` lines survive
+  as ordinary CommonMark blockquotes. A malformed header (missing a
+  token) is just a blockquote and stays.
+- **Wikilinks** — `[[Some other file]]` becomes `some other file`;
+  `[[Foo|Bar]]` becomes `Bar` (the display text); `[[Foo#Heading]]`
+  becomes `Foo`; `[[#Anchor]]` becomes `#Anchor`. Obsidian embeds
+  become CommonMark images: `![[img.png]]` → `![img.png](img.png)`.
+
+Everything else passes through byte-for-byte: markdown links, headings,
+task lines (emoji metadata included), `> [!note]`-style callouts, code
+spans and fenced code blocks (wikilinks inside code are code, not
+references, and stay verbatim).
+
+### Line ranges are original-file lines
+
+`--lines A-B` (alias `-l`) addresses the **original file**, and the
+range start is clamped to the first line after the frontmatter — so a
+range that includes frontmatter silently drops it, and a range fully
+inside the frontmatter exports nothing (exit 0):
+
+```sh
+ft notes export notes/spectral.md --lines 6-10   # body lines only
+```
+
+A range end past the file's last line is an error that names the file
+and its actual line count. Removing frontmatter does not renumber or
+shift anything else: the output is exactly the selected lines,
+transformed. Omit `--lines` to export the whole note.
+
+Because it is a plain stdout command with no prompts and no color,
+`ft notes export` is safe to call from scripts and other tools.

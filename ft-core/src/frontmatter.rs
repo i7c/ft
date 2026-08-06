@@ -27,6 +27,30 @@
 //! `key:` line. Tabs and spaces both count as indentation (the indent
 //! width is compared by leading-whitespace byte length).
 
+/// The 1-indexed line number of the closing fence of a well-formed
+/// leading frontmatter block (`---` … `---` at the very top of the
+/// file), or `None` when there is none.
+///
+/// Line-based recognition, matching [`crate::markdown::LineSkipState`]:
+/// the opener is line 1 trimming to `---`; the closer is the first
+/// later line trimming to `---` or `...` (YAML doc-end). Used by the
+/// export pipeline to clamp line ranges to the first body line.
+pub fn frontmatter_end_line(content: &str) -> Option<u32> {
+    let mut lines = content.split('\n');
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let mut lineno = 1u32;
+    for line in lines {
+        lineno += 1;
+        let t = line.trim_end();
+        if t == "---" || t == "..." {
+            return Some(lineno);
+        }
+    }
+    None
+}
+
 /// Read `ft.tasks.section` (the heading new tasks land under).
 ///
 /// Returns `None` when there is no frontmatter, no `ft:` map, or no
@@ -542,5 +566,48 @@ mod tests {
     fn extra_whitespace() {
         let c = fm("ft:\n  synth:\n    enabled:    true\n");
         assert_eq!(ft_synth_enabled(&c), Some(true));
+    }
+
+    // ── frontmatter_end_line ───────────────────────────────────────
+
+    #[test]
+    fn end_line_canonical_block() {
+        let c = "---\nft:\n  synth:\n    enabled: true\n---\n# Body\n";
+        assert_eq!(frontmatter_end_line(c), Some(5));
+    }
+
+    #[test]
+    fn end_line_no_frontmatter() {
+        assert_eq!(frontmatter_end_line("# Body\n"), None);
+        assert_eq!(frontmatter_end_line(""), None);
+    }
+
+    #[test]
+    fn end_line_ellipsis_closer() {
+        let c = "---\ntitle: Foo\n...\n# Body\n";
+        assert_eq!(frontmatter_end_line(c), Some(3));
+    }
+
+    #[test]
+    fn end_line_crlf() {
+        let c = "---\r\nft:\r\n  synth:\r\n    enabled: true\r\n---\r\nbody\r\n";
+        assert_eq!(frontmatter_end_line(c), Some(5));
+    }
+
+    #[test]
+    fn end_line_mid_file_dashes_not_frontmatter() {
+        let c = "some prose\n---\nnot frontmatter\n";
+        assert_eq!(frontmatter_end_line(c), None);
+    }
+
+    #[test]
+    fn end_line_unterminated_block() {
+        assert_eq!(frontmatter_end_line("---\nno close\n"), None);
+    }
+
+    #[test]
+    fn end_line_empty_block() {
+        let c = "---\n---\n# Body\n";
+        assert_eq!(frontmatter_end_line(c), Some(2));
     }
 }

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use ft_core::graph::Graph;
 use ft_core::query::{interpolate, SigilCtx};
@@ -37,4 +37,30 @@ pub fn sigil_ctx<'a>(vault: &'a Vault, today: NaiveDate) -> SigilCtx<'a> {
 pub fn interpolate_query(src: &str, vault: &Vault, today: NaiveDate) -> Result<String> {
     interpolate(src, sigil_ctx(vault, today))
         .map_err(|e| anyhow::anyhow!("invalid query `{src}`: {e}"))
+}
+
+/// Parse an `A-B` line-range spec into a validated 1-indexed inclusive
+/// range. Shared by `ft notes quote` (required) and `ft notes export`
+/// (optional): positive integers, `A >= 1`, `A <= B`.
+pub fn parse_line_range(spec: &str) -> Result<(u32, u32)> {
+    let (a, b) = spec
+        .split_once('-')
+        .ok_or_else(|| anyhow!("invalid --lines `{spec}` (expected `A-B`)"))?;
+    let start: u32 = a
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("invalid --lines `{spec}` (A must be a positive integer)"))?;
+    let end: u32 = b
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("invalid --lines `{spec}` (B must be a positive integer)"))?;
+    if start < 1 {
+        return Err(anyhow!(
+            "invalid --lines `{spec}` (lines are 1-indexed; A must be >= 1)"
+        ));
+    }
+    if start > end {
+        return Err(anyhow!("invalid --lines `{spec}` (A must be <= B)"));
+    }
+    Ok((start, end))
 }

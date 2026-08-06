@@ -258,6 +258,11 @@ pub(crate) struct LineSkipState {
     /// Are we inside an indented code block? Set when one begins at a
     /// block boundary; cleared by a non-blank, non-indented line.
     in_indent_code: bool,
+    /// Was the most recently advanced line code (fence delimiter,
+    /// inside a fence, or an indented-code-block line)? Consumers that
+    /// need to distinguish "code" from other structural lines (the
+    /// export driver) read this after [`LineSkipState::skip_line`].
+    last_code: bool,
 }
 
 impl LineSkipState {
@@ -280,6 +285,14 @@ impl LineSkipState {
         result
     }
 
+    /// Whether the most recently [`skip_line`](LineSkipState::skip_line)'d
+    /// line was code: a fence delimiter, a line inside a fence, or an
+    /// indented-code-block line. Frontmatter and plain content lines
+    /// return `false`.
+    pub(crate) fn last_was_code(&self) -> bool {
+        self.last_code
+    }
+
     fn classify(&mut self, line: &str, is_blank: bool) -> bool {
         // Frontmatter handling: only relevant on line 1 and during the
         // block. CommonMark doesn't define frontmatter; we follow the
@@ -288,12 +301,15 @@ impl LineSkipState {
             self.started = true;
             if line.trim_end() == "---" {
                 self.in_frontmatter = true;
+                self.last_code = false;
                 return true;
             }
+            self.last_code = false;
         } else if self.in_frontmatter {
             if line.trim_end() == "---" || line.trim_end() == "..." {
                 self.in_frontmatter = false;
             }
+            self.last_code = false;
             return true;
         }
 
@@ -310,11 +326,13 @@ impl LineSkipState {
                     self.fence_len = 0;
                 }
             }
+            self.last_code = true;
             return true;
         }
         if let Some((c, n)) = leading_fence(trimmed) {
             self.fence = Some(c);
             self.fence_len = n;
+            self.last_code = true;
             return true;
         }
 
@@ -328,14 +346,18 @@ impl LineSkipState {
         // non-blank, non-indented line ends it.
         if self.in_indent_code {
             if is_blank || starts_with_indent(line, 4) {
+                self.last_code = true;
                 return true;
             }
             self.in_indent_code = false;
+            self.last_code = false;
         } else if self.prev_blank && !is_blank && starts_with_indent(line, 4) {
             self.in_indent_code = true;
+            self.last_code = true;
             return true;
         }
 
+        self.last_code = false;
         false
     }
 }

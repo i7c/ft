@@ -107,6 +107,10 @@ pub enum NotesCommand {
     /// Emit the canonical protected-section callout for a line range of
     /// a vault file (read-only plumbing; pins to HEAD like `synth`).
     Quote(crate::cmd::quote::QuoteArgs),
+    /// Render a vault file as clean, portable markdown — stripping
+    /// frontmatter, `[!ft-source]` callout headers, and wikilinks
+    /// (read-only plumbing; no git needed).
+    Export(crate::cmd::export::ExportArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -130,6 +134,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
         NotesCommand::Quote(q) => crate::cmd::quote::run_quote(q, vault_flag),
+        NotesCommand::Export(e) => crate::cmd::export::run_export(e, vault_flag),
     }
 }
 

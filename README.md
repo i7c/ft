@@ -279,4 +279,6 @@ depth.
   the `[!ft-source]` callout grammar used in synth notes, and the
   `[synth]` config table; `ft notes quote` (the read-only plumbing
   command behind the same pinning mechanics) is documented in
-  [docs/guide/synthesis.md](docs/guide/synthesis.md)
+  [docs/guide/synthesis.md](docs/guide/synthesis.md), and its inverse
+  `ft notes export` (vault-stripped CommonMark for pasting/publishing)
+  in [docs/guide/notes.md](docs/guide/notes.md)

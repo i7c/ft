@@ -32,7 +32,7 @@ pub struct QuoteArgs {
 }
 
 pub fn run_quote(args: QuoteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let (start, end) = parse_range(&args.lines)?;
+    let (start, end) = crate::cmd::common::parse_line_range(&args.lines)?;
 
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
@@ -77,28 +77,4 @@ pub fn run_quote(args: QuoteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCod
     let section = build_pinned_section(&short_sha, &source);
     println!("{}", serialize(&section));
     Ok(ExitCode::SUCCESS)
-}
-
-/// Parse `A-B` into a validated 1-indexed inclusive range.
-fn parse_range(spec: &str) -> Result<(u32, u32)> {
-    let (a, b) = spec
-        .split_once('-')
-        .ok_or_else(|| anyhow!("invalid --lines `{spec}` (expected `A-B`)"))?;
-    let start: u32 = a
-        .trim()
-        .parse()
-        .map_err(|_| anyhow!("invalid --lines `{spec}` (A must be a positive integer)"))?;
-    let end: u32 = b
-        .trim()
-        .parse()
-        .map_err(|_| anyhow!("invalid --lines `{spec}` (B must be a positive integer)"))?;
-    if start < 1 {
-        return Err(anyhow!(
-            "invalid --lines `{spec}` (lines are 1-indexed; A must be >= 1)"
-        ));
-    }
-    if start > end {
-        return Err(anyhow!("invalid --lines `{spec}` (A must be <= B)"));
-    }
-    Ok((start, end))
 }
