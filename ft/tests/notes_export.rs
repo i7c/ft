@@ -163,6 +163,111 @@ fn format_flag_defaults_and_validates() {
 }
 
 #[test]
+fn slack_format_is_accepted() {
+    let tmp = make_vault();
+    export(&tmp, &["notes/sample.md", "--format", "slack"])
+        .success()
+        .stdout(
+            "*Heading Foo*\n\
+             \n\
+             See bee and img.png and #Anchor.\n\
+             \n\
+             > Keep me\n> see Baz\n\
+             \n\
+             > quoted Quoted\n\
+             \n\
+             - ⏫ 📅 2026-08-05 task with md link\n\
+             ```\n[[InsideFence]]\n```\n",
+        );
+}
+
+#[test]
+fn slack_export_converts_every_construct() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/slack.md")
+        .write_str(
+            "---\n---\n\
+             # Title\n\n\
+             **bold** and *italic* and ~~strike~~ and `**code**`\n\n\
+             see [docs](https://docs.example.com/x) and [note](notes/other.md)\n\n\
+             ![remote](https://ex.com/img.png) and ![local](local.png)\n\n\
+             - [ ] ⏫ 📅 2026-08-05 Finish\n  - [x] done\n\n\
+             > [!note] Keep this\n> > [!warning] nested\n\n\
+             ```rust\nfn main() { println!(\"[[not a link]]\"); }\n```\n\n\
+             ~~~\ntilde code\n~~~\n\n\
+             snake_case and 2 * 3 and AT&T <value>\n",
+        )
+        .unwrap();
+    export(&tmp, &["notes/slack.md", "--format", "slack"])
+        .success()
+        .stdout(
+            "*Title*\n\
+             \n\
+             *bold* and _italic_ and ~strike~ and `**code**`\n\
+             \n\
+             see <https://docs.example.com/x|docs> and note\n\
+             \n\
+             https://ex.com/img.png and local\n\
+             \n\
+             - ⏫ 📅 2026-08-05 Finish\n  - done\n\
+             \n\
+             > Keep this\n> > nested\n\
+             \n\
+             ```\nfn main() { println!(\"[[not a link]]\"); }\n```\n\
+             \n\
+             ```\ntilde code\n```\n\
+             \n\
+             snake_case and 2 * 3 and AT&T <value>\n",
+        );
+}
+
+#[test]
+fn slack_range_matches_commonmark_line_semantics() {
+    let tmp = make_vault();
+    // Same `-l` addressing, different transform: line 7 heading + line
+    // 8 blank in commonmark vs slack bold.
+    export(&tmp, &["notes/sample.md", "-l", "7-8", "--format", "slack"])
+        .success()
+        .stdout("*Heading Foo*\n\n");
+}
+
+#[test]
+fn slack_commonmark_regression_same_fixture() {
+    // The same fixture exports identically to the pre-slack commonmark
+    // behavior (sample.md regression guard lives in
+    // whole_file_export_is_exact_commonmark; this pins the shared
+    // clamp/range machinery across targets).
+    let tmp = make_vault();
+    let cm = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "notes",
+            "export",
+            "notes/sample.md",
+        ])
+        .output()
+        .unwrap();
+    let explicit = ft()
+        .args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "notes",
+            "export",
+            "notes/sample.md",
+            "--format",
+            "commonmark",
+        ])
+        .output()
+        .unwrap();
+    assert!(cm.status.success());
+    assert!(explicit.status.success());
+    assert_eq!(cm.stdout, explicit.stdout);
+    assert!(cm.stdout.starts_with(b"# Heading Foo\n"));
+}
+
+#[test]
 fn range_after_frontmatter_exports_those_lines() {
     let tmp = make_vault();
     export(&tmp, &["notes/sample.md", "-l", "7-8"])

@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
-use ft_core::export::{export_content, CommonMarkExport, ExportError, ExportTarget};
+use ft_core::export::{export_content, CommonMarkExport, ExportError, ExportTarget, SlackExport};
 
 #[derive(Args, Debug)]
 pub struct ExportArgs {
@@ -31,7 +31,11 @@ pub struct ExportArgs {
     pub lines: Option<String>,
 
     /// Export target — the stripping rules applied. `commonmark` is
-    /// the only target today; plain text and Slack will follow.
+    /// clean CommonMark for pasting/publishing; `slack` rewrites to
+    /// Slack's mrkdwn dialect (headings, emphasis, links, task
+    /// checkboxes, callout markers and code fences converted; `& < >`
+    /// left raw for the composer). Plain text is planned, not yet
+    /// accepted.
     #[arg(long, value_enum, default_value_t = ExportFormat::CommonMark)]
     pub format: ExportFormat,
 }
@@ -44,12 +48,21 @@ pub enum ExportFormat {
     #[default]
     #[value(name = "commonmark")]
     CommonMark,
+    /// Slack mrkdwn: everything `commonmark` does, plus CommonMark
+    /// syntax Slack renders as literal text converted to its dialect
+    /// — headings → bold, `**bold**` → `*bold*`, `[text](url)` →
+    /// `<url|text>`, images → text/URL, `- [ ]` checkboxes dropped,
+    /// `[!type]` callout markers stripped, code-fence language tags
+    /// dropped and `~~~` fences → ` ``` `. `& < >` stay raw.
+    #[value(name = "slack")]
+    Slack,
 }
 
 impl ExportFormat {
     fn target(self) -> &'static dyn ExportTarget {
         match self {
             ExportFormat::CommonMark => &CommonMarkExport,
+            ExportFormat::Slack => &SlackExport,
         }
     }
 }

@@ -7,8 +7,10 @@
 //! (converted to plain text / CommonMark images).
 //!
 //! The per-line stripping rules live behind [`ExportTarget`] so new
-//! targets (plain text, Slack) are new impls; the frontmatter clamp
+//! targets (plain text) are new impls; the frontmatter clamp
 //! and range slicing in [`export_content`] are target-independent.
+//! `CommonMarkExport` is the v1 target; `SlackExport` renders
+//! Slack's mrkdwn dialect.
 
 use crate::frontmatter::frontmatter_end_line;
 use crate::synth::callout::header_regex;
@@ -24,6 +26,17 @@ pub struct LineContext {
     /// or part of an indented code block. Code lines are content, not
     /// vault structure — the CommonMark target copies them verbatim.
     pub in_code: bool,
+    /// The line is the *opening* delimiter of a fenced code block.
+    /// Fence normalization targets (Slack: language tags, tilde
+    /// fences) read this to distinguish the opener from closing
+    /// delimiters and from content lines that merely look like
+    /// delimiters. False on every other line.
+    pub opened_fence: bool,
+    /// The fence char active after this line — `'`'` or `'~'` while
+    /// inside a fenced block (including the opening delimiter line),
+    /// `None` otherwise. Lets a target tell a true closing delimiter
+    /// (fence ends: `None`) from content inside a fence (char stays).
+    pub fence_char: Option<char>,
 }
 
 /// One export target: renders a single source line (no trailing
@@ -62,6 +75,436 @@ impl ExportTarget for CommonMarkExport {
             return None;
         }
         Some(convert_wikilinks(line))
+    }
+}
+
+/// v2 target: Slack mrkdwn. `*bold*`, `_italic_`, `~strike~`,
+/// `` `code` ``, ` ``` ` blocks, `>` blockquotes, `- ` lists and
+/// `<url|text>` links survive; CommonMark syntax Slack renders as
+/// literal text — `#` headings, `**bold**`, `[text](url)`,
+/// `![alt](src)`, `- [ ]` checkboxes, `[!type]` callout markers,
+/// language tags on code fences, `~~~` fences — is rewritten to a
+/// Slack-native or plain-text form. `&`, `<`, `>` pass through raw:
+/// the output targets the Slack composer, which does not decode HTML
+/// entities.
+pub struct SlackExport;
+
+impl ExportTarget for SlackExport {
+    fn name(&self) -> &'static str {
+        "slack"
+    }
+
+    fn transform_line(&self, line: &str, ctx: LineContext) -> Option<String> {
+        // Code lines are content — but fence delimiter lines are
+        // normalized to Slack's syntax (language tags dropped,
+        // `~~~` → ` ``` `).
+        if ctx.in_code {
+            return Some(normalize_fence_line(line, ctx));
+        }
+        // Canonical `[!ft-source]` headers are provenance plumbing —
+        // dropped, same as the CommonMark target. Their `> body`
+        // lines survive as blockquotes.
+        if header_regex().is_match(line) {
+            return None;
+        }
+        // Inline pass first, structural rewrites second, so generated
+        // markup (heading `*H*` wrappers, stripped markers) is never
+        // re-scanned as inline content.
+        Some(structural_rewrites(&convert_slack_inline(line)))
+    }
+}
+
+/// Rewrite every inline element on `line` for the Slack target in one
+/// left-to-right pass: code spans verbatim, then wikilinks, embeds,
+/// markdown links/images and emphasis — each rewritten exactly once so
+/// no rewrite re-triggers another. Link labels are re-scanned
+/// recursively so `[**bold**](u)` keeps its bold; a label is strictly
+/// shorter than its line, so recursion terminates.
+fn convert_slack_inline(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut copy_start = 0usize;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'`' {
+            let run = run_len(bytes, i);
+            if let Some(close_end) = closing_run_end(bytes, i + run, run) {
+                // Copy the whole closed span verbatim.
+                i = close_end;
+            } else {
+                i += run;
+            }
+            continue;
+        }
+        if b == b'!' && i + 2 < bytes.len() && bytes[i + 1] == b'[' && bytes[i + 2] == b'[' {
+            if let Some(end) = wikilink_end(bytes, i + 1) {
+                out.push_str(&line[copy_start..i]);
+                out.push_str(&slack_embed_replacement(&line[i..end]));
+                copy_start = end;
+                i = end;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'!' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            if let Some((label, dest, end)) = markdown_link(bytes, i + 1) {
+                out.push_str(&line[copy_start..i]);
+                out.push_str(&slack_image_replacement(&label, &dest));
+                copy_start = end;
+                i = end;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'[' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            if let Some(end) = wikilink_end(bytes, i) {
+                out.push_str(&line[copy_start..i]);
+                out.push_str(&wikilink_replacement(&line[i..end]));
+                copy_start = end;
+                i = end;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'[' {
+            if let Some((label, dest, end)) = markdown_link(bytes, i) {
+                out.push_str(&line[copy_start..i]);
+                out.push_str(&slack_link_replacement(&label, &dest));
+                copy_start = end;
+                i = end;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'*' || b == b'_' || b == b'~' {
+            if let Some((end, rep)) = emphasis_replacement(bytes, i) {
+                out.push_str(&line[copy_start..i]);
+                out.push_str(&rep);
+                copy_start = end;
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&line[copy_start..]);
+    out
+}
+
+/// Parse a CommonMark link `[label](dest)` whose opening `[` is at
+/// `start`. Returns `(label, dest, end)` with `end` just past the
+/// closing `)`, or `None`. Label scanning skips inline code spans
+/// (first-match `]`); the dest is the raw text between the parens
+/// (angle-bracket/title forms are cleaned by the caller).
+fn markdown_link(bytes: &[u8], start: usize) -> Option<(String, String, usize)> {
+    debug_assert!(bytes[start] == b'[');
+    let label_end = scan_until(bytes, start + 1, b']')?;
+    if bytes.get(label_end + 1) != Some(&b'(') {
+        return None;
+    }
+    let dest_end = scan_until(bytes, label_end + 2, b')')?;
+    let label = String::from_utf8_lossy(&bytes[start + 1..label_end]).into_owned();
+    let dest = String::from_utf8_lossy(&bytes[label_end + 2..dest_end]).into_owned();
+    Some((label, dest, dest_end + 1))
+}
+
+/// Byte offset of the first `needle` at or after `start`, skipping
+/// closed inline code spans (backtick runs). `None` at end-of-line.
+fn scan_until(bytes: &[u8], mut i: usize, needle: u8) -> Option<usize> {
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'`' {
+            let run = run_len(bytes, i);
+            if let Some(close_end) = closing_run_end(bytes, i + run, run) {
+                i = close_end;
+                continue;
+            }
+        }
+        if b == needle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Slack form of a markdown link. http(s)/mailto destinations become
+/// `<url|text>` (markdown titles dropped); anything else (internal
+/// note links — a relative path is not a URL and would break Slack's
+/// link syntax) degrades to the display text, inline-converted.
+fn slack_link_replacement(label: &str, dest: &str) -> String {
+    let label_slack = convert_slack_inline(label);
+    let dest = clean_destination(dest);
+    if is_web_destination(dest) {
+        format!("<{dest}|{label_slack}>")
+    } else {
+        label_slack
+    }
+}
+
+/// Slack form of a markdown image. A remote source becomes the bare
+/// URL — Slack autolinks it and unfurls a preview thumbnail. A local
+/// source (unreachable from Slack) becomes the alt text.
+fn slack_image_replacement(label: &str, dest: &str) -> String {
+    let dest = clean_destination(dest);
+    if dest.starts_with("http://") || dest.starts_with("https://") {
+        dest.to_string()
+    } else {
+        convert_slack_inline(label)
+    }
+}
+
+/// Slack form of an embed `![[body]]`: plain text — display text when
+/// present, else the trimmed target; anchors dropped. Vault-local
+/// files are unreachable from Slack, so no image syntax survives. A
+/// body without a target is not a real embed and stays verbatim.
+fn slack_embed_replacement(raw: &str) -> String {
+    let body = &raw[3..raw.len() - 2];
+    match split_wiki(body) {
+        Some((target, _anchor, display)) if !target.is_empty() => display.unwrap_or(target),
+        _ => raw.to_string(),
+    }
+}
+
+/// Clean a markdown link/image destination: strip surrounding
+/// whitespace and angle brackets, and drop a trailing ` "title"` /
+/// ` 'title'` component (cut at the space before the opening quote).
+fn clean_destination(dest: &str) -> &str {
+    let d = dest.trim().trim_matches(|c| c == '<' || c == '>');
+    for q in ['"', '\''] {
+        if let Some(pos) = d.find(q) {
+            let core = d[..pos].trim_end();
+            if !core.is_empty() {
+                return core;
+            }
+        }
+    }
+    d
+}
+
+fn is_web_destination(dest: &str) -> bool {
+    dest.starts_with("http://") || dest.starts_with("https://") || dest.starts_with("mailto:")
+}
+
+/// Try to match an emphasis delimiter run at `i` — `*`, `_`, `~` in
+/// runs of `***`/`___`, `**`/`__`, `*`/`_`, `~~` — against a closing
+/// run, and return `(end, slack_form)` when both sides are valid
+/// delimiters. Simplified CommonMark flanking: a run opens only when
+/// not followed by whitespace (and, for `_`, only at a word boundary
+/// — keeps `snake_case` literal); a closer must not be preceded by
+/// whitespace. The closer scan skips inline code spans, and the inner
+/// text is re-scanned so nested emphasis survives (`*a **b** c*`).
+/// Returns `None` for literal runs (single `~`, runs longer than the
+/// table, `2 * 3`, `snake_case`, unmatched openers).
+fn emphasis_replacement(bytes: &[u8], i: usize) -> Option<(usize, String)> {
+    let c = bytes[i];
+    let run = char_run_len(bytes, i);
+    let (open_len, open_rep, close_rep) = match (c, run) {
+        (b'*', 3) | (b'_', 3) => (3, "*_", "_*"),
+        (b'*', 2) | (b'_', 2) => (2, "*", "*"),
+        (b'*', 1) | (b'_', 1) => (1, "_", "_"),
+        (b'~', 2) => (2, "~", "~"),
+        _ => return None,
+    };
+    if !is_opener(bytes, i, c) {
+        return None;
+    }
+    let close = find_closer(bytes, i + run, c, open_len)?;
+    let inner = std::str::from_utf8(&bytes[i + run..close]).unwrap_or("");
+    Some((
+        close + open_len,
+        format!("{open_rep}{}{close_rep}", convert_slack_inline(inner)),
+    ))
+}
+
+/// Number of consecutive copies of `bytes[i]` starting at `i` (the
+/// generic form of [`run_len`], which is backtick-specific for code
+/// spans).
+fn char_run_len(bytes: &[u8], i: usize) -> usize {
+    let c = bytes[i];
+    bytes[i..].iter().take_while(|&&b| b == c).count()
+}
+
+/// Simplified CommonMark flanking check for an emphasis opener at `i`:
+/// followed by non-whitespace; `_` additionally only at a word
+/// boundary (start / whitespace / punctuation before).
+fn is_opener(bytes: &[u8], i: usize, c: u8) -> bool {
+    match bytes.get(i + 1) {
+        Some(a) if a.is_ascii_whitespace() => return false,
+        None => return false, // EOL — nothing to wrap
+        _ => {}
+    }
+    if c == b'_' {
+        match i.checked_sub(1).map(|p| bytes[p]) {
+            Some(prev) => !prev.is_ascii_alphanumeric(),
+            None => true,
+        }
+    } else {
+        true
+    }
+}
+
+/// Byte offset of a closing run of exactly `len` of char `c` at or
+/// after `from`, skipping inline code spans. A closer must not be
+/// preceded by whitespace. `None` when no such run exists.
+fn find_closer(bytes: &[u8], from: usize, c: u8, len: usize) -> Option<usize> {
+    let mut j = from;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == b'`' {
+            let run = run_len(bytes, j);
+            if let Some(close_end) = closing_run_end(bytes, j + run, run) {
+                j = close_end;
+                continue;
+            }
+        }
+        if b == c {
+            let n = char_run_len(bytes, j);
+            if n == len && !bytes[j - 1].is_ascii_whitespace() {
+                return Some(j);
+            }
+            j += n;
+        } else {
+            j += 1;
+        }
+    }
+    None
+}
+
+/// Line-level rewrites that run *after* the inline pass so generated
+/// markup (heading `*H*` wrappers, stripped markers) is never
+/// re-scanned as inline content: callout `[!type]` marker strip,
+/// task-checkbox drop, then ATX heading → bold.
+fn structural_rewrites(line: &str) -> String {
+    let line = strip_callout_marker(line);
+    let line = drop_task_checkbox(&line);
+    boldify_heading(&line)
+}
+
+/// Strip an Obsidian callout marker (`[!type]`) that starts the
+/// content of a blockquote line: `> [!note] Title` → `> Title`,
+/// `> > [!warning] x` → `> > x`. The marker is vault chrome; the
+/// title survives as the quote's first line. Only the first marker
+/// token is removed; non-callout blockquotes are untouched.
+fn strip_callout_marker(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    // Consume `>` prefixes (each with optional surrounding spaces).
+    let mut prefix_end = 0;
+    loop {
+        if bytes.get(i) == Some(&b'>') {
+            i += 1;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            prefix_end = i;
+        } else {
+            break;
+        }
+    }
+    if prefix_end == 0 {
+        return line.to_string();
+    }
+    let rest = &bytes[prefix_end..];
+    if !rest.starts_with(b"[!") {
+        return line.to_string();
+    }
+    let close = match rest.iter().position(|&b| b == b']') {
+        Some(c) => c,
+        None => return line.to_string(),
+    };
+    let token = &rest[2..close];
+    let is_type = !token.is_empty()
+        && token[0].is_ascii_alphabetic()
+        && token
+            .iter()
+            .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !is_type {
+        return line.to_string();
+    }
+    let after = std::str::from_utf8(&rest[close + 1..]).unwrap_or("");
+    let remainder = after.strip_prefix([' ', '\t']).unwrap_or(after);
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..prefix_end]);
+    if !line[..prefix_end].ends_with(' ') && !remainder.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(remainder);
+    out
+}
+
+/// Drop the checkbox from a CommonMark task list item:
+/// `- [ ] ⏫ …` → `- ⏫ …`, `  - [x] done` → `  - done`. The bullet
+/// char, indentation and the rest of the line survive — Slack has no
+/// checkbox syntax but renders `- ` as a bullet.
+fn drop_task_checkbox(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && i < 3 && bytes[i] == b' ' {
+        i += 1;
+    }
+    if i >= bytes.len() || !matches!(bytes[i], b'-' | b'*' | b'+') {
+        return line.to_string();
+    }
+    i += 1;
+    if i >= bytes.len() || !(bytes[i] == b' ' || bytes[i] == b'\t') {
+        return line.to_string();
+    }
+    let space_start = i;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i + 3 > bytes.len()
+        || bytes[i] != b'['
+        || !matches!(bytes[i + 1], b' ' | b'x' | b'X')
+        || bytes[i + 2] != b']'
+    {
+        return line.to_string();
+    }
+    let after = i + 3;
+    if after < bytes.len() && !(bytes[after] == b' ' || bytes[after] == b'\t') {
+        return line.to_string(); // `[x]foo` is not a task item
+    }
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..space_start]);
+    out.push_str(&line[after..]);
+    out
+}
+
+/// Rewrite an ATX heading to Slack bold — `# Title` → `*Title*`. The
+/// level is lost (Slack has no headings); the cleaned heading text
+/// reuses the crate's ATX parser (closing `#`s stripped).
+fn boldify_heading(line: &str) -> String {
+    match crate::markdown::parse_atx(line, 0) {
+        Some(h) => format!("*{}*", h.text),
+        None => line.to_string(),
+    }
+}
+
+/// Normalize a fenced-code delimiter line to Slack's syntax: opening
+/// delimiters collapse to ``` (language tags dropped — Slack has no
+/// highlighting), closing delimiters collapse to ```, and tilde
+/// delimiters convert to backticks (Slack does not know tilde
+/// fences). Only actual delimiters are touched: a content line that
+/// merely looks like one (a ```js line inside a fence, a tilde-only
+/// line inside a backtick fence) is left alone via `ctx.fence_char`.
+fn normalize_fence_line(line: &str, ctx: LineContext) -> String {
+    if ctx.opened_fence {
+        return "```".to_string();
+    }
+    match crate::markdown::leading_fence(line.trim_start()) {
+        Some(('`', _)) if ctx.fence_char.is_none() => "```".to_string(),
+        Some(('~', _)) if ctx.fence_char.is_none() => "```".to_string(),
+        _ => line.to_string(),
     }
 }
 
@@ -133,6 +576,8 @@ pub fn export_content(
         ls.skip_line(line);
         let ctx = LineContext {
             in_code: ls.last_was_code(),
+            opened_fence: ls.opened_fence(),
+            fence_char: ls.fence_char(),
         };
         if let Some(t) = target.transform_line(line, ctx) {
             out_lines.push(t);
@@ -315,7 +760,13 @@ mod tests {
     }
 
     fn cm_code(line: &str) -> Option<String> {
-        CommonMarkExport.transform_line(line, LineContext { in_code: true })
+        CommonMarkExport.transform_line(
+            line,
+            LineContext {
+                in_code: true,
+                ..Default::default()
+            },
+        )
     }
 
     // ── transform_line: ft-source headers ──────────────────────────
@@ -616,5 +1067,327 @@ mod tests {
     #[test]
     fn target_name() {
         assert_eq!(CommonMarkExport.name(), "commonmark");
+        assert_eq!(SlackExport.name(), "slack");
+    }
+
+    // ── slack: helpers ─────────────────────────────────────────────
+
+    fn sl(line: &str) -> Option<String> {
+        SlackExport.transform_line(line, LineContext::default())
+    }
+
+    fn sl_code(opened: bool, fence: Option<char>, line: &str) -> Option<String> {
+        SlackExport.transform_line(
+            line,
+            LineContext {
+                in_code: true,
+                opened_fence: opened,
+                fence_char: fence,
+            },
+        )
+    }
+
+    // ── slack: shared stripping ────────────────────────────────────
+
+    #[test]
+    fn slack_canonical_header_dropped() {
+        assert_eq!(
+            sl(r#"> [!ft-source] "notes/foo.md" L42-44 @abc1234 #7f3a91"#),
+            None
+        );
+    }
+
+    #[test]
+    fn slack_body_lines_kept() {
+        assert_eq!(
+            sl("> Some original paragraph"),
+            Some("> Some original paragraph".into())
+        );
+    }
+
+    #[test]
+    fn slack_malformed_header_marker_stripped() {
+        // Not canonical — survives, but the `[!ft-source]` marker is
+        // vault chrome and gets stripped like any callout marker.
+        assert_eq!(
+            sl(r#"> [!ft-source] "notes/foo.md""#),
+            Some(r#"> "notes/foo.md""#.into())
+        );
+    }
+
+    #[test]
+    fn slack_code_context_lines_verbatim() {
+        assert_eq!(sl_code(false, None, "```rust"), Some("```".into()));
+        assert_eq!(sl_code(false, Some('`'), "[[Bar]]"), Some("[[Bar]]".into()));
+    }
+
+    // ── slack: headings ────────────────────────────────────────────
+
+    #[test]
+    fn heading_becomes_bold() {
+        assert_eq!(sl("# Title"), Some("*Title*".into()));
+        assert_eq!(sl("## Subtitle"), Some("*Subtitle*".into()));
+        assert_eq!(sl("# Title ##"), Some("*Title*".into()));
+    }
+
+    #[test]
+    fn heading_with_wikilink() {
+        assert_eq!(sl("# [[Foo]]"), Some("*Foo*".into()));
+    }
+
+    #[test]
+    fn non_heading_kept() {
+        assert_eq!(
+            sl("####### not a heading"),
+            Some("####### not a heading".into())
+        );
+        assert_eq!(sl("no hash"), Some("no hash".into()));
+        assert_eq!(sl("#no-space"), Some("#no-space".into()));
+    }
+
+    // ── slack: emphasis ────────────────────────────────────────────
+
+    #[test]
+    fn emphasis_converts_to_slack_dialect() {
+        assert_eq!(sl("**bold**"), Some("*bold*".into()));
+        assert_eq!(sl("*italic*"), Some("_italic_".into()));
+        assert_eq!(sl("_under_"), Some("_under_".into()));
+        assert_eq!(sl("~~strike~~"), Some("~strike~".into()));
+        assert_eq!(sl("***both***"), Some("*_both_*".into()));
+        assert_eq!(sl("__strong__"), Some("*strong*".into()));
+    }
+
+    #[test]
+    fn emphasis_code_spans_untouched() {
+        assert_eq!(sl("`**not bold**`"), Some("`**not bold**`".into()));
+        assert_eq!(
+            sl("`a *b* c` and **bold**"),
+            Some("`a *b* c` and *bold*".into())
+        );
+    }
+
+    #[test]
+    fn flanking_rules_keep_prose_literal() {
+        assert_eq!(sl("snake_case"), Some("snake_case".into()));
+        assert_eq!(sl("2 * 3"), Some("2 * 3".into()));
+        assert_eq!(sl("*unmatched"), Some("*unmatched".into()));
+        assert_eq!(sl("a ~ single"), Some("a ~ single".into()));
+    }
+
+    #[test]
+    fn nested_emphasis_survives() {
+        assert_eq!(sl("*a **b** c*"), Some("_a *b* c_".into()));
+        assert_eq!(sl("**a _b_ c**"), Some("*a _b_ c*".into()));
+    }
+
+    // ── slack: links ───────────────────────────────────────────────
+
+    #[test]
+    fn markdown_link_becomes_slack_link() {
+        assert_eq!(
+            sl("see [docs](https://docs.example.com/x)"),
+            Some("see <https://docs.example.com/x|docs>".into())
+        );
+        assert_eq!(
+            sl("[mail](mailto:per@ex.com)"),
+            Some("<mailto:per@ex.com|mail>".into())
+        );
+    }
+
+    #[test]
+    fn internal_markdown_link_loses_link() {
+        assert_eq!(
+            sl("see [other note](notes/other.md)"),
+            Some("see other note".into())
+        );
+    }
+
+    #[test]
+    fn link_title_dropped_and_angle_dest_cleaned() {
+        assert_eq!(
+            sl("[x](https://ex.com \"title\")"),
+            Some("<https://ex.com|x>".into())
+        );
+        assert_eq!(
+            sl("[x](<https://ex.com>)"),
+            Some("<https://ex.com|x>".into())
+        );
+    }
+
+    #[test]
+    fn link_label_emphasis_converted() {
+        assert_eq!(
+            sl("[**bold**](https://ex.com)"),
+            Some("<https://ex.com|*bold*>".into())
+        );
+    }
+
+    #[test]
+    fn ampersand_in_url_raw() {
+        assert_eq!(
+            sl("[x](https://a.com?a=1&b=2)"),
+            Some("<https://a.com?a=1&b=2|x>".into())
+        );
+    }
+
+    // ── slack: images ──────────────────────────────────────────────
+
+    #[test]
+    fn remote_image_becomes_bare_url() {
+        assert_eq!(
+            sl("![diagram](https://ex.com/img.png)"),
+            Some("https://ex.com/img.png".into())
+        );
+    }
+
+    #[test]
+    fn local_image_becomes_alt_text() {
+        assert_eq!(sl("![screenshot](local.png)"), Some("screenshot".into()));
+    }
+
+    #[test]
+    fn embed_becomes_plain_text() {
+        assert_eq!(sl("![[image.png]]"), Some("image.png".into()));
+        assert_eq!(sl("![[image.png|alt text]]"), Some("alt text".into()));
+        assert_eq!(sl("![[img.png#anchor]]"), Some("img.png".into()));
+        assert_eq!(sl("![[#A]]"), Some("![[#A]]".into()));
+    }
+
+    #[test]
+    fn slack_wikilink_conversion_matches_commonmark() {
+        assert_eq!(
+            sl("see [[Some other file]]"),
+            Some("see Some other file".into())
+        );
+        assert_eq!(sl("[[Foo|Bar]]"), Some("Bar".into()));
+        assert_eq!(sl("[[#Heading]]"), Some("#Heading".into()));
+        assert_eq!(sl("[[Foo]] and [[B|bee]]"), Some("Foo and bee".into()));
+    }
+
+    #[test]
+    fn slack_non_links_verbatim() {
+        assert_eq!(sl("[[]]"), Some("[[]]".into()));
+        assert_eq!(sl("[[unterminated"), Some("[[unterminated".into()));
+        assert_eq!(sl("`[[Foo]]`"), Some("`[[Foo]]`".into()));
+    }
+
+    // ── slack: callouts ────────────────────────────────────────────
+
+    #[test]
+    fn callout_marker_stripped() {
+        assert_eq!(sl("> [!note] Keep this"), Some("> Keep this".into()));
+        assert_eq!(sl("> > [!warning] nested"), Some("> > nested".into()));
+        assert_eq!(sl("> [!note]"), Some("> ".into()));
+        assert_eq!(sl(">[!note]Title"), Some("> Title".into()));
+    }
+
+    #[test]
+    fn non_callout_blockquotes_kept() {
+        assert_eq!(sl("> plain quote"), Some("> plain quote".into()));
+        assert_eq!(sl("> text [!note] mid"), Some("> text [!note] mid".into()));
+        assert_eq!(sl("> [!] nothing"), Some("> [!] nothing".into()));
+    }
+
+    #[test]
+    fn callout_inline_content_converted() {
+        assert_eq!(sl("> [!note] **Hi**"), Some("> *Hi*".into()));
+        assert_eq!(sl("> see [[Baz]]"), Some("> see Baz".into()));
+    }
+
+    // ── slack: task lines ──────────────────────────────────────────
+
+    #[test]
+    fn task_checkbox_dropped() {
+        assert_eq!(
+            sl("- [ ] ⏫ 📅 2026-08-05 Finish"),
+            Some("- ⏫ 📅 2026-08-05 Finish".into())
+        );
+        assert_eq!(sl("  - [x] done"), Some("  - done".into()));
+        assert_eq!(sl("* [ ] star"), Some("* star".into()));
+        assert_eq!(sl("- [ ]"), Some("-".into()));
+    }
+
+    #[test]
+    fn non_task_lines_kept() {
+        assert_eq!(sl("- [foo]"), Some("- [foo]".into()));
+        assert_eq!(sl("- item"), Some("- item".into()));
+        assert_eq!(sl("1. item"), Some("1. item".into()));
+    }
+
+    // ── slack: raw specials ────────────────────────────────────────
+
+    #[test]
+    fn specials_not_escaped() {
+        assert_eq!(
+            sl("AT&T and <value> and a > b"),
+            Some("AT&T and <value> and a > b".into())
+        );
+    }
+
+    // ── slack: fence normalization (needs driver context) ──────────
+
+    #[test]
+    fn fence_openers_normalized() {
+        assert_eq!(sl_code(true, Some('`'), "```rust"), Some("```".into()));
+        assert_eq!(sl_code(true, Some('`'), "``` "), Some("```".into()));
+        assert_eq!(sl_code(true, Some('~'), "~~~"), Some("```".into()));
+        assert_eq!(sl_code(true, Some('~'), "~~~rust"), Some("```".into()));
+    }
+
+    #[test]
+    fn fence_closers_normalized() {
+        assert_eq!(sl_code(false, None, "```"), Some("```".into()));
+        assert_eq!(sl_code(false, None, "~~~"), Some("```".into()));
+    }
+
+    #[test]
+    fn fence_content_lines_verbatim() {
+        assert_eq!(sl_code(false, Some('`'), "[[Bar]]"), Some("[[Bar]]".into()));
+        assert_eq!(sl_code(false, Some('~'), "  code"), Some("  code".into()));
+    }
+
+    #[test]
+    fn fence_looking_content_not_normalized() {
+        // A ```js line inside a backtick fence is content, not a
+        // delimiter — the block must stay intact.
+        assert_eq!(sl_code(false, Some('`'), "```js"), Some("```js".into()));
+        // A tilde-only line inside a backtick fence is content too.
+        assert_eq!(sl_code(false, Some('`'), "~~~"), Some("~~~".into()));
+    }
+
+    // ── slack: whole-document driver tests ─────────────────────────
+
+    fn slack_export(doc: &str, range: Option<(u32, u32)>) -> Result<ExportOutcome, ExportError> {
+        export_content(doc, range, &SlackExport)
+    }
+
+    #[test]
+    fn slack_fenced_blocks_normalized_in_document() {
+        let c = "intro\n```rust\nfn main() {}\n```\n\n~~~\ncode\n~~~\nend\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "intro\n```\nfn main() {}\n```\n\n```\ncode\n```\nend"
+        );
+    }
+
+    #[test]
+    fn slack_fence_looking_content_stays_in_block() {
+        // ` ```js ` inside a 3-backtick fence is content — it must not
+        // be treated as an opening delimiter (the block opens once and
+        // closes once).
+        let c = "```\n```js\ncode\n```\nafter\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "```\n```js\ncode\n```\nafter"
+        );
+    }
+
+    #[test]
+    fn slack_whole_document_composition() {
+        let c = "---\ntitle: x\n---\n\n# Heading [[Foo]]\n\n**bold** and [link](https://ex.com)\n\n- [ ] ⏫ task\n\n> [!note] Title\n\n![[img.png|pic]]\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "\n*Heading Foo*\n\n*bold* and <https://ex.com|link>\n\n- ⏫ task\n\n> Title\n\npic"
+        );
     }
 }

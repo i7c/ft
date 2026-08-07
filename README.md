@@ -280,5 +280,6 @@ depth.
   `[synth]` config table; `ft notes quote` (the read-only plumbing
   command behind the same pinning mechanics) is documented in
   [docs/guide/synthesis.md](docs/guide/synthesis.md), and its inverse
-  `ft notes export` (vault-stripped CommonMark for pasting/publishing)
+  `ft notes export` (vault-stripped CommonMark, or Slack mrkdwn with
+  `--format slack` — for pasting/publishing)
   in [docs/guide/notes.md](docs/guide/notes.md)
