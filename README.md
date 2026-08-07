@@ -203,6 +203,20 @@ This drops a single `ft` binary in `~/.cargo/bin/`. MSRV is pinned
 in `rust-toolchain.toml`. After installing, generate completions and
 man pages — see [install.md](docs/guide/install.md).
 
+## Releasing
+
+`scripts/release.sh` cuts a release: it derives the next version from
+the latest `v*` tag (patch by default; `--minor` / `--major` to
+override), generates a `CHANGELOG.md` section from the commit subjects
+since the last tag (skipping `openspec:`/`chore:`/`ci:`/`docs:`
+process commits), bumps `[workspace.package] version` in
+`Cargo.toml`, refreshes `Cargo.lock` (the workflow builds with
+`--locked`), and creates the `vX.Y.Z` tag — whose push triggers
+[.github/workflows/release.yml](.github/workflows/release.yml) to
+build and upload the binaries. `--dry-run` previews everything,
+`--check` runs the five build invariants from `AGENTS.md` first, and
+`--push` also pushes the commit and tag.
+
 ## First run
 
 `ft` auto-discovers your vault by walking up from the current
