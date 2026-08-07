@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.8
+
+### Added
+
+- scripts: add release.sh — version bump, changelog, tag
+- ft notes export: --format slack target (mrkdwn conversion + fence context)
+- Fix path normalization
+
 ## 0.1.7
 
 ### Added
