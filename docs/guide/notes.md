@@ -358,10 +358,9 @@ ft notes export notes/spectral.md
 ```
 
 The v1 target is **CommonMark**, selected with `--format commonmark`
-(the default; `plaintext` and `slack` targets are planned — the
-stripping rules live behind an extensible seam, so future targets are
-new implementations, not a different command). Export strips exactly
-the vault-specific structure:
+(the default; the stripping rules live behind an extensible seam, so
+targets are implementations, not separate commands). Export strips
+exactly the vault-specific structure:
 
 - **Frontmatter** — the whole leading `--- … ---` block is dropped.
 - **`[!ft-source]` callouts** — the header line (path, range, SHA,
@@ -377,6 +376,37 @@ Everything else passes through byte-for-byte: markdown links, headings,
 task lines (emoji metadata included), `> [!note]`-style callouts, code
 spans and fenced code blocks (wikilinks inside code are code, not
 references, and stay verbatim).
+
+### Exporting for Slack
+
+`--format slack` renders the note in Slack's **mrkdwn** dialect,
+which is deliberately incompatible with CommonMark: headings,
+`**bold**`, `[text](url)` links, images, tables and task checkboxes
+all render as literal text. The Slack target shares the vault
+stripping above (frontmatter, ft-source headers, wikilinks) and then
+converts:
+
+- **Headings → bold** — `# Title` becomes `*Title*`; the level is
+  lost (Slack has no headings).
+- **Emphasis** — `**bold**` → `*bold*`, `*italic*` → `_italic_`,
+  `~~strike~~` → `~strike~`, `***both***` → `*_both_*`. Code spans
+  are untouched, and flanking rules keep `snake_case` and `2 * 3`
+  literal.
+- **Links** — `[text](https://…)` → `<https://…|text>`; an internal
+  link (`[other](notes/other.md)`) loses the link and keeps the
+  display text. Remote images become the bare URL (Slack unfurls a
+  preview); local images and embeds become their alt/filename text.
+- **Callouts** — the `[!note]`-style marker is stripped, the title
+  survives as the quote's first line: `> [!note] Keep this` →
+  `> Keep this`.
+- **Task lines** — the checkbox drops, the bullet and emoji metadata
+  stay: `- [ ] ⏫ 📅 2026-08-05 Finish` → `- ⏫ 📅 2026-08-05 Finish`.
+- **Code fences** — language tags drop (```` ```rust ```` → ```` ``` ````)
+  and `~~~` fences become ` ``` `; the code itself is verbatim.
+
+`&`, `<` and `>` are **not** escaped — the output targets the Slack
+composer, which does not decode HTML entities. Tables and `---` rules
+stay literal (Slack can't render them in messages).
 
 ### Line ranges are original-file lines
 

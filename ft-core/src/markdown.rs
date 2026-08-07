@@ -263,6 +263,13 @@ pub(crate) struct LineSkipState {
     /// need to distinguish "code" from other structural lines (the
     /// export driver) read this after [`LineSkipState::skip_line`].
     last_code: bool,
+    /// Was the most recently advanced line the *opening* delimiter of
+    /// a fenced code block? True only on the opener line itself;
+    /// false on closing delimiters, content inside fences, and
+    /// non-fence lines. Consumers that need to distinguish "opened a
+    /// fence" from "inside a fence" (the export driver, for fence
+    /// normalization) read this after [`LineSkipState::skip_line`].
+    last_opened_fence: bool,
 }
 
 impl LineSkipState {
@@ -293,7 +300,23 @@ impl LineSkipState {
         self.last_code
     }
 
+    /// Whether the most recently [`skip_line`](LineSkipState::skip_line)'d
+    /// line opened a fenced code block (its opening delimiter).
+    pub(crate) fn opened_fence(&self) -> bool {
+        self.last_opened_fence
+    }
+
+    /// The fence char active *after* the most recently
+    /// [`skip_line`](LineSkipState::skip_line)'d line: `'`'` or `'~'`
+    /// when the line is inside a fenced block (including the opening
+    /// delimiter line), `None` otherwise — plain lines, indented code,
+    /// and the closing delimiter line (which ends the block).
+    pub(crate) fn fence_char(&self) -> Option<char> {
+        self.fence
+    }
+
     fn classify(&mut self, line: &str, is_blank: bool) -> bool {
+        self.last_opened_fence = false;
         // Frontmatter handling: only relevant on line 1 and during the
         // block. CommonMark doesn't define frontmatter; we follow the
         // Obsidian / Jekyll convention of a `---` block at the very top.
@@ -321,7 +344,14 @@ impl LineSkipState {
         if let Some(fence_char) = self.fence {
             // Inside a fence — only the matching close fence ends it.
             if let Some((c, n)) = leading_fence(trimmed) {
-                if c == fence_char && n >= self.fence_len {
+                // Per CommonMark a closing fence is `n >= fence_len`
+                // fence chars followed by nothing but spaces/tabs — a
+                // line like ` ```js ` inside a fence is content, not a
+                // closer.
+                if c == fence_char
+                    && n >= self.fence_len
+                    && trimmed[n..].chars().all(|c| c == ' ' || c == '\t')
+                {
                     self.fence = None;
                     self.fence_len = 0;
                 }
@@ -333,6 +363,7 @@ impl LineSkipState {
             self.fence = Some(c);
             self.fence_len = n;
             self.last_code = true;
+            self.last_opened_fence = true;
             return true;
         }
 
@@ -400,7 +431,7 @@ fn starts_with_indent(line: &str, n: usize) -> bool {
 
 /// Parse an ATX heading from `line` if it matches the pattern; `lineno`
 /// is the 1-indexed source line.
-fn parse_atx(line: &str, lineno: usize) -> Option<Heading> {
+pub(crate) fn parse_atx(line: &str, lineno: usize) -> Option<Heading> {
     let trimmed = line.trim_start();
     let level = trimmed.chars().take_while(|c| *c == '#').count();
     if !(1..=6).contains(&level) {
@@ -430,6 +461,50 @@ fn parse_atx(line: &str, lineno: usize) -> Option<Heading> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opened_fence_and_fence_char_sequence() {
+        // `opened_fence` is true only on the opening delimiter;
+        // `fence_char` is the active fence after the line.
+        let mut s = LineSkipState::new();
+
+        s.skip_line("before");
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), None);
+
+        s.skip_line("```rust"); // opens
+        assert!(s.opened_fence());
+        assert_eq!(s.fence_char(), Some('`'));
+
+        s.skip_line("```js"); // content: 3 backticks + text is not a closer
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), Some('`'));
+
+        s.skip_line("code"); // content
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), Some('`'));
+
+        s.skip_line("```"); // closes
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), None);
+
+        s.skip_line("~~~"); // opens a tilde fence
+        assert!(s.opened_fence());
+        assert_eq!(s.fence_char(), Some('~'));
+
+        s.skip_line("~~~"); // closes it
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), None);
+    }
+
+    #[test]
+    fn opened_fence_false_for_plain_and_indented_code() {
+        let mut s = LineSkipState::new();
+        s.skip_line(""); // blank boundary
+        s.skip_line("    indented");
+        assert!(!s.opened_fence());
+        assert_eq!(s.fence_char(), None);
+    }
 
     #[test]
     fn extracts_atx_levels_one_through_six() {

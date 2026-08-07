@@ -2,7 +2,7 @@
 
 ## 1. Core: driver extension + shared scanner helpers
 
-- [ ] 1.1 Extend `LineContext` in `ft-core/src/export.rs` with
+- [x] 1.1 Extend `LineContext` in `ft-core/src/export.rs` with
       `opened_fence: bool` (default `false`) and plumb it in
       `export_content`; add `opened_fence` tracking to
       `LineSkipState` in `ft-core/src/markdown.rs` (set true exactly
@@ -16,7 +16,7 @@
 
 ## 2. Core: SlackExport target
 
-- [ ] 2.1 Implement `SlackExport` in `ft-core/src/export.rs`:
+- [x] 2.1 Implement `SlackExport` in `ft-core/src/export.rs`:
       `name() == "slack"`; `transform_line` drops canonical
       `[!ft-source]` header lines (same `header_regex()` as
       CommonMark); code lines pass through verbatim except fence
@@ -25,7 +25,7 @@
       drop/pass-through boundary: canonical header dropped, malformed
       header kept then marker-stripped, body `> ` lines kept,
       code-context lines verbatim.
-- [ ] 2.2 Slack inline scanner (single left-to-right pass, reusing the
+- [x] 2.2 Slack inline scanner (single left-to-right pass, reusing the
       existing backtick-run helpers `run_len`/`closing_run_end` and
       the wikilink body parser `split_wiki`/`wikilink_end`): code
       spans copied verbatim; wikilinks → plain text (shared table:
@@ -40,7 +40,7 @@
       mapping table, code spans untouched, flanking edges (`snake_case`,
       `2 * 3`), `***` runs, multiple constructs per line, unicode
       surroundings, non-link edges (`[[]]`, unterminated `[[`).
-- [ ] 2.3 Structural line rewrites (applied to the raw line before the
+- [x] 2.3 Structural line rewrites (applied to the raw line before the
       inline scanner, per design D2): ATX heading prefix `#{1,6} ` →
       `*` with a closing `*` appended (level lost); blockquote callout
       marker strip — after the `>` prefixes, a leading `[!word]` token
@@ -52,7 +52,7 @@
       `> > [!note] x`→`> > x`, `> [!note]`→`> `, `- [ ] …`→`- …`,
       `  - [x] done`→`  - done`, no-false-positive (`- [foo]` not a
       task, `[!note]` mid-line not stripped).
-- [ ] 2.4 Fence normalization using `ctx.opened_fence` and
+- [x] 2.4 Fence normalization using `ctx.opened_fence` and
       `ctx.in_code`: opening backtick fence with a language tag
       (backticks followed by non-backtick, non-whitespace content) →
       bare ` ``` `; opening or closing `~~~`-fence delimiter line →
@@ -64,7 +64,7 @@
 
 ## 3. CLI
 
-- [ ] 3.1 Add `ExportFormat::Slack` to `ft/src/cmd/export.rs` with
+- [x] 3.1 Add `ExportFormat::Slack` to `ft/src/cmd/export.rs` with
       `#[value(name = "slack")]` and a doc comment; map it to
       `&SlackExport` in `ExportFormat::target()`; update the
       `--format` help text and the `ExportArgs` docs so the target
@@ -73,7 +73,7 @@
 
 ## 4. Integration tests
 
-- [ ] 4.1 Extend `ft/tests/notes_export.rs` with a `slack` fixture
+- [x] 4.1 Extend `ft/tests/notes_export.rs` with a `slack` fixture
       note combining every mapped construct (frontmatter, ft-source
       callout, wikilinks, embeds, markdown links incl. internal and
       remote-image forms, headings, bold/italic/strike, code spans,
@@ -87,7 +87,7 @@
 
 ## 5. Docs
 
-- [ ] 5.1 Document the `--format slack` target in `docs/guide/notes.md`
+- [x] 5.1 Document the `--format slack` target in `docs/guide/notes.md`
       (the mapping table: what converts, what stays literal, the
       no-escaping rationale, code-fence normalization); update the
       sentence that says slack is "planned"; check
@@ -96,9 +96,9 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Run the five build invariants: `cargo build --release`,
+- [x] 6.1 Run the five build invariants: `cargo build --release`,
       `cargo test --workspace`, `cargo clippy --workspace --tests -- -D
       warnings`, `cargo fmt --check`,
       `cargo run --release -q -- commands docs --check`.
-- [ ] 6.2 Commit the implementation as its own commit (the spec commit
+- [x] 6.2 Commit the implementation as its own commit (the spec commit
       already lands separately).

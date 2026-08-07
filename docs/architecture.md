@@ -290,7 +290,7 @@ CLI surface lives in `ft/src/cmd/{pulse.rs, synth.rs}` (plus the
 read-only plumbing commands `ft notes quote` in `ft/src/cmd/quote.rs`,
 which emits the canonical callout for a file+range to stdout, and its
 inverse `ft notes export` in `ft/src/cmd/export.rs`, which renders a
-note as vault-stripped CommonMark) and the
+note as vault-stripped CommonMark or Slack mrkdwn (`--format`)) and the
 extended `ft/src/cmd/notes.rs::run_gather` (which now accepts repeated
 `--link "[[X]]"` flags in addition to the positional note argument).
 The TUI exposes the flow through the `Pulse` tab
