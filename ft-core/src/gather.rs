@@ -15,7 +15,7 @@
 //! graph free of a special "related alias" edge kind.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
@@ -23,7 +23,6 @@ use crate::blame_cache::{paragraph_date, BlameCache};
 use crate::error::Result;
 use crate::git;
 use crate::graph::{EdgeKind, Graph, NodeKind, NoteId};
-use crate::markdown::extract_headings;
 use crate::vault::Vault;
 
 /// One row of the journal feed.
@@ -119,6 +118,7 @@ pub fn build_gather(
     targets: &[NoteId],
     vault: &Vault,
     cache: &mut BlameCache,
+    scan: &crate::scan::Scan,
 ) -> Result<GatherReport> {
     if targets.is_empty() {
         return Ok(GatherReport::default());
@@ -132,6 +132,10 @@ pub fn build_gather(
 
     // In single-target mode, resolve aliases and capture the target's
     // path for self-exclusion. In multi-target mode, both are skipped.
+    // Alias resolution reads the target's headings + line count from the
+    // scan; when the target is absent from the scan (ghost, read error,
+    // or created after the scan) there are no aliases — the same outcome
+    // as the pre-scan read-error path.
     let (self_path, alias_ids): (Option<PathBuf>, Vec<NoteId>) = if single_mode {
         let primary = targets[0];
         let note_path: Option<PathBuf> = match graph.node(primary) {
@@ -140,7 +144,10 @@ pub fn build_gather(
             _ => return Ok(GatherReport::default()),
         };
         let aliases = match &note_path {
-            Some(p) => resolve_related_aliases(graph, primary, vault, p)?,
+            Some(p) => match scan.files.iter().find(|pf| &pf.rel == p) {
+                Some(pf) => resolve_related_aliases(graph, primary, &pf.headings, pf.line_count)?,
+                None => Vec::new(),
+            },
             None => Vec::new(),
         };
         (note_path, aliases)
@@ -356,16 +363,10 @@ fn heading_chain_targets(
 pub fn resolve_related_aliases(
     graph: &Graph,
     note_id: NoteId,
-    vault: &Vault,
-    note_path: &Path,
+    headings: &[crate::markdown::Heading],
+    total_lines: u32,
 ) -> Result<Vec<NoteId>> {
-    let abs = vault.path.join(note_path);
-    let content = match std::fs::read_to_string(&abs) {
-        Ok(s) => s,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let headings = extract_headings(&content);
-    let related_range = match find_related_range(&headings, &content) {
+    let related_range = match find_related_range(headings, total_lines) {
         Some(r) => r,
         None => return Ok(Vec::new()),
     };
@@ -392,8 +393,10 @@ pub fn resolve_related_aliases(
 /// `## Related` heading and its body — up to the next heading of equal
 /// or higher level, or end of file. Heading text match is
 /// case-insensitive; comparison ignores trailing whitespace and `#`s.
-fn find_related_range(headings: &[crate::markdown::Heading], content: &str) -> Option<(u32, u32)> {
-    let total_lines = content.lines().count() as u32;
+fn find_related_range(
+    headings: &[crate::markdown::Heading],
+    total_lines: u32,
+) -> Option<(u32, u32)> {
     for (i, h) in headings.iter().enumerate() {
         if h.text.eq_ignore_ascii_case("Related") {
             let start = h.line as u32;
@@ -416,6 +419,8 @@ fn find_related_range(headings: &[crate::markdown::Heading], content: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::markdown::extract_headings;
+    use std::path::Path;
     use std::process::Command;
 
     #[test]
@@ -425,14 +430,14 @@ mod tests {
             level: 2,
             line: 1,
         }];
-        assert!(find_related_range(&headings, "## Other\n").is_none());
+        assert!(find_related_range(&headings, "## Other\n".lines().count() as u32).is_none());
     }
 
     #[test]
     fn find_related_range_to_eof() {
         let content = "# Top\n\n## Related\n- [[Bar]]\n";
         let headings = extract_headings(content);
-        let r = find_related_range(&headings, content).unwrap();
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
         assert_eq!(r, (3, 4));
     }
 
@@ -440,7 +445,7 @@ mod tests {
     fn find_related_range_bounded_by_next_heading() {
         let content = "## Related\n- [[Bar]]\n\n## Next\nbody\n";
         let headings = extract_headings(content);
-        let r = find_related_range(&headings, content).unwrap();
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
         assert_eq!(r, (1, 3));
     }
 
@@ -448,7 +453,7 @@ mod tests {
     fn find_related_range_case_insensitive_match() {
         let content = "## related\n- [[Bar]]\n";
         let headings = extract_headings(content);
-        let r = find_related_range(&headings, content).unwrap();
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
         assert_eq!(r.0, 1);
     }
 
@@ -507,7 +512,7 @@ mod tests {
         let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // Daily-A mentions [[Target]]; Daily-B mentions [[Bar]] which
@@ -541,7 +546,7 @@ mod tests {
         let (vault, graph) = make_vault_with_history(&tmp);
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache, &vault.scan()).unwrap();
         assert_eq!(report.entries.len(), 2);
         assert_eq!(
             report.entries[0].date, report.entries[1].date,
@@ -595,7 +600,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be materialized as a Ghost");
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[phantom], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[phantom], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(report.skipped_blame.is_empty(), "blame should succeed");
         let mut titles: Vec<&str> = report
             .entries
@@ -652,7 +657,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let target = graph.note_by_path(Path::new("Target.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[target], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[target], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(
             report.skipped_blame.is_empty(),
             "expected no blame skips, got {:?}",
@@ -731,7 +736,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(report.skipped_blame.is_empty());
 
         // The three section paragraphs (A includes the heading line text
@@ -772,7 +777,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         let bodies: Vec<String> = report
             .entries
             .iter()
@@ -844,7 +849,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         assert_eq!(report.entries.len(), 2, "got {:?}", report.entries);
         // Map text → date, then assert each paragraph's date is its own.
         let by_text: std::collections::HashMap<&str, chrono::NaiveDate> = report
@@ -892,7 +897,7 @@ mod tests {
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache, &vault.scan()).unwrap();
         // Para B: expansion-only, no direct link → matched should be [Foo].
         let para_b = report
             .entries
@@ -932,7 +937,7 @@ mod tests {
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let bar = graph.note_by_path(Path::new("Bar.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo, bar], &vault, &mut cache, &vault.scan()).unwrap();
         // Para A appears exactly once.
         let para_a: Vec<_> = report
             .entries
@@ -966,7 +971,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(
             report.entries.is_empty(),
             "self-exclusion should drop Foo's own paragraphs, got {:?}",
@@ -994,7 +999,7 @@ mod tests {
             .ghost_by_raw("Phantom")
             .expect("Phantom should be a ghost");
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[phantom], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[phantom], &vault, &mut cache, &vault.scan()).unwrap();
         assert!(report.skipped_blame.is_empty());
         let bodies: Vec<String> = report
             .entries
@@ -1029,7 +1034,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         assert_eq!(report.entries.len(), 3);
         // Reverse-chrono by date (all equal) → title (all equal) → line_start asc.
         let texts: Vec<&str> = report
@@ -1073,7 +1078,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let foo = graph.note_by_path(Path::new("Foo.md")).unwrap();
         let mut cache = BlameCache::default();
-        let report = build_gather(&graph, &[foo], &vault, &mut cache).unwrap();
+        let report = build_gather(&graph, &[foo], &vault, &mut cache, &vault.scan()).unwrap();
         // The Daily body paragraph is a direct match → included.
         let daily_present = report
             .entries

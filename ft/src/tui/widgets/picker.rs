@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::recents::RecentsLog;
-use ft_core::search::{fuzzy_find, recent_hits, Hit, Query, SearchOptions};
+use ft_core::search::{fuzzy_find, fuzzy_find_from_scan, recent_hits, Hit, Query, SearchOptions};
 use ft_core::vault::Vault;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -439,18 +439,34 @@ const RECENTS_DISPLAY_LIMIT: usize = 25;
 /// `Arc<RecentsLog>` is shared across all four picker sites (notes
 /// open/source/target + tasks target) so an open recorded in one site
 /// surfaces immediately in the next.
+///
+/// When `scan` is `Some` (the App-owned snapshot's scan), per-keystroke
+/// filtering runs against the in-memory parse artifacts
+/// ([`fuzzy_find_from_scan`] / [`recent_hits`] on the scan) with zero
+/// vault I/O; before the first snapshot lands, `None` falls back to the
+/// vault-based paths.
 pub struct VaultFilePickerSource {
     vault: Arc<Vault>,
     recents: Arc<RecentsLog>,
+    scan: Option<Arc<ft_core::scan::Scan>>,
     path_matcher: Matcher,
     text_matcher: Matcher,
 }
 
 impl VaultFilePickerSource {
     pub fn new(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
+        Self::with_scan(vault, recents, None)
+    }
+
+    pub fn with_scan(
+        vault: Arc<Vault>,
+        recents: Arc<RecentsLog>,
+        scan: Option<Arc<ft_core::scan::Scan>>,
+    ) -> Self {
         Self {
             vault,
             recents,
+            scan,
             path_matcher: Matcher::new(Config::DEFAULT.match_paths()),
             text_matcher: Matcher::new(Config::DEFAULT),
         }
@@ -462,8 +478,17 @@ impl PickerSource for VaultFilePickerSource {
 
     fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<Hit>> {
         let cap = limit.min(RECENTS_DISPLAY_LIMIT);
-        recent_hits(&self.vault, &self.recents, cap)
-            .into_iter()
+        let hits = match &self.scan {
+            Some(scan) => recent_hits(scan, &self.recents, cap),
+            None => {
+                let scan = ft_core::scan::scan_vault(
+                    &self.vault.path,
+                    &self.vault.config.config.ignored_paths,
+                );
+                recent_hits(&scan, &self.recents, cap)
+            }
+        };
+        hits.into_iter()
             .map(|hit| PickerItem {
                 label: hit.path.display().to_string(),
                 match_indices: Vec::new(),
@@ -477,14 +502,24 @@ impl PickerSource for VaultFilePickerSource {
         if parsed.is_empty() {
             return Vec::new();
         }
-        let hits = fuzzy_find(
-            &self.vault,
-            &parsed,
-            SearchOptions {
-                limit,
-                include_headings: parsed.heading_part.is_some(),
-            },
-        );
+        let hits = match &self.scan {
+            Some(scan) => fuzzy_find_from_scan(
+                scan,
+                &parsed,
+                SearchOptions {
+                    limit,
+                    include_headings: parsed.heading_part.is_some(),
+                },
+            ),
+            None => fuzzy_find(
+                &self.vault,
+                &parsed,
+                SearchOptions {
+                    limit,
+                    include_headings: parsed.heading_part.is_some(),
+                },
+            ),
+        };
 
         let file_pat = (!parsed.file_part.is_empty()).then(|| {
             Pattern::parse(
@@ -587,6 +622,7 @@ pub enum GatherSourceHit {
 pub struct GatherSourcePickerSource {
     vault: Arc<Vault>,
     recents: Arc<RecentsLog>,
+    scan: Option<Arc<ft_core::scan::Scan>>,
     path_matcher: Matcher,
     text_matcher: Matcher,
     /// Pre-extracted ghost raw strings from the graph snapshot, owned
@@ -601,6 +637,15 @@ impl GatherSourcePickerSource {
     /// at the moment the picker opens (same pattern Journal uses for
     /// its multi-target load).
     pub fn new(vault: Arc<Vault>, recents: Arc<RecentsLog>, graph: &ft_core::graph::Graph) -> Self {
+        Self::with_scan(vault, recents, graph, None)
+    }
+
+    pub fn with_scan(
+        vault: Arc<Vault>,
+        recents: Arc<RecentsLog>,
+        graph: &ft_core::graph::Graph,
+        scan: Option<Arc<ft_core::scan::Scan>>,
+    ) -> Self {
         let ghosts = graph
             .nodes()
             .filter_map(|(_, k)| match k {
@@ -611,6 +656,7 @@ impl GatherSourcePickerSource {
         Self {
             vault,
             recents,
+            scan,
             path_matcher: Matcher::new(Config::DEFAULT.match_paths()),
             text_matcher: Matcher::new(Config::DEFAULT),
             ghosts,
@@ -623,8 +669,17 @@ impl PickerSource for GatherSourcePickerSource {
 
     fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<GatherSourceHit>> {
         let cap = limit.min(RECENTS_DISPLAY_LIMIT);
-        recent_hits(&self.vault, &self.recents, cap)
-            .into_iter()
+        let hits = match &self.scan {
+            Some(scan) => recent_hits(scan, &self.recents, cap),
+            None => {
+                let scan = ft_core::scan::scan_vault(
+                    &self.vault.path,
+                    &self.vault.config.config.ignored_paths,
+                );
+                recent_hits(&scan, &self.recents, cap)
+            }
+        };
+        hits.into_iter()
             .map(|hit| PickerItem {
                 label: hit.path.display().to_string(),
                 match_indices: Vec::new(),
@@ -640,16 +695,26 @@ impl PickerSource for GatherSourcePickerSource {
         }
 
         // Real-note hits (same path the `VaultFilePickerSource` uses).
-        let hits = fuzzy_find(
-            &self.vault,
-            &parsed,
-            SearchOptions {
-                limit,
-                // Ghost picking is path-only; headings would dilute
-                // the result list.
-                include_headings: false,
-            },
-        );
+        let hits = match &self.scan {
+            Some(scan) => fuzzy_find_from_scan(
+                scan,
+                &parsed,
+                SearchOptions {
+                    limit,
+                    // Ghost picking is path-only; headings would dilute
+                    // the result list.
+                    include_headings: false,
+                },
+            ),
+            None => fuzzy_find(
+                &self.vault,
+                &parsed,
+                SearchOptions {
+                    limit,
+                    include_headings: false,
+                },
+            ),
+        };
         let file_pat = (!parsed.file_part.is_empty()).then(|| {
             Pattern::parse(
                 &parsed.file_part,

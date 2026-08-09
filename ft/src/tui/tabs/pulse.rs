@@ -172,7 +172,7 @@ impl PulseTab {
         };
         let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
-        let review = match compute_pulse(graph, ctx.vault, &self.window, &cfg) {
+        let review = match compute_pulse(graph, ctx.vault, &self.window, &cfg, &snap.scan) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("compute_pulse failed: {e}"));

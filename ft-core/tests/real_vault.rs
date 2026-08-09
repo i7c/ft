@@ -123,7 +123,8 @@ fn real_vault_link_review_runs() {
     let graph = ft_core::graph::Graph::build(&scan).expect("build graph");
     let cfg = vault.config.config.synth.clone();
     let window = WindowRange::Since(Duration::days(7));
-    let review = compute_pulse(&graph, &vault, &window, &cfg).expect("compute_pulse on real vault");
+    let review =
+        compute_pulse(&graph, &vault, &window, &cfg, &scan).expect("compute_pulse on real vault");
     // Sanity: rows are sorted by count desc, alphabetical tiebreak.
     for w in review.rows.windows(2) {
         assert!(

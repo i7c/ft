@@ -1265,10 +1265,11 @@ impl GatherSourcesModal {
         let Some(snap) = ctx.snapshot.as_ref() else {
             return;
         };
-        let source = GatherSourcePickerSource::new(
+        let source = GatherSourcePickerSource::with_scan(
             std::sync::Arc::clone(ctx.vault),
             std::sync::Arc::clone(ctx.recents),
             &snap.graph,
+            Some(std::sync::Arc::clone(&snap.scan)),
         );
         self.picker = Some(FuzzyPicker::new(source));
     }

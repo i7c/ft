@@ -22,10 +22,11 @@ use chrono::NaiveDate;
 use crate::blame_cache::{paragraph_date, BlameCache};
 use crate::config::Synth as SynthCfg;
 use crate::error::Result;
+use crate::frontmatter;
 use crate::git;
 use crate::graph::{Graph, NodeKind};
 use crate::pulse::{compute_pulse, WindowRange};
-use crate::synth::callout::is_synth_note;
+
 use crate::vault::Vault;
 
 /// One row of the history feed. Mirrors [`crate::gather::GatherEntry`]
@@ -84,12 +85,13 @@ pub fn build_recent(
     cfg: &SynthCfg,
     opts: &RecentOptions,
     cache: &mut BlameCache,
+    scan: &crate::scan::Scan,
 ) -> Result<RecentReport> {
     let repo = git::RepoMap::discover(&vault.path)?;
 
     // The added-lines map is both the edit filter and the file prefilter:
     // only files touched in the window appear as keys.
-    let review = compute_pulse(graph, vault, window, cfg)?;
+    let review = compute_pulse(graph, vault, window, cfg, scan)?;
     if review.added_lines.is_empty() {
         return Ok(RecentReport::default());
     }
@@ -98,7 +100,9 @@ pub fn build_recent(
     let mut entries: Vec<RecentEntry> = Vec::new();
     let mut skipped_blame: Vec<PathBuf> = Vec::new();
     let mut skipped_seen: HashSet<PathBuf> = HashSet::new();
-    // Per-file synth-marker memo so each touched file is read at most once.
+    // Per-file synth-marker memo, served from the scan's captured
+    // frontmatter; falls back to a direct read when the file is absent
+    // from the scan (read error, or created after the scan).
     let mut synth_memo: HashMap<PathBuf, bool> = HashMap::new();
 
     for (_id, node) in graph.nodes() {
@@ -114,9 +118,19 @@ pub fn build_recent(
 
         if !opts.include_synth {
             let is_synth = *synth_memo.entry(p.source_file.clone()).or_insert_with(|| {
-                std::fs::read_to_string(vault.path.join(&p.source_file))
-                    .map(|c| is_synth_note(&c))
-                    .unwrap_or(false)
+                // The scan is authoritative for files it captured: a
+                // plain file (no frontmatter block) is definitively
+                // not a synth note. The direct-read fallback fires
+                // only when the file is absent from the scan entirely.
+                match scan.files.iter().find(|pf| pf.rel == p.source_file) {
+                    Some(pf) => pf
+                        .frontmatter
+                        .as_deref()
+                        .is_some_and(|fm| frontmatter::ft_synth_enabled_in(fm) == Some(true)),
+                    None => std::fs::read_to_string(vault.path.join(&p.source_file))
+                        .map(|c| frontmatter::ft_synth_enabled(&c) == Some(true))
+                        .unwrap_or(false),
+                }
             });
             if is_synth {
                 continue;
@@ -250,6 +264,7 @@ mod tests {
             &default_cfg(),
             &RecentOptions::default(),
             &mut cache,
+            &vault.scan(),
         )
         .unwrap();
         assert!(
@@ -300,6 +315,7 @@ mod tests {
             &default_cfg(),
             &RecentOptions::default(),
             &mut cache,
+            &vault.scan(),
         )
         .unwrap();
         let titles: HashSet<&str> = default_report
@@ -323,6 +339,7 @@ mod tests {
                 include_synth: true,
             },
             &mut cache2,
+            &vault.scan(),
         )
         .unwrap();
         let titles2: HashSet<&str> = incl_report
@@ -362,6 +379,7 @@ mod tests {
             &default_cfg(),
             &RecentOptions::default(),
             &mut cache,
+            &vault.scan(),
         )
         .unwrap();
         let order: Vec<&str> = report
@@ -401,6 +419,7 @@ mod tests {
             &default_cfg(),
             &RecentOptions::default(),
             &mut cache,
+            &vault.scan(),
         )
         .unwrap();
         let titles: HashSet<&str> = report
@@ -412,6 +431,125 @@ mod tests {
         assert!(
             !titles.contains("Old"),
             "untouched file excluded: {titles:?}"
+        );
+    }
+
+    /// The scan-fed synth gate is eventually consistent (staleness
+    /// accepted): a marker added after the scan is not seen until the
+    /// next scan, while a file absent from the scan falls back to a
+    /// direct read and honors the marker immediately.
+    #[test]
+    fn synth_gate_is_scan_eventual_and_falls_back() {
+        use assert_fs::prelude::*;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        tmp.child(".obsidian").create_dir_all().unwrap();
+        tmp.child("Plain.md")
+            .write_str("# Plain\n\nPlain para.\n")
+            .unwrap();
+        tmp.child("Later.md")
+            .write_str("# Later\n\nLater para.\n")
+            .unwrap();
+        tmp.child("Synth.md")
+            .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nSynth para.\n")
+            .unwrap();
+        init_git_repo(tmp.path());
+        commit_all_dated(tmp.path(), "base", "2025-01-01T00:00:00");
+        // c2 (HEAD): every file edited in the window.
+        tmp.child("Plain.md")
+            .write_str("# Plain\n\nPlain para.\n\nMore plain.\n")
+            .unwrap();
+        tmp.child("Later.md")
+            .write_str("# Later\n\nLater para.\n\nMore later.\n")
+            .unwrap();
+        tmp.child("Synth.md")
+            .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nSynth para.\n\nMore synth.\n")
+            .unwrap();
+        commit_all_dated(tmp.path(), "c2", "2025-02-01T00:00:00");
+
+        let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
+
+        // Stale scan: taken before Later.md gains the synth marker.
+        let stale_scan = vault.scan();
+        tmp.child("Later.md")
+            .write_str(
+                "---\nft:\n  synth:\n    enabled: true\n---\n\n# Later\n\nLater para.\n\nMore later.\n",
+            )
+            .unwrap();
+        let graph = Graph::build(&stale_scan).unwrap();
+
+        // Stale path: the scan doesn't know Later.md is synth → included.
+        let mut cache = BlameCache::default();
+        let stale_report = build_recent(
+            &graph,
+            &vault,
+            &range("HEAD~1", "HEAD"),
+            &default_cfg(),
+            &RecentOptions::default(),
+            &mut cache,
+            &stale_scan,
+        )
+        .unwrap();
+        let stale_titles: HashSet<&str> = stale_report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
+        assert!(
+            stale_titles.contains("Later"),
+            "stale scan must not see the new marker: {stale_titles:?}"
+        );
+
+        // Fresh scan: marker honored → Later excluded.
+        let mut cache2 = BlameCache::default();
+        let fresh_report = build_recent(
+            &graph,
+            &vault,
+            &range("HEAD~1", "HEAD"),
+            &default_cfg(),
+            &RecentOptions::default(),
+            &mut cache2,
+            &vault.scan(),
+        )
+        .unwrap();
+        let fresh_titles: HashSet<&str> = fresh_report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
+        assert!(
+            !fresh_titles.contains("Later"),
+            "fresh scan must honor the marker: {fresh_titles:?}"
+        );
+
+        // Fallback: a scan missing Synth.md still excludes it via the
+        // direct read (and still treats Later as stale-non-synth).
+        let mut pruned = stale_scan;
+        pruned
+            .files
+            .retain(|pf| pf.rel.as_path() != std::path::Path::new("Synth.md"));
+        let mut cache3 = BlameCache::default();
+        let fallback_report = build_recent(
+            &graph,
+            &vault,
+            &range("HEAD~1", "HEAD"),
+            &default_cfg(),
+            &RecentOptions::default(),
+            &mut cache3,
+            &pruned,
+        )
+        .unwrap();
+        let fallback_titles: HashSet<&str> = fallback_report
+            .entries
+            .iter()
+            .map(|e| e.source_title.as_str())
+            .collect();
+        assert!(
+            !fallback_titles.contains("Synth"),
+            "fallback read must still exclude synth: {fallback_titles:?}"
+        );
+        assert!(
+            fallback_titles.contains("Later"),
+            "stale marker survives the pruned scan: {fallback_titles:?}"
         );
     }
 }

@@ -207,9 +207,12 @@ pub fn try_execute_preset(
                         template_source: source,
                         section_override: preset.section.clone(),
                         vars_needed: vars_needed.clone(),
-                        picker: FuzzyPicker::new(VaultFilePickerSource::new(
+                        picker: FuzzyPicker::new(VaultFilePickerSource::with_scan(
                             std::sync::Arc::clone(ctx.vault),
                             std::sync::Arc::clone(ctx.recents),
+                            ctx.snapshot
+                                .as_ref()
+                                .map(|s| std::sync::Arc::clone(&s.scan)),
                         )),
                     }));
                 }

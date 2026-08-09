@@ -55,6 +55,14 @@ pub struct ParsedFile {
     /// the file has one. Resolve keys via the `frontmatter::*_in`
     /// readers without re-reading the file.
     pub frontmatter: Option<String>,
+    /// Modification time, captured from the same walk that produced the
+    /// file list (no second filesystem pass). The only mtime source in
+    /// the crate — consumers needing recency order read it here.
+    pub mtime: std::time::SystemTime,
+    /// Number of lines in the file's content, computed from the single
+    /// read. Lets consumers compute section bounds (e.g. "to EOF")
+    /// without re-reading the file.
+    pub line_count: u32,
 }
 
 /// Result of [`scan_vault`]. Tasks across the vault, the per-file parse
@@ -110,8 +118,10 @@ pub fn scan_vault(root: &Path, ignored: &[String]) -> Scan {
     let (files, dirs) = walk(root, ignored);
     debug!(file_count = files.len(), "starting parallel parse");
 
-    let results: Vec<(Vec<Task>, Option<ParsedFile>, Option<ScanError>)> =
-        files.par_iter().map(|rel| parse_file(root, rel)).collect();
+    let results: Vec<(Vec<Task>, Option<ParsedFile>, Option<ScanError>)> = files
+        .par_iter()
+        .map(|(rel, mtime)| parse_file(root, rel, *mtime))
+        .collect();
 
     let mut scan = Scan::default();
     for (tasks, parsed, err) in results {
@@ -128,42 +138,24 @@ pub fn scan_vault(root: &Path, ignored: &[String]) -> Scan {
 }
 
 /// Every markdown file under `root` as a vault-relative path, using the
-/// same exclusion rules as [`scan_vault`]. Files whose metadata can't
-/// be read are still returned (the metadata is only needed by
-/// [`markdown_files_with_mtime`]).
+/// same exclusion rules as [`scan_vault`].
 pub fn markdown_files(root: &Path, ignored: &[String]) -> Vec<PathBuf> {
-    walk(root, ignored).0
-}
-
-/// Walk the vault and pair each markdown file with its `mtime`.
-///
-/// Same exclusion rules as [`markdown_files`]. Files whose metadata
-/// can't be read are kept in the result with mtime set to
-/// `SystemTime::UNIX_EPOCH` so they still appear (last) in any recency
-/// ranking rather than being silently dropped. Paths are vault-relative.
-pub fn markdown_files_with_mtime(
-    root: &Path,
-    ignored: &[String],
-) -> Vec<(PathBuf, std::time::SystemTime)> {
     walk(root, ignored)
         .0
         .into_iter()
-        .map(|rel| {
-            let mtime = std::fs::metadata(root.join(&rel))
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            (rel, mtime)
-        })
+        .map(|(rel, _)| rel)
         .collect()
 }
 
-/// One walker pass yielding both the markdown-file list and the
-/// directory list, both vault-relative (root excluded from `dirs`).
+/// One walker pass yielding the markdown-file list (with mtimes,
+/// captured by a per-entry stat during the same walk — no second
+/// traversal) and the directory list, both vault-relative (root
+/// excluded from `dirs`).
 ///
 /// The directory set is built from the same entries the file set is, so
 /// the two can never disagree: a directory excluded from the walk does
 /// not appear in `dirs`, and neither do the files it contains.
-fn walk(root: &Path, ignored: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+fn walk(root: &Path, ignored: &[String]) -> (Vec<(PathBuf, std::time::SystemTime)>, Vec<PathBuf>) {
     let mut overrides = OverrideBuilder::new(root);
     for default in DEFAULT_IGNORED {
         // Exclude both the directory itself and its contents — the
@@ -201,7 +193,12 @@ fn walk(root: &Path, ignored: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 dirs.push(rel.to_path_buf());
             }
         } else if ft.is_some_and(|t| t.is_file()) && path.extension().is_some_and(|e| e == "md") {
-            files.push(rel.to_path_buf());
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            files.push((rel.to_path_buf(), mtime));
         }
     }
     (files, dirs)
@@ -210,7 +207,11 @@ fn walk(root: &Path, ignored: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
 /// Parse one markdown file into its task lines and graph parse
 /// artifacts. The file is read exactly once here; everything the
 /// downstream model needs is extracted from that single content.
-fn parse_file(root: &Path, rel: &Path) -> (Vec<Task>, Option<ParsedFile>, Option<ScanError>) {
+fn parse_file(
+    root: &Path,
+    rel: &Path,
+    mtime: std::time::SystemTime,
+) -> (Vec<Task>, Option<ParsedFile>, Option<ScanError>) {
     let abs = root.join(rel);
     let content = match std::fs::read_to_string(&abs) {
         Ok(c) => c,
@@ -254,6 +255,8 @@ fn parse_file(root: &Path, rel: &Path) -> (Vec<Task>, Option<ParsedFile>, Option
         paragraphs: extract_paragraphs(&content),
         headings: extract_headings(&content),
         frontmatter: frontmatter::block(&content).map(str::to_string),
+        mtime,
+        line_count: content.lines().count() as u32,
     };
     (tasks, Some(parsed), None)
 }
@@ -475,8 +478,12 @@ title: note
         let (files, dirs) = walk(dir.path(), &[]);
         assert_eq!(files.len(), 2, "both files found");
         assert_eq!(dirs, vec![std::path::PathBuf::from("sub")], "one dir");
-        assert!(files.iter().all(|p| p.is_relative()));
+        assert!(files.iter().all(|(p, _)| p.is_relative()));
         assert!(dirs.iter().all(|p| p.is_relative()));
+        // mtimes come from the same walk, not a second pass.
+        assert!(files
+            .iter()
+            .all(|(_, m)| *m != std::time::SystemTime::UNIX_EPOCH));
     }
 
     #[test]
@@ -489,11 +496,13 @@ title: note
 
         let (files, dirs) = walk(dir.path(), &["archive/".to_string()]);
         assert!(
-            files.contains(&std::path::PathBuf::from("keep.md")),
+            files
+                .iter()
+                .any(|(p, _)| p == &std::path::PathBuf::from("keep.md")),
             "unexcluded file present: {files:?}"
         );
         assert!(
-            files.iter().all(|p| !p.starts_with("archive")),
+            files.iter().all(|(p, _)| !p.starts_with("archive")),
             "archive files excluded: {files:?}"
         );
         assert!(
@@ -574,5 +583,69 @@ title: note
             .filter(|(_, n)| matches!(n, crate::graph::NodeKind::Note(_)))
             .count();
         assert_eq!(note_count, scan.files.len());
+    }
+
+    // ── file metadata ──────────────────────────────────────────────────
+
+    #[test]
+    fn scan_captures_line_count() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        dir.child("three.md")
+            .write_str("line one\nline two\nline three\n")
+            .unwrap();
+        dir.child("empty.md").write_str("").unwrap();
+
+        let scan = scan_vault(dir.path(), &[]);
+        let three = scan
+            .files
+            .iter()
+            .find(|p| p.rel.ends_with("three.md"))
+            .unwrap();
+        assert_eq!(three.line_count, 3);
+        let empty = scan
+            .files
+            .iter()
+            .find(|p| p.rel.ends_with("empty.md"))
+            .unwrap();
+        assert_eq!(empty.line_count, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_captures_distinct_mtimes() {
+        let dir = TempDir::new().unwrap();
+        make_obsidian_dir(&dir);
+        let older = dir.child("older.md");
+        older.write_str("x\n").unwrap();
+        let newer = dir.child("newer.md");
+        newer.write_str("x\n").unwrap();
+        // Force distinct mtimes via the stable FileTimes API.
+        let now = std::time::SystemTime::now();
+        for (rel, offset_secs) in [("older.md", 0u64), ("newer.md", 5)] {
+            let abs = dir.path().join(rel);
+            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&abs) {
+                let mt = now + std::time::Duration::from_secs(offset_secs);
+                let _ = f.set_times(std::fs::FileTimes::new().set_modified(mt));
+            }
+        }
+
+        let scan = scan_vault(dir.path(), &[]);
+        let older_pf = scan
+            .files
+            .iter()
+            .find(|p| p.rel.ends_with("older.md"))
+            .unwrap();
+        let newer_pf = scan
+            .files
+            .iter()
+            .find(|p| p.rel.ends_with("newer.md"))
+            .unwrap();
+        assert!(
+            older_pf.mtime < newer_pf.mtime,
+            "older file must carry an older mtime: {:?} vs {:?}",
+            older_pf.mtime,
+            newer_pf.mtime
+        );
     }
 }

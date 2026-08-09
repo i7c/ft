@@ -458,7 +458,7 @@ impl GatherTab {
         }
         let cache = self.cache.as_mut().expect("just initialized");
 
-        let report = match build_gather(graph, &ids, ctx.vault, cache) {
+        let report = match build_gather(graph, &ids, ctx.vault, cache, &snap.scan) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("build_gather failed: {e}"));
@@ -551,7 +551,7 @@ impl GatherTab {
         let graph = &snap.graph;
         let cfg = ctx.vault.config.config.synth.clone();
         let core_window = window.to_core();
-        let review = match compute_pulse(graph, ctx.vault, &core_window, &cfg) {
+        let review = match compute_pulse(graph, ctx.vault, &core_window, &cfg, &snap.scan) {
             Ok(r) => r,
             Err(_) => return,
         };
@@ -905,7 +905,11 @@ impl GatherTab {
         if self.entries.is_empty() {
             return;
         }
-        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
+        let source = VaultFilePickerSource::with_scan(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
+        );
         self.synth_send = Some(SynthSendState::PickExisting {
             picker: FuzzyPicker::new(source),
             new_only: false,
@@ -919,7 +923,11 @@ impl GatherTab {
         if self.entries.is_empty() {
             return;
         }
-        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
+        let source = VaultFilePickerSource::with_scan(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
+        );
         self.synth_send = Some(SynthSendState::PickExisting {
             picker: FuzzyPicker::new(source),
             new_only: true,

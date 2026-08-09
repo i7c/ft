@@ -25,11 +25,10 @@ use chrono::{Duration, NaiveDate};
 
 use crate::config::Synth as SynthCfg;
 use crate::error::Result;
+use crate::frontmatter;
 use crate::git;
 use crate::graph::{EdgeKind, Graph, NodeKind, NoteId};
-use crate::synth::callout::{
-    is_synth_note, line_is_inside_callout, parse as parse_callouts, path_excluded,
-};
+use crate::synth::callout::{line_is_inside_callout, parse as parse_callouts, path_excluded};
 use crate::vault::Vault;
 
 /// The window the link review operates over.
@@ -97,6 +96,7 @@ pub fn compute_pulse(
     vault: &Vault,
     window: &WindowRange,
     cfg: &SynthCfg,
+    scan: &crate::scan::Scan,
 ) -> Result<Pulse> {
     let repo = git::RepoMap::discover(&vault.path)?;
     let (from_sha, to_sha) = resolve_window(repo.root(), window)?;
@@ -147,17 +147,38 @@ pub fn compute_pulse(
 
         // If the note is a synth note, parse its callouts at the `to`
         // state and use them to skip wikilinks that come from quoted
-        // material.
-        let to_content_for_callouts = if to_is_head {
-            std::fs::read_to_string(vault.path.join(&vault_path)).ok()
+        // material. When `to` is HEAD the synth gate is served from the
+        // scan's captured frontmatter (staleness accepted, see design):
+        // non-synth files are never read, synth files are read for their
+        // callout ranges. When `to` is another ref the content comes
+        // from `git show` and the scan cannot serve it.
+        let callouts_to_skip: Vec<crate::synth::callout::ParsedCallout> = if to_is_head {
+            // The scan is authoritative for files it captured (a plain
+            // file is definitively not a synth note); the direct-read
+            // fallback fires only when the file is absent from the scan.
+            let is_synth = match scan.files.iter().find(|pf| pf.rel == vault_path) {
+                Some(pf) => pf
+                    .frontmatter
+                    .as_deref()
+                    .is_some_and(|fm| frontmatter::ft_synth_enabled_in(fm) == Some(true)),
+                None => std::fs::read_to_string(vault.path.join(&vault_path))
+                    .map(|c| frontmatter::ft_synth_enabled(&c) == Some(true))
+                    .unwrap_or(false),
+            };
+            if !is_synth {
+                Vec::new()
+            } else {
+                std::fs::read_to_string(vault.path.join(&vault_path))
+                    .ok()
+                    .map(|c| parse_callouts(&c))
+                    .unwrap_or_default()
+            }
         } else {
-            git::show_file_at(repo.root(), &to_sha, &path).ok()
+            git::show_file_at(repo.root(), &to_sha, &path)
+                .ok()
+                .map(|c| parse_callouts(&c))
+                .unwrap_or_default()
         };
-        let callouts_to_skip = to_content_for_callouts
-            .as_deref()
-            .filter(|c| is_synth_note(c))
-            .map(parse_callouts)
-            .unwrap_or_default();
 
         // For each paragraph the note owns, see if any of its lines
         // overlap an added line.
@@ -356,7 +377,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
 
         // Expected: [[Foo]] count = 2 (two paragraphs in note-a, only first
         // also mentions [[Bar]]). Wait — the second paragraph also has Foo.
@@ -415,7 +436,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         assert_eq!(foo.count, 1, "paragraph-level dedup");
     }
@@ -469,7 +490,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         assert_eq!(foo.count, 1, "both [[Foo]] mentions are in one block");
     }
@@ -480,7 +501,7 @@ mod tests {
         let (vault, graph, repo, c1) = make_two_commit_repo(&tmp);
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
         // Both counts are 2; alphabetical tiebreak → Bar before Foo.
         assert_eq!(review.rows[0].target, "Bar");
         assert_eq!(review.rows[1].target, "Foo");
@@ -494,7 +515,7 @@ mod tests {
         cfg.exclude_prefixes = vec!["note-a".into()]; // drop note-a contributions
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &cfg).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &cfg, &vault.scan()).unwrap();
         // note-a contributed Foo (×2) and Bar (×1). Excluding note-a leaves
         // only note-b's Bar.
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
@@ -514,7 +535,7 @@ mod tests {
             from: head.clone(),
             to: head,
         };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
         assert!(review.rows.is_empty());
     }
 
@@ -540,7 +561,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
         let foo = review.rows.iter().find(|r| r.target == "Foo").unwrap();
         let bar = review.rows.iter().find(|r| r.target == "Bar").unwrap();
         assert!(!foo.is_ghost, "Foo.md exists → not a ghost");
@@ -594,7 +615,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
 
         assert!(review.rows.iter().any(|r| r.target == "Bar"));
         assert!(
@@ -651,7 +672,7 @@ mod tests {
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
 
         assert!(
             review.rows.iter().any(|r| r.target == "Replacement"),
@@ -722,7 +743,7 @@ Then I add a thought about [[Bar]].
         let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
-        let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
+        let review = compute_pulse(&graph, &vault, &window, &default_cfg(), &vault.scan()).unwrap();
 
         assert!(
             review.rows.iter().all(|r| r.target != "Foo"),

@@ -1632,7 +1632,7 @@ fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::gather::build_gather(&graph, &targets, &vault, &mut cache)
+    let report = ft_core::gather::build_gather(&graph, &targets, &vault, &mut cache, &scan)
         .context("building journal")?;
     // Best-effort save — a cache write failure is non-fatal.
     let _ = cache.save(&vault.path);
@@ -1657,7 +1657,7 @@ fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         let window = resolve_window(&args.since, &args.range)?
             .expect("validated above: in_window implies since/range");
         let cfg = vault.config.config.synth.clone();
-        let review = ft_core::pulse::compute_pulse(&graph, &vault, &window, &cfg)
+        let review = ft_core::pulse::compute_pulse(&graph, &vault, &window, &cfg, &scan)
             .context("computing in-window filter")?;
         entries.retain(|e| {
             review
@@ -1867,8 +1867,9 @@ fn run_recent(args: RecentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     };
     let mut cache =
         ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report = ft_core::recent::build_recent(&graph, &vault, &window, &cfg, &opts, &mut cache)
-        .context("building history")?;
+    let report =
+        ft_core::recent::build_recent(&graph, &vault, &window, &cfg, &opts, &mut cache, &scan)
+            .context("building history")?;
     let _ = cache.save(&vault.path);
 
     if !report.skipped_blame.is_empty() {

@@ -24,7 +24,10 @@ pub struct GraphSnapshot {
     /// to know when to re-derive (expansion, selection, cursor anchors —
     /// all keyed by `NodeKey` so they survive the swap).
     pub generation: u64,
-    pub scan: Scan,
+    /// `Arc` so pickers and other transient UI components can hold an
+    /// owned handle to the scan's parse artifacts (paths, headings,
+    /// mtimes, frontmatter) without outliving the snapshot borrow.
+    pub scan: Arc<Scan>,
     pub graph: Graph,
     /// Which synth notes cite which paragraphs, rebuilt with every
     /// snapshot so feed badges stay generation-consistent with the
@@ -42,7 +45,7 @@ pub fn build_graph_snapshot(vault: &Vault, generation: u64) -> Result<Arc<GraphS
     match Graph::build(&scan) {
         Ok(graph) => Ok(Arc::new(GraphSnapshot {
             generation,
-            scan,
+            scan: Arc::new(scan),
             graph,
             citations,
         })),

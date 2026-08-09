@@ -105,9 +105,10 @@ fn transition(next: ResliceState) -> ResliceStep {
 /// Build a `PickingNote` state with a fresh vault picker.
 pub fn begin_with_picker(ctx: &TabCtx) -> ResliceState {
     ResliceState::PickingNote {
-        picker: FuzzyPicker::new(VaultFilePickerSource::new(
+        picker: FuzzyPicker::new(VaultFilePickerSource::with_scan(
             Arc::clone(ctx.vault),
             Arc::clone(ctx.recents),
+            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
         )),
         error: None,
     }

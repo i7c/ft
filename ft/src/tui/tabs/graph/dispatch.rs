@@ -812,19 +812,22 @@ impl GraphTab {
         let Some(graph) = Self::graph_of(&self.snapshot) else {
             return;
         };
-        let mut cache = ft_core::blame_cache::BlameCache::load(&ctx.vault.path).unwrap_or_default();
-        let report = match ft_core::gather::build_gather(graph, &[ghost_id], ctx.vault, &mut cache)
-        {
-            Ok(r) => r,
-            Err(e) => {
-                queue_toast(
-                    ctx,
-                    &format!("promote: journal failed: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
+        let Some(scan) = self.snapshot.as_ref().map(|s| s.scan.clone()) else {
+            return;
         };
+        let mut cache = ft_core::blame_cache::BlameCache::load(&ctx.vault.path).unwrap_or_default();
+        let report =
+            match ft_core::gather::build_gather(graph, &[ghost_id], ctx.vault, &mut cache, &scan) {
+                Ok(r) => r,
+                Err(e) => {
+                    queue_toast(
+                        ctx,
+                        &format!("promote: journal failed: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return;
+                }
+            };
         let _ = cache.save(&ctx.vault.path);
         if report.entries.is_empty() {
             queue_toast(

@@ -175,7 +175,8 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("vault is not inside a git repository — `ft synth` needs git history")
     })?;
-    let graph = crate::cmd::common::build_graph(&vault.scan())?;
+    let scan = vault.scan();
+    let graph = crate::cmd::common::build_graph(&scan)?;
     let target = normalize_md_target(&args.target);
 
     let mut entries: Vec<GatherEntry> = Vec::new();
@@ -193,7 +194,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             ));
         }
         let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_gather(&graph, &targets, &vault, &mut cache)
+        let report = build_gather(&graph, &targets, &vault, &mut cache, &scan)
             .context("building multi-source journal")?;
         let _ = cache.save(&vault.path);
 
@@ -201,7 +202,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             let window = resolve_window(&args.since, &args.range)?
                 .expect("validated above: in_window implies since/range");
             let cfg = vault.config.config.synth.clone();
-            let review = compute_pulse(&graph, &vault, &window, &cfg)
+            let review = compute_pulse(&graph, &vault, &window, &cfg, &scan)
                 .context("computing in-window filter")?;
             report
                 .entries
@@ -311,7 +312,8 @@ fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             target.display()
         ));
     }
-    let graph = crate::cmd::common::build_graph(&vault.scan())?;
+    let scan = vault.scan();
+    let graph = crate::cmd::common::build_graph(&scan)?;
 
     // Resolve targets: explicit --link / --from, else frontmatter.
     let explicit_links = !args.link.is_empty();
@@ -328,7 +330,7 @@ fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             ));
         }
         // Re-resolve frontmatter targets via the same path as --link.
-        return run_grow_with_targets(args, vault, graph, target, fm_targets, false);
+        return run_grow_with_targets(args, vault, graph, scan, target, fm_targets, false);
     }
 
     let links: Vec<String> = if explicit_links {
@@ -336,7 +338,7 @@ fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     } else {
         Vec::new()
     };
-    run_grow_with_targets(args, vault, graph, target, links, explicit_links)
+    run_grow_with_targets(args, vault, graph, scan, target, links, explicit_links)
 }
 
 /// Shared grow body: build the journal for `links` (if any), add `--from`
@@ -348,6 +350,7 @@ fn run_grow_with_targets(
     args: GrowArgs,
     vault: Vault,
     graph: Graph,
+    scan: ft_core::scan::Scan,
     target: PathBuf,
     links: Vec<String>,
     links_were_explicit: bool,
@@ -365,7 +368,7 @@ fn run_grow_with_targets(
             ));
         }
         let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_gather(&graph, &targets, &vault, &mut cache)
+        let report = build_gather(&graph, &targets, &vault, &mut cache, &scan)
             .context("building multi-source journal")?;
         let _ = cache.save(&vault.path);
 
@@ -373,7 +376,7 @@ fn run_grow_with_targets(
             let window = resolve_window(&args.since, &args.range)?
                 .expect("validated above: in_window implies since/range");
             let cfg = vault.config.config.synth.clone();
-            let review = compute_pulse(&graph, &vault, &window, &cfg)
+            let review = compute_pulse(&graph, &vault, &window, &cfg, &scan)
                 .context("computing in-window filter")?;
             report
                 .entries

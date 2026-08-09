@@ -1761,10 +1761,11 @@ fn journal_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
     // it via the core planner so the pin matches HEAD exactly.
     let abs = vault_path.join("Synth/topic.md");
     std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let graph = ft_core::graph::Graph::build(&vault.scan()).unwrap();
+    let scan = vault.scan();
+    let graph = ft_core::graph::Graph::build(&scan).unwrap();
     let foo = graph.ghost_by_raw("Foo").unwrap();
     let mut cache = ft_core::blame_cache::BlameCache::default();
-    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;
+    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache, &scan)?;
     // Pin only the first entry (DailyA) — leave DailyB missing.
     let first: Vec<ft_core::synth::source::SynthSource> =
         report.entries.iter().map(Into::into).collect();
@@ -1810,10 +1811,11 @@ fn journal_send_to_synth_new_only_scopes_to_watermark() -> Result<()> {
     // the watermark == today, and --new-only should find nothing newer).
     let abs = vault_path.join("Synth/topic.md");
     std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let graph = ft_core::graph::Graph::build(&vault.scan()).unwrap();
+    let scan = vault.scan();
+    let graph = ft_core::graph::Graph::build(&scan).unwrap();
     let foo = graph.ghost_by_raw("Foo").unwrap();
     let mut cache = ft_core::blame_cache::BlameCache::default();
-    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;
+    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache, &scan)?;
     let sources: Vec<ft_core::synth::source::SynthSource> =
         report.entries.iter().map(Into::into).collect();
     let plan = ft_core::synth::scaffold::plan_synth_scaffold(

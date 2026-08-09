@@ -272,7 +272,15 @@ impl RecentTab {
         let cfg = ctx.vault.config.config.synth.clone();
         let opts = RecentOptions::default();
 
-        let report = match build_recent(graph, ctx.vault, &self.window, &cfg, &opts, cache) {
+        let report = match build_recent(
+            graph,
+            ctx.vault,
+            &self.window,
+            &cfg,
+            &opts,
+            cache,
+            &snap.scan,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = Some(format!("build_recent failed: {e}"));
@@ -388,7 +396,11 @@ impl RecentTab {
         if self.entries.is_empty() {
             return;
         }
-        let source = VaultFilePickerSource::new(Arc::clone(ctx.vault), Arc::clone(ctx.recents));
+        let source = VaultFilePickerSource::with_scan(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
+        );
         self.synth_send = Some(SynthSendState::PickExisting {
             picker: FuzzyPicker::new(source),
             new_only: false,

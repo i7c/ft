@@ -23,7 +23,7 @@
 //! nested `###### Big Topic` when both have equal fuzzy quality.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nucleo_matcher::{
     pattern::{CaseMatching, Normalization, Pattern},
@@ -110,7 +110,9 @@ impl Default for SearchOptions {
 
 // ── algorithm ────────────────────────────────────────────────────────────────
 
-/// Run a fuzzy search against `vault`.
+/// Run a fuzzy search against `vault`. Walks the vault and reads
+/// survivor files for headings on every call — the CLI path (fresh
+/// results, no parse cost for filename-only queries).
 ///
 /// Two-stage filter: (1) score every filename against `query.file_part`
 /// using a path-aware matcher and discard non-matches, (2) when headings
@@ -125,45 +127,10 @@ pub fn fuzzy_find(vault: &Vault, query: &Query, opts: SearchOptions) -> Vec<Hit>
 
     let want_headings = opts.include_headings || query.heading_part.is_some();
     let files = crate::scan::markdown_files(&vault.path, &vault.config.config.ignored_paths);
-
-    // Stage 1: filename matching.
-    let file_matches: Vec<(PathBuf, u32)> = if query.file_part.is_empty() {
-        // Heading-only query (`#heading`) — every file is a candidate;
-        // assign a neutral file_score of 0 so the combined ranking is
-        // driven entirely by the heading match.
-        files
-            .into_iter()
-            .map(|p| (rel(&p, &vault.path), 0u32))
-            .collect()
-    } else {
-        let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-        let pattern = Pattern::parse(&query.file_part, CaseMatching::Ignore, Normalization::Smart);
-        let mut buf: Vec<char> = Vec::new();
-        files
-            .into_iter()
-            .filter_map(|p| {
-                let rel = rel(&p, &vault.path);
-                let s = rel.to_string_lossy();
-                let haystack = Utf32Str::new(&s, &mut buf);
-                pattern.score(haystack, &mut matcher).map(|sc| (rel, sc))
-            })
-            .collect()
-    };
+    let file_matches = stage1_file_matches(files, query);
 
     if !want_headings {
-        return rank_and_truncate(
-            file_matches
-                .into_iter()
-                .map(|(path, file_score)| Hit {
-                    path,
-                    file_score,
-                    heading: None,
-                    heading_score: None,
-                    total_score: file_score,
-                })
-                .collect(),
-            opts.limit,
-        );
+        return plain_hits(file_matches, opts.limit);
     }
 
     // Stage 2: heading extraction in parallel (I/O bound) — but only on
@@ -180,6 +147,95 @@ pub fn fuzzy_find(vault: &Vault, query: &Query, opts: SearchOptions) -> Vec<Hit>
         })
         .collect();
 
+    finish_heading_hits(with_headings, query, opts.limit)
+}
+
+/// Scan-fed variant of [`fuzzy_find`]: same two-stage filter and scoring,
+/// but stage-1 paths and stage-2 headings come from the scan's parse
+/// artifacts — zero vault I/O per call. The TUI picker uses this (the
+/// scan is the snapshot's, so per-keystroke filtering is in-memory);
+/// CLI `ft find` keeps the vault-based [`fuzzy_find`].
+pub fn fuzzy_find_from_scan(
+    scan: &crate::scan::Scan,
+    query: &Query,
+    opts: SearchOptions,
+) -> Vec<Hit> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let want_headings = opts.include_headings || query.heading_part.is_some();
+    let files: Vec<PathBuf> = scan.files.iter().map(|pf| pf.rel.clone()).collect();
+    let file_matches = stage1_file_matches(files, query);
+
+    if !want_headings {
+        return plain_hits(file_matches, opts.limit);
+    }
+
+    let with_headings: Vec<(PathBuf, u32, Vec<Heading>)> = file_matches
+        .iter()
+        .map(|(path, file_score)| {
+            let headings = scan
+                .files
+                .iter()
+                .find(|pf| &pf.rel == path)
+                .map(|pf| pf.headings.clone())
+                .unwrap_or_default();
+            (path.clone(), *file_score, headings)
+        })
+        .collect();
+
+    finish_heading_hits(with_headings, query, opts.limit)
+}
+
+/// Stage 1 shared by [`fuzzy_find`] and [`fuzzy_find_from_scan`]: score
+/// every vault-relative path against the query's file part.
+fn stage1_file_matches(files: Vec<PathBuf>, query: &Query) -> Vec<(PathBuf, u32)> {
+    if query.file_part.is_empty() {
+        // Heading-only query (`#heading`) — every file is a candidate;
+        // assign a neutral file_score of 0 so the combined ranking is
+        // driven entirely by the heading match.
+        return files.into_iter().map(|p| (p, 0u32)).collect();
+    }
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let pattern = Pattern::parse(&query.file_part, CaseMatching::Ignore, Normalization::Smart);
+    let mut buf: Vec<char> = Vec::new();
+    files
+        .into_iter()
+        .filter_map(|rel| {
+            let s = rel.to_string_lossy();
+            let haystack = Utf32Str::new(&s, &mut buf);
+            pattern.score(haystack, &mut matcher).map(|sc| (rel, sc))
+        })
+        .collect()
+}
+
+/// Filename-only result set shared by both search paths.
+fn plain_hits(file_matches: Vec<(PathBuf, u32)>, limit: usize) -> Vec<Hit> {
+    rank_and_truncate(
+        file_matches
+            .into_iter()
+            .map(|(path, file_score)| Hit {
+                path,
+                file_score,
+                heading: None,
+                heading_score: None,
+                total_score: file_score,
+            })
+            .collect(),
+        limit,
+    )
+}
+
+/// Stage-2 scoring shared by [`fuzzy_find`] and [`fuzzy_find_from_scan`]:
+/// score each survivor's headings against the query's heading part, build
+/// hits, rank + truncate. The two pipelines differ only in how
+/// `(path, file_score, headings)` triples are produced.
+fn finish_heading_hits(
+    with_headings: Vec<(PathBuf, u32, Vec<Heading>)>,
+    query: &Query,
+    limit: usize,
+) -> Vec<Hit> {
     let heading_pattern = query
         .heading_part
         .as_deref()
@@ -220,7 +276,7 @@ pub fn fuzzy_find(vault: &Vault, query: &Query, opts: SearchOptions) -> Vec<Hit>
         });
     }
 
-    rank_and_truncate(hits, opts.limit)
+    rank_and_truncate(hits, limit)
 }
 
 /// Score every heading in `headings` against `pattern`, return the
@@ -257,11 +313,6 @@ fn rank_and_truncate(mut hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
     hits
 }
 
-/// Strip the vault prefix so all returned paths are vault-relative.
-fn rel(p: &Path, vault_root: &Path) -> PathBuf {
-    p.strip_prefix(vault_root).unwrap_or(p).to_path_buf()
-}
-
 /// Small bonus that boosts level-1 headings over deeper ones when their
 /// nucleo scores tie. Empirical numbers — tuned so a level-1 heading match
 /// barely edges out a level-6 match of identical fuzzy quality but doesn't
@@ -290,17 +341,18 @@ fn level_bonus(level: u8) -> u32 {
 /// `Hit.path` is vault-relative for consistency with [`fuzzy_find`].
 /// All scores are zero and `heading` is `None` — the picker renders
 /// these rows verbatim, with no match highlighting.
-pub fn recent_hits(vault: &Vault, recents: &RecentsLog, limit: usize) -> Vec<Hit> {
+pub fn recent_hits(scan: &crate::scan::Scan, recents: &RecentsLog, limit: usize) -> Vec<Hit> {
     if limit == 0 {
         return Vec::new();
     }
 
     let opens = recents.load_recent(limit.saturating_mul(2));
 
-    let files_with_mtime: Vec<(PathBuf, std::time::SystemTime)> =
-        crate::scan::markdown_files_with_mtime(&vault.path, &vault.config.config.ignored_paths)
-            .into_iter()
-            .collect();
+    let files_with_mtime: Vec<(PathBuf, std::time::SystemTime)> = scan
+        .files
+        .iter()
+        .map(|pf| (pf.rel.clone(), pf.mtime))
+        .collect();
     let file_set: HashSet<PathBuf> = files_with_mtime.iter().map(|(p, _)| p.clone()).collect();
 
     let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -361,6 +413,7 @@ mod tests {
     use super::*;
     use assert_fs::TempDir;
     use std::fs;
+    use std::path::Path;
 
     // ── Query parsing ───────────────────────────────────────────────
 
@@ -729,7 +782,7 @@ mod tests {
         }
 
         let recents = make_recents_for(&vault, &dir);
-        let hits = recent_hits(&vault, &recents, 25);
+        let hits = recent_hits(&vault.scan(), &recents, 25);
         let names: Vec<String> = hits
             .iter()
             .map(|h| h.path.to_string_lossy().into_owned())
@@ -759,7 +812,7 @@ mod tests {
         recents.record_open(Path::new("a.md"));
         recents.record_open(Path::new("c.md"));
 
-        let hits = recent_hits(&vault, &recents, 2);
+        let hits = recent_hits(&vault.scan(), &recents, 2);
         let names: Vec<String> = hits
             .iter()
             .map(|h| h.path.to_string_lossy().into_owned())
@@ -780,7 +833,7 @@ mod tests {
         // Open only a.md — it must appear first, regardless of mtime.
         recents.record_open(Path::new("a.md"));
 
-        let hits = recent_hits(&vault, &recents, 25);
+        let hits = recent_hits(&vault.scan(), &recents, 25);
         let names: Vec<String> = hits
             .iter()
             .map(|h| h.path.to_string_lossy().into_owned())
@@ -800,7 +853,7 @@ mod tests {
         recents.record_open(Path::new("ghost.md"));
         recents.record_open(Path::new("alive.md"));
 
-        let hits = recent_hits(&vault, &recents, 25);
+        let hits = recent_hits(&vault.scan(), &recents, 25);
         let names: Vec<String> = hits
             .iter()
             .map(|h| h.path.to_string_lossy().into_owned())
@@ -824,10 +877,10 @@ mod tests {
         let recents = make_recents_for(&vault, &dir);
         recents.record_open(Path::new("a.md"));
         recents.record_open(Path::new("b.md"));
-        let hits = recent_hits(&vault, &recents, 3);
+        let hits = recent_hits(&vault.scan(), &recents, 3);
         assert_eq!(hits.len(), 3, "limit must be honored across the merge");
 
-        assert!(recent_hits(&vault, &recents, 0).is_empty());
+        assert!(recent_hits(&vault.scan(), &recents, 0).is_empty());
     }
 
     #[test]
@@ -842,7 +895,7 @@ mod tests {
         recents.record_open(Path::new("a.md"));
         recents.record_open(Path::new("b.md"));
 
-        let hits = recent_hits(&vault, &recents, 10);
+        let hits = recent_hits(&vault.scan(), &recents, 10);
         let names: Vec<String> = hits
             .iter()
             .map(|h| h.path.to_string_lossy().into_owned())
@@ -857,6 +910,43 @@ mod tests {
         fs::create_dir_all(root.join(".obsidian")).unwrap();
         let vault = Vault::discover(Some(root)).unwrap();
         let recents = make_recents_for(&vault, &dir);
-        assert!(recent_hits(&vault, &recents, 25).is_empty());
+        assert!(recent_hits(&vault.scan(), &recents, 25).is_empty());
+    }
+
+    // ── fuzzy_find_from_scan equivalence ──────────────────────────────
+
+    /// The scan-fed search ranks identically to the vault-based search
+    /// for the same vault state — the two pipelines differ only in
+    /// where stage-1 paths and stage-2 headings come from; scoring is
+    /// shared.
+    #[test]
+    fn fuzzy_find_from_scan_equals_fuzzy_find() {
+        let (_dir, vault) = make_vault(&[
+            ("notes/A.md", "# Alpha\n\n# Beta\nbody\n"),
+            ("notes/B.md", "# Gamma\nbody\n"),
+            ("other.md", "# Delta\n"),
+        ]);
+        let scan = vault.scan();
+        for q in ["A", "Alpha", "notes/A", "# Beta", "A#Beta", "zzz"] {
+            let parsed = Query::parse(q);
+            let opts = SearchOptions {
+                limit: 10,
+                include_headings: true,
+            };
+            let from_vault = fuzzy_find(&vault, &parsed, opts.clone());
+            let from_scan = fuzzy_find_from_scan(&scan, &parsed, opts);
+            let paths_v: Vec<PathBuf> = from_vault.iter().map(|h| h.path.clone()).collect();
+            let paths_s: Vec<PathBuf> = from_scan.iter().map(|h| h.path.clone()).collect();
+            assert_eq!(paths_v, paths_s, "query {q:?}: path ranking");
+            let heads_v: Vec<Option<String>> = from_vault
+                .iter()
+                .map(|h| h.heading.as_ref().map(|x| x.text.clone()))
+                .collect();
+            let heads_s: Vec<Option<String>> = from_scan
+                .iter()
+                .map(|h| h.heading.as_ref().map(|x| x.text.clone()))
+                .collect();
+            assert_eq!(heads_v, heads_s, "query {q:?}: heading picks");
+        }
     }
 }

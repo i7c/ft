@@ -53,7 +53,21 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
     };
 
     let alias_ids = match &note_path {
-        Some(p) => resolve_related_aliases(graph, note_id, vault, p)?,
+        Some(p) => {
+            let abs = vault.path.join(p);
+            match std::fs::read_to_string(&abs) {
+                Ok(content) => {
+                    let headings = crate::markdown::extract_headings(&content);
+                    resolve_related_aliases(
+                        graph,
+                        note_id,
+                        &headings,
+                        content.lines().count() as u32,
+                    )?
+                }
+                Err(_) => Vec::new(),
+            }
+        }
         None => Vec::new(),
     };
     let alias_set: HashSet<NoteId> = alias_ids.iter().copied().collect();
