@@ -200,7 +200,7 @@ impl GraphTab {
     fn set_graph_for_test(&mut self, graph: Graph) {
         self.snapshot = Some(std::sync::Arc::new(crate::tui::snapshot::GraphSnapshot {
             generation: 1,
-            scan: ft_core::vault::Scan::default(),
+            scan: ft_core::scan::Scan::default(),
             graph,
             citations: ft_core::synth::citations::CitationIndex::default(),
         }));

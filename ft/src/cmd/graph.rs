@@ -157,7 +157,7 @@ fn run_query(args: QueryArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         }
     };
 
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     let opts = WalkOptions {
         max_depth: args.depth,

@@ -80,7 +80,7 @@ pub fn verify_synth_note(vault: &Vault, note_path: &Path) -> Result<Vec<Verifica
 pub fn verify_all(vault: &Vault) -> Result<Vec<(PathBuf, Vec<VerificationResult>)>> {
     let repo = git::RepoMap::discover(&vault.path)?;
     let mut out = Vec::new();
-    for note_rel in walk_markdown_files(&vault.path) {
+    for note_rel in crate::scan::markdown_files(&vault.path, &vault.config.config.ignored_paths) {
         let absolute = vault.path.join(&note_rel);
         let content = match std::fs::read_to_string(&absolute) {
             Ok(s) => s,
@@ -185,35 +185,6 @@ fn verify_one(repo: &git::RepoMap, note_path: &Path, c: &ParsedCallout) -> Verif
         status: SectionStatus::Ok,
         detail: String::new(),
     }
-}
-
-/// Walk every `.md` file under `vault_root`, returning vault-relative
-/// paths. Skips dot-prefixed entries (`.obsidian/`, `.git/`, etc.).
-/// Shared with [`crate::synth::repair`]'s all-notes sweep.
-pub(crate) fn walk_markdown_files(vault_root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    fn rec(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in rd.flatten() {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let p = entry.path();
-            if p.is_dir() {
-                rec(&p, root, out);
-            } else if p.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok(rel) = p.strip_prefix(root) {
-                    out.push(rel.to_path_buf());
-                }
-            }
-        }
-    }
-    rec(vault_root, vault_root, &mut out);
-    out.sort();
-    out
 }
 
 #[cfg(test)]

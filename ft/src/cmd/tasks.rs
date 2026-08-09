@@ -254,7 +254,7 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     // Build the graph once. The query evaluator runs against the graph and
     // returns task NoteIds; we map those back to `&Task` for sort/render.
-    let graph = crate::cmd::common::build_graph(&vault, &scan)?;
+    let graph = crate::cmd::common::build_graph(&scan)?;
     let matched_task_keys: HashSet<TaskKey> = if graph_queries.is_empty() {
         // No predicates at all — every task in the scan is admissible.
         scan.tasks
@@ -793,7 +793,7 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
         let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
-        let graph = crate::cmd::common::build_graph(&vault, &scan)?;
+        let graph = crate::cmd::common::build_graph(&scan)?;
         let keys = resolve::by_query(&graph, &parsed);
         let mut targets: Vec<&Task> = scan
             .tasks
@@ -1092,7 +1092,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
         let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
-        let graph = crate::cmd::common::build_graph(&vault, &scan)?;
+        let graph = crate::cmd::common::build_graph(&scan)?;
         let keys = resolve::by_query(&graph, &parsed);
         scan.tasks
             .iter()
@@ -1510,7 +1510,7 @@ fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyho
 fn resolve_targets<'a>(
     selector: Option<&str>,
     query: Option<&str>,
-    scan: &'a ft_core::vault::Scan,
+    scan: &'a ft_core::scan::Scan,
     vault: &Vault,
     today: NaiveDate,
 ) -> Result<Vec<&'a Task>> {
@@ -1518,7 +1518,7 @@ fn resolve_targets<'a>(
         let expanded = crate::cmd::common::interpolate_query(q, vault, today)?;
         let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
-        let graph = crate::cmd::common::build_graph(vault, scan)?;
+        let graph = crate::cmd::common::build_graph(scan)?;
         let keys = resolve::by_query(&graph, &parsed);
         let out: Vec<&Task> = scan
             .tasks

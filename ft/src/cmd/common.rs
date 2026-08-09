@@ -7,7 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use ft_core::graph::Graph;
 use ft_core::query::{interpolate, SigilCtx};
-use ft_core::vault::{Scan, Vault};
+use ft_core::scan::Scan;
+use ft_core::vault::Vault;
 
 /// Discover a vault (`--vault` flag → `$FT_VAULT` → CWD walk-up →
 /// user-config `default_vault`) with the standard "could not locate"
@@ -16,10 +17,10 @@ pub fn discover_vault(vault_flag: Option<PathBuf>) -> Result<Vault> {
     Vault::discover(vault_flag).context("could not locate a vault")
 }
 
-/// Build the note-link graph for `vault` with the standard "graph build
-/// failed" context attached.
-pub fn build_graph(vault: &Vault, scan: &Scan) -> Result<Graph> {
-    Graph::build(vault, scan).context("could not build graph for vault")
+/// Build the note-link graph from a scan with the standard "graph
+/// build failed" context attached.
+pub fn build_graph(scan: &Scan) -> Result<Graph> {
+    Graph::build(scan).context("could not build graph for vault")
 }
 
 /// Build a [`SigilCtx`] for `vault` at `today`, for `@`-sigil

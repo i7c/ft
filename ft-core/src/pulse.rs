@@ -339,7 +339,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         (vault, graph, repo, first_sha)
     }
 
@@ -412,7 +412,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
@@ -466,7 +466,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
@@ -537,7 +537,7 @@ mod tests {
         run_git(&["commit", "-m", "c3"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
@@ -591,7 +591,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
@@ -648,7 +648,7 @@ mod tests {
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();
@@ -719,7 +719,7 @@ Then I add a thought about [[Bar]].
         run_git(&["commit", "-m", "c2"]);
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let head = git::head_hash(&repo).unwrap();
         let window = WindowRange::Range { from: c1, to: head };
         let review = compute_pulse(&graph, &vault, &window, &default_cfg()).unwrap();

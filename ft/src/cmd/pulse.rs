@@ -46,7 +46,7 @@ pub fn run(args: PulseArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     })?;
 
     let window = resolve_window(&args)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
     let cfg = vault.config.config.synth.clone();
     let review = compute_pulse(&graph, &vault, &window, &cfg).context("computing link review")?;
 

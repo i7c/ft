@@ -8,7 +8,8 @@ mod tree_tests {
 
     use ft_core::graph::query::parse as parse_query;
     use ft_core::graph::Graph;
-    use ft_core::vault::{Scan, Vault};
+    use ft_core::scan::Scan;
+    use ft_core::vault::Vault;
 
     use super::*;
 
@@ -22,7 +23,7 @@ mod tree_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &v.scan()).unwrap()
+        Graph::build(&v.scan()).unwrap()
     }
 
     fn dirs_query() -> GraphQuery {
@@ -199,7 +200,7 @@ mod tree_tests {
         tmp.child(".obsidian").create_dir_all().unwrap();
 
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &v.scan()).unwrap();
+        let g = Graph::build(&v.scan()).unwrap();
 
         let q = parse_query(
             "node where indegree = 0; expand where from.kind = Directory and edge.kind = directory-contains and to.kind = Note;",
@@ -285,7 +286,7 @@ mod tree_tests {
             ],
             ..v.scan()
         };
-        let g = Graph::build(&v, &scan).unwrap();
+        let g = Graph::build(&scan).unwrap();
 
         // Query for task nodes only
         let q = parse_query("node where kind = Task;").unwrap();
@@ -307,7 +308,8 @@ mod view_tests {
 
     use assert_fs::prelude::*;
     use ft_core::graph::Graph;
-    use ft_core::vault::{Scan, Vault};
+    use ft_core::scan::Scan;
+    use ft_core::vault::Vault;
 
     use super::*;
 
@@ -321,7 +323,7 @@ mod view_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &v.scan()).unwrap()
+        Graph::build(&v.scan()).unwrap()
     }
 
     fn dirs_query_text() -> &'static str {
@@ -685,7 +687,7 @@ mod view_tests {
 
         // Build graph so views can resolve queries.
         let scan = vault.scan();
-        let graph = Graph::build(&vault, &scan).unwrap();
+        let graph = Graph::build(&scan).unwrap();
 
         let mut tab = GraphTab::new();
         tab.set_graph_for_test(graph);
@@ -751,7 +753,7 @@ mod view_tests {
         }
         let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
         let scan = vault.scan();
-        let graph = Graph::build(&vault, &scan).unwrap();
+        let graph = Graph::build(&scan).unwrap();
         let mut v = ExpandedView {
             query_buf: EditBuffer::from(query_text),
             ..Default::default()
@@ -822,7 +824,7 @@ mod view_tests {
         dir.child(".obsidian").create_dir_all().unwrap();
         dir.child("foo.md").write_str("[[Phantom]]").unwrap();
         let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let mut v = ExpandedView {
             query_buf: EditBuffer::from("node where kind = Ghost;"),
             ..Default::default()
@@ -853,7 +855,7 @@ mod view_tests {
             }],
             ..vault.scan()
         };
-        let graph = Graph::build(&vault, &scan).unwrap();
+        let graph = Graph::build(&scan).unwrap();
         let mut v = ExpandedView {
             query_buf: EditBuffer::from("node where kind = Task;"),
             ..Default::default()
@@ -919,7 +921,7 @@ mod search_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &v.scan()).unwrap()
+        Graph::build(&v.scan()).unwrap()
     }
 
     fn dirs_query() -> GraphQuery {
@@ -977,7 +979,7 @@ mod search_tests {
         tmp.child("a.md").write_str("[[b]]\n").unwrap();
         tmp.child("b.md").write_str("[[a]]\n").unwrap();
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&vault, &vault.scan()).unwrap();
+        let g = Graph::build(&vault.scan()).unwrap();
         let q = parse_query(
             "node where kind = Note and path = \"a.md\"; expand where edge.kind = note-link;",
         )
@@ -1033,7 +1035,7 @@ mod search_tests {
         tmp.child(".obsidian").create_dir_all().unwrap();
         let v = ft_core::vault::Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
         // Due 3 days ago (relative to FT_TEST_TODAY = 2026-05-12).
-        let scan = ft_core::vault::Scan {
+        let scan = ft_core::scan::Scan {
             tasks: vec![ft_core::task::Task {
                 description: "Fix login bug".into(),
                 status: ft_core::task::Status::Open,
@@ -1045,7 +1047,7 @@ mod search_tests {
             }],
             ..v.scan()
         };
-        let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
+        let g = ft_core::graph::Graph::build(&scan).unwrap();
         let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
         let (display, kind) = leaf_display(&g, task_id, FT_TEST_TODAY);
         assert_eq!(kind, 'T');
@@ -1067,7 +1069,7 @@ mod search_tests {
         let tmp = assert_fs::TempDir::new().unwrap();
         tmp.child(".obsidian").create_dir_all().unwrap();
         let v = ft_core::vault::Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let scan = ft_core::vault::Scan {
+        let scan = ft_core::scan::Scan {
             tasks: vec![ft_core::task::Task {
                 description: "Plain task".into(),
                 source_file: PathBuf::from("root.md"),
@@ -1076,7 +1078,7 @@ mod search_tests {
             }],
             ..v.scan()
         };
-        let g = ft_core::graph::Graph::build(&v, &scan).unwrap();
+        let g = ft_core::graph::Graph::build(&scan).unwrap();
         let task_id = g.task_by_loc(Path::new("root.md"), 1).unwrap();
         let (display, kind) = leaf_display(&g, task_id, FT_TEST_TODAY);
         assert_eq!(kind, 'T');
@@ -1183,7 +1185,7 @@ mod nav_tests {
     fn dirs_graph() -> Graph {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/dirs");
         let v = Vault::discover(Some(path)).expect("dirs fixture vault must exist");
-        Graph::build(&v, &v.scan()).unwrap()
+        Graph::build(&v.scan()).unwrap()
     }
 
     fn tab_with_query(graph: Graph, query_text: &str) -> GraphTab {
@@ -1259,7 +1261,7 @@ mod nav_tests {
         // With a link-graph expand policy, a note reachable via
         // multiple paths should return the shortest (BFS).
         let (_dir, vault) = link_vault_for_shortest_path();
-        let g = Graph::build(&vault, &vault.scan()).unwrap();
+        let g = Graph::build(&vault.scan()).unwrap();
         let tab = tab_with_query(
             g,
             "node where kind = Note and path = \"A.md\"; expand where edge.kind in {links-into, note-link};",

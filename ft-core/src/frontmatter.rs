@@ -57,7 +57,15 @@ pub fn frontmatter_end_line(content: &str) -> Option<u32> {
 /// `ft.tasks.section` key. The legacy flat `ft-tasks-section` key is
 /// ignored.
 pub fn ft_tasks_section(content: &str) -> Option<String> {
-    let fm = frontmatter_block(content)?;
+    let fm = block(content)?;
+    ft_tasks_section_in(fm)
+}
+
+/// Same as [`ft_tasks_section`] but takes the frontmatter block (as
+/// returned by [`block`] / captured by the scan in
+/// `crate::scan::ParsedFile::frontmatter`) instead of full content — no
+/// re-scanning needed.
+pub fn ft_tasks_section_in(fm: &str) -> Option<String> {
     let ft = nested_value(fm, "ft")?;
     let tasks = nested_value(ft, "tasks")?;
     scalar_value(tasks, "section")
@@ -69,7 +77,13 @@ pub fn ft_tasks_section(content: &str) -> Option<String> {
 /// `ft.append.section` key. The legacy flat `ft-append-section` key is
 /// ignored.
 pub fn ft_append_section(content: &str) -> Option<String> {
-    let fm = frontmatter_block(content)?;
+    let fm = block(content)?;
+    ft_append_section_in(fm)
+}
+
+/// Same as [`ft_append_section`] but takes the frontmatter block
+/// directly.
+pub fn ft_append_section_in(fm: &str) -> Option<String> {
     let ft = nested_value(fm, "ft")?;
     let append = nested_value(ft, "append")?;
     scalar_value(append, "section")
@@ -83,7 +97,13 @@ pub fn ft_append_section(content: &str) -> Option<String> {
 /// by [`crate::synth::callout::is_synth_note`]). The legacy flat
 /// `ft-synth:` key is ignored.
 pub fn ft_synth_enabled(content: &str) -> Option<bool> {
-    let fm = frontmatter_block(content)?;
+    let fm = block(content)?;
+    ft_synth_enabled_in(fm)
+}
+
+/// Same as [`ft_synth_enabled`] but takes the frontmatter block
+/// directly.
+pub fn ft_synth_enabled_in(fm: &str) -> Option<bool> {
     let ft = nested_value(fm, "ft")?;
     let synth = nested_value(ft, "synth")?;
     let raw = scalar_value(synth, "enabled")?;
@@ -109,7 +129,13 @@ pub fn ft_synth_enabled(content: &str) -> Option<bool> {
 /// (`["[[Foo]]", "[[Bar]]"]`) or block-sequence (`- "[[Foo]]"`) form.
 /// The legacy flat `ft-synth-targets` key is ignored.
 pub fn ft_synth_targets(content: &str) -> Option<Vec<String>> {
-    let fm = frontmatter_block(content)?;
+    let fm = block(content)?;
+    ft_synth_targets_in(fm)
+}
+
+/// Same as [`ft_synth_targets`] but takes the frontmatter block
+/// directly.
+pub fn ft_synth_targets_in(fm: &str) -> Option<Vec<String>> {
     let ft = nested_value(fm, "ft")?;
     let synth = nested_value(ft, "synth")?;
     // First check for an inline flow sequence on the `targets:` key line
@@ -133,7 +159,12 @@ pub fn ft_synth_targets(content: &str) -> Option<Vec<String>> {
 /// The raw frontmatter body text (between the opening and closing
 /// `---` fences), or `None` if `content` doesn't start with a
 /// well-formed `---\n…\n---` block.
-fn frontmatter_block(content: &str) -> Option<&str> {
+///
+/// The block is the text the [`*_in`](frontmatter::ft_tasks_section_in)
+/// reader variants operate on: a scan captures it once per file
+/// (`ParsedFile::frontmatter`) so consumers resolve keys without
+/// re-reading or re-scanning the file.
+pub fn block(content: &str) -> Option<&str> {
     let rest = content.strip_prefix("---")?;
     // The opening `---` must be followed by `\n` (Obsidian also accepts
     // `---\r\n`).
@@ -390,6 +421,34 @@ mod tests {
 
     fn fm(body: &str) -> String {
         format!("---\n{body}\n---\n\n# Body\n")
+    }
+
+    // ── block-taking readers (`*_in`) ──────────────────────────────
+
+    #[test]
+    fn block_in_variants_agree_with_content_readers() {
+        let c = fm(
+            "ft:\n  tasks:\n    section: Tasks\n  append:\n    section: Sessions\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\", \"[[Bar]]\"]\n",
+        );
+        let b = block(&c).unwrap();
+        assert_eq!(ft_tasks_section(&c), ft_tasks_section_in(b));
+        assert_eq!(ft_append_section(&c), ft_append_section_in(b));
+        assert_eq!(ft_synth_enabled(&c), ft_synth_enabled_in(b));
+        assert_eq!(ft_synth_targets(&c), ft_synth_targets_in(b));
+        assert_eq!(ft_synth_enabled_in(b), Some(true));
+    }
+
+    #[test]
+    fn block_in_handles_block_without_content() {
+        let c = fm("ft:\n  synth:\n    enabled: true\n");
+        let b = block(&c).unwrap();
+        assert_eq!(ft_synth_enabled_in(b), Some(true));
+        assert_eq!(ft_tasks_section_in(b), None);
+    }
+
+    #[test]
+    fn block_returns_none_without_frontmatter() {
+        assert_eq!(block("no frontmatter"), None);
     }
 
     // ── ft_tasks_section ───────────────────────────────────────────

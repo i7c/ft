@@ -241,7 +241,7 @@ mod tests {
         commit_all_dated(tmp.path(), "c2", "2025-02-01T00:00:00");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let mut cache = BlameCache::default();
         let report = build_recent(
             &graph,
@@ -290,7 +290,7 @@ mod tests {
         commit_all_dated(tmp.path(), "c2", "2025-02-01T00:00:00");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
 
         let mut cache = BlameCache::default();
         let default_report = build_recent(
@@ -353,7 +353,7 @@ mod tests {
         commit_all_dated(tmp.path(), "c3", "2025-06-01T00:00:00");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let mut cache = BlameCache::default();
         let report = build_recent(
             &graph,
@@ -392,7 +392,7 @@ mod tests {
         commit_all_dated(tmp.path(), "c2", "2025-02-01T00:00:00");
 
         let vault = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let graph = Graph::build(&vault, &vault.scan()).unwrap();
+        let graph = Graph::build(&vault.scan()).unwrap();
         let mut cache = BlameCache::default();
         let report = build_recent(
             &graph,

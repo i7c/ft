@@ -120,7 +120,7 @@ fn real_vault_link_review_runs() {
         return;
     }
     let scan = vault.scan();
-    let graph = ft_core::graph::Graph::build(&vault, &scan).expect("build graph");
+    let graph = ft_core::graph::Graph::build(&scan).expect("build graph");
     let cfg = vault.config.config.synth.clone();
     let window = WindowRange::Since(Duration::days(7));
     let review = compute_pulse(&graph, &vault, &window, &cfg).expect("compute_pulse on real vault");

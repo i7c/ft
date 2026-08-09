@@ -331,7 +331,7 @@ mod tests {
             tmp.child(name).write_str(content).unwrap();
         }
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &v.scan()).unwrap();
+        let g = Graph::build(&v.scan()).unwrap();
         (tmp, v, g)
     }
 
@@ -487,7 +487,7 @@ mod tests {
             )
             .unwrap();
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &v.scan()).unwrap();
+        let g = Graph::build(&v.scan()).unwrap();
         let cands = detect_drift(&g, &v);
         assert!(
             pair(&cands, "diagram-v1.png", "diagram-v2.png").is_none(),
@@ -520,7 +520,7 @@ mod tests {
             )
             .unwrap();
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &v.scan()).unwrap();
+        let g = Graph::build(&v.scan()).unwrap();
         let cands = detect_drift(&g, &v);
         assert!(
             pair(&cands, "onboarding", "onboarding-flow").is_none(),

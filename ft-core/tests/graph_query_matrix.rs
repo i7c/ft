@@ -106,7 +106,7 @@ fn diff(expected: &[String], actual: &[String]) -> String {
 fn graph_query_fixture_matrix() {
     let dir = fixtures_dir();
     let vault = Vault::discover(Some(dirs_vault_path())).expect("dirs fixture vault must exist");
-    let graph = Graph::build(&vault, &vault.scan()).expect("build graph");
+    let graph = Graph::build(&vault.scan()).expect("build graph");
 
     let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read fixtures dir {}: {e}", dir.display()))

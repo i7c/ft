@@ -1761,7 +1761,7 @@ fn journal_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
     // it via the core planner so the pin matches HEAD exactly.
     let abs = vault_path.join("Synth/topic.md");
     std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let graph = ft_core::graph::Graph::build(&vault, &vault.scan()).unwrap();
+    let graph = ft_core::graph::Graph::build(&vault.scan()).unwrap();
     let foo = graph.ghost_by_raw("Foo").unwrap();
     let mut cache = ft_core::blame_cache::BlameCache::default();
     let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;
@@ -1810,7 +1810,7 @@ fn journal_send_to_synth_new_only_scopes_to_watermark() -> Result<()> {
     // the watermark == today, and --new-only should find nothing newer).
     let abs = vault_path.join("Synth/topic.md");
     std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let graph = ft_core::graph::Graph::build(&vault, &vault.scan()).unwrap();
+    let graph = ft_core::graph::Graph::build(&vault.scan()).unwrap();
     let foo = graph.ghost_by_raw("Foo").unwrap();
     let mut cache = ft_core::blame_cache::BlameCache::default();
     let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache)?;

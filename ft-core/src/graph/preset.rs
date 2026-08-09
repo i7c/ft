@@ -31,8 +31,9 @@ mod tests {
     use super::*;
     use crate::graph::query;
     use crate::graph::Graph;
+    use crate::scan::Scan;
     use crate::task::Task;
-    use crate::vault::{Scan, Vault};
+    use crate::vault::Vault;
     use assert_fs::prelude::*;
     use std::path::PathBuf;
 
@@ -79,7 +80,7 @@ mod tests {
             ],
             ..v.scan()
         };
-        let g = Graph::build(&v, &scan).unwrap();
+        let g = Graph::build(&scan).unwrap();
 
         let dsl_str = builtin("tasks-in-fs").expect("tasks-in-fs preset exists");
         let q = query::parse(dsl_str).unwrap();
@@ -122,7 +123,7 @@ mod tests {
             }],
             ..v.scan()
         };
-        let g = Graph::build(&v, &scan).unwrap();
+        let g = Graph::build(&scan).unwrap();
 
         let dsl_str = builtin("fs").expect("fs preset exists");
         let q = query::parse(dsl_str).unwrap();
@@ -160,7 +161,7 @@ mod tests {
             }],
             ..v.scan()
         };
-        let g = Graph::build(&v, &scan).unwrap();
+        let g = Graph::build(&scan).unwrap();
 
         let dsl_str = builtin("tree").expect("tree preset exists");
         let q = query::parse(dsl_str).unwrap();

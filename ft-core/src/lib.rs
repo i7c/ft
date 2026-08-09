@@ -16,6 +16,7 @@ pub mod query;
 pub mod recent;
 pub mod recents;
 pub mod related;
+pub mod scan;
 pub mod search;
 pub mod selector;
 pub mod synth;

@@ -49,8 +49,8 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
 use crate::error::Result;
+use crate::scan::{ParsedFile, Scan};
 use crate::task::Task;
-use crate::vault::{ParsedFile, Scan, Vault};
 
 /// Stable identity of a node within a single [`Graph`].
 ///
@@ -379,13 +379,13 @@ impl Graph {
     ///
     /// Does no file I/O of its own: the scan already read every file once
     /// and extracted links, paragraph ranges, and headings into
-    /// [`Scan::files`] (so `scan → build` touches each file exactly once).
-    /// The only vault access here is the directory walk for
+    /// [`Scan::files`] (so `scan → build` touches each file exactly once),
+    /// and walked the directory tree into [`Scan::dirs`] for
     /// [`NodeKind::Directory`] nodes.
     ///
     /// Task nodes are created from `scan.tasks` after the note nodes,
     /// and `HasTask` edges connect notes to their tasks.
-    pub fn build(vault: &Vault, scan: &Scan) -> Result<Graph> {
+    pub fn build(scan: &Scan) -> Result<Graph> {
         let parsed = &scan.files;
 
         let mut graph = Graph {
@@ -404,12 +404,11 @@ impl Graph {
             graph.insert_note_node(pf.rel.clone());
         }
 
-        // Insert directory nodes (root + every directory the vault
-        // walk yields + every parent directory of a note as a defensive
+        // Insert directory nodes (root + every directory the scan walk
+        // yields + every parent directory of a note as a defensive
         // union, so freshly created dirs not yet on disk at walk time
         // still get nodes).
-        let dirs = vault.directories();
-        graph.insert_directory_nodes(parsed, &dirs);
+        graph.insert_directory_nodes(parsed, &scan.dirs);
 
         // Insert contains edges from each directory to its immediate
         // children (subdirectories and notes).

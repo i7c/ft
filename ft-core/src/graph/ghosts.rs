@@ -80,7 +80,7 @@ mod tests {
             tmp.child(name).write_str(content).unwrap();
         }
         let v = Vault::discover(Some(tmp.path().to_path_buf())).unwrap();
-        let g = Graph::build(&v, &v.scan()).unwrap();
+        let g = Graph::build(&v.scan()).unwrap();
         (tmp, g)
     }
 

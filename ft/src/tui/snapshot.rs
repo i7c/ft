@@ -11,8 +11,9 @@
 use std::sync::Arc;
 
 use ft_core::graph::Graph;
+use ft_core::scan::Scan;
 use ft_core::synth::citations::CitationIndex;
-use ft_core::vault::{Scan, Vault};
+use ft_core::vault::Vault;
 
 /// One installed graph build. `scan` and `graph` come from the same
 /// read pass, so task line numbers and graph task nodes always agree.
@@ -37,8 +38,8 @@ pub struct GraphSnapshot {
 /// `Clone` event channel.
 pub fn build_graph_snapshot(vault: &Vault, generation: u64) -> Result<Arc<GraphSnapshot>, String> {
     let scan = vault.scan();
-    let citations = CitationIndex::build(vault);
-    match Graph::build(vault, &scan) {
+    let citations = CitationIndex::build(&vault.path, &scan);
+    match Graph::build(&scan) {
         Ok(graph) => Ok(Arc::new(GraphSnapshot {
             generation,
             scan,

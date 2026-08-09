@@ -131,7 +131,7 @@ pub fn plan_synth_repair(vault: &Vault, note: &Path) -> Result<SynthRepairPlan> 
 /// callers can report a complete sweep.
 pub fn plan_repair_all(vault: &Vault) -> Result<Vec<SynthRepairPlan>> {
     let mut out = Vec::new();
-    for note_rel in super::verify::walk_markdown_files(&vault.path) {
+    for note_rel in crate::scan::markdown_files(&vault.path, &vault.config.config.ignored_paths) {
         let absolute = vault.path.join(&note_rel);
         let Ok(content) = std::fs::read_to_string(&absolute) else {
             continue;

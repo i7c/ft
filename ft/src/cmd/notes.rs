@@ -1194,7 +1194,7 @@ pub struct LinksArgs {
 
 fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     let query = args.note.join(" ");
     let id = resolve_note_query(&graph, &vault, &query)?;
@@ -1302,7 +1302,7 @@ pub struct RelatedArgs {
 
 fn run_related(args: RelatedArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     // Resolve a note *or* ghost target: unlike `backlinks`/`links`, a
     // phantom (unresolved `[[link]]`) is a first-class related-scoring
@@ -1368,7 +1368,7 @@ pub struct GhostsArgs {
 
 fn run_ghosts(args: GhostsArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     let mut ranks = ft_core::graph::ghosts::rank_ghosts(&graph);
     ranks.retain(|r| r.mentions >= args.min_mentions);
@@ -1432,7 +1432,7 @@ pub struct DriftArgs {
 
 fn run_drift(args: DriftArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     let mut candidates = ft_core::graph::drift::detect_drift(&graph, &vault);
     if let Some(n) = args.limit {
@@ -1529,7 +1529,7 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     // Validate the note resolves to a real note before tearing the
     // terminal apart for the TUI.
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
     let query = args.note.join(" ");
     let note_id = resolve_note_query(&graph, &vault, &query)?;
     let note_path = match graph.node(note_id) {
@@ -1606,7 +1606,8 @@ fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     }
 
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let scan = vault.scan();
+    let graph = crate::cmd::common::build_graph(&scan)?;
     // Verify the vault is inside a git repo, but then run blame from
     // `vault.path` itself: paragraph `source_file` paths are
     // vault-relative, and `git -C <vault>` finds the enclosing repo
@@ -1666,7 +1667,7 @@ fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         });
     }
 
-    let citations = ft_core::synth::citations::CitationIndex::build(&vault);
+    let citations = ft_core::synth::citations::CitationIndex::build(&vault.path, &scan);
     if args.uncited {
         entries.retain(|e| {
             !citations
@@ -1847,7 +1848,8 @@ pub struct RecentArgs {
 
 fn run_recent(args: RecentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let scan = vault.scan();
+    let graph = crate::cmd::common::build_graph(&scan)?;
     // Blame runs from `vault.path`; `git -C <vault>` finds the enclosing
     // repo whether the vault is the repo root or a subdir.
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
@@ -1882,7 +1884,7 @@ fn run_recent(args: RecentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         }
     }
 
-    let citations = ft_core::synth::citations::CitationIndex::build(&vault);
+    let citations = ft_core::synth::citations::CitationIndex::build(&vault.path, &scan);
     let mut entries = report.entries;
     if args.uncited {
         entries.retain(|e| {
@@ -2078,7 +2080,7 @@ pub struct MoveArgs {
 
 fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     let id = resolve_rename_source(&graph, &vault, &args.note)?;
 
@@ -2135,7 +2137,7 @@ fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 
 fn run_mv(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     // Resolve the target to a directory.
     let target_rel = Path::new(args.target.trim());

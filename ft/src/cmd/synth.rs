@@ -175,7 +175,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
         anyhow!("vault is not inside a git repository — `ft synth` needs git history")
     })?;
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
     let target = normalize_md_target(&args.target);
 
     let mut entries: Vec<GatherEntry> = Vec::new();
@@ -311,7 +311,7 @@ fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             target.display()
         ));
     }
-    let graph = crate::cmd::common::build_graph(&vault, &vault.scan())?;
+    let graph = crate::cmd::common::build_graph(&vault.scan())?;
 
     // Resolve targets: explicit --link / --from, else frontmatter.
     let explicit_links = !args.link.is_empty();

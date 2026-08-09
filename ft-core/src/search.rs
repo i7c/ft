@@ -124,7 +124,7 @@ pub fn fuzzy_find(vault: &Vault, query: &Query, opts: SearchOptions) -> Vec<Hit>
     }
 
     let want_headings = opts.include_headings || query.heading_part.is_some();
-    let files = vault.markdown_files();
+    let files = crate::scan::markdown_files(&vault.path, &vault.config.config.ignored_paths);
 
     // Stage 1: filename matching.
     let file_matches: Vec<(PathBuf, u32)> = if query.file_part.is_empty() {
@@ -297,11 +297,10 @@ pub fn recent_hits(vault: &Vault, recents: &RecentsLog, limit: usize) -> Vec<Hit
 
     let opens = recents.load_recent(limit.saturating_mul(2));
 
-    let files_with_mtime: Vec<(PathBuf, std::time::SystemTime)> = vault
-        .markdown_files_with_mtime()
-        .into_iter()
-        .map(|(abs, mt)| (rel(&abs, &vault.path), mt))
-        .collect();
+    let files_with_mtime: Vec<(PathBuf, std::time::SystemTime)> =
+        crate::scan::markdown_files_with_mtime(&vault.path, &vault.config.config.ignored_paths)
+            .into_iter()
+            .collect();
     let file_set: HashSet<PathBuf> = files_with_mtime.iter().map(|(p, _)| p.clone()).collect();
 
     let mut seen: HashSet<PathBuf> = HashSet::new();

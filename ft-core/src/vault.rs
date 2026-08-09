@@ -1,63 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use ignore::{overrides::OverrideBuilder, WalkBuilder};
-use rayon::prelude::*;
 use tracing::debug;
 
 use crate::{
     config::{self, LayeredConfig},
-    error::{Error, Result, ScanError},
-    graph::parser::{extract_links, RawLink},
-    markdown::{extract_headings, extract_paragraphs, Heading, LineSkipState, Paragraph},
-    task::{
-        emoji::EmojiFormat,
-        format::{ParseContext, TaskFormat},
-        hierarchy::resolve_hierarchy,
-        Task,
-    },
+    error::{Error, Result},
+    scan::{self, Scan},
+    task::{emoji::EmojiFormat, format::TaskFormat},
 };
-
-/// Folders excluded from scanning by default. Combined with `.gitignore` and
-/// the vault's `ignored_paths` config.
-///
-/// Dotfile directories — `.obsidian/`, `.git/`, and `.ft/` — are additionally
-/// excluded by the walker's `.hidden(true)` filter (see `markdown_files` /
-/// `directories`). `.ft/` is intentionally absent from this list to avoid dead
-/// config: it would never be the active exclusion path.
-pub const DEFAULT_IGNORED: &[&str] = &[".obsidian", ".git", "attachments"];
 
 #[derive(Debug)]
 pub struct Vault {
     pub path: PathBuf,
     pub config: LayeredConfig,
-}
-
-/// Everything extracted from one markdown file in a single read during
-/// [`Vault::scan`]: the vault-relative path plus the raw links, paragraph
-/// ranges, and headings that [`crate::graph::Graph::build`] consumes.
-/// Struct (not a tuple) so the field reads stay self-documenting.
-#[derive(Debug)]
-pub struct ParsedFile {
-    /// Vault-relative path.
-    pub rel: PathBuf,
-    pub links: Vec<RawLink>,
-    pub paragraphs: Vec<Paragraph>,
-    pub headings: Vec<Heading>,
-}
-
-/// Result of [`Vault::scan`]. Tasks across the vault, the per-file parse
-/// artifacts the graph build consumes, plus per-file errors collected
-/// non-fatally.
-///
-/// One scan is one read of every vault file — [`crate::graph::Graph::build`]
-/// works entirely from `files` and does no I/O of its own, so
-/// `scan → build` touches each file exactly once.
-#[derive(Debug, Default)]
-pub struct Scan {
-    pub tasks: Vec<Task>,
-    pub errors: Vec<ScanError>,
-    /// Per-file parse artifacts, one entry per readable markdown file.
-    pub files: Vec<ParsedFile>,
 }
 
 impl Vault {
@@ -91,140 +46,17 @@ impl Vault {
     }
 
     /// Walk the vault, parse every markdown file in parallel, and return all
-    /// tasks, per-file graph parse artifacts, plus per-file errors. Respects
-    /// `.gitignore`, default exclusions (`.obsidian/`, `.git/`,
-    /// `attachments/`), and the `ignored_paths` config.
+    /// tasks, per-file graph parse artifacts, the directory list, plus
+    /// per-file errors. Respects `.gitignore`, default exclusions
+    /// (`.obsidian/`, `.git/`, `attachments/`), and the `ignored_paths`
+    /// config.
     ///
     /// This is the single read pass: each file's content is loaded once and
-    /// everything downstream needs — tasks, links, paragraphs, headings —
-    /// is extracted here. [`crate::graph::Graph::build`] consumes the
-    /// artifacts without re-reading anything.
+    /// everything downstream needs — tasks, links, paragraphs, headings,
+    /// frontmatter block — is extracted here. [`crate::graph::Graph::build`]
+    /// consumes the artifacts without re-reading anything.
     pub fn scan(&self) -> Scan {
-        let files = self.markdown_files();
-        debug!(file_count = files.len(), "starting parallel parse");
-
-        let results: Vec<(Vec<Task>, Option<ParsedFile>, Option<ScanError>)> = files
-            .par_iter()
-            .map(|path| parse_file(&self.path, path))
-            .collect();
-
-        let mut scan = Scan::default();
-        for (tasks, parsed, err) in results {
-            scan.tasks.extend(tasks);
-            if let Some(p) = parsed {
-                scan.files.push(p);
-            }
-            if let Some(e) = err {
-                scan.errors.push(e);
-            }
-        }
-        scan
-    }
-
-    /// Walk the vault and pair each markdown file with its `mtime`.
-    ///
-    /// Same exclusion rules as [`Self::markdown_files`]. Files whose
-    /// metadata can't be read are kept in the result with mtime set to
-    /// `SystemTime::UNIX_EPOCH` so they still appear (last) in any
-    /// recency ranking rather than being silently dropped.
-    pub(crate) fn markdown_files_with_mtime(&self) -> Vec<(PathBuf, std::time::SystemTime)> {
-        self.markdown_files()
-            .into_iter()
-            .map(|p| {
-                let mtime = std::fs::metadata(&p)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                (p, mtime)
-            })
-            .collect()
-    }
-
-    pub(crate) fn markdown_files(&self) -> Vec<PathBuf> {
-        let mut overrides = OverrideBuilder::new(&self.path);
-        for default in DEFAULT_IGNORED {
-            // `!pattern` excludes; trailing `/` keeps it a directory match.
-            let _ = overrides.add(&format!("!{default}/**"));
-        }
-        for extra in &self.config.config.ignored_paths {
-            let pattern = if extra.ends_with('/') {
-                format!("!{extra}**")
-            } else {
-                format!("!{extra}")
-            };
-            let _ = overrides.add(&pattern);
-        }
-        let overrides = overrides.build().expect("override patterns are valid");
-
-        let walker = WalkBuilder::new(&self.path)
-            .hidden(true)
-            .ignore(true)
-            .git_ignore(true)
-            .git_exclude(true)
-            .parents(false)
-            .overrides(overrides)
-            .build();
-
-        let mut files = Vec::new();
-        for entry in walker.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            if path.extension().is_some_and(|e| e == "md") {
-                files.push(path.to_path_buf());
-            }
-        }
-        files
-    }
-
-    /// Walk the vault and return every directory as a vault-relative
-    /// path, excluding the root itself. Same exclusion rules as
-    /// [`Self::markdown_files`] so the graph's set of `Directory` nodes
-    /// stays consistent with its set of `Note` nodes — a directory the
-    /// scan excludes will not appear here either.
-    ///
-    /// Unlike [`Self::markdown_files`], paths are vault-relative because
-    /// the only consumer (graph build) immediately strips the root.
-    pub(crate) fn directories(&self) -> Vec<PathBuf> {
-        let mut overrides = OverrideBuilder::new(&self.path);
-        for default in DEFAULT_IGNORED {
-            // Exclude both the directory itself and its contents — the
-            // walker's `is_dir()` check would otherwise let the dir entry
-            // through even when its contents are filtered out.
-            let _ = overrides.add(&format!("!{default}"));
-            let _ = overrides.add(&format!("!{default}/**"));
-        }
-        for extra in &self.config.config.ignored_paths {
-            let stripped = extra.strip_suffix('/').unwrap_or(extra);
-            let _ = overrides.add(&format!("!{stripped}"));
-            let _ = overrides.add(&format!("!{stripped}/**"));
-        }
-        let overrides = overrides.build().expect("override patterns are valid");
-
-        let walker = WalkBuilder::new(&self.path)
-            .hidden(true)
-            .ignore(true)
-            .git_ignore(true)
-            .git_exclude(true)
-            .parents(false)
-            .overrides(overrides)
-            .build();
-
-        let mut dirs = Vec::new();
-        for entry in walker.flatten() {
-            if !entry.file_type().is_some_and(|t| t.is_dir()) {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(rel) = path.strip_prefix(&self.path) else {
-                continue;
-            };
-            if rel.as_os_str().is_empty() {
-                continue;
-            }
-            dirs.push(rel.to_path_buf());
-        }
-        dirs
+        scan::scan_vault(&self.path, &self.config.config.ignored_paths)
     }
 
     /// The task wire format for this vault. Always [`EmojiFormat`] today;
@@ -350,56 +182,6 @@ impl Vault {
         )?;
         Ok(path)
     }
-}
-
-fn parse_file(
-    vault_root: &Path,
-    path: &Path,
-) -> (Vec<Task>, Option<ParsedFile>, Option<ScanError>) {
-    let rel = path.strip_prefix(vault_root).unwrap_or(path).to_path_buf();
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                Vec::new(),
-                None,
-                Some(ScanError {
-                    path: rel,
-                    message: format!("read failed: {e}"),
-                }),
-            );
-        }
-    };
-
-    // Task scan uses the same `LineSkipState` as `extract_paragraphs` /
-    // `extract_headings`, so a `- [ ]` line inside a fenced code block or
-    // YAML frontmatter is not recognized as a task. This keeps the invariant
-    // that every task lands in exactly one paragraph (required for the
-    // `OwnsTask` edge to be total) and avoids parsing code-block examples as
-    // phantom tasks.
-    let mut tasks = Vec::new();
-    let mut skip_state = LineSkipState::new();
-    for (lineno, line) in content.lines().enumerate() {
-        if skip_state.skip_line(line) {
-            continue;
-        }
-        let ctx = ParseContext {
-            source_file: rel.clone(),
-            source_line: lineno + 1,
-        };
-        if let Some(task) = EmojiFormat.parse_line(line, ctx) {
-            tasks.push(task);
-        }
-    }
-    resolve_hierarchy(&mut tasks);
-
-    let parsed = ParsedFile {
-        rel,
-        links: extract_links(&content),
-        paragraphs: extract_paragraphs(&content),
-        headings: extract_headings(&content),
-    };
-    (tasks, Some(parsed), None)
 }
 
 fn find_vault(vault_flag: Option<PathBuf>) -> Result<PathBuf> {
@@ -691,162 +473,6 @@ mod tests {
     use std::sync::Mutex;
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    // ── scan ──────────────────────────────────────────────────────────────────
-
-    fn make_vault_with(files: &[(&str, &str)]) -> (TempDir, Vault) {
-        let dir = TempDir::new().unwrap();
-        make_obsidian_dir(&dir);
-        for (rel, content) in files {
-            let f = dir.child(rel);
-            f.touch().unwrap();
-            f.write_str(content).unwrap();
-        }
-        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
-        (dir, vault)
-    }
-
-    #[test]
-    fn scan_collects_tasks_from_multiple_files() {
-        let (_dir, vault) = make_vault_with(&[
-            ("a.md", "- [ ] task in A\n- [x] done in A ✅ 2026-05-01\n"),
-            ("b.md", "Some prose\n- [ ] task in B\n"),
-        ]);
-        let scan = vault.scan();
-        assert_eq!(scan.tasks.len(), 3, "expected 3 tasks total");
-        assert!(scan.errors.is_empty());
-    }
-
-    #[test]
-    fn scan_skips_default_excluded_dirs() {
-        let (_dir, vault) = make_vault_with(&[
-            ("notes/keep.md", "- [ ] keep me\n"),
-            ("attachments/skip.md", "- [ ] skip me\n"),
-        ]);
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(descs.contains(&"keep me".to_string()));
-        assert!(!descs.contains(&"skip me".to_string()));
-    }
-
-    #[test]
-    fn scan_respects_ignored_paths_from_config() {
-        let dir = TempDir::new().unwrap();
-        make_obsidian_dir(&dir);
-        dir.child(".ft/config.toml")
-            .write_str(r#"ignored_paths = ["private/"]"#)
-            .unwrap();
-        dir.child("public.md")
-            .write_str("- [ ] public task\n")
-            .unwrap();
-        dir.child("private/secret.md")
-            .write_str("- [ ] private task\n")
-            .unwrap();
-
-        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(descs.contains(&"public task".to_string()));
-        assert!(!descs.contains(&"private task".to_string()));
-    }
-
-    #[test]
-    fn scan_excludes_ft_dir_contents() {
-        // A `.ft/` directory is excluded by the walker's dotfile filter
-        // (`.hidden(true)`), so tasks inside it are never scanned — even
-        // when `.ft/` is the *only* vault marker present.
-        let dir = TempDir::new().unwrap();
-        make_ft_dir(&dir);
-        dir.child(".ft/notes.md")
-            .write_str("- [ ] hidden ft task\n")
-            .unwrap();
-        dir.child("visible.md")
-            .write_str("- [ ] visible task\n")
-            .unwrap();
-
-        let vault = Vault::discover(Some(dir.path().to_path_buf())).unwrap();
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(descs.contains(&"visible task".to_string()));
-        assert!(!descs.contains(&"hidden ft task".to_string()));
-    }
-
-    // ── task scanner skip rules ───────────────────────────────────────────────
-    //
-    // The task scan in `parse_file` uses `LineSkipState` so a `- [ ]` line
-    // inside a fenced code block or YAML frontmatter is not parsed as a
-    // task. This is the invariant the `OwnsTask` edge depends on (every
-    // task lands in exactly one paragraph) and also a latent bug fix:
-    // `- [ ]` lines in code blocks are examples, not tasks.
-
-    #[test]
-    fn scan_skips_task_lines_inside_fenced_code_blocks() {
-        let (_dir, vault) = make_vault_with(&[(
-            "note.md",
-            "```
-- [ ] example task in code block
-```
-
-- [ ] real task after code block
-",
-        )]);
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(
-            descs.contains(&"real task after code block".to_string()),
-            "real task after the code block must be parsed"
-        );
-        assert!(
-            !descs.contains(&"example task in code block".to_string()),
-            "task line inside a fenced code block must not be parsed"
-        );
-        assert_eq!(scan.tasks.len(), 1, "expected exactly one task");
-    }
-
-    #[test]
-    fn scan_skips_task_lines_inside_frontmatter() {
-        let (_dir, vault) = make_vault_with(&[(
-            "note.md",
-            "---
-title: note
-- [ ] fake task in frontmatter
----
-
-- [ ] real task in body
-",
-        )]);
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(
-            descs.contains(&"real task in body".to_string()),
-            "real task in body must be parsed"
-        );
-        assert!(
-            !descs.contains(&"fake task in frontmatter".to_string()),
-            "task line inside frontmatter must not be parsed"
-        );
-        assert_eq!(scan.tasks.len(), 1, "expected exactly one task");
-    }
-
-    #[test]
-    fn scan_parses_real_task_directly_after_code_block() {
-        // The real task after the closing fence lands in its own paragraph
-        // (single-line). Confirms the scanner re-engages after the fence
-        // closes, not just that it skipped the fence.
-        let (_dir, vault) = make_vault_with(&[(
-            "note.md",
-            "```
-- [ ] inside
-```
-- [ ] immediately after
-",
-        )]);
-        let scan = vault.scan();
-        let descs: Vec<_> = scan.tasks.iter().map(|t| t.description.clone()).collect();
-        assert!(descs.contains(&"immediately after".to_string()));
-        assert!(!descs.contains(&"inside".to_string()));
-        assert_eq!(scan.tasks.len(), 1);
-    }
-
     #[test]
     fn ensure_target_renders_daily_template_when_missing() {
         let dir = TempDir::new().unwrap();
@@ -917,38 +543,6 @@ title: note
         assert_eq!(path, dir.path().canonicalize().unwrap().join("Inbox.md"));
         // Explicit paths are resolved but never created/templated here.
         assert!(!path.exists());
-    }
-
-    #[test]
-    fn scan_resolves_hierarchy_per_file() {
-        let (_dir, vault) = make_vault_with(&[(
-            "nested.md",
-            "- [ ] parent\n  - [ ] child A\n  - [ ] child B\n",
-        )]);
-        let scan = vault.scan();
-        assert_eq!(scan.tasks.len(), 3);
-        let parent = scan
-            .tasks
-            .iter()
-            .find(|t| t.description == "parent")
-            .unwrap();
-        let children: Vec<_> = scan
-            .tasks
-            .iter()
-            .filter(|t| t.parent == Some(parent.source_line))
-            .collect();
-        assert_eq!(children.len(), 2);
-    }
-
-    #[test]
-    fn scan_returns_relative_paths() {
-        let (_dir, vault) = make_vault_with(&[("notes/sub.md", "- [ ] task\n")]);
-        let scan = vault.scan();
-        assert_eq!(scan.tasks.len(), 1);
-        assert_eq!(
-            scan.tasks[0].source_file,
-            std::path::PathBuf::from("notes/sub.md")
-        );
     }
 
     #[test]

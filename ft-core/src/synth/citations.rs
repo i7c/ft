@@ -1,8 +1,10 @@
 //! Citation index: which synth notes cite which source paragraphs.
 //!
-//! Built by walking the vault's synth notes (`ft.synth.enabled: true`) and
-//! parsing their `[!ft-source]` callouts. Lookup classifies a paragraph
-//! into one of three states:
+//! Built from a vault scan: synth-note discovery comes from the scan's
+//! captured frontmatter (no re-walk, no reads of non-synth files); only
+//! synth-marked notes get their content read, once, for `[!ft-source]`
+//! callout parsing. Lookup classifies a paragraph into one of three
+//! states:
 //!
 //! - **Cited** — some callout pins the same source path with a
 //!   byte-identical body. The matching rule (header content-hash prefix
@@ -22,10 +24,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::frontmatter;
+use crate::scan::Scan;
 use crate::synth::callout::{
-    compute_section_hash, is_synth_note, parse as parse_callouts, CONTENT_HASH_PREFIX_LEN,
+    compute_section_hash, parse as parse_callouts, CONTENT_HASH_PREFIX_LEN,
 };
-use crate::vault::Vault;
 
 /// Citation state of one paragraph, as classified by
 /// [`CitationIndex::lookup`]. Citing note paths are vault-relative,
@@ -101,24 +104,28 @@ pub struct CitationIndex {
 }
 
 impl CitationIndex {
-    /// Walk the vault, read every synth note, and index its callouts.
-    ///
-    /// Mirrors `synth::verify::verify_all`'s discovery: every markdown
-    /// file is read and checked for the `ft.synth.enabled: true` marker.
-    /// Unreadable files and malformed callout headers are recorded in
-    /// [`CitationIndex::skipped`] rather than aborting.
-    pub fn build(vault: &Vault) -> CitationIndex {
+    /// Build the index from a vault scan. Synth-note discovery uses the
+    /// scan's captured frontmatter — no re-walk of the vault and no
+    /// reads of non-synth files; only synth-marked notes' contents are
+    /// read (once) for callout parsing. Unreadable files and malformed
+    /// callout headers are recorded in [`CitationIndex::skipped`] rather
+    /// than aborting.
+    pub fn build(root: &Path, scan: &Scan) -> CitationIndex {
         let mut index = CitationIndex::default();
-        for note_rel in crate::synth::verify::walk_markdown_files(&vault.path) {
-            let absolute = vault.path.join(&note_rel);
+        for pf in &scan.files {
+            let is_synth = pf
+                .frontmatter
+                .as_deref()
+                .is_some_and(|fm| frontmatter::ft_synth_enabled_in(fm) == Some(true));
+            if !is_synth {
+                continue;
+            }
+            let absolute = root.join(&pf.rel);
             let content = match std::fs::read_to_string(&absolute) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if !is_synth_note(&content) {
-                continue;
-            }
-            index.add_note(&note_rel, &content);
+            index.add_note(&pf.rel, &content);
         }
         index
     }

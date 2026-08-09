@@ -931,7 +931,7 @@ mod tests {
         let (dir, vault) = make_vault(files);
         let recents = empty_recents(&vault, &dir);
         let scan = vault.scan();
-        let graph = ft_core::graph::Graph::build(&vault, &scan).expect("graph build");
+        let graph = ft_core::graph::Graph::build(&scan).expect("graph build");
         (dir, vault, recents, graph)
     }
 

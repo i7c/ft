@@ -29,8 +29,11 @@ ft/
 │   └── tests/                  # integration tests with assert_cmd
 └── ft-core/                    # library crate (the brain)
     └── src/
-        ├── vault.rs            # discovery + single-pass scan (tasks +
-        │                       #   ParsedFile artifacts for the graph)
+        ├── vault.rs            # discovery + config + scan() delegate
+        ├── scan.rs             # single read pass: walk + per-file parse
+        │                       #   into Scan {tasks, files, dirs, errors}
+        │                       #   (ParsedFile: tasks, links, headings,
+        │                       #   paragraphs, frontmatter block)
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
         ├── git.rs              # discover_repo + status + sync + blame
@@ -78,7 +81,7 @@ representation. The ops layer is already format-parametric: every
 `Vault::task_format()` is the single place that picks the vault's
 format (always `EmojiFormat` today — this accessor is where
 config-driven detection will plug in). A new format therefore needs:
-the trait impl, detection in `vault::parse_file` (still hard-coded to
+the trait impl, detection in `scan::parse_file` (still hard-coded to
 `EmojiFormat`), and nothing else.
 
 ### Operations API (`task::ops`)
@@ -383,7 +386,7 @@ send-to-synth overlay and the shared section-move modal (seeded via
 ### A new task format (e.g. dataview)
 
 1. Create `ft-core/src/task/<name>.rs` implementing `TaskFormat`.
-2. Add format detection in `vault::parse_file` (try formats in priority
+2. Add format detection in `scan::parse_file` (try formats in priority
    order configured by `.ft/config.toml`).
 3. Round-trip property tests: `serialize(parse(line)) == line` and
    `parse(serialize(task)) == task` (proptest, snapshot, real-vault).
