@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.9
+
+### Internal cleanup
+
+- refactor(core): serve vault-reading consumers from the scan
+- refactor(core): extract ft-core::scan — the single-read-pass scan module
+
 ## 0.1.8
 
 ### Added
