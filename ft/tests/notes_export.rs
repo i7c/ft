@@ -210,7 +210,7 @@ fn slack_export_converts_every_construct() {
              \n\
              https://ex.com/img.png and local\n\
              \n\
-             - ⏫ 📅 2026-08-05 Finish\n  - done\n\
+             - ⏫ 📅 2026-08-05 Finish\n    - done\n\
              \n\
              > Keep this\n> > nested\n\
              \n\
@@ -462,4 +462,106 @@ fn read_only_guarantee() {
     let content = std::fs::read_to_string(tmp.path().join("notes/sample.md")).unwrap();
     assert!(content.contains("[!ft-source]"));
     assert!(content.contains("[[Foo]]"));
+}
+
+// ── slack: list indentation normalization ────────────────────────────────
+
+#[test]
+fn slack_two_space_list_reindented_to_four() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/nested.md")
+        .write_str("- foo\n  - bar\n    - lol\n- baz\n")
+        .unwrap();
+    export(&tmp, &["notes/nested.md", "--format", "slack"])
+        .success()
+        .stdout("- foo\n    - bar\n        - lol\n- baz\n");
+}
+
+#[test]
+fn slack_all_marker_kinds_normalized() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/markers.md")
+        .write_str("- one\n  * two\n    + three\n      1. four\n")
+        .unwrap();
+    export(&tmp, &["notes/markers.md", "--format", "slack"])
+        .success()
+        .stdout("- one\n    * two\n        + three\n            1. four\n");
+}
+
+#[test]
+fn slack_deep_nesting_scales_by_level() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/deep.md")
+        .write_str("- a\n  - b\n    - c\n      - d\n")
+        .unwrap();
+    export(&tmp, &["notes/deep.md", "--format", "slack"])
+        .success()
+        .stdout("- a\n    - b\n        - c\n            - d\n");
+}
+
+#[test]
+fn slack_four_space_source_list_unchanged() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/four.md")
+        .write_str("- foo\n    - bar\n        - lol\n")
+        .unwrap();
+    export(&tmp, &["notes/four.md", "--format", "slack"])
+        .success()
+        .stdout("- foo\n    - bar\n        - lol\n");
+}
+
+#[test]
+fn slack_list_looking_lines_in_code_untouched() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    // A `- item` inside a fence and one inside an indented code block
+    // are code content, not lists — indentation stays verbatim.
+    tmp.child("notes/codelist.md")
+        .write_str("```\n  - item\n```\n\n    - code item\n\nafter\n")
+        .unwrap();
+    export(&tmp, &["notes/codelist.md", "--format", "slack"])
+        .success()
+        .stdout("```\n  - item\n```\n\n    - code item\n\nafter\n");
+}
+
+#[test]
+fn slack_heading_interrupts_list_reset() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/interrupt.md")
+        .write_str("- a\n# Heading\n  - b\n")
+        .unwrap();
+    export(&tmp, &["notes/interrupt.md", "--format", "slack"])
+        .success()
+        .stdout("- a\n*Heading*\n- b\n");
+}
+
+#[test]
+fn slack_nested_task_checkbox_dropped() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/nestedtask.md")
+        .write_str("- parent\n    - [x] done\n")
+        .unwrap();
+    export(&tmp, &["notes/nestedtask.md", "--format", "slack"])
+        .success()
+        .stdout("- parent\n    - done\n");
+}
+
+#[test]
+fn commonmark_list_indentation_unchanged() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/cmnested.md")
+        .write_str("- foo\n  - bar\n    - lol\n- baz\n")
+        .unwrap();
+    // The list-depth tracker runs for every target, but only slack
+    // consumes it — commonmark output stays byte-identical.
+    export(&tmp, &["notes/cmnested.md"])
+        .success()
+        .stdout("- foo\n  - bar\n    - lol\n- baz\n");
 }

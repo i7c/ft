@@ -37,6 +37,13 @@ pub struct LineContext {
     /// `None` otherwise. Lets a target tell a true closing delimiter
     /// (fence ends: `None`) from content inside a fence (char stays).
     pub fence_char: Option<char>,
+    /// Nesting depth of a list-item line — 0 is the top level — `None`
+    /// on every other line (non-list content, code). Computed by the
+    /// driver from the raw line via [`crate::markdown::ListDepthTracker`];
+    /// code lines always carry `None` (the tracker is never advanced
+    /// on them). Only the Slack target consumes it, for its
+    /// 4-space-per-level list re-indentation.
+    pub list_depth: Option<usize>,
 }
 
 /// One export target: renders a single source line (no trailing
@@ -109,8 +116,11 @@ impl ExportTarget for SlackExport {
         }
         // Inline pass first, structural rewrites second, so generated
         // markup (heading `*H*` wrappers, stripped markers) is never
-        // re-scanned as inline content.
-        Some(structural_rewrites(&convert_slack_inline(line)))
+        // re-scanned as inline content. The list re-indent runs last:
+        // a checkbox-dropped task line is re-indented with its marker
+        // intact.
+        let converted = structural_rewrites(&convert_slack_inline(line));
+        Some(reindent_list_item(&converted, ctx.list_depth))
     }
 }
 
@@ -442,14 +452,39 @@ fn strip_callout_marker(line: &str) -> String {
     out
 }
 
+/// Re-indent a list-item line to Slack's 4-space-per-level rule: a
+/// line at depth `d` gets exactly `4d` leading spaces (depth 0 stays
+/// unindented). Runs after the inline/structural rewrites, so a
+/// checkbox-dropped task line is re-indented cleanly; defensively
+/// re-checks that the rewritten line still starts with a list marker
+/// (the rewrites preserve markers today, but a malformed line must
+/// never gain an indent it does not deserve).
+fn reindent_list_item(line: &str, depth: Option<usize>) -> String {
+    let Some(d) = depth else {
+        return line.to_string();
+    };
+    let (_, off) = crate::markdown::leading_ws(line);
+    if !crate::markdown::is_list_item_marker(&line[off..]) {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len() + 4 * d);
+    for _ in 0..(4 * d) {
+        out.push(' ');
+    }
+    out.push_str(&line[off..]);
+    out
+}
+
 /// Drop the checkbox from a CommonMark task list item:
 /// `- [ ] ⏫ …` → `- ⏫ …`, `  - [x] done` → `  - done`. The bullet
 /// char, indentation and the rest of the line survive — Slack has no
-/// checkbox syntax but renders `- ` as a bullet.
+/// checkbox syntax but renders `- ` as a bullet. The checkbox is
+/// recognized after *any* leading whitespace (spaces or tabs), so
+/// nested items indented 4+ spaces drop it too.
 fn drop_task_checkbox(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut i = 0;
-    while i < bytes.len() && i < 3 && bytes[i] == b' ' {
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
         i += 1;
     }
     if i >= bytes.len() || !matches!(bytes[i], b'-' | b'*' | b'+') {
@@ -572,12 +607,20 @@ pub fn export_content(
     // Fence / indented-code tracking is target-independent markdown
     // structure (same rules as the graph parser and heading extractor).
     let mut ls = crate::markdown::LineSkipState::new();
+    // List nesting is the same category of structure: the tracker is
+    // advanced on every non-code line (fence content and indented code
+    // blocks are opaque and must not feed the stack) and the resulting
+    // depth feeds the Slack target's re-indent.
+    let mut lists = crate::markdown::ListDepthTracker::new();
     for line in body.split('\n') {
         ls.skip_line(line);
+        let in_code = ls.last_was_code();
+        let list_depth = if in_code { None } else { lists.advance(line) };
         let ctx = LineContext {
-            in_code: ls.last_was_code(),
+            in_code,
             opened_fence: ls.opened_fence(),
             fence_char: ls.fence_char(),
+            list_depth,
         };
         if let Some(t) = target.transform_line(line, ctx) {
             out_lines.push(t);
@@ -1076,6 +1119,18 @@ mod tests {
         SlackExport.transform_line(line, LineContext::default())
     }
 
+    /// Transform with an explicit list depth, as the driver would
+    /// compute it for a list-item line.
+    fn sl_at(line: &str, depth: Option<usize>) -> Option<String> {
+        SlackExport.transform_line(
+            line,
+            LineContext {
+                list_depth: depth,
+                ..Default::default()
+            },
+        )
+    }
+
     fn sl_code(opened: bool, fence: Option<char>, line: &str) -> Option<String> {
         SlackExport.transform_line(
             line,
@@ -1083,6 +1138,7 @@ mod tests {
                 in_code: true,
                 opened_fence: opened,
                 fence_char: fence,
+                list_depth: None,
             },
         )
     }
@@ -1308,10 +1364,22 @@ mod tests {
     }
 
     #[test]
+    fn task_checkbox_dropped_at_any_depth() {
+        // The checkbox is recognized after *any* leading whitespace,
+        // not just the 0-3 spaces of a top-level item.
+        assert_eq!(sl("    - [ ] foo"), Some("    - foo".into()));
+        assert_eq!(sl("        - [x] done"), Some("        - done".into()));
+        assert_eq!(sl("\t- [ ] tab"), Some("\t- tab".into()));
+    }
+
+    #[test]
     fn non_task_lines_kept() {
         assert_eq!(sl("- [foo]"), Some("- [foo]".into()));
         assert_eq!(sl("- item"), Some("- item".into()));
         assert_eq!(sl("1. item"), Some("1. item".into()));
+        // Deeply indented non-task lines are untouched too.
+        assert_eq!(sl("    - [foo]"), Some("    - [foo]".into()));
+        assert_eq!(sl("    - [x]foo"), Some("    - [x]foo".into()));
     }
 
     // ── slack: raw specials ────────────────────────────────────────
@@ -1355,6 +1423,39 @@ mod tests {
         assert_eq!(sl_code(false, Some('`'), "~~~"), Some("~~~".into()));
     }
 
+    // ── slack: list re-indentation (4 spaces per level) ────────────
+
+    #[test]
+    fn list_item_reindented_by_depth() {
+        assert_eq!(sl_at("- foo", Some(0)), Some("- foo".into()));
+        assert_eq!(sl_at("  - bar", Some(1)), Some("    - bar".into()));
+        assert_eq!(sl_at("    - lol", Some(2)), Some("        - lol".into()));
+        assert_eq!(sl_at("      - d", Some(3)), Some("            - d".into()));
+        assert_eq!(sl_at("1. item", Some(1)), Some("    1. item".into()));
+        assert_eq!(sl_at("* star", Some(1)), Some("    * star".into()));
+    }
+
+    #[test]
+    fn list_item_inline_and_structural_rewrites_survive() {
+        // Inline conversion happens before re-indent: the content is
+        // converted, then the whole line is re-indented.
+        assert_eq!(sl_at("  - **bold**", Some(1)), Some("    - *bold*".into()));
+        // Checkbox drop happens before re-indent too.
+        assert_eq!(sl_at("- [ ] foo", Some(1)), Some("    - foo".into()));
+        assert_eq!(sl_at("    - [x] done", Some(1)), Some("    - done".into()));
+    }
+
+    #[test]
+    fn non_list_lines_never_reindented() {
+        // Depth is None for every non-list line; the defensive marker
+        // re-check also refuses to indent a line that stopped looking
+        // like a list item (e.g. a heading boldified to `*H*`).
+        assert_eq!(sl_at("plain text", None), Some("plain text".into()));
+        assert_eq!(sl_at("> - foo", None), Some("> - foo".into()));
+        assert_eq!(sl_at("plain text", Some(1)), Some("plain text".into()));
+        assert_eq!(sl_at("# Title", Some(1)), Some("*Title*".into()));
+    }
+
     // ── slack: whole-document driver tests ─────────────────────────
 
     fn slack_export(doc: &str, range: Option<(u32, u32)>) -> Result<ExportOutcome, ExportError> {
@@ -1388,6 +1489,81 @@ mod tests {
         assert_eq!(
             slack_export(c, None).unwrap().text,
             "\n*Heading Foo*\n\n*bold* and <https://ex.com|link>\n\n- ⏫ task\n\n> Title\n\npic"
+        );
+    }
+
+    // ── slack: list re-indentation in documents ────────────────────
+
+    #[test]
+    fn slack_two_space_list_reindented_to_four() {
+        // The user's case: a 2-space-per-level source list becomes
+        // 4 spaces per level (depth-based, not ceil-to-multiple-of-4 —
+        // the 4-space `- lol` becomes 8, two levels deep).
+        let c = "- foo\n  - bar\n    - lol\n- baz\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "- foo\n    - bar\n        - lol\n- baz"
+        );
+    }
+
+    #[test]
+    fn slack_deep_nesting_scales_by_level() {
+        let c = "- a\n  - b\n    - c\n      - d\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "- a\n    - b\n        - c\n            - d"
+        );
+    }
+
+    #[test]
+    fn slack_all_marker_kinds_normalized() {
+        let c = "- one\n  * two\n    + three\n      1. four\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "- one\n    * two\n        + three\n            1. four"
+        );
+    }
+
+    #[test]
+    fn slack_four_space_sources_unchanged() {
+        let c = "- foo\n    - bar\n        - lol\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "- foo\n    - bar\n        - lol"
+        );
+    }
+
+    #[test]
+    fn slack_list_looking_lines_in_code_untouched() {
+        // A `- item` inside a fence and one inside an indented code
+        // block are code content, not lists — indentation verbatim.
+        let c = "```\n  - item\n```\n\n    - code item\n\nafter\n";
+        assert_eq!(
+            slack_export(c, None).unwrap().text,
+            "```\n  - item\n```\n\n    - code item\n\nafter"
+        );
+    }
+
+    #[test]
+    fn slack_heading_interrupts_list_reset() {
+        let c = "- a\n# Heading\n  - b\n";
+        assert_eq!(slack_export(c, None).unwrap().text, "- a\n*Heading*\n- b");
+    }
+
+    #[test]
+    fn slack_nested_task_checkbox_dropped_in_document() {
+        let c = "- parent\n    - [x] done\n";
+        assert_eq!(slack_export(c, None).unwrap().text, "- parent\n    - done");
+    }
+
+    #[test]
+    fn commonmark_list_unchanged_by_list_tracking() {
+        // The tracker runs for every target, but only Slack consumes
+        // it — a 2-space nested list stays verbatim in commonmark.
+        let c = "- foo\n  - bar\n    - lol\n- baz\n";
+        assert_eq!(
+            export_content(c, None, &CommonMarkExport).unwrap().text,
+            "- foo\n  - bar\n    - lol\n- baz"
         );
     }
 }

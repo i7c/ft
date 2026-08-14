@@ -401,6 +401,19 @@ converts:
   `> Keep this`.
 - **Task lines** — the checkbox drops, the bullet and emoji metadata
   stay: `- [ ] ⏫ 📅 2026-08-05 Finish` → `- ⏫ 📅 2026-08-05 Finish`.
+  This applies at any nesting depth, so a nested `    - [x] done`
+  exports as a clean nested bullet.
+- **List indentation** — Slack needs **4 spaces per nesting level**
+  for a sub-item to render as a bullet, while Obsidian/CommonMark
+  accept 2. List items are re-indented to exactly 4 spaces per level
+  (depth-based, so a 2-space source list `- foo` / `  - bar` /
+  `    - lol` exports as `- foo` / `    - bar` / `        - lol`);
+  `-`, `*`, `+`, and numbered `1.` items are treated alike, and
+  already-correct 4-space lists are unchanged. Lines inside code
+  blocks are never touched, and an unindented heading/paragraph
+  between items resets the nesting (it interrupts the list).
+  Continuation lines of multi-line items and lists inside blockquote
+  lines (`> - foo`) keep their source indentation.
 - **Code fences** — language tags drop (```` ```rust ```` → ```` ``` ````)
   and `~~~` fences become ` ``` `; the code itself is verbatim.
 

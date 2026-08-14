@@ -429,6 +429,121 @@ fn starts_with_indent(line: &str, n: usize) -> bool {
     false
 }
 
+/// Leading whitespace of `line` as `(width_in_columns, byte_offset)`, where
+/// `byte_offset` points at the first non-space/tab char (`line.len()` when
+/// the line is all whitespace). Tabs advance to the next multiple of 4
+/// columns, per the same rule as [`starts_with_indent`].
+pub(crate) fn leading_ws(line: &str) -> (usize, usize) {
+    let mut col = 0usize;
+    for (i, c) in line.char_indices() {
+        match c {
+            ' ' => col += 1,
+            '\t' => col = (col / 4 + 1) * 4,
+            _ => return (col, i),
+        }
+    }
+    (col, line.len())
+}
+
+/// True when `rest` — the part of a line after its leading whitespace —
+/// starts a list item: a `-`/`*`/`+` bullet or an ordered `N.` marker,
+/// each followed by whitespace. Shared by [`ListDepthTracker`] (depth
+/// derivation) and the export driver's Slack re-indent (defensive
+/// marker re-check), so both agree on what counts as a list item.
+pub(crate) fn is_list_item_marker(rest: &str) -> bool {
+    let mut chars = rest.chars();
+    match chars.next() {
+        Some('-' | '*' | '+') => matches!(chars.next(), Some(' ') | Some('\t')),
+        Some(c) if c.is_ascii_digit() => {
+            let digits = chars
+                .as_str()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
+            let after_digits = &chars.as_str()[digits..];
+            let mut after_digits = after_digits.chars();
+            after_digits.next() == Some('.')
+                && matches!(after_digits.next(), Some(' ') | Some('\t'))
+        }
+        _ => false,
+    }
+}
+
+/// Tracks list-item nesting depth across consecutive lines, for
+/// consumers that need a per-line level (the export driver, for the
+/// Slack target's 4-space-per-level re-indentation).
+///
+/// The tracker is deliberately **not** code-aware: the caller advances
+/// it only on non-code lines (fence content and indented code blocks
+/// are opaque and must not feed the stack).
+///
+/// Depth is derived from a stack of source-indent widths, one per open
+/// level. An item indented deeper than its predecessor nests one level;
+/// equal indentation stays at the same level; lesser indentation moves
+/// up to the matching level. A non-list, non-blank line with **no**
+/// leading whitespace resets the stack — per CommonMark such a line
+/// (heading, paragraph, blockquote) interrupts the list, so a following
+/// item starts a new top-level list. Blank lines do not reset (loose
+/// lists continue). A first-line item with a nonzero indent (e.g. a
+/// range export starting mid-list) is treated as a new top level.
+#[derive(Debug, Default)]
+pub(crate) struct ListDepthTracker {
+    /// Source indent widths (in columns) of the currently open levels,
+    /// deepest last. Empty = no list in progress.
+    stack: Vec<usize>,
+}
+
+impl ListDepthTracker {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Advance one non-code line. Returns `Some(depth)` when `line` is
+    /// a list item (0 = top level), `None` otherwise.
+    pub(crate) fn advance(&mut self, line: &str) -> Option<usize> {
+        let (w, off) = leading_ws(line);
+        let rest = &line[off..];
+        if is_list_item_marker(rest) {
+            let depth = match self.stack.last() {
+                None => {
+                    self.stack.push(w);
+                    0
+                }
+                Some(&top) if w > top => {
+                    self.stack.push(w);
+                    self.stack.len() - 1
+                }
+                Some(&top) if w == top => self.stack.len() - 1,
+                Some(_) => {
+                    // w < top: pop to the matching level; a width
+                    // between two levels starts a new level; an empty
+                    // stack starts a new top level.
+                    while self.stack.last().is_some_and(|&l| l > w) {
+                        self.stack.pop();
+                    }
+                    match self.stack.last() {
+                        None => {
+                            self.stack.push(w);
+                            0
+                        }
+                        Some(&l) if l == w => self.stack.len() - 1,
+                        Some(_) => {
+                            self.stack.push(w);
+                            self.stack.len() - 1
+                        }
+                    }
+                }
+            };
+            Some(depth)
+        } else {
+            if w == 0 && !line.trim().is_empty() {
+                self.stack.clear();
+            }
+            None
+        }
+    }
+}
+
 /// Parse an ATX heading from `line` if it matches the pattern; `lineno`
 /// is the 1-indexed source line.
 pub(crate) fn parse_atx(line: &str, lineno: usize) -> Option<Heading> {
@@ -776,6 +891,137 @@ title: not frontmatter
         assert_eq!(
             extract_paragraphs(body),
             vec![p(1, 1, "intro"), p(6, 6, "after")]
+        );
+    }
+
+    // ── ListDepthTracker ────────────────────────────────────────────
+
+    /// Advance a fresh tracker over every line, returning the depth
+    /// each line was assigned.
+    fn depths(lines: &[&str]) -> Vec<Option<usize>> {
+        let mut t = ListDepthTracker::new();
+        lines.iter().map(|l| t.advance(l)).collect()
+    }
+
+    #[test]
+    fn list_depth_two_space_source_walk() {
+        // The user's case: 2-space-per-level source indentation.
+        assert_eq!(
+            depths(&["- foo", "  - bar", "    - lol", "- baz"]),
+            vec![Some(0), Some(1), Some(2), Some(0)]
+        );
+    }
+
+    #[test]
+    fn list_depth_four_space_source_walk() {
+        // Already-4-space sources yield the same levels, so re-indent
+        // is idempotent.
+        assert_eq!(
+            depths(&["- foo", "    - bar", "        - lol"]),
+            vec![Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn list_depth_deep_nesting_scales_by_level() {
+        assert_eq!(
+            depths(&["- a", "  - b", "    - c", "      - d"]),
+            vec![Some(0), Some(1), Some(2), Some(3)]
+        );
+    }
+
+    #[test]
+    fn list_depth_pop_to_matching_level() {
+        assert_eq!(
+            depths(&["- a", "  - b", "    - c", "  - d", "- e"]),
+            vec![Some(0), Some(1), Some(2), Some(1), Some(0)]
+        );
+    }
+
+    #[test]
+    fn list_depth_all_marker_kinds_alike() {
+        assert_eq!(
+            depths(&["- one", "  * two", "    + three", "      1. four"]),
+            vec![Some(0), Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(depths(&["10. ten"]), vec![Some(0)]);
+    }
+
+    #[test]
+    fn list_depth_non_markers_return_none() {
+        assert_eq!(
+            depths(&["text", "> quote", "-foo", "1.4 prose"]),
+            vec![None, None, None, None]
+        );
+        // A bullet with no content after the marker is not an item by
+        // our detection (needs whitespace after the marker).
+        assert_eq!(depths(&["-"]), vec![None]);
+    }
+
+    #[test]
+    fn list_depth_unindented_content_line_resets() {
+        // Heading interrupts the list — the later indented item starts
+        // a fresh top-level list.
+        assert_eq!(
+            depths(&["- a", "# H", "  - b"]),
+            vec![Some(0), None, Some(0)]
+        );
+        // Unindented paragraph and blockquote interrupt too.
+        assert_eq!(
+            depths(&["- a", "text", "  - b"]),
+            vec![Some(0), None, Some(0)]
+        );
+        assert_eq!(
+            depths(&["- a", "> quote", "  - b"]),
+            vec![Some(0), None, Some(0)]
+        );
+    }
+
+    #[test]
+    fn list_depth_blank_lines_do_not_reset() {
+        assert_eq!(
+            depths(&["- a", "", "  - b", "- c"]),
+            vec![Some(0), None, Some(1), Some(0)]
+        );
+        // Whitespace-only lines are blank too.
+        assert_eq!(
+            depths(&["- a", "   ", "  - b"]),
+            vec![Some(0), None, Some(1)]
+        );
+    }
+
+    #[test]
+    fn list_depth_indented_continuation_keeps_stack() {
+        // A 2-space-indented non-marker line is item content, not an
+        // interruption — the next item still nests under the parent.
+        assert_eq!(
+            depths(&["- a", "  continuation", "  - b"]),
+            vec![Some(0), None, Some(1)]
+        );
+    }
+
+    #[test]
+    fn list_depth_tabs_count_as_four_columns() {
+        assert_eq!(depths(&["- a", "\t- b"]), vec![Some(0), Some(1)]);
+        // A tab (4 cols) after a 2-space item is deeper by one level.
+        assert_eq!(
+            depths(&["- a", "  - b", "\t- c"]),
+            vec![Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn list_depth_indented_fragment_starts_at_top() {
+        // A range export starting mid-list: the first item is the new
+        // top level; a later 0-indent item pops back to level 0.
+        assert_eq!(depths(&["  - b", "- a"]), vec![Some(0), Some(0)]);
+    }
+
+    #[test]
+    fn list_depth_between_levels_width_starts_new_level() {
+        assert_eq!(
+            depths(&["- a", "      - deep", "    - mid"]),
+            vec![Some(0), Some(1), Some(1)]
         );
     }
 
