@@ -305,15 +305,41 @@ lines (canonical `[!ft-source]` header lines SHALL be dropped entirely,
 as in the `commonmark` target). Task list items SHALL drop the checkbox
 but keep the bullet character, indentation, and emoji metadata:
 `- [ ] ⏫ 📅 2026-08-05 Finish` → `- ⏫ 📅 2026-08-05 Finish`; `[x]`
-(done) checkboxes SHALL drop the same way. Fenced code blocks SHALL
-normalize to Slack's syntax: opening-fence language tags SHALL be
-stripped (```` ```rust ```` → ```` ``` ````) and `~~~`-delimited fences
-SHALL convert their open and close delimiter lines to ` ``` `; content
-inside fences SHALL pass through verbatim. Blockquotes SHALL keep their
-`>` prefixes, bulleted/numbered lists SHALL pass through, and inline
-code SHALL pass through. The target SHALL NOT escape `&`, `<`, or `>`
-(no HTML-entity conversion), and SHALL NOT produce tables, images, or
-horizontal rules.
+(done) checkboxes SHALL drop the same way. The checkbox drop SHALL
+apply at any nesting depth — the checkbox SHALL be recognized after any
+amount of leading whitespace, not only the 0-3 spaces of a top-level
+item — so a nested `    - [ ] foo` SHALL export as a nested bullet
+with the checkbox removed. Fenced code blocks SHALL normalize to
+Slack's syntax: opening-fence language tags SHALL be stripped
+(```` ```rust ```` → ```` ``` ````) and `~~~`-delimited fences SHALL
+convert their open and close delimiter lines to ` ``` `; content inside
+fences SHALL pass through verbatim. Blockquotes SHALL keep their `>`
+prefixes, and inline code SHALL pass through. Bulleted and numbered
+list items SHALL pass through with leading indentation normalized to
+Slack's 4-space-per-level rule: a depth-`n` item SHALL have exactly
+`4n` leading spaces, with depth 0 (the top level) unindented. Marker
+kinds `-`, `*`, `+`, and ordered `N.` (digits followed by a period)
+SHALL be treated alike. The nesting level SHALL be derived from the
+item's indentation relative to the preceding list items: an item
+indented deeper than its predecessor SHALL nest one level deeper, an
+item at the same indentation SHALL stay at the same level, and an item
+indented less SHALL move up to the matching level. A source list
+indented 2 spaces per level SHALL therefore be re-indented to 4
+(`- foo` / `  - bar` / `    - lol` / `- baz` SHALL export as `- foo` /
+`    - bar` / `        - lol` / `- baz`), and an item whose source
+indentation already matches its level times 4 SHALL be unchanged
+(normalization SHALL be idempotent). List-item lines inside fenced or
+indented code blocks SHALL NOT be re-indented. A non-list, non-blank
+content line with no leading whitespace between list items SHALL reset
+the nesting — the list SHALL be considered interrupted — so a following
+indented item SHALL start a new top-level list. Lines that are not
+list items SHALL keep their source indentation: continuation lines of
+multi-line items and lists nested inside blockquote lines
+(`> - foo`) are out of scope for normalization. The target SHALL NOT
+escape `&`, `<`, or `>` (no HTML-entity conversion), and SHALL NOT
+produce tables, images, or horizontal rules. The `commonmark` target
+SHALL be unaffected by the list rules: its list output SHALL remain
+byte-identical.
 
 #### Scenario: Heading becomes bold
 - **WHEN** the body contains `# Title` and `## Subtitle` and the
@@ -365,7 +391,52 @@ horizontal rules.
 - **WHEN** the body contains `- [ ] ⏫ 📅 2026-08-05 Finish` and
   `  - [x] done` and the format is `slack`
 - **THEN** the output contains `- ⏫ 📅 2026-08-05 Finish` and
-  `  - done`
+  `    - done` (the nested item is re-indented to 4 spaces and its
+  checkbox is dropped)
+
+#### Scenario: Nested task checkbox dropped at any depth
+- **WHEN** the body contains `- parent` followed by
+  `    - [x] done` and the format is `slack`
+- **THEN** the output contains `- parent` and `    - done` — the
+  checkbox is dropped even though the item is indented 4 spaces
+
+#### Scenario: Two-space sub-items re-indented to four
+- **WHEN** the body contains
+  `- foo` / `  - bar` / `    - lol` / `- baz` and the format is `slack`
+- **THEN** the output is
+  `- foo` / `    - bar` / `        - lol` / `- baz` — each nesting
+  level gets exactly 4 spaces
+
+#### Scenario: Deep nesting scales by level
+- **WHEN** the body contains `- a` / `  - b` / `    - c` /
+  `      - d` and the format is `slack`
+- **THEN** the output is `- a` / `    - b` / `        - c` /
+  `            - d` (0 / 4 / 8 / 12 spaces)
+
+#### Scenario: All marker kinds normalized
+- **WHEN** the body contains `- one` / `  * two` / `    + three` /
+  `      1. four` and the format is `slack`
+- **THEN** the output is `- one` / `    * two` / `        + three` /
+  `            1. four`
+
+#### Scenario: Already-correct four-space sources unchanged
+- **WHEN** the body contains `- foo` / `    - bar` / `        - lol`
+  and the format is `slack`
+- **THEN** the output is byte-identical to the input
+
+#### Scenario: List-looking lines inside code are not re-indented
+- **WHEN** the body contains a fenced block with a `  - item` line
+  inside it, and an indented code block containing a `- item` line,
+  and the format is `slack`
+- **THEN** both `- item` lines appear inside their code blocks exactly
+  as written (indentation untouched)
+
+#### Scenario: List interrupted by a heading resets nesting
+- **WHEN** the body contains `- a` / `# Heading` / `  - b` and the
+  format is `slack`
+- **THEN** the output contains `*Heading*` and `- b` unindented — the
+  heading ends the list, so the indented item starts a new top-level
+  list
 
 #### Scenario: Fence language tag stripped
 - **WHEN** the body contains a fenced block opening with ` ```rust `
@@ -389,4 +460,9 @@ horizontal rules.
   ` ```js ` (backticks plus text) and the format is `slack`
 - **THEN** the block still opens and closes exactly once — the content
   line is not treated as an opening delimiter
+
+#### Scenario: Commonmark list output unchanged
+- **WHEN** the body contains a 2-space-indented nested list and the
+  format is `commonmark`
+- **THEN** the list lines appear byte-identical to the source
 
