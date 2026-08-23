@@ -38,6 +38,7 @@ fn make_multi_target_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "init"]);
     tmp

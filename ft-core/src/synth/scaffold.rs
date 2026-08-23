@@ -272,6 +272,7 @@ mod tests {
         run_git(&["config", "user.name", "T"]);
         run_git(&["config", "user.email", "t@e.com"]);
         run_git(&["config", "commit.gpgsign", "false"]);
+        run_git(&["config", "maintenance.auto", "false"]);
         run_git(&["add", "."]);
         run_git(&["commit", "-m", "c1"]);
 
@@ -299,6 +300,9 @@ mod tests {
         assert_eq!(listing_before, listing_after, "planner must not touch fs");
     }
 
+    /// Vault files only: `.git` is skipped because git's detached
+    /// auto-maintenance touches `.git/objects/maintenance.lock` on its
+    /// own schedule, which would race this listing.
     fn collect_files(root: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         fn rec(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -306,6 +310,9 @@ mod tests {
                 for entry in rd.flatten() {
                     let p = entry.path();
                     if p.is_dir() {
+                        if p.file_name().is_some_and(|n| n == ".git") {
+                            continue;
+                        }
                         rec(&p, out);
                     } else {
                         out.push(p);
@@ -586,6 +593,7 @@ mod tests {
         run_git(&["config", "user.name", "T"]);
         run_git(&["config", "user.email", "t@e.com"]);
         run_git(&["config", "commit.gpgsign", "false"]);
+        run_git(&["config", "maintenance.auto", "false"]);
         run_git(&["add", "."]);
         run_git(&["commit", "-m", "c1"]);
 

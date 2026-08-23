@@ -39,6 +39,7 @@ fn make_source_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "init"]);
     tmp
@@ -195,6 +196,7 @@ fn nested_vault_scaffold_verify_roundtrip() {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "init"]);
 
@@ -596,6 +598,7 @@ fn make_search_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     let commit_env = |date: &str| {
         vec![
             ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),

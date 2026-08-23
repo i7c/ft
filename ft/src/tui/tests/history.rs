@@ -67,6 +67,7 @@ fn recent_edit_vault() -> (TempDir, Vault) {
     run_git(&vp, &["config", "user.name", "T"]);
     run_git(&vp, &["config", "user.email", "t@e.com"]);
     run_git(&vp, &["config", "commit.gpgsign", "false"]);
+    run_git(&vp, &["config", "maintenance.auto", "false"]);
     commit_dated(&vp, "base", "2025-01-01T00:00:00");
     // Recent commit, backdated to a fixed date inside the default 7d
     // window relative to the fixed test clock (2026-05-10). Keeping it
@@ -94,6 +95,7 @@ fn stale_only_vault() -> (TempDir, Vault) {
     run_git(&vp, &["config", "user.name", "T"]);
     run_git(&vp, &["config", "user.email", "t@e.com"]);
     run_git(&vp, &["config", "commit.gpgsign", "false"]);
+    run_git(&vp, &["config", "maintenance.auto", "false"]);
     commit_dated(&vp, "base", "2025-01-01T00:00:00");
     std::fs::write(vp.join("Old.md"), "# Old\n\nAncient prose.\n").unwrap();
     commit_dated(&vp, "old", "2025-02-01T00:00:00");

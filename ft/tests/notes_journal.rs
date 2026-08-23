@@ -51,6 +51,7 @@ fn make_journal_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "init"]);
     tmp
@@ -144,6 +145,7 @@ fn make_heading_expansion_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     // Backdate the first commit so the heading paragraph is older.
     run_git_dated(repo, "2025-01-01T00:00:00", &["add", "."]);
     run_git_dated(repo, "2025-01-01T00:00:00", &["commit", "-m", "c1"]);

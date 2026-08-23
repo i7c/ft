@@ -57,6 +57,7 @@ fn make_history_vault() -> assert_fs::TempDir {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     commit_all_dated(repo, "c1", "2025-01-01T00:00:00");
 
     // Newest commit adds a fresh note; leave its date to "now" so the
@@ -145,6 +146,7 @@ fn history_excludes_synth_notes_by_default() {
     run_git(repo, &["config", "user.name", "T"]);
     run_git(repo, &["config", "user.email", "t@e.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "maintenance.auto", "false"]);
     // Base commit so HEAD~1 exists and the window diffs against it.
     tmp.child("Seed.md").write_str("# Seed\n").unwrap();
     commit_all_dated(repo, "base", "2025-01-01T00:00:00");

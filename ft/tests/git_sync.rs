@@ -33,6 +33,7 @@ fn init_repo(dir: &Path) {
     run_git(dir, &["config", "user.name", "Test"]);
     run_git(dir, &["config", "user.email", "test@example.com"]);
     run_git(dir, &["config", "commit.gpgsign", "false"]);
+    run_git(dir, &["config", "maintenance.auto", "false"]);
 }
 
 /// Make `dir` a vault by adding `.obsidian/`.
@@ -62,6 +63,7 @@ fn setup_origin_and_vault(tmp: &Path) -> std::path::PathBuf {
     run_git(&vault, &["config", "user.name", "Local"]);
     run_git(&vault, &["config", "user.email", "local@example.com"]);
     run_git(&vault, &["config", "commit.gpgsign", "false"]);
+    run_git(&vault, &["config", "maintenance.auto", "false"]);
     make_vault(&vault);
     std::fs::write(vault.join("seed.md"), "seed\n").unwrap();
     run_git(&vault, &["add", "."]);
@@ -150,6 +152,7 @@ fn sync_merge_conflict_exits_two_with_files_in_stderr() {
     run_git(&side, &["config", "user.name", "Side"]);
     run_git(&side, &["config", "user.email", "side@example.com"]);
     run_git(&side, &["config", "commit.gpgsign", "false"]);
+    run_git(&side, &["config", "maintenance.auto", "false"]);
     std::fs::write(side.join("seed.md"), "from side\n").unwrap();
     run_git(&side, &["add", "."]);
     run_git(&side, &["commit", "-m", "from side"]);

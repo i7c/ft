@@ -36,6 +36,7 @@ fn gather_test_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
 
@@ -910,6 +911,7 @@ fn pulse_test_vault() -> (TempDir, Vault) {
     run_git_at(None, &["config", "user.name", "T"]);
     run_git_at(None, &["config", "user.email", "t@e.com"]);
     run_git_at(None, &["config", "commit.gpgsign", "false"]);
+    run_git_at(None, &["config", "maintenance.auto", "false"]);
     run_git_at(None, &["add", "."]);
     run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
 
@@ -989,6 +991,7 @@ fn pulse_overflow_vault() -> (TempDir, Vault) {
     run_git_at(None, &["config", "user.name", "T"]);
     run_git_at(None, &["config", "user.email", "t@e.com"]);
     run_git_at(None, &["config", "commit.gpgsign", "false"]);
+    run_git_at(None, &["config", "maintenance.auto", "false"]);
     run_git_at(None, &["add", "."]);
     run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
 
@@ -1078,6 +1081,7 @@ fn multi_target_gather_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
     let vault = Vault::discover(Some(vault_path)).unwrap();
@@ -1144,6 +1148,7 @@ fn gather_blocks_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
     let vault = Vault::discover(Some(vault_path)).unwrap();
@@ -1180,6 +1185,7 @@ fn gather_scroll_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
     let vault = Vault::discover(Some(vault_path)).unwrap();
@@ -1611,6 +1617,7 @@ fn reslice_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "c1"]);
 
@@ -1926,6 +1933,7 @@ fn citation_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
 

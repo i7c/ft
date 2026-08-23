@@ -209,6 +209,7 @@ mod tests {
         run_git(repo, &["config", "user.name", "T"]);
         run_git(repo, &["config", "user.email", "t@e.com"]);
         run_git(repo, &["config", "commit.gpgsign", "false"]);
+        run_git(repo, &["config", "maintenance.auto", "false"]);
     }
 
     fn commit_all_dated(repo: &Path, msg: &str, date: &str) {

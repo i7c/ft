@@ -259,6 +259,7 @@ mod tests {
         run(&["config", "user.name", "T"]);
         run(&["config", "user.email", "t@e.com"]);
         run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "maintenance.auto", "false"]);
     }
 
     fn commit_at(tmp: &Path, msg: &str, date: &str) -> String {

@@ -55,6 +55,11 @@ fn make_vault() -> assert_fs::TempDir {
         "2024-12-01T00:00:00",
         &["config", "commit.gpgsign", "false"],
     );
+    run_git(
+        repo,
+        "2024-12-01T00:00:00",
+        &["config", "maintenance.auto", "false"],
+    );
     tmp.child("Topic.md").write_str("# Topic\n").unwrap();
     run_git(repo, "2024-12-01T00:00:00", &["add", "."]);
     run_git(repo, "2024-12-01T00:00:00", &["commit", "-m", "baseline"]);

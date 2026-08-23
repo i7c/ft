@@ -34,6 +34,7 @@ fn search_vault() -> (TempDir, Vault) {
     run_git(None, &["config", "user.name", "T"]);
     run_git(None, &["config", "user.email", "t@e.com"]);
     run_git(None, &["config", "commit.gpgsign", "false"]);
+    run_git(None, &["config", "maintenance.auto", "false"]);
     run_git(None, &["add", "."]);
     run_git(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
     std::fs::write(

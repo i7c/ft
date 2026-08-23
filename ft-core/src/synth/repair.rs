@@ -333,6 +333,7 @@ mod tests {
         run_git(tmp.path(), &["config", "user.name", "T"]);
         run_git(tmp.path(), &["config", "user.email", "t@e.com"]);
         run_git(tmp.path(), &["config", "commit.gpgsign", "false"]);
+        run_git(tmp.path(), &["config", "maintenance.auto", "false"]);
         run_git(tmp.path(), &["add", "."]);
         run_git(tmp.path(), &["commit", "-m", "c1"]);
 

@@ -838,6 +838,7 @@ mod tests {
         run_git(dir, &["config", "user.name", "Test"]);
         run_git(dir, &["config", "user.email", "test@example.com"]);
         run_git(dir, &["config", "commit.gpgsign", "false"]);
+        run_git(dir, &["config", "maintenance.auto", "false"]);
     }
 
     /// Create a bare origin and a clone that already has one commit
@@ -863,6 +864,7 @@ mod tests {
         run_git(&clone, &["config", "user.name", "A"]);
         run_git(&clone, &["config", "user.email", "a@example.com"]);
         run_git(&clone, &["config", "commit.gpgsign", "false"]);
+        run_git(&clone, &["config", "maintenance.auto", "false"]);
 
         fs::write(clone.join("seed.md"), "seed\n").unwrap();
         run_git(&clone, &["add", "."]);
@@ -898,6 +900,7 @@ mod tests {
             &["config", "user.email", &format!("{name}@example.com")],
         );
         run_git(&dir, &["config", "commit.gpgsign", "false"]);
+        run_git(&dir, &["config", "maintenance.auto", "false"]);
         fs::write(dir.join(file), content).unwrap();
         run_git(&dir, &["add", "."]);
         run_git(&dir, &["commit", "-m", &format!("from {name}")]);

@@ -422,6 +422,7 @@ fn setup_origin_and_vault(tmp: &Path) -> std::path::PathBuf {
     run_git(&vault, &["config", "user.name", "Local"]);
     run_git(&vault, &["config", "user.email", "local@example.com"]);
     run_git(&vault, &["config", "commit.gpgsign", "false"]);
+    run_git(&vault, &["config", "maintenance.auto", "false"]);
     std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
     std::fs::write(vault.join("seed.md"), "seed\n").unwrap();
     run_git(&vault, &["add", "."]);

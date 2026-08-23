@@ -225,6 +225,7 @@ mod tests {
         run_git(repo, &["config", "user.name", "T"]);
         run_git(repo, &["config", "user.email", "t@e.com"]);
         run_git(repo, &["config", "commit.gpgsign", "false"]);
+        run_git(repo, &["config", "maintenance.auto", "false"]);
     }
 
     /// Source file with five single-line paragraphs; scaffold a section

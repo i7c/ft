@@ -2357,6 +2357,7 @@ fn ghost_git_vault() -> (TempDir, Vault) {
     run_git(&["config", "user.name", "T"]);
     run_git(&["config", "user.email", "t@e.com"]);
     run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["config", "maintenance.auto", "false"]);
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "init"]);
     (dir, vault)

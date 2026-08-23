@@ -205,6 +205,7 @@ fn json_includes_date_with_sort_date() {
     run(&["config", "user.name", "T"]);
     run(&["config", "user.email", "t@e.com"]);
     run(&["config", "commit.gpgsign", "false"]);
+    run(&["config", "maintenance.auto", "false"]);
     run(&["add", "."]);
     run(&["commit", "-m", "c1"]);
 
@@ -258,6 +259,7 @@ fn gather_is_deprecated_hidden_and_still_works() {
     run(&["config", "user.name", "T"]);
     run(&["config", "user.email", "t@e.com"]);
     run(&["config", "commit.gpgsign", "false"]);
+    run(&["config", "maintenance.auto", "false"]);
     run(&["add", "."]);
     run(&["commit", "-m", "c1"]);
 
