@@ -7,7 +7,7 @@ optional), relevance and date sorts, a `ft notes search` CLI, a live Search TUI
 tab, and scaffold `--search` sourcing. Replaces the graph-based gather as the
 sourcing front-end for the synthesis flow; gather is deprecated separately.
 
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Paragraph index built from the scan
 
@@ -149,8 +149,7 @@ result-set files, lazily; paragraphs whose blame fails SHALL sort as oldest
 
 ### Requirement: ft notes search command
 
-`ft notes search <query> [--any] [--sort relevance|date] [--limit N] [--json]`
-SHALL be a subcommand of `ft notes`. The default sort SHALL be `relevance`.
+`ft notes search <query> [--any] [--sort relevance|date] [--limit N] [--json]` SHALL be a subcommand of `ft notes`. The default sort SHALL be `relevance`.
 The command SHALL respect `synth.exclude_prefixes` (files whose vault-relative
 path starts with a configured prefix SHALL NOT be searched). Text output SHALL
 print one result per line: vault-relative path, `L<start>-<end>`, the matched
