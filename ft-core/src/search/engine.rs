@@ -23,7 +23,7 @@ use chrono::NaiveDate;
 use crate::blame_cache::{paragraph_date, BlameCache};
 use crate::error::Result;
 use crate::git;
-use crate::search::index::SearchIndex;
+use crate::search::index::{trigrams_of, SearchIndex};
 use crate::search::query::{Clause, Mode, SearchQuery};
 use crate::vault::Vault;
 
@@ -228,17 +228,15 @@ fn clause_matches(index: &SearchIndex, clause: &Clause) -> Vec<u32> {
 /// narrowed by levenshtein, then postings.
 fn fuzzy_postings(index: &SearchIndex, term: &str) -> Vec<u32> {
     let mut candidate_ids: HashSet<u32> = HashSet::new();
-    if term.len() <= 3 {
+    if term.chars().count() <= 3 {
         for (tok, id) in &index.token_ids {
             if tok.starts_with(term) {
                 candidate_ids.insert(*id);
             }
         }
     } else {
-        let bytes = term.as_bytes();
-        for i in 0..=bytes.len() - 3 {
-            let trig = &term[i..i + 3];
-            if let Some(ids) = index.trigrams.get(trig) {
+        for trig in trigrams_of(term) {
+            if let Some(ids) = index.trigrams.get(&trig) {
                 candidate_ids.extend(ids.iter().copied());
             }
         }
@@ -566,6 +564,16 @@ mod tests {
             1,
             "fuzzy over the link-target token"
         );
+    }
+
+    #[test]
+    fn fuzzy_over_non_ascii_term_does_not_panic() {
+        // Both the indexed link target and the query term carry
+        // multi-byte scalars; trigram generation used to slice bytes.
+        let index = idx(&[("a.md", "See [[móveis]] and [[problems with móveis ii]].\n")]);
+        assert_eq!(search(&index, &parse("~móveis", false)).len(), 1);
+        // Short non-ASCII term takes the prefix-scan branch.
+        assert!(search(&index, &parse("~óé", false)).is_empty());
     }
 
     // ── perf budget (gated; run with FT_PERF_TESTS=1) ─────────────────

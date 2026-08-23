@@ -169,3 +169,29 @@ fn real_vault_synth_verify_all_runs() {
         drifted
     );
 }
+
+#[test]
+fn real_vault_search_index_builds() {
+    use ft_core::search::{parse_query, search, SearchIndex};
+    use ft_core::vault::Vault;
+
+    if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let vault_path = PathBuf::from("/Users/cmw/git/fortytwo");
+    let vault = match Vault::discover(Some(vault_path)) {
+        Ok(v) => v,
+        Err(_) => return, // vault not present on this machine
+    };
+    let scan = vault.scan();
+    // Real prose carries arbitrary UTF-8 in wikilink targets; indexing
+    // and fuzzy querying must both stay on char boundaries.
+    let index = SearchIndex::build(&scan, &[]);
+    for term in ["~memoization", "~móveis", "~óé", "=the", "[[Topic]]"] {
+        let _ = search(&index, &parse_query(term, false));
+    }
+    println!(
+        "real_vault_search_index: {} paragraphs indexed",
+        index.paragraph_count()
+    );
+}

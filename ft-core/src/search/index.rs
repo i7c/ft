@@ -190,15 +190,18 @@ fn link_target(content: &str) -> Option<String> {
     }
 }
 
-/// All 3-grams of a folded term (length ≥ 3).
-fn trigrams_of(term: &str) -> Vec<String> {
-    if term.len() < 3 {
+/// All 3-grams of a folded term (length ≥ 3 chars).
+///
+/// Counted in `char`s, not bytes: link tokens come from `[[…]]` targets
+/// and carry arbitrary UTF-8, so byte offsets would split multi-byte
+/// scalars. Index and query sides both go through here so their
+/// trigrams agree.
+pub(crate) fn trigrams_of(term: &str) -> Vec<String> {
+    let chars: Vec<char> = term.chars().collect();
+    if chars.len() < 3 {
         return Vec::new();
     }
-    let bytes = term.as_bytes();
-    (0..=bytes.len() - 3)
-        .map(|i| term[i..i + 3].to_string())
-        .collect()
+    chars.windows(3).map(|w| w.iter().collect()).collect()
 }
 
 /// True when the paragraph is a `[!ft-source]` protected-section
@@ -319,6 +322,31 @@ mod tests {
         let idx = SearchIndex::build(&scan, &[]);
         assert!(idx.trigrams.contains_key("mem"));
         assert!(idx.trigrams.contains_key("zat"));
+    }
+
+    #[test]
+    fn trigrams_of_splits_on_chars_not_bytes() {
+        // Link tokens carry arbitrary UTF-8; byte offsets used to panic
+        // mid-scalar on the accented char.
+        assert_eq!(trigrams_of("móv"), vec!["móv".to_string()]);
+        assert_eq!(
+            trigrams_of("móve"),
+            vec!["móv".to_string(), "óve".to_string()]
+        );
+        // Two chars, four bytes: still too short for a trigram.
+        assert!(trigrams_of("óé").is_empty());
+    }
+
+    #[test]
+    fn indexes_non_ascii_link_target() {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        let scan = build_scan(
+            tmp.path(),
+            &[("a.md", "See [[problems with móveis ii]] for context.\n")],
+        );
+        let idx = SearchIndex::build(&scan, &[]);
+        assert!(idx.token_ids.contains_key("problems with móveis ii"));
+        assert!(idx.trigrams.contains_key("óve"));
     }
 
     #[test]
