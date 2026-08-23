@@ -65,8 +65,10 @@ fn scaffold_create_writes_frontmatter_and_callouts() {
     written.assert(predicates::path::is_file());
     let body = std::fs::read_to_string(written.path()).unwrap();
     assert!(body.starts_with("---\nft:\n  synth:\n    enabled: true\n"));
-    assert!(body.contains("targets: [\"[[Foo]]\"]"));
-    assert!(body.contains("---\n"));
+    assert!(
+        !body.contains("targets:"),
+        "self-describing targets frontmatter is gone"
+    );
     assert!(body.contains("> [!ft-source] \"notes/source.md\" L1-2 @"));
     assert!(body.contains("> First paragraph mentions [[Foo]]."));
     assert!(body.contains("> [!ft-source] \"notes/source.md\" L4-4 @"));
@@ -139,7 +141,9 @@ fn scaffold_requires_link_or_from() {
     ])
     .assert()
     .failure()
-    .stderr(predicates::str::contains("one of --link or --from"));
+    .stderr(predicates::str::contains(
+        "one of --search, --link, or --from",
+    ));
 }
 
 #[test]
@@ -572,114 +576,20 @@ fn repair_unrecoverable_body_exits_failure_with_json_detail() {
     );
 }
 
-// ── ft synth grow ──────────────────────────────────────────────────────
+// ── scaffold --search / --link (transitional) ────────────────────────
 
-/// A vault with a Foo-target note whose two paragraphs are committed on
-/// different days, so the watermark date filter is exercisable.
-fn make_grow_vault() -> assert_fs::TempDir {
+/// A vault whose source paragraphs mention `[[Foo]]`, committed so dates
+/// are distinguishable.
+fn make_search_vault() -> assert_fs::TempDir {
     use assert_fs::prelude::*;
     let tmp = assert_fs::TempDir::new().unwrap();
     tmp.child(".obsidian").create_dir_all().unwrap();
-    // Day 1: one Foo-mentioning paragraph.
-    tmp.child("notes/daily.md")
-        .write_str("First mention of [[Foo]] here.\n")
-        .unwrap();
-    let repo = tmp.path();
-    run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.name", "T"]);
-    run_git(repo, &["config", "user.email", "t@e.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["add", "."]);
-    // Backdate the first commit so the watermark is distinguishable.
-    let out = StdCommand::new("git")
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00")
-        .args(["commit", "-m", "c1"])
-        .output()
-        .expect("git commit");
-    assert!(out.status.success());
-    // Day 2: a second Foo-mentioning paragraph, newer date.
-    tmp.child("notes/daily.md")
+    tmp.child("notes/source.md")
         .write_str(
-            "First mention of [[Foo]] here.\n\n\
-             Second mention of [[Foo]] committed later.\n",
+            "First paragraph mentions [[Foo]].\n\n\
+             Second paragraph mentions [[Foo]] again.\n\n\
+             Third paragraph mentions [[Bar]] only.\n",
         )
-        .unwrap();
-    let out = StdCommand::new("git")
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_AUTHOR_DATE", "2026-06-01T00:00:00")
-        .env("GIT_COMMITTER_DATE", "2026-06-01T00:00:00")
-        .args(["add", "."])
-        .output()
-        .expect("git add");
-    assert!(out.status.success());
-    let out = StdCommand::new("git")
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_AUTHOR_DATE", "2026-06-01T00:00:00")
-        .env("GIT_COMMITTER_DATE", "2026-06-01T00:00:00")
-        .args(["commit", "-m", "c2"])
-        .output()
-        .expect("git commit");
-    assert!(out.status.success());
-    tmp
-}
-
-#[test]
-fn grow_appends_only_missing_entries() {
-    use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    // Scaffold first (captures both Foo paragraphs, pinned at HEAD=c2).
-    ft().args([
-        "--vault",
-        tmp.path().to_str().unwrap(),
-        "notes",
-        "synth",
-        "scaffold",
-        "Synthesis/topic.md",
-        "--link",
-        "[[Foo]]",
-        "--no-edit",
-    ])
-    .assert()
-    .success();
-    let note = tmp.child("Synthesis/topic.md");
-    let before = std::fs::read_to_string(note.path()).unwrap();
-    let section_count_before = before.matches("[!ft-source]").count();
-
-    // Grow with the same link: dedup-on-append means nothing new.
-    ft().args([
-        "--vault",
-        tmp.path().to_str().unwrap(),
-        "notes",
-        "synth",
-        "grow",
-        "Synthesis/topic.md",
-        "--link",
-        "[[Foo]]",
-        "--no-edit",
-    ])
-    .assert()
-    .success();
-    let after = std::fs::read_to_string(note.path()).unwrap();
-    let section_count_after = after.matches("[!ft-source]").count();
-    assert_eq!(
-        section_count_before, section_count_after,
-        "grow with all-pinned entries must append nothing"
-    );
-}
-
-#[test]
-fn grow_new_only_scopes_to_entries_newer_than_watermark() {
-    use assert_fs::prelude::*;
-    let tmp = assert_fs::TempDir::new().unwrap();
-    tmp.child(".obsidian").create_dir_all().unwrap();
-    // Day 1: first Foo paragraph.
-    tmp.child("notes/daily.md")
-        .write_str("First mention of [[Foo]] here.\n")
         .unwrap();
     let repo = tmp.path();
     run_git(repo, &["init", "-b", "main"]);
@@ -699,34 +609,12 @@ fn grow_new_only_scopes_to_entries_newer_than_watermark() {
         &["commit", "-m", "c1"],
         &commit_env("2026-01-01T00:00:00"),
     );
-
-    // Scaffold the note at c1 → watermark = 2026-01-01.
-    ft().args([
-        "--vault",
-        tmp.path().to_str().unwrap(),
-        "notes",
-        "synth",
-        "scaffold",
-        "Synthesis/topic.md",
-        "--link",
-        "[[Foo]]",
-        "--no-edit",
-    ])
-    .assert()
-    .success();
-    let note = tmp.child("Synthesis/topic.md");
-    let after_scaffold = std::fs::read_to_string(note.path()).unwrap();
-    assert_eq!(
-        after_scaffold.matches("[!ft-source]").count(),
-        1,
-        "scaffold captured the one paragraph"
-    );
-
-    // Day 2: add a second Foo paragraph (date 2026-06-01 > watermark).
-    tmp.child("notes/daily.md")
+    // Day 2: touch the second paragraph (newer blame date).
+    tmp.child("notes/source.md")
         .write_str(
-            "First mention of [[Foo]] here.\n\n\
-             Second mention of [[Foo]] committed later.\n",
+            "First paragraph mentions [[Foo]].\n\n\
+             Second paragraph mentions [[Foo]] again (edited).\n\n\
+             Third paragraph mentions [[Bar]] only.\n",
         )
         .unwrap();
     run_git_env(repo, &["add", "."], &commit_env("2026-06-01T00:00:00"));
@@ -735,77 +623,144 @@ fn grow_new_only_scopes_to_entries_newer_than_watermark() {
         &["commit", "-m", "c2"],
         &commit_env("2026-06-01T00:00:00"),
     );
-
-    // grow --new-only should append exactly the new (second) paragraph.
-    let assert = ft()
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--link",
-            "[[Foo]]",
-            "--new-only",
-            "--no-edit",
-        ])
-        .assert()
-        .success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    assert!(
-        stdout.contains("appended 1 section"),
-        "expected 1 new section, got stdout: {stdout}"
-    );
-    let after_grow = std::fs::read_to_string(note.path()).unwrap();
-    assert_eq!(
-        after_grow.matches("[!ft-source]").count(),
-        2,
-        "note now has both sections"
-    );
-    assert!(
-        after_grow.contains("Second mention of [[Foo]] committed later."),
-        "new paragraph body must be present"
-    );
+    tmp
 }
 
 #[test]
-fn grow_new_only_on_brand_new_note_falls_back_with_warning() {
+fn scaffold_search_create_writes_frontmatter_and_callouts() {
     use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    // Create an empty synth note (no callouts → no watermark).
-    tmp.child("Synthesis/topic.md")
-        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
-        .unwrap();
-    let assert = ft()
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--new-only",
-            "--no-edit",
-        ])
-        .assert()
-        .success();
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]]",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+    let written = tmp.child("Synthesis/topic.md");
+    written.assert(predicates::path::is_file());
+    let body = std::fs::read_to_string(written.path()).unwrap();
+    assert!(body.starts_with("---\nft:\n  synth:\n    enabled: true\n"));
     assert!(
-        stderr.contains("could not determine a last-synth watermark"),
-        "expected fallback warning, got stderr: {stderr}"
+        !body.contains("targets:"),
+        "self-describing targets frontmatter is gone"
     );
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L1-1 @"));
+    assert!(body.contains("> [!ft-source] \"notes/source.md\" L3-3 @"));
+    assert!(!body.contains("[[Bar]]"), "only Foo paragraphs are sourced");
+}
+
+#[test]
+fn scaffold_search_and_terms_in_same_paragraph() {
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]] [[Bar]]",
+        "--no-edit",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("no entries to scaffold"));
+}
+
+#[test]
+fn scaffold_search_any_mode_unions() {
+    use assert_fs::prelude::*;
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]] [[Bar]]",
+        "--any",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
     let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
-    // Both paragraphs appended (all missing, watermark unavailable).
-    assert_eq!(body.matches("[!ft-source]").count(), 2);
+    assert_eq!(
+        body.matches("[!ft-source]").count(),
+        3,
+        "any-mode sources every Foo or Bar paragraph"
+    );
 }
 
 #[test]
-fn grow_reads_targets_from_frontmatter() {
-    use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    // Pre-create a synth note with frontmatter targets and one already-pinned section.
-    // Scaffold first to get a real pinned section + targets, then grow with no --link.
+fn scaffold_search_repeat_is_idempotent() {
+    let tmp = make_search_vault();
+    let run = || {
+        ft().args([
+            "--vault",
+            tmp.path().to_str().unwrap(),
+            "notes",
+            "synth",
+            "scaffold",
+            "Synthesis/topic.md",
+            "--search",
+            "[[Foo]]",
+            "--no-edit",
+        ])
+        .assert()
+        .success();
+    };
+    run();
+    let body1 = std::fs::read_to_string(tmp.path().join("Synthesis/topic.md")).unwrap();
+    assert_eq!(body1.matches("[!ft-source]").count(), 2);
+    run();
+    let body2 = std::fs::read_to_string(tmp.path().join("Synthesis/topic.md")).unwrap();
+    assert_eq!(
+        body2.matches("[!ft-source]").count(),
+        2,
+        "second run must not duplicate sections"
+    );
+}
+
+#[test]
+fn scaffold_search_sort_date_orders_newest_first() {
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]]",
+        "--sort",
+        "date",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+    let body = std::fs::read_to_string(tmp.path().join("Synthesis/topic.md")).unwrap();
+    let idx_edited = body.find("(edited)").unwrap();
+    let idx_first = body.find("First paragraph mentions").unwrap();
+    assert!(
+        idx_edited < idx_first,
+        "newest-edited section must come first in --sort date mode"
+    );
+}
+
+#[test]
+fn scaffold_link_transitional_still_sources() {
+    let tmp = make_search_vault();
     ft().args([
         "--vault",
         tmp.path().to_str().unwrap(),
@@ -819,142 +774,77 @@ fn grow_reads_targets_from_frontmatter() {
     ])
     .assert()
     .success();
-    // grow with NO --link → reads targets from frontmatter. All already
-    // pinned → appends nothing, succeeds.
-    let assert = ft()
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--no-edit",
-        ])
-        .assert()
-        .success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    // Both paragraphs are already pinned → either "appended 0" or the
-    // all-pinned message. Accept success + no new sections.
-    let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
-    let _ = stdout;
+    let body = std::fs::read_to_string(tmp.path().join("Synthesis/topic.md")).unwrap();
     assert_eq!(
         body.matches("[!ft-source]").count(),
         2,
-        "frontmatter-driven grow must not duplicate pinned sections"
+        "--link lowers to an any-mode [[Foo]] search"
     );
 }
 
 #[test]
-fn grow_no_targets_errors_clearly() {
-    use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    // A synth note with NO ft.synth.targets frontmatter.
-    tmp.child("Synthesis/topic.md")
-        .write_str("---\nft:\n  synth:\n    enabled: true\n---\n\nUser prose.\n")
-        .unwrap();
-    let assert = ft()
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--no-edit",
-        ])
-        .assert()
-        .failure();
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+fn scaffold_search_plus_from_picks() {
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]]",
+        "--from",
+        "notes/source.md:5",
+        "--no-edit",
+    ])
+    .assert()
+    .success();
+    let body = std::fs::read_to_string(tmp.path().join("Synthesis/topic.md")).unwrap();
     assert!(
-        stderr.contains("no targets") && stderr.contains("--link"),
-        "expected a clear no-targets error, got stderr: {stderr}"
+        body.contains("Third paragraph mentions [[Bar]] only."),
+        "--from adds the Bar-only paragraph alongside the Foo search results"
     );
+    assert!(body.contains("First paragraph mentions [[Foo]]."));
 }
 
 #[test]
-fn grow_nonexistent_target_errors() {
-    let tmp = make_grow_vault();
-    let assert = ft()
-        .args([
+fn scaffold_window_flags_are_rejected() {
+    let tmp = make_search_vault();
+    for flag in ["--since", "7d", "--in-window"] {
+        let mut args = vec![
             "--vault",
             tmp.path().to_str().unwrap(),
             "notes",
             "synth",
-            "grow",
-            "Synthesis/missing.md",
-            "--link",
+            "scaffold",
+            "Synthesis/topic.md",
+            "--search",
             "[[Foo]]",
+            flag,
             "--no-edit",
-        ])
-        .assert()
-        .failure();
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
-    assert!(
-        stderr.contains("does not exist") && stderr.contains("scaffold"),
-        "expected a 'use scaffold' hint, got stderr: {stderr}"
-    );
+        ];
+        if flag == "--since" {
+            args.push("7d");
+        }
+        ft().args(&args).assert().failure();
+    }
 }
 
 #[test]
-fn grow_limit_caps_appended_sections() {
-    use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    // Empty synth note with frontmatter target → all missing, then limit to 1.
-    tmp.child("Synthesis/topic.md")
-        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
-        .unwrap();
-    let assert = ft()
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--link",
-            "[[Foo]]",
-            "--limit",
-            "1",
-            "--no-edit",
-        ])
-        .assert()
-        .success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    assert!(
-        stdout.contains("appended 1 section"),
-        "expected exactly 1 section with --limit 1, got stdout: {stdout}"
-    );
-    let body = std::fs::read_to_string(tmp.child("Synthesis/topic.md").path()).unwrap();
-    assert_eq!(
-        body.matches("[!ft-source]").count(),
-        1,
-        "only 1 section should be on disk"
-    );
-}
-
-#[test]
-fn grow_no_edit_suppresses_editor() {
-    // Smoke: --no-edit exits 0 without trying to spawn an editor.
-    // (Setting EDITATOR=true would make a non-no-edit run hang; this
-    // test just confirms --no-edit short-circuits.)
-    use assert_fs::prelude::*;
-    let tmp = make_grow_vault();
-    tmp.child("Synthesis/topic.md")
-        .write_str("---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\"]\n---\n\n")
-        .unwrap();
-    ft().env("EDITOR", "false")
-        .args([
-            "--vault",
-            tmp.path().to_str().unwrap(),
-            "notes",
-            "synth",
-            "grow",
-            "Synthesis/topic.md",
-            "--no-edit",
-        ])
-        .assert()
-        .success();
+fn grow_command_is_gone() {
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "grow",
+        "Synthesis/topic.md",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("unrecognized subcommand"));
 }
 
 /// Run git with extra environment variables (for backdated commits).

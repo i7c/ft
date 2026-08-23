@@ -67,9 +67,10 @@ pub enum NotesCommand {
     /// updating all vault-wide references.
     #[command(name = "mv")]
     Move(MoveArgs),
-    /// Reverse-chronological feed of paragraph-level mentions of a
-    /// note (and its Related-section aliases) across the vault. Dates
-    /// come from `git blame`.
+    /// DEPRECATED — use `ft notes search`. Reverse-chronological feed
+    /// of paragraph-level mentions of a note (and its Related-section
+    /// aliases) across the vault. Dates come from `git blame`.
+    #[command(hide = true)]
     Gather(GatherArgs),
     /// Reverse-chronological feed of every paragraph edited within a
     /// time window, across the whole vault — the untargeted, time-shaped
@@ -88,8 +89,13 @@ pub enum NotesCommand {
     /// window — the sweep trigger: "what's been on my mind?" Ghosts are
     /// marked `?`. Dates come from git history.
     Pulse(crate::cmd::pulse::PulseArgs),
-    /// Synth notes: scaffold, grow, verify, repair, or reslice
-    /// provenance-pinned syntheses compiled from gathered paragraphs.
+    /// Search every paragraph in the vault with a fast index —
+    /// substring (default), `=word`, `~fuzzy`, `"phrase"`, `[[link]]`,
+    /// `-exclude`; AND by default, `--any` for OR; sorted by relevance
+    /// or blame date. The successor to the deprecated `gather`.
+    Search(crate::cmd::search::SearchArgs),
+    /// Synth notes: scaffold, verify, repair, or reslice
+    /// provenance-pinned syntheses compiled from search results.
     #[command(subcommand)]
     Synth(crate::cmd::synth::SynthCommand),
     /// Report likely concept-name drift — one idea split across several
@@ -130,6 +136,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
         NotesCommand::Drift(a) => run_drift(a, vault_flag),
         NotesCommand::Pulse(a) => crate::cmd::pulse::run(a, vault_flag),
+        NotesCommand::Search(a) => crate::cmd::search::run(a, vault_flag),
         NotesCommand::Synth(c) => crate::cmd::synth::run_command(c, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),
@@ -1596,6 +1603,7 @@ pub struct GatherArgs {
 }
 
 fn run_gather(args: GatherArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    eprintln!("warning: `ft notes gather` is deprecated — use `ft notes search <query>` instead");
     if args.note.is_empty() && args.link.is_empty() {
         return Err(anyhow!(
             "provide a NOTE argument or one or more --link flags"

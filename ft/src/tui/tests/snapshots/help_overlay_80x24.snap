@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 100
 expression: frame
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
+  1 Graph ┌ help ────────────────────────────────────────────────────┐er  │  7 T
 > node whe│Keybindings — Graph                                      █│ note-link
  1: node w│                                                         █│          
 ┌ node whe│  Global                                                 █│─────────┐

@@ -690,15 +690,11 @@ impl Graph {
                         .edges_directed(cur.0, Direction::Incoming)
                         .find(|e| matches!(e.weight(), EdgeKind::OwnsHeading))
                         .map(|e| NoteId(e.source()));
-                    match parent {
-                        Some(p) => {
-                            if matches!(self.node(p), NodeKind::Note(_)) {
-                                return Some(p);
-                            }
-                            cur = p;
-                        }
-                        None => return None,
+                    let p = parent?;
+                    if matches!(self.node(p), NodeKind::Note(_)) {
+                        return Some(p);
                     }
+                    cur = p;
                 }
             }
             _ => None,

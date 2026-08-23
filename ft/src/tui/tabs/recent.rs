@@ -14,13 +14,11 @@
 //! section-move modal seeded to the row's note. `R` reloads.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use std::sync::LazyLock;
 
 use anyhow::Result;
 use chrono::Duration;
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -33,23 +31,18 @@ use ft_core::blame_cache::BlameCache;
 use ft_core::git::discover_repo;
 use ft_core::pulse::WindowRange;
 use ft_core::recent::{build_recent, RecentEntry, RecentOptions};
-use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::keymap::{KeyChord, KeyMap};
-use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::notes_actions::queue_toast;
 use crate::tui::palette;
+use crate::tui::synth_send::{SynthSendFlow, SynthSendHost};
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle};
 use crate::tui::tabs::gather::{
-    citation_badge_line, citation_detail_line, inline_markdown_spans, mark_note_as_synth,
-    pad_to_width, render_synth_send, wrap_line, NonSynthChoice, SynthSendState,
+    citation_badge_line, citation_detail_line, inline_markdown_spans, pad_to_width, wrap_line,
 };
-use crate::tui::widgets::{
-    render_feed_split, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
-    VaultFilePickerSource,
-};
+use crate::tui::widgets::render_feed_split;
 
 // ── Commands ─────────────────────────────────────────────────────────
 
@@ -214,7 +207,7 @@ pub struct RecentTab {
     last_error: Option<String>,
     /// Send-to-synth overlay state (reuses the Journal tab's enum). `s`
     /// opens the existing-note picker; `S` the folder→title create flow.
-    synth_send: Option<SynthSendState>,
+    synth_send: SynthSendFlow,
     keymap: KeyMap,
 }
 
@@ -235,7 +228,7 @@ impl RecentTab {
             cache: None,
             built_generation: None,
             last_error: None,
-            synth_send: None,
+            synth_send: SynthSendFlow::new(),
             keymap: RECENT_KEYMAP.clone(),
         }
     }
@@ -396,15 +389,7 @@ impl RecentTab {
         if self.entries.is_empty() {
             return;
         }
-        let source = VaultFilePickerSource::with_scan(
-            Arc::clone(ctx.vault),
-            Arc::clone(ctx.recents),
-            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
-        );
-        self.synth_send = Some(SynthSendState::PickExisting {
-            picker: FuzzyPicker::new(source),
-            new_only: false,
-        });
+        self.synth_send.open_existing(ctx, false);
     }
 
     /// `S` — open the folder picker for the create-new synth flow.
@@ -412,9 +397,7 @@ impl RecentTab {
         if self.entries.is_empty() {
             return;
         }
-        let folders = enumerate_vault_folders(ctx.vault);
-        let source = PathListPickerSource::new(folders);
-        self.synth_send = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
+        self.synth_send.open_new(ctx);
     }
 
     /// Entries to ship to the scaffold, as `SynthSource` (the type the
@@ -433,180 +416,25 @@ impl RecentTab {
         };
         chosen.into_iter().map(Into::into).collect()
     }
-
-    /// Drive the send-to-synth overlay. History omits the Journal tab's
-    /// `new_only` watermark flow — `new_only` is always `false` here.
-    fn handle_synth_send_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
-        let Some(state) = self.synth_send.take() else {
-            return EventOutcome::NotHandled;
-        };
-        match state {
-            SynthSendState::PickExisting { mut picker, .. } => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, hit.path),
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickExisting {
-                        picker,
-                        new_only: false,
-                    });
-                }
-            },
-            SynthSendState::NonSynthPrompt { path, focus, .. } => match k.code {
-                KeyCode::Esc => {}
-                KeyCode::Enter => self.commit_send(ctx, &path, matches_mark(focus)),
-                KeyCode::Char('a') | KeyCode::Char('A') => self.commit_send(ctx, &path, false),
-                KeyCode::Char('m') | KeyCode::Char('M') => self.commit_send(ctx, &path, true),
-                KeyCode::Char('c') | KeyCode::Char('C') => {}
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                    let next = match focus {
-                        NonSynthChoice::AppendAnyway => NonSynthChoice::MarkAndAppend,
-                        NonSynthChoice::MarkAndAppend => NonSynthChoice::AppendAnyway,
-                    };
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus: next,
-                        new_only: false,
-                    });
-                }
-                _ => {
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus,
-                        new_only: false,
-                    });
-                }
-            },
-            // The context-note picker is a Journal-tab flow; History
-            // never constructs it.
-            SynthSendState::PickContextNote(_) => {}
-            SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
-                PickerOutcome::Selected(folder) => {
-                    let folder = if folder == Path::new(".") {
-                        PathBuf::new()
-                    } else {
-                        folder
-                    };
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf: EditBuffer::default(),
-                        error: None,
-                    });
-                }
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickFolder(picker));
-                }
-            },
-            SynthSendState::TitlePrompt {
-                folder, mut buf, ..
-            } => match k.code {
-                KeyCode::Esc => {}
-                KeyCode::Enter => {
-                    let title = buf.text.trim().to_string();
-                    if title.is_empty() {
-                        self.synth_send = Some(SynthSendState::TitlePrompt {
-                            folder,
-                            buf,
-                            error: Some("title is required".into()),
-                        });
-                    } else {
-                        let filename = if title.ends_with(".md") {
-                            title
-                        } else {
-                            format!("{title}.md")
-                        };
-                        let target = if folder.as_os_str().is_empty() {
-                            PathBuf::from(&filename)
-                        } else {
-                            folder.join(&filename)
-                        };
-                        self.commit_send(ctx, &target, false);
-                    }
-                }
-                _ => {
-                    let _ = buf.handle_event(k);
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-            },
-        }
-        EventOutcome::Consumed
-    }
-
-    /// Existing note picked → send directly if it's already a synth note,
-    /// else raise the append-anyway / mark-and-append prompt.
-    fn on_existing_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
-        let abs = ctx.vault.path.join(&path);
-        let is_synth = std::fs::read_to_string(&abs)
-            .map(|c| ft_core::synth::callout::is_synth_note(&c))
-            .unwrap_or(false);
-        if is_synth {
-            self.commit_send(ctx, &path, false);
-        } else {
-            self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                path,
-                focus: NonSynthChoice::MarkAndAppend,
-                new_only: false,
-            });
-        }
-    }
-
-    /// Plan + apply the synth scaffold and hand off to `$EDITOR`.
-    fn commit_send(&mut self, ctx: &mut TabCtx, vault_rel_path: &Path, mark_synth: bool) {
-        let entries = self.entries_to_send();
-        if entries.is_empty() {
-            queue_toast(ctx, "send-to-synth: no entries to send", ToastStyle::Error);
-            return;
-        }
-        if mark_synth {
-            if let Err(e) = mark_note_as_synth(&ctx.vault.path.join(vault_rel_path)) {
-                queue_toast(
-                    ctx,
-                    &format!("could not add ft.synth marker: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
-        }
-        let plan = match plan_synth_scaffold(ctx.vault, vault_rel_path, &entries) {
-            Ok(p) => p,
-            Err(e) => {
-                queue_toast(ctx, &format!("synth plan failed: {e}"), ToastStyle::Error);
-                return;
-            }
-        };
-        let written = match apply_synth_scaffold(ctx.vault, &plan) {
-            Ok(p) => p,
-            Err(e) => {
-                queue_toast(ctx, &format!("synth write failed: {e}"), ToastStyle::Error);
-                return;
-            }
-        };
-        queue_toast(
-            ctx,
-            &format!(
-                "{} {} synth section(s) to {}",
-                if plan.create { "created" } else { "appended" },
-                plan.sections.len(),
-                vault_rel_path.display()
-            ),
-            ToastStyle::Success,
-        );
-        // The synth note changed on disk; refresh the shared snapshot.
-        ctx.request_graph_refresh();
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
-            path: written,
-            line: 1,
-        });
-    }
 }
 
-/// Map a non-synth prompt focus to the `mark_synth` boolean.
-fn matches_mark(focus: NonSynthChoice) -> bool {
-    matches!(focus, NonSynthChoice::MarkAndAppend)
+/// The Recent tab supplies its feed rows (selected, or the whole feed);
+/// it has no watermark flow (`new_only` is always false) and requests a
+/// graph refresh after a successful send so badges re-derive.
+impl SynthSendHost for RecentTab {
+    fn synth_sources(
+        &mut self,
+        _ctx: &mut TabCtx,
+        _target: &Path,
+        _new_only: bool,
+    ) -> Vec<ft_core::synth::source::SynthSource> {
+        self.entries_to_send()
+    }
+
+    fn on_synth_committed(&mut self, ctx: &mut TabCtx, _target: &Path) {
+        // The synth note changed on disk; refresh the shared snapshot.
+        ctx.request_graph_refresh();
+    }
 }
 
 impl Tab for RecentTab {
@@ -697,8 +525,13 @@ impl Tab for RecentTab {
         let Event::Key(k) = ev else {
             return Ok(EventOutcome::NotHandled);
         };
-        if self.synth_send.is_some() {
-            return Ok(self.handle_synth_send_key(k, ctx));
+        if self.synth_send.is_active() {
+            // Take the flow out of `self` so the host borrow (`self`) is
+            // disjoint from the flow's mutable borrow.
+            let mut flow = std::mem::take(&mut self.synth_send);
+            let outcome = flow.handle_key(k, ctx, self);
+            self.synth_send = flow;
+            return Ok(outcome);
         }
         let chord = KeyChord::from_key_event(k);
         let Some(cmd) = self.keymap.lookup(chord).cloned() else {
@@ -721,9 +554,7 @@ impl Tab for RecentTab {
             &self.entry_selected,
             self.last_error.as_deref(),
         );
-        if let Some(state) = self.synth_send.as_mut() {
-            render_synth_send(frame, area, state);
-        }
+        self.synth_send.render(frame, area);
     }
 }
 

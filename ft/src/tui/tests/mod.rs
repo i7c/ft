@@ -579,6 +579,7 @@ mod git;
 mod graph;
 mod history;
 mod notes;
+mod search;
 mod snapshot_lifecycle;
 mod synthesis;
 mod tasks;
@@ -598,7 +599,7 @@ fn default_layout_hides_adjacent_tabs() {
         "workflow tabs missing:\n{frame}"
     );
     assert!(
-        frame.contains("4 Recent") && frame.contains("5 Gather"),
+        frame.contains("4 Recent") && frame.contains("5 Search"),
         "workflow tabs missing:\n{frame}"
     );
     assert!(
@@ -624,7 +625,7 @@ fn tui_config_enables_adjacent_tabs() {
     let frame = render(&mut app, 90, 24);
     assert!(
         frame.contains("6 Tasks") && frame.contains("7 Ti"),
-        "enabled adjacent tabs must appear after Gather:\n{frame}"
+        "enabled adjacent tabs must appear after Search:\n{frame}"
     );
 }
 

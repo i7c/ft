@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests/mod.rs
-assertion_line: 577
 expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather                     
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search                     
 > node where path = ""; expand where edge.kind in {directory-contains, note-link
  1: node where path = "…                                                        
 ┌ node where path = "… ────────────────────────────────────────────────────────┐

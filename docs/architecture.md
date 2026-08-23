@@ -211,16 +211,26 @@ flags (`--sort`, `--limit`), not DSL clauses. See
 `docs/migrating-task-queries.md` for the predicate translation table
 from the removed standalone task DSL.
 
-### Synthesis (`pulse` + `gather` + `synth`)
+### Synthesis (`pulse` + `search` + `synth`)
 
 Synthesis is the "post-connecting" workflow for the
 quick-capture style note-taking the user-guide philosophy chapter
-describes: pulse recently-mentioned `[[wikilinks]]`, aggregate
+describes: pulse recently-mentioned `[[wikilinks]]`, search the
 cross-vault context for a chosen subset, and produce synth notes whose
 quoted excerpts are pinned to verifiable git provenance. It runs
 through three composable layers:
 
 ```rust
+// Engine 3: scan-derived paragraph search index + query DSL.
+// Substring default, `=word`, `~fuzzy`, `"phrase"`, `[[link]]`,
+// `-exclude`; AND by default, `--any` for OR; relevance or blame-date
+// sort. Sourcing engine for scaffold (the gather feed was deprecated
+// in its favor).
+pub struct ft_core::search::SearchIndex;
+pub fn ft_core::search::parse_query(input: &str, any: bool) -> SearchQuery;
+pub fn ft_core::search::search(index: &SearchIndex, query: &SearchQuery)
+    -> Vec<SearchResult>;
+
 // Engine 2: git log diff scan + paragraph-frequency dedup.
 pub fn ft_core::pulse::compute_pulse(
     graph: &Graph, vault: &Vault, repo: &Path,
@@ -289,58 +299,61 @@ callouts of a synth note (recycled material doesn't double-count on
 the next pulse) while still counting links the user wrote in their
 own prose between callouts.
 
-CLI surface lives in `ft/src/cmd/{pulse.rs, synth.rs}` (plus the
-read-only plumbing commands `ft notes quote` in `ft/src/cmd/quote.rs`,
-which emits the canonical callout for a file+range to stdout, and its
-inverse `ft notes export` in `ft/src/cmd/export.rs`, which renders a
-note as vault-stripped CommonMark or Slack mrkdwn (`--format`)) and the
-extended `ft/src/cmd/notes.rs::run_gather` (which now accepts repeated
-`--link "[[X]]"` flags in addition to the positional note argument).
+CLI surface lives in `ft/src/cmd/{pulse.rs, search.rs, synth.rs}`
+(plus the read-only plumbing commands `ft notes quote` in
+`ft/src/cmd/quote.rs`, which emits the canonical callout for a
+file+range to stdout, and its inverse `ft notes export` in
+`ft/src/cmd/export.rs`, which renders a note as vault-stripped
+CommonMark or Slack mrkdwn (`--format`)). `ft notes search` is the
+sourcing front-end: a scan-derived paragraph index, the query DSL
+(`search::query::parse`), and relevance / blame-date sorts; it feeds
+`ft notes synth scaffold --search "<query>"`, the Pulse handoff, and
+ghost promotion. The deprecated `ft notes gather` / `ft notes journal`
+remain hidden-but-functional during the transition.
+
 The TUI exposes the flow through the `Pulse` tab
 (`ft/src/tui/tabs/pulse.rs`) that hands selected links off to the
-Gather tab via `AppRequest::GatherForMulti` carrying a
-`MultiTargetRequest`. The Gather tab gained: multi-target rendering
-with a `matched: X, Y` badge when an entry's paragraph hits more than
-one selected target, an in-window-only toggle (`w`), entry multi-select
-(`Space`), and a `s` chord that opens an inline send-to-synth prompt
-running the plan/apply scaffold and triggering the editor handoff.
+`Search` tab (`ft/src/tui/tabs/search.rs`) via
+`AppRequest::SearchWithQuery` — the links become `[[…]]` clauses in
+any-mode. The Search tab's `/` input line re-queries the shared
+snapshot's index (`GraphSnapshot::search`) synchronously on every
+keystroke; `a` toggles all/any, `o` cycles relevance ↔ date, `Space`
+multi-selects, and `s`/`S` send the selection (or all results) to a
+synth note through the shared send-to-synth flow
+(`ft/src/tui/synth_send.rs`, also used by the Recent tab). The
+deprecated Gather tab is opt-in via `[tui] show_gather = true` until
+it is removed.
 
 Config: a new `[synth]` table with `folder` (default `"Synthesis/"`)
 and `exclude_prefixes` (default empty; users typically add their
-periodic-notes folder).
+periodic-notes folder) — `exclude_prefixes` applies to both pulse and
+search.
 
-### Accrete: grow, dedup-on-append, watermark, self-describing notes
+### Accrete: dedup-on-append
 
-`ft notes synth grow` (and the Gather tab's `n` chord) accrete missing
-gathered entries into an existing synth note. Two selection steps sit on
-top of the unchanged `build_gather` + `plan_synth_scaffold` machinery:
+`plan_synth_scaffold`'s append path is idempotent by construction; the
+former `grow` command (and its watermark / self-describing-targets
+frontmatter) were removed with the gather deprecation:
 
 - **Dedup-on-append invariant** (`ft_core::synth::accrete::filter_missing`):
   the planner's append path drops entries whose `(source_path, body)`
-  is already pinned in the note, so re-running scaffold/grow with the
-  same target is idempotent across CLI and TUI. The count is surfaced as
-  `SynthScaffoldPlan::dedup_skipped`. The body is the stable identity;
-  `commit_sha` is deliberately not part of the key (same body at a newer
-  commit = unchanged paragraph, no reason to re-pin).
-- **Last-synth watermark** (`accrete::last_synth_watermark`): the
-  topological tip among the note's pinned `commit_sha` values, paired
-  with its committer date — the scope for `--new-only`. Computed via one
-  `git rev-list` + one `git log` call; unreachable SHAs (shallow clone,
-  branch switch) are skipped, and an all-unreachable note degrades
-  `--new-only` to "all missing" with a warning.
+  is already pinned in the note, so re-running scaffold with the same
+  `--search` query is idempotent across CLI and TUI. The count is
+  surfaced as `SynthScaffoldPlan::dedup_skipped`. The body is the
+  stable identity; `commit_sha` is deliberately not part of the key
+  (same body at a newer commit = unchanged paragraph, no reason to
+  re-pin).
+- The last-synth watermark (`accrete::last_synth_watermark`) and the
+  self-describing `ft.synth.targets` frontmatter (helpers
+  `callout::parse_synth_targets` / `upsert_synth_frontmatter`) were
+  removed with `grow`. The helpers survive only as internals of the
+  deprecated Gather tab (its `n` new-only chord and `o` context mode
+  still use them) and die with the tab.
 
-A synth note MAY self-describe its gather target(s) in frontmatter via
-`ft.synth.targets: ["[[Foo]]", "[[Bar]]"]` (a YAML sequence; helpers
-`callout::parse_synth_targets` / `upsert_synth_frontmatter`). When
-`--link` is supplied, scaffold/grow write the key on create (or upsert
-when absent on append); when `--link`/`--from` are absent, `grow` reads
-targets from frontmatter — the "persisted gather note" UX. The key is
-optional and backward-compatible; verify/repair/reslice ignore it.
-
-CLI: `ft notes synth grow <note.md> [--link ...] [--new-only] [--limit N]
-[--since|--range [--in-window]] [--from path:line] [--no-edit]`.
-TUI: `n` (send-to-synth-new-only) on the Gather tab; `s` now dedups
-for free via the planner invariant.
+CLI: `ft notes synth scaffold <target.md> --search "<query>"
+[--any] [--sort relevance|date] [--from path:line] [--no-edit]`.
+TUI: `s`/`S` on the Search and Recent tabs ship results through the
+shared send-to-synth flow; the planner's dedup applies for free.
 
 ## Adding things
 
@@ -354,7 +367,7 @@ for free via the planner invariant.
 
 ### A new TUI tab
 
-The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent,
+The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent, Search,
 Gather — plus opt-in Tasks and Timeblocks tabs (config `[tui]`,
 default off). Pulse drives the link-pick → Gather handoff (see
 §"Synthesis"). Recent is the untargeted, time-shaped sibling of

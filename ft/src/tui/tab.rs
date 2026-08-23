@@ -37,10 +37,10 @@ pub enum GatherTarget {
 }
 
 /// Cross-tab request for the Journal tab to enter multi-target mode.
-/// Built by the Review tab when the user presses Enter on a selection
-/// of links; consumed by the Journal tab's `queue_gather_for_multi`
-/// hook and turned into a multi-source journal load on the next
-/// `on_focus`.
+/// Built by the Pulse tab's Enter handoff (before it was rewired to the
+/// Search tab); consumed by the Journal tab's `queue_gather_for_multi`
+/// hook. Retained for the deprecated Gather tab and removed with it.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiTargetRequest {
     pub targets: Vec<GatherTarget>,
@@ -53,7 +53,9 @@ pub struct MultiTargetRequest {
 /// cross-tab handoff. Kept here (rather than importing the core enum
 /// into `tab.rs` directly) to avoid pulling link-review types into the
 /// Tab trait surface; the Journal tab converts back to the core type
-/// when running the in-window filter.
+/// when running the in-window filter. Retained for the deprecated
+/// Gather tab and removed with it.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatherWindow {
     Since(chrono::Duration),
@@ -255,10 +257,18 @@ pub enum AppRequest {
     GatherFor {
         target: GatherTarget,
     },
+    /// Switch to the Search tab and set its query (in the given
+    /// any-mode), re-running the search. Raised by the Pulse tab's
+    /// Enter handoff: the selected links become `[[…]]` clauses.
+    SearchWithQuery {
+        query: String,
+        any: bool,
+    },
     /// Switch to the Journal tab and queue a multi-target request.
-    /// Raised by the Review tab on Enter; the Journal tab consumes
-    /// the request on its next `on_focus` and builds the multi-source
-    /// journal across all `targets`.
+    /// Formerly raised by the Pulse tab's Enter handoff (now rewired
+    /// to [`AppRequest::SearchWithQuery`]). Retained for the deprecated
+    /// Gather tab and removed with it.
+    #[allow(dead_code)]
     GatherForMulti {
         request: MultiTargetRequest,
     },
@@ -338,6 +348,11 @@ impl std::fmt::Debug for AppRequest {
             AppRequest::GatherFor { target } => {
                 f.debug_struct("GatherFor").field("target", target).finish()
             }
+            AppRequest::SearchWithQuery { query, any } => f
+                .debug_struct("SearchWithQuery")
+                .field("query", query)
+                .field("any", any)
+                .finish(),
             AppRequest::GatherForMulti { request } => f
                 .debug_struct("GatherForMulti")
                 .field("targets_count", &request.targets.len())
@@ -480,6 +495,7 @@ pub enum TabKind {
     Gather,
     Recent,
     Pulse,
+    Search,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to
@@ -563,6 +579,11 @@ pub trait Tab {
     /// tab's next `on_focus`. Default is a no-op: other tabs ignore
     /// the request.
     fn queue_gather_for(&mut self, _target: &GatherTarget) {}
+
+    /// Hook for the cross-tab Search handoff (see
+    /// [`AppRequest::SearchWithQuery`]). The Search tab overrides this
+    /// to install the query + any-mode and re-run; other tabs ignore it.
+    fn queue_search_query(&mut self, _query: String, _any: bool) {}
 
     /// Hook for the cross-tab multi-target Journal handoff (see
     /// [`AppRequest::GatherForMulti`]). The Journal tab overrides this

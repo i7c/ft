@@ -23,7 +23,6 @@ use ratatui::{
 };
 
 use ft_core::git::discover_repo;
-use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::pulse::{compute_pulse, Pulse, PulseRow, WindowRange};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
@@ -31,9 +30,7 @@ use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
-use crate::tui::tab::{
-    AppRequest, EventOutcome, GatherTarget, GatherWindow, MultiTargetRequest, Tab, TabCtx, TabKind,
-};
+use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind};
 use crate::tui::widgets::scroll_list::{render_scroll_list, ScrollListOpts};
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -223,38 +220,22 @@ impl PulseTab {
             v.sort_unstable();
             v
         };
-        // Need a graph to convert each row's target name to a
-        // GatherTarget (Note vs Ghost). Both tabs read the same shared
-        // snapshot, so names resolve consistently across the handoff.
-        let Some(snap) = ctx.snapshot.as_ref() else {
-            self.last_error =
-                Some("graph is still building — retry the handoff in a moment".to_string());
-            return;
-        };
-        let graph = &snap.graph;
-        let mut targets: Vec<GatherTarget> = Vec::new();
+        // Lower each row's target name to a `[[…]]` search clause. The
+        // Search tab matches link targets, so no graph round-trip is
+        // needed — ghosts and notes alike become link clauses. Any-mode
+        // mirrors the deprecated gather's multi-target OR semantics.
+        let mut clauses: Vec<String> = Vec::new();
         for idx in row_indices {
             let row = &self.rows[idx];
-            let target = if row.is_ghost {
-                GatherTarget::Ghost(row.target.clone())
-            } else if let Some(id) = note_id_by_title(graph, &row.target) {
-                let NodeKind::Note(n) = graph.node(id) else {
-                    continue;
-                };
-                GatherTarget::Note(n.path.clone())
-            } else {
-                continue;
-            };
-            targets.push(target);
+            clauses.push(format!("[[{}]]", row.target));
         }
-        if targets.is_empty() {
+        if clauses.is_empty() {
             return;
         }
-        let request = MultiTargetRequest {
-            targets,
-            window: Some(window_to_gather(&self.window)),
-        };
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherForMulti { request });
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::SearchWithQuery {
+            query: clauses.join(" "),
+            any: true,
+        });
     }
 
     /// Double the window (Since-style only).
@@ -276,27 +257,6 @@ impl PulseTab {
             self.window = WindowRange::Since(new);
             self.load(ctx);
         }
-    }
-}
-
-fn note_id_by_title(graph: &Graph, title: &str) -> Option<NoteId> {
-    for (id, node) in graph.nodes() {
-        if let NodeKind::Note(n) = node {
-            if n.title.eq_ignore_ascii_case(title) {
-                return Some(id);
-            }
-        }
-    }
-    None
-}
-
-fn window_to_gather(window: &WindowRange) -> GatherWindow {
-    match window {
-        WindowRange::Since(d) => GatherWindow::Since(*d),
-        WindowRange::Range { from, to } => GatherWindow::Range {
-            from: from.clone(),
-            to: to.clone(),
-        },
     }
 }
 

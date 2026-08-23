@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests/notes.rs
-assertion_line: 90
 expression: down
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
+  1 Graph ┌ help ────────────────────────────────────────────────────┐er  │  7 T
 > node whe│  Tab            Switch to the next tab                  ║│ note-link
  1: node w│  BackTab        Switch to the previous tab              █│          
 ┌ node whe│  1..9           Switch to the tab at the given 0-based i█│─────────┐

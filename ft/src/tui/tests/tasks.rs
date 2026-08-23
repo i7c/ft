@@ -60,7 +60,7 @@ fn tab_key_cycles_tabs() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test(vault);
     // Start on Tasks so Tab isn't intercepted by Graph's input mode.
-    app.switch_to(5)?;
+    app.switch_to(6)?;
     let tab_ev = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Timeblocks");
@@ -72,6 +72,8 @@ fn tab_key_cycles_tabs() -> Result<()> {
     assert_eq!(app.active_title(), "Pulse");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Recent");
+    app.dispatch(tab_ev.clone())?;
+    assert_eq!(app.active_title(), "Search");
     app.dispatch(tab_ev.clone())?;
     assert_eq!(app.active_title(), "Gather");
     app.dispatch(tab_ev)?;

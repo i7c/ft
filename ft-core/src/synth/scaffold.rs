@@ -169,7 +169,16 @@ pub fn find_dirty_sources(repo: &git::RepoMap, paths: &[PathBuf]) -> Result<Vec<
         .collect();
     let mut offending: Vec<PathBuf> = paths
         .iter()
-        .filter(|p| dirty.contains(repo.to_repo(p).as_path()))
+        .filter(|p| {
+            let repo_path = repo.to_repo(p);
+            // `git status --porcelain` collapses a fully-untracked
+            // directory to the directory path (`?? Synthesis/`), so a
+            // file under an untracked dir must match via ancestor
+            // prefix, not exact path equality.
+            dirty
+                .iter()
+                .any(|d| repo_path.starts_with(d) || d.starts_with(&repo_path))
+        })
         .cloned()
         .collect();
     offending.sort();
@@ -426,6 +435,36 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::SynthDirtySources(_)));
+    }
+
+    #[test]
+    fn scaffold_rejects_source_under_untracked_directory() {
+        // git collapses a fully-untracked directory to the directory
+        // path (`?? Synthesis/`); the file under it must still be
+        // flagged as dirty. Regression for the search flow, which
+        // scaffolds into a fresh directory on the first run.
+        let (tmp, vault, _entry) = make_repo_with_entry();
+        tmp.child("FreshDir/new.md")
+            .write_str("Fresh untracked paragraph.\n")
+            .unwrap();
+        let entry = SynthSource {
+            source_path: PathBuf::from("FreshDir/new.md"),
+            line_start: 1,
+            line_end: 1,
+            body: "Fresh untracked paragraph.".into(),
+        };
+        let err = plan_synth_scaffold(
+            &vault,
+            Path::new("Synthesis/topic.md"),
+            std::slice::from_ref(&entry),
+        )
+        .unwrap_err();
+        match err {
+            Error::SynthDirtySources(paths) => {
+                assert_eq!(paths, vec![PathBuf::from("FreshDir/new.md")]);
+            }
+            other => panic!("expected SynthDirtySources, got {other:?}"),
+        }
     }
 
     #[test]

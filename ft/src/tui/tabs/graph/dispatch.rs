@@ -772,7 +772,7 @@ impl GraphTab {
     /// refreshed, editor opened. The ghost node disappears on refresh
     /// because the note now exists.
     fn promote_ghost(&mut self, ctx: &mut TabCtx) {
-        let (ghost_id, raw) = {
+        let (_ghost_id, raw) = {
             let Some(graph) = Self::graph_of(&self.snapshot) else {
                 queue_toast(
                     ctx,
@@ -809,38 +809,32 @@ impl GraphTab {
             return;
         }
 
-        let Some(graph) = Self::graph_of(&self.snapshot) else {
+        let Some(snap) = self.snapshot.as_ref() else {
             return;
         };
-        let Some(scan) = self.snapshot.as_ref().map(|s| s.scan.clone()) else {
-            return;
-        };
-        let mut cache = ft_core::blame_cache::BlameCache::load(&ctx.vault.path).unwrap_or_default();
-        let report =
-            match ft_core::gather::build_gather(graph, &[ghost_id], ctx.vault, &mut cache, &scan) {
-                Ok(r) => r,
-                Err(e) => {
-                    queue_toast(
-                        ctx,
-                        &format!("promote: journal failed: {e}"),
-                        ToastStyle::Error,
-                    );
-                    return;
-                }
-            };
-        let _ = cache.save(&ctx.vault.path);
-        if report.entries.is_empty() {
+        // Every paragraph mentioning the ghost becomes a source via the
+        // shared search index (the search path replaced the gather feed).
+        let query = ft_core::search::parse_query(&format!("[[{raw}]]"), true);
+        let results = ft_core::search::search(&snap.search, &query);
+        if results.is_empty() {
             queue_toast(
                 ctx,
-                "promote: no mentioning paragraphs with git history found",
+                "promote: no mentioning paragraphs found",
                 ToastStyle::Error,
             );
             return;
         }
 
         let target = std::path::Path::new(&raw).with_extension("md");
-        let entries: Vec<ft_core::synth::source::SynthSource> =
-            report.entries.iter().map(Into::into).collect();
+        let entries: Vec<ft_core::synth::source::SynthSource> = results
+            .iter()
+            .map(|r| ft_core::synth::source::SynthSource {
+                source_path: r.path.clone(),
+                line_start: r.line_start,
+                line_end: r.line_end,
+                body: r.body.clone(),
+            })
+            .collect();
         let plan = match ft_core::synth::scaffold::plan_synth_scaffold(ctx.vault, &target, &entries)
         {
             Ok(p) => p,
@@ -865,15 +859,6 @@ impl GraphTab {
                 return;
             }
         };
-
-        // Record the promoted concept so `synth grow` and the Journal
-        // tab's context flow (`o`) know this note's targets.
-        let link = format!("[[{raw}]]");
-        if let Ok(content) = std::fs::read_to_string(&written) {
-            let new_content =
-                ft_core::synth::callout::upsert_synth_frontmatter(&content, Some(&[link]));
-            let _ = ft_core::fs::write_atomic(&written, &new_content);
-        }
 
         ctx.request_graph_refresh();
         queue_toast(

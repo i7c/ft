@@ -34,7 +34,7 @@ use crate::tui::{
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
         gather::GatherTab, graph::GraphTab, notes::NotesTab, pulse::PulseTab, recent::RecentTab,
-        tasks::TasksTab, timeblocks::TimeblocksTab,
+        search::SearchTab, tasks::TasksTab, timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
@@ -779,6 +779,12 @@ impl App {
                     self.switch_tab(idx)?;
                 }
             }
+            AppRequest::SearchWithQuery { query, any } => {
+                self.with_tab(TabKind::Search, |tab, _| tab.queue_search_query(query, any));
+                if let Some(idx) = self.tab_index(TabKind::Search) {
+                    self.switch_tab(idx)?;
+                }
+            }
             AppRequest::GatherForMulti { request } => {
                 self.with_tab(TabKind::Gather, |tab, _| {
                     tab.queue_gather_for_multi(&request)
@@ -1315,7 +1321,8 @@ fn build_tabs_with_overlays(
         keymap::KeymapOverlay,
         tabs::{
             gather::GATHER_KEYMAP, graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, pulse::PULSE_KEYMAP,
-            recent::RECENT_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+            recent::RECENT_KEYMAP, search::SEARCH_KEYMAP, tasks::TASKS_KEYMAP,
+            timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1358,6 +1365,7 @@ fn build_tabs_with_overlays(
     let gather_overlay = build_overlay("tab/gather", &GATHER_KEYMAP);
     let recent_overlay = build_overlay("tab/recent", &RECENT_KEYMAP);
     let pulse_overlay = build_overlay("tab/pulse", &PULSE_KEYMAP);
+    let search_overlay = build_overlay("tab/search", &SEARCH_KEYMAP);
 
     let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
         (
@@ -1419,16 +1427,23 @@ fn build_tabs_with_overlays(
     .collect();
 
     // Tab order reads the workflow: browse (Graph, Notes) → resurface
-    // in sweep-to-pull order (Pulse, Recent, Gather). The adjacent
-    // features (Tasks, Timeblocks) are opt-in via `[tui]` and append
-    // at the end; digits and cycling derive from the built list.
+    // in sweep-to-pull order (Pulse, Recent, Search). The deprecated
+    // Gather tab is opt-in via `[tui] show_gather` until it is removed.
+    // The adjacent features (Tasks, Timeblocks) are opt-in via `[tui]`
+    // and append at the end; digits and cycling derive from the built
+    // list.
     let mut tabs: Vec<Box<dyn Tab>> = vec![
         Box::new(GraphTab::new().with_keymap_overlay(&graph_overlay)),
         Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
         Box::new(PulseTab::new().with_keymap_overlay(&pulse_overlay)),
         Box::new(RecentTab::new().with_keymap_overlay(&recent_overlay)),
-        Box::new(GatherTab::new().with_keymap_overlay(&gather_overlay)),
+        Box::new(SearchTab::new().with_keymap_overlay(&search_overlay)),
     ];
+    if config.tui.show_gather {
+        tabs.push(Box::new(
+            GatherTab::new().with_keymap_overlay(&gather_overlay),
+        ));
+    }
     if config.tui.tasks_tab {
         tabs.push(Box::new(
             TasksTab::new().with_keymap_overlay(&tasks_overlay),
@@ -1615,10 +1630,13 @@ impl App {
     /// is itself a `TempDir` in tests, the log is cleaned up on drop.
     pub fn for_test(vault: Vault) -> Self {
         // Tests exercise the full layout; the production default hides
-        // the adjacent tabs (see `default_layout_hides_adjacent_tabs`).
+        // the adjacent tabs (see `default_layout_hides_adjacent_tabs`)
+        // and the deprecated Gather tab (restore via `[tui]
+        // show_gather = true`).
         let mut vault = vault;
         vault.config.config.tui.tasks_tab = true;
         vault.config.config.tui.timeblocks_tab = true;
+        vault.config.config.tui.show_gather = true;
         let recents = Self::test_recents_for(&vault);
         Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
     }

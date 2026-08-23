@@ -1,34 +1,38 @@
-//! `ft synth` — scaffold protected sections into a synth note from
-//! the multi-source journal, plus a `verify` sub-subcommand for
+//! `ft synth` — scaffold protected sections into a synth note from the
+//! paragraph search index, plus `verify`/`repair`/`reslice` for
 //! checking on-disk synth notes against their pinned sources.
 //!
-//! Scaffold flow (`ft synth <target.md> --link "[[Foo]]" ...`):
-//! 1. Resolve each `--link` to a graph target (note or ghost).
-//! 2. Build the multi-source journal for those targets.
-//! 3. Apply optional in-window filter when `--in-window` + a window
-//!    flag are present.
-//! 4. Optionally extend the entry set with `--from <path>:<line>`
-//!    paragraphs picked directly.
-//! 5. `plan_synth_scaffold` → `apply_synth_scaffold` → editor handoff
+//! Scaffold flow (`ft synth <target.md> --search "<query>" ...`):
+//! 1. Parse the query and search the scan-derived index (substring
+//!    default, `=word`, `~fuzzy`, `"phrase"`, `[[link]]`, `-exclude`;
+//!    AND by default, `--any` for OR).
+//! 2. Sort by relevance or blame date (`--sort date`).
+//! 3. Optionally extend the set with `--from <path>:<line>` paragraphs
+//!    picked directly.
+//! 4. `plan_synth_scaffold` → `apply_synth_scaffold` → editor handoff
 //!    (unless `--no-edit`).
 //!
-//! Verify flow (`ft synth verify [<note.md> | --all]`): walks the
-//! requested notes through [`ft_core::synth::verify::verify_synth_note`]
-//! / [`verify_all`] and prints per-section status. Exit code is 0
-//! when every section is `Ok`, else 1.
+//! The `--link` form is a deprecated transitional alias: it lowers to
+//! an any-mode search for the given links (no Related-alias
+//! resolution). Verify flow (`ft synth verify [<note.md> | --all]`):
+//! walks the requested notes through
+//! [`ft_core::synth::verify::verify_synth_note`] / [`verify_all`] and
+//! prints per-section status. Exit code is 0 when every section is
+//! `Ok`, else 1.
 
 use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcCommand, ExitCode};
 
+use crate::cmd::search::SortArg;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
 use ft_core::blame_cache::{paragraph_date, BlameCache};
-use ft_core::gather::{build_gather, GatherEntry};
-use ft_core::graph::{Graph, NodeKind, NoteId};
-use ft_core::pulse::{compute_pulse, WindowRange};
+use ft_core::gather::GatherEntry;
+use ft_core::graph::{Graph, NodeKind};
+use ft_core::search::{parse_query, search, search_with_dates, SearchIndex};
 use ft_core::synth::repair::{
     apply_synth_repair, plan_repair_all, plan_synth_repair, RepairAction, SynthRepairPlan,
 };
@@ -43,11 +47,6 @@ pub enum SynthCommand {
     /// it with `ft.synth.enabled: true` frontmatter if needed). Default action.
     #[command(name = "scaffold")]
     Scaffold(ScaffoldArgs),
-    /// Accrete missing journal entries into an existing synth note,
-    /// optionally scoped to entries newer than the note's last synth
-    /// watermark. See `ft notes synth grow --help`.
-    #[command(name = "grow")]
-    Grow(GrowArgs),
     /// Grow or shrink a protected section's line range, re-pinned at its
     /// existing commit.
     Reslice(ResliceArgs),
@@ -62,7 +61,6 @@ pub enum SynthCommand {
 pub fn run_command(command: SynthCommand, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match command {
         SynthCommand::Scaffold(a) => run_scaffold(a, vault_flag),
-        SynthCommand::Grow(a) => run_grow(a, vault_flag),
         SynthCommand::Reslice(a) => run_reslice(a, vault_flag),
         SynthCommand::Verify(a) => run_verify(a, vault_flag),
         SynthCommand::Repair(a) => run_repair(a, vault_flag),
@@ -78,83 +76,33 @@ pub struct ScaffoldArgs {
     #[arg(value_name = "TARGET.md")]
     pub target: PathBuf,
 
+    /// Search query sourcing every matching paragraph (see
+    /// `ft notes search`: substring, `=word`, `~fuzzy`, `"phrase"`,
+    /// `[[link]]`, `-exclude`; AND by default).
+    #[arg(long, value_name = "QUERY")]
+    pub search: Option<String>,
+
     /// A `[[wikilink]]` to source paragraphs from. Repeatable.
-    /// At least one of `--link` or `--from` is required.
+    /// DEPRECATED transitional form: lowers to an any-mode search for
+    /// the given links; prefer `--search`.
     #[arg(long, value_name = "LINK")]
     pub link: Vec<String>,
+
+    /// Any-mode: a paragraph matching ANY clause qualifies (default:
+    /// every clause must match). Implied for `--link`.
+    #[arg(long)]
+    pub any: bool,
+
+    /// Sort order for search-sourced sections: relevance (default) or
+    /// date (newest edit first).
+    #[arg(long, value_enum, default_value = "relevance")]
+    pub sort: SortArg,
 
     /// Explicit source paragraph: `<vault-relative-path>:<line>`.
     /// Repeatable. Identifies the paragraph whose `line_start` equals
-    /// `<line>` in the named file. Use with or instead of `--link`.
+    /// `<line>` in the named file. Use with or instead of `--search`.
     #[arg(long, value_name = "PATH:LINE")]
     pub from: Vec<String>,
-
-    /// Duration window for `--link` sourcing: `7d`, `24h`, `2w`, `1m`.
-    /// Mutually exclusive with `--range`. Only takes effect when
-    /// combined with `--in-window`; otherwise all-time mentions are
-    /// included.
-    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
-    pub since: Option<String>,
-
-    /// Commit range `X..Y` (two git refs). Mutually exclusive with
-    /// `--since`. Same semantics as `--since`.
-    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
-    pub range: Option<String>,
-
-    /// Restrict `--link`-sourced entries to paragraphs touched by the
-    /// window. Requires `--since` or `--range`.
-    #[arg(long)]
-    pub in_window: bool,
-
-    /// Skip launching `$EDITOR` after writing.
-    #[arg(long)]
-    pub no_edit: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct GrowArgs {
-    /// Target synth note (vault-relative). MUST already exist — use
-    /// `ft synth scaffold` to create one.
-    #[arg(value_name = "TARGET.md")]
-    pub target: PathBuf,
-
-    /// A `[[wikilink]]` to source paragraphs from. Repeatable. When
-    /// omitted (along with `--from`), targets are read from the note's
-    /// `ft.synth.targets` frontmatter.
-    #[arg(long, value_name = "LINK")]
-    pub link: Vec<String>,
-
-    /// Explicit source paragraph: `<vault-relative-path>:<line>`.
-    /// Repeatable.
-    #[arg(long, value_name = "PATH:LINE")]
-    pub from: Vec<String>,
-
-    /// Scope to entries whose `date` is newer than the note's last-synth
-    /// watermark (the newest pinned commit SHA among its callouts).
-    /// Falls back to "all missing" with a warning when the watermark
-    /// is unavailable (no callouts or all SHAs unreachable).
-    #[arg(long)]
-    pub new_only: bool,
-
-    /// Duration window: `7d`, `24h`, `2w`, `1m`. Mutually exclusive
-    /// with `--range`. Only takes effect when combined with `--in-window`.
-    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
-    pub since: Option<String>,
-
-    /// Commit range `X..Y`. Mutually exclusive with `--since`. Same
-    /// semantics as `--since`.
-    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
-    pub range: Option<String>,
-
-    /// Restrict `--link`-sourced entries to paragraphs touched by the
-    /// window. Requires `--since` or `--range`.
-    #[arg(long)]
-    pub in_window: bool,
-
-    /// Cap the number of appended sections to the newest `N` (after
-    /// dedup and, if active, the new-only filter).
-    #[arg(long, value_name = "N")]
-    pub limit: Option<usize>,
 
     /// Skip launching `$EDITOR` after writing.
     #[arg(long)]
@@ -162,13 +110,10 @@ pub struct GrowArgs {
 }
 
 fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    if args.link.is_empty() && args.from.is_empty() {
+    if args.search.is_none() && args.link.is_empty() && args.from.is_empty() {
         return Err(anyhow!(
-            "one of --link or --from is required (no entries to scaffold)"
+            "one of --search, --link, or --from is required (no entries to scaffold)"
         ));
-    }
-    if args.in_window && args.since.is_none() && args.range.is_none() {
-        return Err(anyhow!("--in-window requires --since or --range"));
     }
 
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
@@ -176,74 +121,74 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         anyhow!("vault is not inside a git repository — `ft synth` needs git history")
     })?;
     let scan = vault.scan();
-    let graph = crate::cmd::common::build_graph(&scan)?;
     let target = normalize_md_target(&args.target);
 
-    let mut entries: Vec<GatherEntry> = Vec::new();
+    let mut sources: Vec<ft_core::synth::source::SynthSource> = Vec::new();
 
-    // ── --link sourcing via multi-target journal ─────────────────────
-    if !args.link.is_empty() {
-        let targets: Vec<NoteId> = args
-            .link
-            .iter()
-            .filter_map(|s| resolve_link_to_id(&graph, s))
-            .collect();
-        if targets.is_empty() {
-            return Err(anyhow!(
-                "none of the --link values resolved to a note or ghost in the vault"
-            ));
-        }
-        let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_gather(&graph, &targets, &vault, &mut cache, &scan)
-            .context("building multi-source journal")?;
-        let _ = cache.save(&vault.path);
+    // ── --search / --link sourcing via the search index ─────────────
+    // `--link` lowers to an any-mode search over the given links
+    // (gather-parity: a paragraph mentioning any link qualifies).
+    let query_text = if let Some(q) = &args.search {
+        Some(q.clone())
+    } else if !args.link.is_empty() {
+        Some(
+            args.link
+                .iter()
+                .map(|l| to_link_clause(l))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    } else {
+        None
+    };
 
-        let filtered = if args.in_window {
-            let window = resolve_window(&args.since, &args.range)?
-                .expect("validated above: in_window implies since/range");
-            let cfg = vault.config.config.synth.clone();
-            let review = compute_pulse(&graph, &vault, &window, &cfg, &scan)
-                .context("computing in-window filter")?;
-            report
-                .entries
-                .into_iter()
-                .filter(|e| entry_overlaps_window(e, &review.added_lines))
-                .collect()
-        } else {
-            report.entries
+    if let Some(q) = query_text {
+        let any = args.any || !args.link.is_empty();
+        let query = parse_query(&q, any);
+        let exclude = vault.config.config.synth.exclude_prefixes.clone();
+        let index = SearchIndex::build(&scan, &exclude);
+        let results = match args.sort {
+            SortArg::Relevance => search(&index, &query),
+            SortArg::Date => {
+                let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
+                let results = search_with_dates(&index, &query, &vault, &mut cache)
+                    .context("searching with dates")?;
+                let _ = cache.save(&vault.path);
+                results
+            }
         };
-        entries.extend(filtered);
+        for r in results {
+            sources.push(ft_core::synth::source::SynthSource {
+                source_path: r.path,
+                line_start: r.line_start,
+                line_end: r.line_end,
+                body: r.body,
+            });
+        }
     }
 
     // ── --from sourcing (explicit paragraph picks) ───────────────────
-    for spec in &args.from {
-        let (path, line) = parse_from_spec(spec)?;
-        let entry = pick_paragraph(&graph, &vault, &path, line)?;
-        entries.push(entry);
+    if !args.from.is_empty() {
+        let graph = crate::cmd::common::build_graph(&scan)?;
+        for spec in &args.from {
+            let (path, line) = parse_from_spec(spec)?;
+            let entry = pick_paragraph(&graph, &vault, &path, line)?;
+            sources.push(ft_core::synth::source::SynthSource::from(&entry));
+        }
     }
 
-    if entries.is_empty() {
+    if sources.is_empty() {
         return Err(anyhow!(
-            "no entries to scaffold (multi-source journal was empty and no --from picks supplied)"
+            "no entries to scaffold (search returned nothing and no --from picks supplied)"
         ));
     }
 
-    // Dedup by (source_path, line_start) — same paragraph picked by
-    // multiple --link targets shouldn't double up in the scaffold.
-    entries = dedup_entries(entries);
+    // Dedup by (source_path, line_start) — the same paragraph picked by
+    // several clauses or by both search and --from shouldn't double up.
+    sources = dedup_sources(sources);
 
-    let sources: Vec<ft_core::synth::source::SynthSource> =
-        entries.iter().map(Into::into).collect();
     let plan = plan_synth_scaffold(&vault, &target, &sources).context("planning synth scaffold")?;
     let written = apply_synth_scaffold(&vault, &plan).context("writing synth scaffold")?;
-
-    // When --link was supplied, persist the targets into frontmatter
-    // (write on create; upsert when the key is absent on append). This
-    // makes the note self-describing so future `ft synth grow` runs need
-    // no --link.
-    if !args.link.is_empty() {
-        ensure_synth_targets(&written, &args.link)?;
-    }
 
     let rel = vault.relativize(&written).display().to_string();
     if plan.create {
@@ -265,218 +210,6 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
 
     Ok(ExitCode::SUCCESS)
 }
-
-/// Idempotently ensure the synth note at `absolute_path` carries an
-/// `ft.synth.targets` frontmatter key matching `links`. Writes only when
-/// the on-disk key differs (create, or absent on an existing note).
-/// Existing keys are replaced so a re-run with different `--link` values
-/// updates the record. Best-effort: a write failure is surfaced as an
-/// error but does not undo the scaffold write that already landed.
-fn ensure_synth_targets(absolute_path: &Path, links: &[String]) -> Result<()> {
-    let content = std::fs::read_to_string(absolute_path)
-        .with_context(|| format!("reading {} for target upsert", absolute_path.display()))?;
-    let new_content = ft_core::synth::callout::upsert_synth_frontmatter(&content, Some(links));
-    if new_content != content {
-        ft_core::fs::write_atomic(absolute_path, &new_content)
-            .with_context(|| format!("writing targets to {}", absolute_path.display()))?;
-    }
-    Ok(())
-}
-
-/// `ft synth grow` — accrete missing journal entries into an existing
-/// synth note. Mirrors `run_scaffold`'s sourcing (multi-source journal +
-/// `--from` picks + `--in-window` filter) but adds two selection steps
-/// on top of the planner's dedup-on-append:
-///
-/// - `--new-only`: compute the note's last-synth watermark and keep only
-///   entries whose `date` is strictly newer. Falls back to "all missing"
-///   with a warning when the watermark is unavailable.
-/// - `--limit N`: cap the appended sections to the newest N.
-///
-/// Targets come from `--link`/`--from`, or — when both are absent — from
-/// the note's `ft.synth.targets` frontmatter.
-fn run_grow(args: GrowArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    if args.in_window && args.since.is_none() && args.range.is_none() {
-        return Err(anyhow!("--in-window requires --since or --range"));
-    }
-
-    let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
-        anyhow!("vault is not inside a git repository — `ft synth grow` needs git history")
-    })?;
-    let target = normalize_md_target(&args.target);
-    let target_abs = vault.path.join(&target);
-    if !target_abs.exists() {
-        return Err(anyhow!(
-            "target note does not exist: {} — use `ft synth scaffold` to create it",
-            target.display()
-        ));
-    }
-    let scan = vault.scan();
-    let graph = crate::cmd::common::build_graph(&scan)?;
-
-    // Resolve targets: explicit --link / --from, else frontmatter.
-    let explicit_links = !args.link.is_empty();
-    let explicit_from = !args.from.is_empty();
-    if !explicit_links && !explicit_from {
-        // Read targets from the note's frontmatter.
-        let content = std::fs::read_to_string(&target_abs)
-            .with_context(|| format!("reading {} for targets", target.display()))?;
-        let fm_targets = ft_core::synth::callout::parse_synth_targets(&content).unwrap_or_default();
-        if fm_targets.is_empty() {
-            return Err(anyhow!(
-                "no targets: pass --link or add `ft.synth.targets` frontmatter to {}",
-                target.display()
-            ));
-        }
-        // Re-resolve frontmatter targets via the same path as --link.
-        return run_grow_with_targets(args, vault, graph, scan, target, fm_targets, false);
-    }
-
-    let links: Vec<String> = if explicit_links {
-        args.link.clone()
-    } else {
-        Vec::new()
-    };
-    run_grow_with_targets(args, vault, graph, scan, target, links, explicit_links)
-}
-
-/// Shared grow body: build the journal for `links` (if any), add `--from`
-/// picks, apply `--new-only` watermark + `--limit`, plan (dedup happens
-/// in the planner), apply, upsert frontmatter targets when `--link` was
-/// explicit, and hand off to the editor.
-#[allow(clippy::too_many_arguments)]
-fn run_grow_with_targets(
-    args: GrowArgs,
-    vault: Vault,
-    graph: Graph,
-    scan: ft_core::scan::Scan,
-    target: PathBuf,
-    links: Vec<String>,
-    links_were_explicit: bool,
-) -> Result<ExitCode> {
-    let mut entries: Vec<GatherEntry> = Vec::new();
-
-    if !links.is_empty() {
-        let targets: Vec<NoteId> = links
-            .iter()
-            .filter_map(|s| resolve_link_to_id(&graph, s))
-            .collect();
-        if targets.is_empty() {
-            return Err(anyhow!(
-                "none of the link values resolved to a note or ghost in the vault"
-            ));
-        }
-        let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-        let report = build_gather(&graph, &targets, &vault, &mut cache, &scan)
-            .context("building multi-source journal")?;
-        let _ = cache.save(&vault.path);
-
-        let filtered = if args.in_window {
-            let window = resolve_window(&args.since, &args.range)?
-                .expect("validated above: in_window implies since/range");
-            let cfg = vault.config.config.synth.clone();
-            let review = compute_pulse(&graph, &vault, &window, &cfg, &scan)
-                .context("computing in-window filter")?;
-            report
-                .entries
-                .into_iter()
-                .filter(|e| entry_overlaps_window(e, &review.added_lines))
-                .collect()
-        } else {
-            report.entries
-        };
-        entries.extend(filtered);
-    }
-
-    for spec in &args.from {
-        let (path, line) = parse_from_spec(spec)?;
-        let entry = pick_paragraph(&graph, &vault, &path, line)?;
-        entries.push(entry);
-    }
-
-    if entries.is_empty() {
-        return Err(anyhow!(
-            "no entries to grow (multi-source journal was empty and no --from picks supplied)"
-        ));
-    }
-
-    // Within-run dedup by (source_path, line_start).
-    entries = dedup_entries(entries);
-
-    // --new-only: scope to entries newer than the note's last-synth
-    // watermark. The watermark is derived from the note's existing
-    // callouts; None degrades to "all missing" with a warning.
-    if args.new_only {
-        let target_abs = vault.path.join(&target);
-        let content = std::fs::read_to_string(&target_abs)
-            .with_context(|| format!("reading {} for watermark", target.display()))?;
-        let callouts = ft_core::synth::callout::parse(&content);
-        let repo = ft_core::git::RepoMap::discover(&vault.path)?;
-        match ft_core::synth::accrete::last_synth_watermark(repo.root(), &callouts)? {
-            Some((_sha, watermark_date)) => {
-                let before = entries.len();
-                entries.retain(|e| e.date > watermark_date);
-                let dropped = before.saturating_sub(entries.len());
-                if dropped > 0 {
-                    eprintln!(
-                        "--new-only: dropped {dropped} entr{} at or before the last-synth watermark ({watermark_date})",
-                        if dropped == 1 { "y" } else { "ies" }
-                    );
-                }
-            }
-            None => {
-                eprintln!(
-                    "warning: --new-only could not determine a last-synth watermark \
-                     (no callouts or all pinned SHAs unreachable) — falling back to all missing"
-                );
-            }
-        }
-    }
-
-    // --limit: cap to the newest N (entries are already date-desc from
-    // dedup_entries' sort).
-    if let Some(limit) = args.limit {
-        if entries.len() > limit {
-            entries.truncate(limit);
-        }
-    }
-
-    if entries.is_empty() {
-        eprintln!("nothing to grow: all entries already pinned or filtered out");
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    let sources: Vec<ft_core::synth::source::SynthSource> =
-        entries.iter().map(Into::into).collect();
-    let plan = plan_synth_scaffold(&vault, &target, &sources).context("planning synth grow")?;
-    let written = apply_synth_scaffold(&vault, &plan).context("writing synth grow")?;
-
-    // Persist explicit --link targets into frontmatter (upsert when the
-    // key is absent). Frontmatter-derived targets are left untouched.
-    if links_were_explicit && !links.is_empty() {
-        ensure_synth_targets(&written, &links)?;
-    }
-
-    let rel = vault.relativize(&written).display().to_string();
-    if plan.dedup_skipped > 0 {
-        println!(
-            "appended {} section(s) to {} ({} already pinned, skipped)",
-            plan.sections.len(),
-            rel,
-            plan.dedup_skipped
-        );
-    } else {
-        println!("appended {} section(s) to {}", plan.sections.len(), rel);
-    }
-
-    if !args.no_edit {
-        open_editor(&written)?;
-    }
-
-    Ok(ExitCode::SUCCESS)
-}
-
 /// Append `.md` to a target if missing.
 fn normalize_md_target(p: &Path) -> PathBuf {
     if p.extension().and_then(|s| s.to_str()) == Some("md") {
@@ -488,64 +221,15 @@ fn normalize_md_target(p: &Path) -> PathBuf {
     }
 }
 
-/// Resolve a CLI link argument (`"[[Foo]]"`, `"Foo"`, or even a path
-/// stem) to a graph `NoteId` (or ghost). Returns `None` when nothing
-/// matches; the caller decides whether to error.
-fn resolve_link_to_id(graph: &Graph, raw: &str) -> Option<NoteId> {
-    let trimmed = raw
-        .trim()
-        .trim_start_matches("[[")
-        .trim_end_matches("]]")
-        .trim();
-    if trimmed.is_empty() {
-        return None;
+/// Lower a deprecated `--link` value (`"Foo"` or `"[[Foo]]"`) to a
+/// `[[…]]` search clause.
+fn to_link_clause(raw: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with("[[") && t.ends_with("]]") {
+        t.to_string()
+    } else {
+        format!("[[{t}]]")
     }
-    // 1. Existing note by title (case-insensitive title index).
-    for (id, node) in graph.nodes() {
-        if let NodeKind::Note(n) = node {
-            if n.title.eq_ignore_ascii_case(trimmed) {
-                return Some(id);
-            }
-        }
-    }
-    // 2. Existing ghost by raw.
-    if let Some(id) = graph.ghost_by_raw(trimmed) {
-        return Some(id);
-    }
-    None
-}
-
-fn resolve_window(since: &Option<String>, range: &Option<String>) -> Result<Option<WindowRange>> {
-    if let Some(s) = since {
-        let dur = WindowRange::parse_since(s)
-            .ok_or_else(|| anyhow!("invalid --since value `{s}` (try e.g. 7d, 24h, 2w, 1m)"))?;
-        return Ok(Some(WindowRange::Since(dur)));
-    }
-    if let Some(r) = range {
-        let (from, to) = r
-            .split_once("..")
-            .ok_or_else(|| anyhow!("invalid --range value `{r}` (expected `X..Y`)"))?;
-        if from.is_empty() || to.is_empty() {
-            return Err(anyhow!(
-                "invalid --range value `{r}` (both X and Y required)"
-            ));
-        }
-        return Ok(Some(WindowRange::Range {
-            from: from.to_string(),
-            to: to.to_string(),
-        }));
-    }
-    Ok(None)
-}
-
-fn entry_overlaps_window(
-    entry: &GatherEntry,
-    added_lines: &std::collections::HashMap<PathBuf, std::collections::BTreeSet<u32>>,
-) -> bool {
-    let Some(lines) = added_lines.get(&entry.source_path) else {
-        return false;
-    };
-    (entry.line_start..=entry.line_end).any(|ln| lines.contains(&ln))
 }
 
 /// Parse `<path>:<line>` into its parts. Rejects ambiguous forms (e.g.
@@ -616,15 +300,15 @@ fn today_naive() -> NaiveDate {
 
 /// Dedup journal entries by `(source_path, line_start)`. Sorts by date
 /// desc afterward to preserve "newest first" scaffold order.
-fn dedup_entries(mut entries: Vec<GatherEntry>) -> Vec<GatherEntry> {
+/// Dedup sources by `(source_path, line_start)`. Order is preserved:
+/// search results arrive pre-sorted (relevance or date), and `--from`
+/// picks append after them.
+fn dedup_sources(
+    mut sources: Vec<ft_core::synth::source::SynthSource>,
+) -> Vec<ft_core::synth::source::SynthSource> {
     let mut seen: HashSet<(PathBuf, u32)> = HashSet::new();
-    entries.retain(|e| seen.insert((e.source_path.clone(), e.line_start)));
-    entries.sort_by(|a, b| {
-        b.date
-            .cmp(&a.date)
-            .then_with(|| a.source_title.cmp(&b.source_title))
-    });
-    entries
+    sources.retain(|s| seen.insert((s.source_path.clone(), s.line_start)));
+    sources
 }
 
 fn open_editor(path: &Path) -> Result<()> {

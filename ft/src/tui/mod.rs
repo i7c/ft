@@ -11,6 +11,7 @@ mod modal_commands;
 mod notes_actions;
 mod palette;
 mod snapshot;
+mod synth_send;
 mod tab;
 mod tabs;
 #[cfg(test)]
@@ -53,6 +54,7 @@ pub mod registry {
             crate::tui::tabs::timeblocks::TIMEBLOCKS_COMMANDS,
             crate::tui::tabs::pulse::PULSE_COMMANDS,
             crate::tui::tabs::recent::RECENT_COMMANDS,
+            crate::tui::tabs::search::SEARCH_COMMANDS,
             crate::tui::tabs::gather::GATHER_COMMANDS,
         ];
         let modal_slices: &[&'static [CommandDef]] = &[

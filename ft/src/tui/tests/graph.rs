@@ -2381,8 +2381,8 @@ fn promote_ghost_creates_seeded_synth_note() -> Result<()> {
         "missing synth marker:\n{content}"
     );
     assert!(
-        content.contains("targets:") && content.contains("[[busy]]"),
-        "missing ft.synth.targets:\n{content}"
+        !content.contains("targets:"),
+        "self-describing targets frontmatter is removed:\n{content}"
     );
     assert_eq!(
         content.matches("[!ft-source]").count(),

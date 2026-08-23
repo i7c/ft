@@ -27,7 +27,7 @@ silently default.
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
 | `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes pulse`. |
-| `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (both default off).       |
+| `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks/Gather tabs (all default off). |
 | `[drift]`               | table                             | either        | Exclude patterns for the `ft notes drift` report.      |
 
 `default_vault` is only honored in the user config; setting it in a
@@ -294,7 +294,7 @@ strict = false       # default: false; true → TUI startup fails on any error
 
 # Per-scope overrides: chord string → command name.
 # Valid scopes: global, tab/graph, tab/tasks, tab/notes, tab/timeblocks,
-#               tab/gather, tab/recent, tab/pulse, modal/create, modal/append, modal/section-move,
+#               tab/gather, tab/recent, tab/pulse, tab/search, modal/create, modal/append, modal/section-move,
 #               modal/capture-var, modal/periodic-leader, modal/query-bar,
 #               modal/rename, modal/search, modal/preset-picker,
 #               modal/capture-picker, modal/related, modal/move
@@ -388,16 +388,18 @@ The query syntax is documented in [graph-query-dsl.md](graph-query-dsl.md)
 
 The Tasks and Timeblocks tabs are adjacent features — the vault
 workflow lives in the note-flow tabs (Graph, Notes, Pulse, Recent,
-Gather) — so they are opt-in and default to off:
+Search) — so they are opt-in and default to off. The deprecated Gather
+tab is also opt-in while it exists:
 
 ```toml
 [tui]
 tasks_tab = true        # default: false — show the Tasks tab
 timeblocks_tab = true   # default: false — show the Timeblocks tab
+show_gather = true      # default: false — show the deprecated Gather tab
 ```
 
-Enabled tabs append after Gather (order: Tasks, then Timeblocks); tab
-digits and `Tab`-cycling follow the built list. The headless CLI
+Enabled tabs append after Search (order: Gather, Tasks, Timeblocks,
+when enabled); tab digits and `Tab`-cycling follow the built list. The headless CLI
 (`ft tasks`, `ft timeblocks`) is unaffected by these toggles.
 
 ## `[drift]`
@@ -418,7 +420,7 @@ exclude = ["*.png", "*.pdf"]
 
 ## `[synth]`
 
-Settings for synthesis (`ft notes pulse`, `ft notes gather --link`,
+Settings for synthesis (`ft notes pulse`, `ft notes search`,
 `ft notes synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
 walkthrough.
 

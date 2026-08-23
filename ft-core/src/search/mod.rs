@@ -406,6 +406,16 @@ impl Vault {
     }
 }
 
+// ── Paragraph search (scan-derived) ──────────────────────────────────────────
+
+pub mod engine;
+pub mod index;
+pub mod query;
+
+pub use engine::{search, search_with_dates, SearchResult, Sort};
+pub use index::SearchIndex;
+pub use query::{parse as parse_query, Clause, Mode, SearchQuery};
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

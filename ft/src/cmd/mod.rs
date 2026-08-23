@@ -11,6 +11,7 @@ pub mod man;
 pub mod notes;
 pub mod pulse;
 pub mod quote;
+pub mod search;
 pub mod synth;
 pub mod tasks;
 pub mod timeblocks;

@@ -21,9 +21,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use anyhow::Result;
-use crossterm::event::KeyEvent;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, ListItem, Paragraph},
@@ -35,22 +34,18 @@ use ft_core::gather::{build_gather, GatherEntry};
 use ft_core::git::discover_repo;
 use ft_core::graph::{NodeKind, NoteId};
 use ft_core::pulse::compute_pulse;
-use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::{KeyChord, KeyMap};
-use crate::tui::notes_actions::create::enumerate_vault_folders;
 use crate::tui::palette;
+use crate::tui::synth_send::{SynthSendFlow, SynthSendHost};
 use crate::tui::tab::{
     AppRequest, AppendOrReplaceMode, EventOutcome, GatherTarget, GatherWindow, MultiTargetRequest,
     Tab, TabCtx, TabKind, ToastStyle,
 };
-use crate::tui::widgets::{
-    render_feed_split, EditBuffer, FuzzyPicker, PathListPickerSource, PickerOutcome,
-    VaultFilePickerSource,
-};
+use crate::tui::widgets::{render_feed_split, FuzzyPicker};
 
 // ── Commands ─────────────────────────────────────────────────────────
 
@@ -245,58 +240,6 @@ pub(crate) static GATHER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("S", "gather.send-to-synth-new")
 });
 
-/// Send-to-synth multi-step flow state. Active only when the user has
-/// pressed `s` (append-to-existing), `S` (create-new), or `n`
-/// (new-only append-to-existing); when `None` the tab handles keys
-/// normally.
-///
-/// Both `s` and `n` converge on `PickExisting`; the `new_only` flag
-/// distinguishes them — `n` filters `entries_to_send()` to entries
-/// newer than the picked note's last-synth watermark before planning.
-/// `S` flows through the folder + title prompts to a create.
-pub enum SynthSendState {
-    /// `s` / `n` — fuzzy picker over every `.md` in the vault. `new_only`
-    /// records which command opened this picker so the on-pick handler
-    /// knows whether to apply the watermark filter.
-    PickExisting {
-        picker: FuzzyPicker<VaultFilePickerSource>,
-        new_only: bool,
-    },
-    /// User picked a real note but its frontmatter lacks
-    /// `ft.synth.enabled: true`. Inline 3-way prompt: append anyway, mark and
-    /// append, or cancel. `new_only` is carried through so the `n` flow
-    /// still filters after the mark/append decision.
-    NonSynthPrompt {
-        path: PathBuf,
-        focus: NonSynthChoice,
-        new_only: bool,
-    },
-    /// `o` — fuzzy picker over the vault's synth notes. Picking one
-    /// loads its `ft.synth.targets` as the source set and installs it
-    /// as the badge context note.
-    PickContextNote(FuzzyPicker<PathListPickerSource>),
-    /// `S` — fuzzy picker over every vault folder. `.` selects the
-    /// vault root.
-    PickFolder(FuzzyPicker<PathListPickerSource>),
-    /// `S` step 2 — typed title prompt; folder is the picked folder.
-    /// The title's `.md` extension is added on submit if missing.
-    TitlePrompt {
-        folder: PathBuf,
-        buf: EditBuffer,
-        error: Option<String>,
-    },
-}
-
-/// User's choice when sending to an existing non-synth note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NonSynthChoice {
-    /// Append protected sections without touching frontmatter.
-    AppendAnyway,
-    /// Insert/upgrade frontmatter to include `ft.synth.enabled: true`, then
-    /// append.
-    MarkAndAppend,
-}
-
 pub struct GatherTab {
     /// The currently-loaded source set. Empty `Vec` = empty-state.
     /// Every rebuild reads from this slot; cross-tab queues (Review
@@ -353,7 +296,7 @@ pub struct GatherTab {
     /// Send-to-synth multi-step state. `Some` while the picker or
     /// prompt overlay owns the keyboard; cleared on completion or
     /// `Esc`.
-    synth_send: Option<SynthSendState>,
+    synth_send: SynthSendFlow,
     keymap: crate::tui::keymap::KeyMap,
 }
 
@@ -380,7 +323,7 @@ impl GatherTab {
             queued_add_sources: None,
             cache: None,
             last_error: None,
-            synth_send: None,
+            synth_send: SynthSendFlow::new(),
             keymap: GATHER_KEYMAP.clone(),
         }
     }
@@ -655,13 +598,140 @@ impl GatherTab {
             );
             return;
         }
-        let source = PathListPickerSource::new(notes);
-        self.synth_send = Some(SynthSendState::PickContextNote(FuzzyPicker::new(source)));
+        self.synth_send.open_context_note(ctx, notes);
     }
 
-    /// Context note picked: load its `ft.synth.targets` as the source
-    /// set and install it as the badge context.
-    fn on_context_note_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
+    /// Entries to ship to the scaffold: selected entries when any are
+    /// selected, otherwise the full feed.
+    fn entries_to_send(&self) -> Vec<GatherEntry> {
+        if self.entry_selected.is_empty() {
+            self.entries.clone()
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.entry_selected.contains(i))
+                .map(|(_, e)| e.clone())
+                .collect()
+        }
+    }
+
+    /// `s` — open the existing-note fuzzy picker (append, all entries).
+    fn open_send_to_existing(&mut self, ctx: &TabCtx) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.synth_send.open_existing(ctx, false);
+    }
+
+    /// `n` — open the existing-note fuzzy picker (append, only entries
+    /// newer than the picked note's last-synth watermark). The filter
+    /// is applied in [`SynthSendHost::synth_sources`] after the note is
+    /// picked.
+    fn open_send_to_new_only(&mut self, ctx: &TabCtx) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.synth_send.open_existing(ctx, true);
+    }
+
+    /// `S` — open the folder fuzzy picker for the create-new flow.
+    fn open_send_to_new(&mut self, ctx: &TabCtx) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.synth_send.open_new(ctx);
+    }
+
+    fn toggle_entry_selection(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        if !self.entry_selected.remove(&self.selected) {
+            self.entry_selected.insert(self.selected);
+        }
+    }
+
+    /// Host side of [`SynthSendHost::synth_sources`]: the feed entries
+    /// (selected, or the whole feed), honoring the deprecated new-only
+    /// watermark filter.
+    fn host_synth_sources(
+        &mut self,
+        ctx: &mut TabCtx,
+        target: &Path,
+        new_only: bool,
+    ) -> Vec<ft_core::synth::source::SynthSource> {
+        let mut entries = self.entries_to_send();
+        if new_only {
+            // Mirror of the removed `ft synth grow --new-only`: keep
+            // entries strictly newer than the target note's last-synth
+            // watermark; an unavailable watermark ships everything.
+            let abs = ctx.vault.path.join(target);
+            let content = match std::fs::read_to_string(&abs) {
+                Ok(c) => c,
+                Err(e) => {
+                    crate::tui::notes_actions::queue_toast(
+                        ctx,
+                        &format!("send-to-synth-new-only: could not read note: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return Vec::new();
+                }
+            };
+            let callouts = ft_core::synth::callout::parse(&content);
+            match ft_core::git::RepoMap::discover(&ctx.vault.path) {
+                Ok(repo) => {
+                    match ft_core::synth::accrete::last_synth_watermark(repo.root(), &callouts) {
+                        Ok(Some((_sha, watermark_date))) => {
+                            entries.retain(|e| e.date > watermark_date);
+                        }
+                        Ok(None) => {
+                            crate::tui::notes_actions::queue_toast(
+                                ctx,
+                                "new-only: no last-synth watermark — shipping all missing entries",
+                                ToastStyle::Info,
+                            );
+                        }
+                        Err(e) => {
+                            crate::tui::notes_actions::queue_toast(
+                                ctx,
+                                &format!("new-only watermark failed: {e}"),
+                                ToastStyle::Error,
+                            );
+                            return Vec::new();
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::tui::notes_actions::queue_toast(
+                        ctx,
+                        &format!("new-only: could not find git repo: {e}"),
+                        ToastStyle::Error,
+                    );
+                    return Vec::new();
+                }
+            }
+            if entries.is_empty() {
+                crate::tui::notes_actions::queue_toast(
+                    ctx,
+                    "new-only: no entries newer than the watermark",
+                    ToastStyle::Info,
+                );
+            }
+        }
+        entries.iter().map(Into::into).collect()
+    }
+
+    fn host_on_synth_committed(&mut self, target: &Path) {
+        // The sent-to note becomes the badge context: after the graph
+        // refresh lands, the shipped entries visibly flip to `in note`.
+        self.context_note = Some(target.to_path_buf());
+    }
+
+    /// Host side of [`SynthSendHost::on_context_note_picked`]: load the
+    /// note's `ft.synth.targets` as the source set and install it as the
+    /// badge context.
+    fn host_on_context_note_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
         let abs = ctx.vault.path.join(&path);
         let content = match std::fs::read_to_string(&abs) {
             Ok(c) => c,
@@ -721,387 +791,6 @@ impl GatherTab {
         self.rebuild_gather(ctx);
     }
 
-    fn toggle_entry_selection(&mut self) {
-        if self.entries.is_empty() {
-            return;
-        }
-        if !self.entry_selected.remove(&self.selected) {
-            self.entry_selected.insert(self.selected);
-        }
-    }
-
-    /// Drive the synth send-to flow per its current state. Returns
-    /// `Consumed` whenever a `synth_send` is active; the caller in
-    /// `handle_event` will exit early without further keymap lookup.
-    fn handle_synth_send_key(&mut self, k: KeyEvent, ctx: &mut TabCtx) -> EventOutcome {
-        use crossterm::event::KeyCode;
-        let Some(state) = self.synth_send.take() else {
-            return EventOutcome::NotHandled;
-        };
-        match state {
-            SynthSendState::PickExisting {
-                mut picker,
-                new_only,
-            } => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, hit.path, new_only),
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen => {
-                    self.synth_send = Some(SynthSendState::PickExisting { picker, new_only });
-                }
-                PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickExisting { picker, new_only });
-                }
-            },
-            SynthSendState::NonSynthPrompt {
-                path,
-                focus,
-                new_only,
-            } => match k.code {
-                KeyCode::Esc => {}
-                KeyCode::Enter => self.commit_non_synth_choice(ctx, &path, focus, new_only),
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    self.commit_non_synth_choice(
-                        ctx,
-                        &path,
-                        NonSynthChoice::AppendAnyway,
-                        new_only,
-                    );
-                }
-                KeyCode::Char('m') | KeyCode::Char('M') => {
-                    self.commit_non_synth_choice(
-                        ctx,
-                        &path,
-                        NonSynthChoice::MarkAndAppend,
-                        new_only,
-                    );
-                }
-                KeyCode::Char('c') | KeyCode::Char('C') => {}
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                    let next = match focus {
-                        NonSynthChoice::AppendAnyway => NonSynthChoice::MarkAndAppend,
-                        NonSynthChoice::MarkAndAppend => NonSynthChoice::AppendAnyway,
-                    };
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus: next,
-                        new_only,
-                    });
-                }
-                _ => {
-                    self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus,
-                        new_only,
-                    });
-                }
-            },
-            SynthSendState::PickContextNote(mut picker) => match picker.handle_key(k) {
-                PickerOutcome::Selected(path) => self.on_context_note_picked(ctx, path),
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickContextNote(picker));
-                }
-            },
-            SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
-                PickerOutcome::Selected(folder) => {
-                    let folder = if folder == Path::new(".") {
-                        PathBuf::new()
-                    } else {
-                        folder
-                    };
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf: EditBuffer::default(),
-                        error: None,
-                    });
-                }
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen => {
-                    self.synth_send = Some(SynthSendState::PickFolder(picker));
-                }
-                PickerOutcome::NotHandled => {
-                    self.synth_send = Some(SynthSendState::PickFolder(picker));
-                }
-            },
-            SynthSendState::TitlePrompt {
-                folder,
-                mut buf,
-                error: _,
-            } => match k.code {
-                KeyCode::Esc => {}
-                KeyCode::Enter => {
-                    let title = buf.text.trim().to_string();
-                    if title.is_empty() {
-                        self.synth_send = Some(SynthSendState::TitlePrompt {
-                            folder,
-                            buf,
-                            error: Some("title is required".into()),
-                        });
-                    } else {
-                        let filename = if title.ends_with(".md") {
-                            title
-                        } else {
-                            format!("{title}.md")
-                        };
-                        let target = if folder.as_os_str().is_empty() {
-                            PathBuf::from(&filename)
-                        } else {
-                            folder.join(&filename)
-                        };
-                        // Create-new: `apply_synth_scaffold` will write
-                        // frontmatter and content. No need to mark.
-                        self.commit_send(ctx, &target, false, false);
-                    }
-                }
-                // All text edits + cursor moves + readline chords go
-                // through the buffer's EDIT_KEYMAP. Any returned
-                // outcome (Consumed or NotHandled) re-parks the state.
-                _ => {
-                    let _ = buf.handle_event(k);
-                    self.synth_send = Some(SynthSendState::TitlePrompt {
-                        folder,
-                        buf,
-                        error: None,
-                    });
-                }
-            },
-        }
-        EventOutcome::Consumed
-    }
-
-    /// Existing note picked → check its frontmatter and either send
-    /// directly (synth-marked) or open the NonSynthPrompt. `new_only`
-    /// carries the `n`-command's watermark-filter intent through to
-    /// [`commit_send`].
-    fn on_existing_picked(&mut self, ctx: &mut TabCtx, path: PathBuf, new_only: bool) {
-        let abs = ctx.vault.path.join(&path);
-        let is_synth = std::fs::read_to_string(&abs)
-            .map(|c| ft_core::synth::callout::is_synth_note(&c))
-            .unwrap_or(false);
-        if is_synth {
-            self.commit_send(ctx, &path, false, new_only);
-        } else {
-            self.synth_send = Some(SynthSendState::NonSynthPrompt {
-                path,
-                focus: NonSynthChoice::MarkAndAppend,
-                new_only,
-            });
-        }
-    }
-
-    fn commit_non_synth_choice(
-        &mut self,
-        ctx: &mut TabCtx,
-        path: &Path,
-        choice: NonSynthChoice,
-        new_only: bool,
-    ) {
-        let mark = matches!(choice, NonSynthChoice::MarkAndAppend);
-        self.commit_send(ctx, path, mark, new_only);
-    }
-
-    /// `s` — open the existing-note fuzzy picker (append, all entries).
-    fn open_send_to_existing(&mut self, ctx: &TabCtx) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let source = VaultFilePickerSource::with_scan(
-            Arc::clone(ctx.vault),
-            Arc::clone(ctx.recents),
-            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
-        );
-        self.synth_send = Some(SynthSendState::PickExisting {
-            picker: FuzzyPicker::new(source),
-            new_only: false,
-        });
-    }
-
-    /// `n` — open the existing-note fuzzy picker (append, only entries
-    /// newer than the picked note's last-synth watermark). The filter
-    /// is applied in [`commit_send`] after the note is picked.
-    fn open_send_to_new_only(&mut self, ctx: &TabCtx) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let source = VaultFilePickerSource::with_scan(
-            Arc::clone(ctx.vault),
-            Arc::clone(ctx.recents),
-            ctx.snapshot.as_ref().map(|s| Arc::clone(&s.scan)),
-        );
-        self.synth_send = Some(SynthSendState::PickExisting {
-            picker: FuzzyPicker::new(source),
-            new_only: true,
-        });
-    }
-
-    /// `S` — open the folder fuzzy picker for the create-new flow.
-    fn open_send_to_new(&mut self, ctx: &TabCtx) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let folders = enumerate_vault_folders(ctx.vault);
-        let source = PathListPickerSource::new(folders);
-        self.synth_send = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
-    }
-
-    /// Entries to ship to the scaffold: selected entries when any are
-    /// selected, otherwise the full feed.
-    fn entries_to_send(&self) -> Vec<GatherEntry> {
-        if self.entry_selected.is_empty() {
-            self.entries.clone()
-        } else {
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| self.entry_selected.contains(i))
-                .map(|(_, e)| e.clone())
-                .collect()
-        }
-    }
-
-    /// Perform the actual scaffold + handoff. `vault_rel_path` is the
-    /// vault-relative target; `mark_synth` ensures the on-disk file's
-    /// frontmatter includes `ft.synth.enabled: true` before the scaffold is
-    /// applied (no-op when the file already has the marker or is being
-    /// created — `apply_synth_scaffold` writes the marker fresh). When
-    /// `new_only` is set, entries whose `date` is at or before the note's
-    /// last-synth watermark are dropped before planning (mirrors `ft synth
-    /// grow --new-only`); the watermark is derived from the note's
-    /// existing callouts, and an unavailable watermark falls back to
-    /// shipping all missing entries with an informational toast.
-    fn commit_send(
-        &mut self,
-        ctx: &mut TabCtx,
-        vault_rel_path: &Path,
-        mark_synth: bool,
-        new_only: bool,
-    ) {
-        let mut entries = self.entries_to_send();
-        if entries.is_empty() {
-            crate::tui::notes_actions::queue_toast(
-                ctx,
-                "send-to-synth: no entries to send",
-                ToastStyle::Error,
-            );
-            return;
-        }
-
-        if mark_synth {
-            if let Err(e) = mark_note_as_synth(&ctx.vault.path.join(vault_rel_path)) {
-                crate::tui::notes_actions::queue_toast(
-                    ctx,
-                    &format!("could not add ft.synth marker: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
-        }
-
-        // `n` (new-only): filter to entries newer than the note's
-        // last-synth watermark before planning. The planner's
-        // dedup-on-append runs after this, so the two filters compose.
-        if new_only {
-            let abs = ctx.vault.path.join(vault_rel_path);
-            let content = match std::fs::read_to_string(&abs) {
-                Ok(c) => c,
-                Err(e) => {
-                    crate::tui::notes_actions::queue_toast(
-                        ctx,
-                        &format!("send-to-synth-new-only: could not read note: {e}"),
-                        ToastStyle::Error,
-                    );
-                    return;
-                }
-            };
-            let callouts = ft_core::synth::callout::parse(&content);
-            match ft_core::git::RepoMap::discover(&ctx.vault.path) {
-                Ok(repo) => {
-                    match ft_core::synth::accrete::last_synth_watermark(repo.root(), &callouts) {
-                        Ok(Some((_sha, watermark_date))) => {
-                            entries.retain(|e| e.date > watermark_date);
-                        }
-                        Ok(None) => {
-                            crate::tui::notes_actions::queue_toast(
-                                ctx,
-                                "new-only: no last-synth watermark — shipping all missing entries",
-                                ToastStyle::Info,
-                            );
-                        }
-                        Err(e) => {
-                            crate::tui::notes_actions::queue_toast(
-                                ctx,
-                                &format!("new-only watermark failed: {e}"),
-                                ToastStyle::Error,
-                            );
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    crate::tui::notes_actions::queue_toast(
-                        ctx,
-                        &format!("new-only: could not find git repo: {e}"),
-                        ToastStyle::Error,
-                    );
-                    return;
-                }
-            }
-            if entries.is_empty() {
-                crate::tui::notes_actions::queue_toast(
-                    ctx,
-                    "new-only: no entries newer than the watermark",
-                    ToastStyle::Info,
-                );
-                return;
-            }
-        }
-
-        let entries: Vec<ft_core::synth::source::SynthSource> =
-            entries.iter().map(Into::into).collect();
-        let plan = match plan_synth_scaffold(ctx.vault, vault_rel_path, &entries) {
-            Ok(p) => p,
-            Err(e) => {
-                crate::tui::notes_actions::queue_toast(
-                    ctx,
-                    &format!("synth plan failed: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
-        };
-        let written = match apply_synth_scaffold(ctx.vault, &plan) {
-            Ok(p) => p,
-            Err(e) => {
-                crate::tui::notes_actions::queue_toast(
-                    ctx,
-                    &format!("synth write failed: {e}"),
-                    ToastStyle::Error,
-                );
-                return;
-            }
-        };
-        crate::tui::notes_actions::queue_toast(
-            ctx,
-            &format!(
-                "{} {} synth section(s) to {}",
-                if plan.create { "created" } else { "appended" },
-                plan.sections.len(),
-                vault_rel_path.display()
-            ),
-            ToastStyle::Success,
-        );
-        // The sent-to note becomes the badge context: after the graph
-        // refresh lands, the shipped entries visibly flip to `in note`.
-        self.context_note = Some(vault_rel_path.to_path_buf());
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor {
-            path: written,
-            line: 1,
-        });
-    }
-
-    /// Open the Sources Manager modal pre-landed on its add-source
-    /// picker. Reads the shared snapshot so ghost rows reflect the
-    /// latest installed vault state.
     fn open_sources_manager(&mut self, ctx: &TabCtx) {
         let Some(snap) = ctx.snapshot.clone() else {
             crate::tui::notes_actions::queue_toast(
@@ -1157,6 +846,25 @@ impl GatherTab {
             path: abs,
             line: entry.line_start as usize,
         });
+    }
+}
+
+impl SynthSendHost for GatherTab {
+    fn synth_sources(
+        &mut self,
+        ctx: &mut TabCtx,
+        target: &Path,
+        new_only: bool,
+    ) -> Vec<ft_core::synth::source::SynthSource> {
+        self.host_synth_sources(ctx, target, new_only)
+    }
+
+    fn on_synth_committed(&mut self, _ctx: &mut TabCtx, target: &Path) {
+        self.host_on_synth_committed(target);
+    }
+
+    fn on_context_note_picked(&mut self, ctx: &mut TabCtx, path: PathBuf) {
+        self.host_on_context_note_picked(ctx, path);
     }
 }
 
@@ -1337,8 +1045,13 @@ impl Tab for GatherTab {
         // keys before the keymap is consulted. (Source manager is on
         // the App's `ActiveModal` slot — the App's modal-driver
         // intercepts those keys before they reach this method.)
-        if self.synth_send.is_some() {
-            return Ok(self.handle_synth_send_key(k, ctx));
+        if self.synth_send.is_active() {
+            // Take the flow out of `self` so the host borrow (`self`) is
+            // disjoint from the flow's mutable borrow.
+            let mut flow = std::mem::take(&mut self.synth_send);
+            let outcome = flow.handle_key(k, ctx, self);
+            self.synth_send = flow;
+            return Ok(outcome);
         }
 
         let chord = KeyChord::from_key_event(k);
@@ -1368,9 +1081,7 @@ impl Tab for GatherTab {
             self.last_error.as_deref(),
         );
 
-        if let Some(state) = self.synth_send.as_mut() {
-            render_synth_send(frame, area, state);
-        }
+        self.synth_send.render(frame, area);
     }
 
     fn help_sections(&self) -> Vec<HelpSection> {
@@ -1719,17 +1430,21 @@ fn render_gather(
     );
 
     if sources.is_empty() {
-        // Empty-state body: just the error banner if any (the strip
-        // already says "no sources loaded — press / …").
+        // Empty-state body: a deprecation note (the tab is opt-in via
+        // `[tui] show_gather` until it is removed) plus the error
+        // banner if any; the strip already says "no sources loaded —
+        // press / …".
+        let mut lines = vec![Line::from(Span::styled(
+            "Gather is deprecated — the Search tab (Tab) replaces it",
+            Style::default().fg(palette::DIM),
+        ))];
         if let Some(err) = last_error {
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!("error: {err}"),
-                    Style::default().fg(palette::ERROR),
-                ))),
-                body_area,
-            );
+            lines.push(Line::from(Span::styled(
+                format!("error: {err}"),
+                Style::default().fg(palette::ERROR),
+            )));
         }
+        frame.render_widget(Paragraph::new(lines), body_area);
         return;
     }
 
@@ -2062,134 +1777,6 @@ fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
         .chunks(width)
         .map(|c| c.iter().collect::<String>())
         .collect()
-}
-
-/// Insert `ft.synth.enabled: true` into the YAML frontmatter of the file at
-/// `absolute_path`. Delegates to [`ft_core::synth::callout::upsert_synth_frontmatter`]
-/// (the core pure transform) so the marker and the `ft.synth.targets` key
-/// compose without clobbering each other. This thin wrapper handles the
-/// I/O (read + atomic write).
-pub(crate) fn mark_note_as_synth(absolute_path: &Path) -> std::io::Result<()> {
-    let content = std::fs::read_to_string(absolute_path)?;
-    let new_content = ft_core::synth::callout::upsert_synth_frontmatter(&content, None);
-    if new_content == content {
-        return Ok(());
-    }
-    ft_core::fs::write_atomic(absolute_path, &new_content).map_err(std::io::Error::other)
-}
-
-// `upsert_ft_synth_marker` (the pure marker-only transform) has moved
-// to `ft_core::synth::callout::upsert_synth_frontmatter`, which also
-// handles the optional `ft.synth.targets` key. The TUI layer no longer
-// keeps its own copy; callers use the core helper directly.
-//
-// The three unit tests below (`upsert_ft_synth_marker_*`) now exercise
-// the core helper to keep coverage of the TUI-layer behavior it backs.
-
-/// Render whichever step of the send-to-synth flow is active.
-pub(crate) fn render_synth_send(frame: &mut Frame, area: Rect, state: &mut SynthSendState) {
-    match state {
-        SynthSendState::PickExisting { picker, .. } => {
-            let popup = centered_rect(70, 70, area);
-            frame.render_widget(Clear, popup);
-            picker.render(frame, popup);
-        }
-        SynthSendState::PickContextNote(picker) | SynthSendState::PickFolder(picker) => {
-            let popup = centered_rect(70, 70, area);
-            frame.render_widget(Clear, popup);
-            picker.render(frame, popup);
-        }
-        SynthSendState::NonSynthPrompt { path, focus, .. } => {
-            let height = 5.min(area.height);
-            let y = area.y + area.height.saturating_sub(height);
-            let prompt_area = Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height,
-            };
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" This isn't a synth note ")
-                .style(Style::default().fg(palette::PRIMARY));
-            let inner = block.inner(prompt_area);
-            frame.render_widget(Clear, prompt_area);
-            frame.render_widget(block, prompt_area);
-            let header = format!("{}", path.display());
-            let (a_style, m_style) = match focus {
-                NonSynthChoice::AppendAnyway => (
-                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
-                    Style::default().fg(palette::DIM),
-                ),
-                NonSynthChoice::MarkAndAppend => (
-                    Style::default().fg(palette::DIM),
-                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
-                ),
-            };
-            let lines = vec![
-                Line::from(Span::styled(header, Style::default().fg(palette::DIM))),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled(" [a] append anyway ", a_style),
-                    Span::raw("  "),
-                    Span::styled(" [m] mark and append ", m_style),
-                    Span::raw("    [c] cancel"),
-                ]),
-            ];
-            frame.render_widget(Paragraph::new(lines), inner);
-        }
-        SynthSendState::TitlePrompt { folder, buf, error } => {
-            let height = 4.min(area.height);
-            let y = area.y + area.height.saturating_sub(height);
-            let prompt_area = Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height,
-            };
-            let folder_disp = if folder.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                folder.display().to_string()
-            };
-            let title =
-                format!(" New synth note in {folder_disp}/ — Enter to create, Esc to cancel ");
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .style(Style::default().fg(palette::PRIMARY));
-            let inner = block.inner(prompt_area);
-            frame.render_widget(Clear, prompt_area);
-            frame.render_widget(block, prompt_area);
-            let mut lines = vec![Line::from(format!("Title: {}_", buf.text))];
-            if let Some(err) = error {
-                lines.push(Line::from(Span::styled(
-                    format!("error: {err}"),
-                    Style::default().fg(palette::ERROR),
-                )));
-            }
-            frame.render_widget(Paragraph::new(lines), inner);
-        }
-    }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]

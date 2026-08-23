@@ -40,9 +40,8 @@ box.
 they're about, the unsorted pile stays retrievable. Two directions:
 
 - *Pull* — you need everything on a topic, now, maybe minutes before a
-  meeting: `ft notes gather --link "[[topic]]"` gathers every
-  paragraph in the vault that mentions it, newest first, dated from
-  git history.
+  meeting: `ft notes search "[[topic]]"` returns every matching
+  paragraph, ranked by relevance (or `--sort date` for newest first).
 - *Sweep* — you want to know what accumulated: `ft notes pulse` ranks the
   concepts most mentioned in a recent window, and `ft notes recent`
   feeds back every paragraph you touched in it.
@@ -69,27 +68,20 @@ $ ft notes pulse --since 7d        # sweep: what's been on my mind?
 (2) [[analytics migration]]
 (1) [[activation]]?
 
-$ ft notes gather --link "[[onboarding]]" --link "[[analytics migration]]"
-2026-06-13  2026-06-13
-matched: onboarding, analytics migration
-──────────────────────
+$ ft notes search "[[onboarding]] [[analytics migration]] --any"
+notes/standup-2026-06-13.md L12-14  [[onboarding]] [[analytics migration]]
 More [[onboarding]] questions in standup — nobody can say what
 "done" means for the [[analytics migration]].
-
-2026-06-12  2026-06-12
-matched: onboarding, analytics migration
-──────────────────────
+notes/standup-2026-06-12.md L9-11   [[onboarding]] [[analytics migration]]
 Talked to Priya — the new [[onboarding]] flow doubles as a dogfood
 path for the [[analytics migration]] since every signup event now
 flows through the new pipeline.
-
-2026-06-09  marketing
-─────────────────────
+notes/marketing.md L4-4             [[onboarding]]
 The [[onboarding]] metrics she keeps asking for are really a proxy
 for activation, not setup completion.
 
 $ ft notes synth scaffold Synthesis/onboarding-and-analytics.md \
-    --link "[[onboarding]]" --link "[[analytics migration]]"
+    --search "[[onboarding]] [[analytics migration]] --any"
 created Synthesis/onboarding-and-analytics.md with 3 section(s)
 ```
 
@@ -139,9 +131,9 @@ Where `ft` departs from Obsidian is that **the graph is a tool, not a
 visualization.** In Obsidian the graph is mostly something you look
 at; in `ft` you work on it — the interconnections between notes (and
 between paragraphs inside notes) are the substrate the operations run
-over. The gather feed above is a graph walk across every paragraph that
-mentions a concept; backlinks surface every reference including
-ghosts; the query DSL walks the graph ad hoc.
+over. The search feed above is a scan-derived paragraph index that
+surfaces every paragraph mentioning a concept; backlinks surface every
+reference including ghosts; the query DSL walks the graph ad hoc.
 
 What `ft` is **not**:
 
@@ -230,11 +222,11 @@ ft tasks list today
 ft tui
 ```
 
-One thing to know up front: the resurfacing commands (`gather`,
-`recent`, `pulse`) date paragraphs from `git blame`, so the vault
-should be a git repository and committed to regularly — `ft git sync`
-does commit + pull + push in one shot. Commit cadence is the temporal
-resolution of your history.
+One thing to know up front: the resurfacing commands (`recent`,
+`pulse`, and `search --sort date`) date paragraphs from `git blame`, so
+the vault should be a git repository and committed to regularly —
+`ft git sync` does commit + pull + push in one shot. Commit cadence is
+the temporal resolution of your history.
 
 ## User guide
 
@@ -252,7 +244,7 @@ feature, common workflows, and the design philosophy:
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |
-| [synthesis.md](docs/guide/synthesis.md)                  | Pulse → multi-source gather → synth notes.                  |
+| [synthesis.md](docs/guide/synthesis.md)                  | Pulse → search → synth notes.                              |
 | [tui.md](docs/guide/tui.md)                              | The TUI tour and the command/keymap model.                  |
 | [git-sync.md](docs/guide/git-sync.md)                    | One-shot commit + pull + push.                              |
 | [scripting.md](docs/guide/scripting.md)                  | Pipelines, exit codes, `--json-errors`, `ft do`.            |
@@ -289,7 +281,7 @@ depth.
   exhaustive reference for append-with-template and quick capture
 - [docs/architecture.md](docs/architecture.md) (synthesis section) —
   internals of the consolidation flow (`ft notes pulse`, `ft notes
-  gather --link`, `ft notes recent`, `ft notes synth scaffold` / `verify`),
+  search`, `ft notes recent`, `ft notes synth scaffold` / `verify`),
   the `[!ft-source]` callout grammar used in synth notes, and the
   `[synth]` config table; `ft notes quote` (the read-only plumbing
   command behind the same pinning mechanics) is documented in

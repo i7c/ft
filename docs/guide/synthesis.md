@@ -8,9 +8,9 @@ with the thoughts, so nothing rots while you wait. The steps:
 
 1. **Pulse** — see which `[[wikilinks]]` have been on your mind
    recently (`ft notes pulse`, or the Pulse tab).
-2. **Aggregate** — pull every paragraph mentioning a chosen subset of
-   those links into one gathered feed (`ft notes gather --link …`, or
-   the Gather tab in multi-target mode).
+2. **Aggregate** — pull every paragraph matching a chosen subset of
+   those links into one search feed (`ft notes search "[[a]] [[b]]"`,
+   or the Search tab).
 3. **Synthesize** — turn that feed into a new note (or append to an
    existing one) with verifiable excerpts pinned to the git commits
    they came from.
@@ -78,77 +78,52 @@ notes folder, since daily notes mention the same recurring topics:
 exclude_prefixes = ["journal/"]
 ```
 
-## Step 2: the multi-source gather
+## Step 2: the search feed
 
-Once you know which links you want to revisit, `ft notes gather`
-takes a `--link` flag (repeatable) and merges paragraphs across the
-vault:
-
-```sh
-ft notes gather --link "[[Eigen-decomposition]]" --link "[[Memoization]]"
-```
-
-Output is reverse-chronological by `git blame` date. A paragraph that
-matched more than one of your selected links shows a
-`matched: Eigen-decomposition, Memoization` indicator after the date —
-co-occurrence is exactly the signal you're looking for when
-synthesizing.
-
-`--json` gives the same data structured for scripts: each entry has
-`date`, `source_title`, `source_path`, `section`, and a `matched`
-array.
-
-To restrict the feed to paragraphs that were *touched* in the window
-(rather than every all-time mention), add `--in-window`:
+Once you know which links you want to revisit, search the whole vault
+for the material. `ft notes search` queries every paragraph with a fast
+scan-derived index — no graph walk, no git needed (except for
+`--sort date`):
 
 ```sh
-ft notes gather --link "[[Foo]]" --since 7d --in-window
+ft notes search "[[Eigen-decomposition]] [[Memoization]] --any"
 ```
 
-By default the all-time feed is what you want — synthesis is about
-connecting recent thoughts to older ones. The in-window flag is for
-when you specifically want "what was written this week."
-
-The TUI Gather tab gains the same `--link`-style multi-target mode
-when you hand off from the Pulse tab (more below).
-
-### Knowing what's already synthesized
-
-Both feeds (`ft notes gather` and `ft notes recent`) badge entries
-with their **citation state**, so a session is incremental instead of
-re-triaging the same paragraphs forever:
-
-- `cited: <note>` — the paragraph is pinned byte-identically in that
-  synth note's `[!ft-source]` callouts. The matching rule is exactly
-  the scaffold's append-dedup, so a `cited` entry is precisely one
-  that `scaffold`/`grow` would skip.
-- `cited*: <note>` — a callout pins the same source lines but the
-  paragraph text has changed since: it was edited *after* being
-  cited. The new form hasn't been synthesized.
-- no badge — never cited anywhere.
-
-`--uncited` filters the feed to what still needs attention (the
-no-badge and `cited*` entries):
+The query DSL: a plain term is a case-insensitive **substring** (so
+`eigen` matches *eigenvalue*); `=term` is a whole **word**; `~term` is
+**fuzzy** (levenshtein — `~memoizaton` finds *memoization*);
+`"a b"` is a **phrase**; `[[Link]]` matches paragraphs that link that
+target (spaces allowed inside the brackets); `-term` **excludes**.
+Space-separated terms **AND** by default — every term must appear in
+the *same paragraph*, which is the cross-reference query (eigen AND
+memoization in one paragraph = co-occurrence). Add `--any` to OR
+them instead (the gather-parity form: paragraphs mentioning any of
+the links).
 
 ```sh
-ft notes gather --link "[[Foo]]" --uncited
-ft notes recent --since 7d --uncited
+ft notes search "eigen memoization"        # both terms, one paragraph
+ft notes search "[[Foo]] [[Bar]]" --any    # links either → old gather form
+ft notes search "eigen -task"              # eigen, excluding task mentions
+ft notes search "~memoizaton"              # typo-tolerant
+ft notes search "eigen" --sort date        # newest edits first (git blame)
 ```
 
-`--json` carries the same data as a `cited_in` array of
-`{note, stale}` objects on every entry.
+`--json` gives structured rows (`path`, `line_start`, `line_end`,
+`body`, `matched`, `score`, and `date` with `--sort date`).
 
-In the TUI, the Gather and Recent tabs show the same badges and
-toggle the uncited-only filter with `u`. The Gather tab additionally
-has a **context-note mode**: press `o` and pick a synth note — its
-`ft.synth.targets` frontmatter loads as the source set, the sources
-strip shows `[context: <note>]`, and every entry badges as `in note`
-or `missing` *relative to that note*. That is the "grow" workflow
-made visible: you see exactly which material the note already holds
-and which is still missing before you send anything. Sending entries
-to a note with `s`/`n`/`S` also installs it as the context, so after
-the background graph refresh the shipped entries visibly flip to
-`in note`.
+### Cross-reference and exclusion
+
+The AND form is the new capability the graph walk couldn't express:
+"paragraphs where *both* concepts appear" is exactly the co-occurrence
+signal you want when synthesizing a bridge note. The `-` exclude form
+lets you subtract noise ("eigen -matrix" if one eigen thread is
+uninteresting).
+
+### Deprecation note
+
+`ft notes gather` (and the Gather tab) are deprecated: still
+functional, hidden from help, and pointing at `ft notes search`. The
+citation badges on `ft notes recent` are unchanged.
 
 ## Step 3: synthesis
 
@@ -202,38 +177,43 @@ back as today's recent thoughts.
 ### Creating from the CLI
 
 ```sh
-# Create a new synth note with every paragraph mentioning [[Foo]] or [[Bar]]
+# Create a new synth note from every paragraph matching the query
 ft notes synth scaffold Synthesis/eigen-and-memo.md \
-    --link "[[Eigen-decomposition]]" \
-    --link "[[Memoization]]"
+    --search "[[Eigen-decomposition]] [[Memoization]] --any"
 ```
 
-The note gets created with the frontmatter marker and every entry
-from the multi-source gather as a protected section, newest first.
-`$EDITOR` then opens at the bottom of the file so you can write prose
-around the excerpts.
+The note gets created with the frontmatter marker and every matching
+paragraph as a protected section, in relevance order (`--sort date`
+switches to newest-edit-first). `$EDITOR` then opens at the bottom of
+the file so you can write prose around the excerpts.
 
-If the file already exists, sections are appended:
+If the file already exists, sections are appended — and re-running the
+same `--search` is idempotent (already-pinned paragraphs are skipped):
 
 ```sh
-ft notes synth scaffold Synthesis/eigen-and-memo.md --link "[[Curry-Howard]]"
+ft notes synth scaffold Synthesis/eigen-and-memo.md --search "~curry"
 ```
 
-For a specific source paragraph rather than a link-driven set, use
+For a specific source paragraph rather than a search-driven set, use
 `--from <path>:<line>` (repeatable). The `<line>` is the paragraph's
 `line_start`:
 
 ```sh
 ft notes synth scaffold Notes/connections.md \
-    --link "[[Foo]]" \
+    --search "[[Foo]]" \
     --from notes/bar.md:42 \
     --from journal/2026-05-08.md:7
 ```
 
+The `--search` flag accepts the full query DSL (`=word`, `~fuzzy`,
+`"phrase"`, `[[link]]`, `-exclude`; `--any` for OR). The deprecated
+`--link "[[X]]"` form still works as sugar for an any-mode
+`[[X]]` search.
+
 Other flags:
 
-- `--since 7d` / `--range X..Y` + `--in-window` — same in-window
-  semantics as `ft notes gather`.
+- `--any` — OR across the query clauses instead of AND.
+- `--sort date` — newest-edit-first section order (git blame).
 - `--no-edit` — write the file but don't launch `$EDITOR`, useful for
   scripting.
 
@@ -257,20 +237,30 @@ Keymap:
 | `j` / `k` (or `↓` / `↑`) | move cursor |
 | `Space` | toggle multi-select on the current row |
 | `[` / `]` | halve / double the window (since-style only) |
-| `Enter` | hand off selected (or cursor) links to the Gather tab |
+| `Enter` | hand off selected (or cursor) links to the Search tab |
 | `R` | reload |
 
-Pressing `Enter` switches to the Gather tab with those targets
-queued. The Gather tab then renders the multi-source feed with
-`matched: Foo, Bar` badges on co-occurrence entries.
+Pressing `Enter` switches to the **Search** tab with the selected
+links prefilled as `[[Foo]] [[Bar]]` in any-mode (the old gather
+behavior). From there:
 
-From there, the synth keys take over:
+```
+┌ Search — ANY · sort: relevance (14 results, 2 selected) ──────────┐
+│> [[Eigen-decomposition]] [[Memoization]]                          │
+│   notes/spectral.md L42-44        [[Eigen-decomposition]]         │
+│▶  notes/hessian.md L12-13         [[Eigen-decomposition]]         │
+└───────────────────────────────────────────────────────────────────┘
+```
 
 | Key | Action |
 |-|-|
-| `Space` | toggle multi-select on the current entry |
-| `w` | toggle in-window-only filter (when a window came in via handoff) |
-| `s` | append to an **existing** note (fuzzy picker) |
+| `/` | edit the query — results update live as you type |
+| `Esc` / `Enter` | leave the query editor |
+| `a` | toggle all-match (AND) ↔ any-match (OR) |
+| `o` | cycle sort: relevance ↔ date |
+| `Space` | toggle multi-select on the current result |
+| `Enter` | open the source note at the paragraph |
+| `s` | append selected (or all) results to an **existing** note |
 | `Shift+s` | create a **new** synth note (folder picker → title prompt) |
 
 If you press `s` and pick a note that doesn't have `ft.synth.enabled: true` in
@@ -282,14 +272,14 @@ root. Pick a folder, type a title, hit Enter. The note is created
 with the right frontmatter and the scaffolded excerpts, then
 `$EDITOR` opens at the bottom so you can compose.
 
-If you have entries selected with `Space`, only those go into the
-scaffold. With no selection, the whole displayed feed is sent.
+If you have results selected with `Space`, only those go into the
+scaffold. With no selection, the whole result set is sent.
 
 One more entry point: on a **ghost row in the Graph tab**, `Shift+p`
 promotes the ghost into a synth note in one keystroke — the note is
 created at the ghost's path, scaffolded with every paragraph that
-mentions it, `ft.synth.targets` set. The CLI equivalent is
-`ft notes synth scaffold <path>.md --link "[[ghost]]"`. See
+mentions it. The CLI equivalent is
+`ft notes synth scaffold <path>.md --search "[[ghost]]"`. See
 [notes.md](notes.md#ghosts-concepts-that-earned-a-note) for the
 ranked ghost list that tells you which concepts are ready.
 
@@ -355,7 +345,7 @@ ft notes quote notes/spectral.md --lines 42-44
 # > spanning two lines.
 ```
 
-It enforces exactly the prerequisites scaffold/grow enforce for the
+It enforces exactly the prerequisites scaffold enforces for the
 pinned file: the source must be committed at `HEAD` and unmodified in
 the working tree (other dirty files don't block), and the range must
 be inside the file. The section is pinned to `HEAD` with the same
@@ -457,8 +447,9 @@ A single `[synth]` table in `config.toml`:
 folder = "Synthesis/"
 
 # Files whose vault-relative path starts with any of these prefixes
-# are excluded from `ft notes pulse`. Useful for filtering out periodic
-# notes that mention the same recurring topics every day.
+# are excluded from `ft notes pulse` and `ft notes search`. Useful for
+# filtering out periodic notes that mention the same recurring topics
+# every day.
 exclude_prefixes = ["journal/"]
 ```
 
@@ -477,9 +468,9 @@ ft tui                  # open the TUI
 # Browse the list, Space on 2–3 links that catch my eye.
 # Enter.
 
-# 2. In the Gather tab now, multi-target mode.
-# Skim entries. Space on the ones I actually want to pull together.
-# Shift+s to create a new synth note.
+# 2. In the Search tab now, the links prefilled in any-mode.
+# / to refine the query if needed. Space on the results I actually
+# want to pull together. Shift+s to create a new synth note.
 # Pick a folder, type a title.
 # Editor opens at the bottom of the new file.
 

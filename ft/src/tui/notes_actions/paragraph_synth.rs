@@ -348,7 +348,7 @@ fn commit(
     let exists = target_abs.exists();
     if exists {
         // Mark an existing non-synth target before appending.
-        if let Err(e) = crate::tui::tabs::gather::mark_note_as_synth(&target_abs) {
+        if let Err(e) = crate::tui::synth_send::mark_note_as_synth(&target_abs) {
             queue_toast(
                 ctx,
                 &format!("could not add ft.synth marker: {e}"),
