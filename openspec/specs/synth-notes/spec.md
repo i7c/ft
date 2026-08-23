@@ -74,21 +74,21 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 
 ### Requirement: ft notes synth scaffold command
 
-`ft notes synth <target.md> --link "[[Foo]]" [--link "[[Bar]]" ...] [--since <duration> | --range <X>..<Y>] [--all | --in-window] [--from <path>:<line> ...] [--no-edit]` SHALL generate or append protected-section scaffolding into the target note. `--link` SHALL be repeatable. When the target file does not exist, the command SHALL create it with `ft-synth: true` frontmatter AND, when `--link` is supplied, an `ft-synth-targets` key listing the supplied links, followed by the scaffolded sections as the body. When the target exists, the command SHALL append (at end of file) the new sections separated from existing content by one blank line; the append path SHALL drop any entry whose `(source_path, body)` is already pinned in the note (dedup-on-append invariant), so re-running scaffold with the same target is idempotent. After writing, the command SHALL open `$EDITOR` at the bottom of the file unless `--no-edit` is passed.
+`ft notes synth <target.md> --search "<query>" [--any] [--sort relevance|date] [--link "[[Foo]]" ...] [--from <path>:<line> ...] [--no-edit]` SHALL generate or append protected-section scaffolding into the target note. `--search` SHALL be the primary sourcing flag and is repeatable with `--any`/`--sort` (see the paragraph-search capability); `--link` and `--from` SHALL remain functional as a transitional path (`--link` is deprecated: it lowers to an any-mode search over the given links and performs no Related-alias resolution). At least one of `--search`, `--link`, or `--from` SHALL be required. The window flags `--in-window`, `--since`, and `--range` SHALL NOT exist. When the target file does not exist, the command SHALL create it with `ft.synth.enabled: true` frontmatter, followed by the scaffolded sections as the body. When the target exists, the command SHALL append (at end of file) the new sections separated from existing content by one blank line; the append path SHALL drop any entry whose `(source_path, body)` is already pinned in the note (dedup-on-append invariant), so re-running scaffold with the same sourcing flags is idempotent. After writing, the command SHALL open `$EDITOR` at the bottom of the file unless `--no-edit` is passed.
 
-#### Scenario: Create new synth note
+#### Scenario: Create new synth note from search
 
-- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Foo]]" --since 7d` is run and `Synthesis/topic.md` does not exist
-- **THEN** the file is created with `ft-synth: true` and `ft-synth-targets: ["[[Foo]]"]` frontmatter and the scaffolded sections; `$EDITOR` is launched at the bottom of the file
+- **WHEN** `ft notes synth Synthesis/topic.md --search "eigen memoization"` is run and `Synthesis/topic.md` does not exist
+- **THEN** the file is created with `ft.synth.enabled: true` frontmatter and the scaffolded sections in result order; `$EDITOR` is launched at the bottom of the file
 
 #### Scenario: Append to existing synth note dedups
 
-- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Bar]]"` is run and the file already exists with some of Bar's paragraphs pinned
+- **WHEN** `ft notes synth Synthesis/topic.md --search "eigen"` is run and the file already exists with some matching paragraphs pinned
 - **THEN** only the not-yet-pinned sections are appended (separated by a blank line) and `$EDITOR` is launched at the new bottom; existing content is preserved unchanged
 
-#### Scenario: Re-running scaffold with the same target is idempotent
+#### Scenario: Re-running scaffold with the same query is idempotent
 
-- **WHEN** `ft notes synth Synthesis/topic.md --link "[[Foo]]"` is run twice in succession with no source changes
+- **WHEN** `ft notes synth Synthesis/topic.md --search "eigen"` is run twice in succession with no source changes
 - **THEN** the second run appends zero sections (all entries are already pinned)
 
 #### Scenario: --no-edit suppresses editor handoff
@@ -96,37 +96,36 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 - **WHEN** `ft notes synth ... --no-edit` is run
 - **THEN** the file is written but `$EDITOR` is NOT launched and the command exits 0
 
-#### Scenario: --link is required when no --from given
+#### Scenario: A source flag is required
 
-- **WHEN** neither `--link` nor `--from` is passed and the target does not exist
-- **THEN** the command exits with a non-zero code and a clear "one of --link or --from is required" error
+- **WHEN** neither `--search`, `--link`, nor `--from` is passed
+- **THEN** the command exits with a non-zero code and a clear "one of --search, --link, or --from is required" error
 
+#### Scenario: Window flags are gone
+
+- **WHEN** `--in-window`, `--since`, or `--range` is passed
+- **THEN** the command fails with clap's unknown-argument error
 ### Requirement: Scaffold content sourcing
 
-With `--link` flags, the scaffold SHALL be sourced from the multi-source journal for the selected links over the specified window. With `--in-window`, only paragraphs whose lines overlap added-lines in the window SHALL be included. With `--all` (the default) or no window flag, all-time matching paragraphs SHALL be included. With `--from <path>:<line>` (repeatable), the scaffold SHALL additionally include the specified source paragraphs (identified by the line in which they start). Sections in the resulting scaffold SHALL be ordered by journal date descending (newest first), preserving the journal's tiebreak (source title ascending) for equal dates.
+With `--search`, the scaffold SHALL be sourced from the paragraph-search index for the parsed query, deduplicated by `(source_path, line_start)`, with sections emitted in result order — relevance descending by default, newest-first with `--sort date` (see the paragraph-search capability). With the transitional `--link` form, sections SHALL be sourced from an any-mode search over the given links (paragraphs mentioning any link qualify; Related-alias resolution is not performed on this path). With `--from <path>:<line>` (repeatable), the scaffold SHALL additionally include the specified source paragraphs (identified by the line in which they start). Sections in the resulting scaffold SHALL be ordered by the search result order (which the `--sort` flag controls).
 
-The scaffold's per-section body text SHALL be taken verbatim from `JournalEntry.section_text`, which derives from `ParagraphData.text`. Because the heading line remains part of the paragraph that begins at that line (Fork A2), `section_text` is unchanged in shape: a paragraph that begins at a heading line still includes the heading line verbatim.
+The scaffold's per-section body text SHALL be taken verbatim from the source paragraph's text (`ParagraphData.text` / `ParsedFile.paragraphs`). Because the heading line remains part of the paragraph that begins at that line (Fork A2), the body is unchanged in shape: a paragraph that begins at a heading line still includes the heading line verbatim.
 
-#### Scenario: --link sources from journal
-- **WHEN** `ft notes synth out.md --link "[[Foo]]" --link "[[Bar]]"` is run
-- **THEN** the scaffold includes a section for every paragraph that the multi-source journal returns for `Foo` or `Bar`
+#### Scenario: --search sources from the index
+- **WHEN** `ft notes synth out.md --search "eigen memoization"` is run
+- **THEN** the scaffold includes a section for every paragraph matching both terms, in relevance order
 
-#### Scenario: --in-window filter applied
-- **WHEN** `ft notes synth out.md --link "[[Foo]]" --since 7d --in-window` is run
-- **THEN** only paragraphs whose lines overlap added-lines in the last 7 days are included
+#### Scenario: --search --sort date orders newest first
+- **WHEN** `ft notes synth out.md --search "eigen" --sort date` is run
+- **THEN** the newest-edited matching paragraph appears first
 
 #### Scenario: --from picks specific paragraphs
-- **WHEN** `ft notes synth out.md --link "[[Foo]]" --from notes/bar.md:42 --no-edit` is run
-- **THEN** the scaffold includes the journal results for `[[Foo]]` PLUS the paragraph starting at line 42 of `notes/bar.md`
-
-#### Scenario: Scaffold ordered newest first
-- **WHEN** the scaffold contains paragraphs dated 2026-03-01 and 2025-11-14
-- **THEN** the 2026-03-01 section appears before the 2025-11-14 section in the file
+- **WHEN** `ft notes synth out.md --search "eigen" --from notes/bar.md:42 --no-edit` is run
+- **THEN** the scaffold includes the search results PLUS the paragraph starting at line 42 of `notes/bar.md`
 
 #### Scenario: Paragraph beginning at a heading line includes the heading
 - **WHEN** a sourced paragraph begins at a `## Section` heading line
-- **THEN** the scaffolded callout body begins with `## Section` (the heading line is part of `ParagraphData.text`, per Fork A2)
-
+- **THEN** the scaffolded callout body begins with `## Section` (the heading line is part of the paragraph text, per Fork A2)
 ### Requirement: Plan/apply split for synth mutations
 A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), NOT `GatherEntry`; feed callers (`GatherEntry`, `RecentEntry`) SHALL lower into `SynthSource` via `From` at the call boundary. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
 
@@ -156,33 +155,4 @@ The `Config` struct SHALL gain a `synth: Synth` sub-struct with two fields: `fol
 #### Scenario: Unknown key rejected
 - **WHEN** a config has `[synth] unknown_key = "x"`
 - **THEN** config load fails with a clear error naming the unknown key
-
-### Requirement: Self-describing synth note targets
-
-A synth note MAY declare its journal target(s) in YAML frontmatter via the key `ft-synth-targets`, whose value SHALL be a YAML sequence of `[[wikilink]]` strings (e.g. `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]`). The key SHALL be optional; notes without it SHALL behave exactly as today (scaffold append, verify, repair, reslice all unchanged). `ft notes synth scaffold` and `ft notes synth grow` SHALL write the key when `--link` is supplied and the note is being created, or when appending and the key is absent. The key SHALL NOT affect verify, repair, or reslice. Parsing SHALL be lenient (accept quoted or bare values, `"[[Foo]]"` or `"Foo"`) and SHALL store values as raw wikilink text. A helper `ft_core::synth::callout::parse_synth_targets(content) -> Option<Vec<String>>` SHALL extract the list; a helper `upsert_synth_frontmatter(content, targets: Option<&[String]>)` SHALL idempotently set both `ft-synth: true` and `ft-synth-targets` without clobbering unrelated frontmatter keys.
-
-#### Scenario: Scaffold writes targets on create
-
-- **WHEN** `ft notes synth scaffold Synthesis/topic.md --link "[[Foo]]" --link "[[Bar]]"` creates a new note
-- **THEN** the frontmatter contains `ft-synth: true` and `ft-synth-targets: ["[[Foo]]", "[[Bar]]"]`
-
-#### Scenario: Grow appends targets when key absent
-
-- **WHEN** `ft notes synth grow Synthesis/topic.md --link "[[Baz]]"` is run on an existing note that lacks `ft-synth-targets`
-- **THEN** the frontmatter gains `ft-synth-targets: ["[[Baz]]"]` and existing frontmatter keys are preserved
-
-#### Scenario: Notes without the key are unaffected
-
-- **WHEN** a synth note created before this change (no `ft-synth-targets`) is verified, repaired, or resliced
-- **THEN** the commands behave exactly as before the change
-
-#### Scenario: Lenient parsing of hand-authored values
-
-- **WHEN** a note's frontmatter contains `ft-synth-targets: [Foo, "[[Bar]]"]`
-- **THEN** `parse_synth_targets` returns `Some(vec!["Foo", "[[Bar]]"])`
-
-#### Scenario: Upsert preserves unrelated frontmatter keys
-
-- **WHEN** `upsert_synth_frontmatter` is applied to a note whose frontmatter has `title: My Note` and `tags: [a]`
-- **THEN** the result retains `title` and `tags` unchanged alongside `ft-synth: true` and `ft-synth-targets`
 

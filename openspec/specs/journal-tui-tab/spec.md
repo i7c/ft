@@ -4,16 +4,28 @@
 TBD - created by archiving change notes-journal-tui. Update Purpose after archive.
 ## Requirements
 ### Requirement: Gather tab registration
-The TUI SHALL register a new top-level tab titled `Journal`, slotted after the existing `Graph` tab in `App::new`. The tab SHALL implement the `Tab` trait alongside the existing tabs.
 
-#### Scenario: Tab appears in the tab strip
-- **WHEN** the TUI starts
-- **THEN** the tab strip lists `Graph`, `Tasks`, `Notes`, `Timeblocks`, and `Journal` (in that order)
+The TUI SHALL register the top-level tab titled `Gather` as DEPRECATED: the tab SHALL be absent from the default tab lineup, and SHALL be included only when the `[tui] show_gather = true` config flag is set (the same opt-in pattern as `tasks_tab` and `timeblocks_tab`). The tab SHALL implement the `Tab` trait alongside the existing tabs whenever included. The Search tab SHALL occupy the default slot the Gather tab previously held.
+
+#### Scenario: Tab hidden by default
+
+- **WHEN** the TUI starts with no `show_gather` config
+- **THEN** the tab strip does NOT list Gather, and it lists Search
+
+#### Scenario: Tab restored by config
+
+- **WHEN** the TUI starts with `[tui] show_gather = true`
+- **THEN** the tab strip lists Gather alongside the other tabs
 
 #### Scenario: Tab can receive focus
-- **WHEN** the user presses the digit key for the Gather tab's position
+
+- **WHEN** the Gather tab is present and the user presses the digit key for its position
 - **THEN** focus switches to the Gather tab and `on_focus` runs
 
+#### Scenario: Deprecation surfaced when restored
+
+- **WHEN** the Gather tab is focused with `show_gather = true`
+- **THEN** the tab shows a deprecation note directing the user to the Search tab
 ### Requirement: Empty-state picker prompt
 When no note has been selected, the Gather tab SHALL display a prompt instructing the user to press `/` to open a fuzzy note picker.
 
@@ -222,9 +234,9 @@ and `ft commands list` pick it up.
   again restores the full feed
 
 ### Requirement: Note-context badges
-When a target synth note is in play — the append-to-existing (`s`)
-picker flow, or a journal opened from a synth note's
-`ft-synth-targets` — row badges SHALL re-scope to that note:
+When a target synth note is in play, row badges SHALL re-scope to that note. The trigger is the append-to-existing (`s`)
+picker flow or a journal opened from a synth note's
+`ft-synth-targets`; badges then show
 `in note` when the entry is already pinned there (per the
 filter_missing rule), `missing` otherwise, with a status-line
 indicator naming the target note. Leaving the flow SHALL restore
