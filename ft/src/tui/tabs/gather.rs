@@ -28,6 +28,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, ListItem, Paragraph},
     Frame,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use ft_core::blame_cache::BlameCache;
 use ft_core::gather::{build_gather, GatherEntry};
@@ -1695,47 +1697,54 @@ pub(crate) fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if line.is_empty() {
         return vec![String::new()];
     }
-    // Preserve any leading indent on the first wrapped fragment.
-    let indent_chars: usize = line.chars().take_while(|c| c.is_whitespace()).count();
-    let indent: String = line.chars().take(indent_chars).collect();
-    let body: String = line.chars().skip(indent_chars).collect();
+    // Preserve any leading indent on the first wrapped fragment. Measure
+    // everything in terminal columns (not `char`s): a `📅` is one char but
+    // two columns, so char-counting would let a wrapped line overflow the
+    // pane and ratatui would clip mid-glyph — the "garbled chars" seen
+    // with emoji/CJK/accented content.
+    let indent: String = line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect::<String>();
+    let indent_width = str_width(&indent);
+    let body = &line[indent.len()..];
     if body.is_empty() {
-        // Trailing whitespace-only line: keep the chars (chunked so we
+        // Trailing whitespace-only line: keep the columns (chunked so we
         // never exceed width) so spacing in poetry-style content is
         // preserved.
-        return chunk_by_chars(line, width);
+        return chunk_by_width(line, width);
     }
 
     let mut out: Vec<String> = Vec::new();
     let mut current = indent.clone();
-    let mut current_len = indent_chars;
+    let mut current_width = indent_width;
     for word in body.split_whitespace() {
-        let word_len = word.chars().count();
-        if word_len > width {
+        let word_width = str_width(word);
+        if word_width > width {
             // Flush whatever's in the current buffer first, then
             // hard-break the long word across full-width chunks.
             if !current.is_empty() {
                 out.push(std::mem::take(&mut current));
-                current_len = 0;
+                current_width = 0;
             }
-            for chunk in chunk_by_chars(word, width) {
+            for chunk in chunk_by_width(word, width) {
                 out.push(chunk);
             }
             continue;
         }
-        let needs_space = current_len > 0 && current_len > indent_chars;
-        let space_len = if needs_space { 1 } else { 0 };
-        if current_len + space_len + word_len > width {
+        let needs_space = current_width > 0 && current_width > indent_width;
+        let space_width = if needs_space { 1 } else { 0 };
+        if current_width + space_width + word_width > width {
             out.push(std::mem::take(&mut current));
             current.push_str(word);
-            current_len = word_len;
+            current_width = word_width;
         } else {
             if needs_space {
                 current.push(' ');
-                current_len += 1;
+                current_width += 1;
             }
             current.push_str(word);
-            current_len += word_len;
+            current_width += word_width;
         }
     }
     if !current.is_empty() {
@@ -1747,41 +1756,94 @@ pub(crate) fn wrap_line(line: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Pad `s` with trailing spaces to exactly `width` chars so a styled
-/// span fills the full row width (giving the header band a solid
-/// background). Over-long input is truncated to `width`. A `width` of 0
-/// returns the string unchanged.
+/// Pad `s` with trailing spaces to exactly `width` terminal columns so a
+/// styled span fills the full row width (giving the header band a solid
+/// background). Over-long input is truncated to fit `width` columns. A
+/// `width` of 0 returns the string unchanged.
 pub(crate) fn pad_to_width(s: &str, width: usize) -> String {
     if width == 0 {
         return s.to_string();
     }
-    let len = s.chars().count();
+    let len = str_width(s);
     if len < width {
         let mut out = s.to_string();
         out.push_str(&" ".repeat(width - len));
         out
     } else if len > width {
-        s.chars().take(width).collect()
+        // Truncate on a grapheme boundary; a trailing wide glyph that
+        // would straddle the edge is dropped, so pad the leftover column.
+        let (mut out, taken) = take_width(s, width);
+        out.push_str(&" ".repeat(width - taken));
+        out
     } else {
         s.to_string()
     }
 }
 
-/// Split `s` into chunks of exactly `width` chars (last may be shorter).
-fn chunk_by_chars(s: &str, width: usize) -> Vec<String> {
+/// Display width of `s` in terminal columns, matching ratatui's own
+/// measurement (both go through `unicode-width`).
+fn str_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Take grapheme clusters from `s` until adding the next one would exceed
+/// `width` columns. Returns the prefix and the columns it actually
+/// occupies (≤ `width`; short by one when a wide glyph sits on the edge).
+fn take_width(s: &str, width: usize) -> (String, usize) {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for g in s.graphemes(true) {
+        let w = grapheme_width(g);
+        if used + w > width {
+            break;
+        }
+        out.push_str(g);
+        used += w;
+    }
+    (out, used)
+}
+
+/// Split `s` into chunks that each fit within `width` columns, breaking on
+/// grapheme boundaries so a multi-column glyph is never sliced. A single
+/// grapheme wider than `width` gets its own chunk (it cannot be split).
+fn chunk_by_width(s: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![s.to_string()];
     }
-    let chars: Vec<char> = s.chars().collect();
-    chars
-        .chunks(width)
-        .map(|c| c.iter().collect::<String>())
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for g in s.graphemes(true) {
+        let w = grapheme_width(g);
+        if current_width + w > width && !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push_str(g);
+        current_width += w;
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Column width of a single grapheme cluster. `unicode-width` measures per
+/// `char`; for a cluster (e.g. a base plus combining marks, or a ZWJ emoji
+/// sequence) the base carries the width and zero-width joiners/marks add 0,
+/// so summing the chars' widths yields the cluster's rendered width.
+fn grapheme_width(g: &str) -> usize {
+    g.chars()
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{inline_markdown_spans, wrap_line};
+    use super::{inline_markdown_spans, pad_to_width, wrap_line};
 
     fn rendered_text(spans: &[ratatui::text::Span<'static>]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
@@ -1883,5 +1945,54 @@ mod tests {
             wrap_line("anything goes here", 0),
             vec!["anything goes here"]
         );
+    }
+
+    /// Display width of a wrapped line, matching ratatui's own measure.
+    fn cols(s: &str) -> usize {
+        unicode_width::UnicodeWidthStr::width(s)
+    }
+
+    #[test]
+    fn wrap_line_measures_wide_glyphs_by_columns_not_chars() {
+        // `📅` is one `char` but two terminal columns. Counting chars let
+        // wrapped lines run wider than the pane, so ratatui clipped the
+        // overflow mid-glyph — the "garbled chars" bug. Every fragment
+        // must stay within the column budget, and no token may be lost.
+        let line = "eigen 📅 aa 📅 bb 📅 cc 📅 dd 📅 ee 📅 ff 📅 gg";
+        let out = wrap_line(line, 20);
+        for frag in &out {
+            assert!(cols(frag) <= 20, "fragment overflows 20 cols: {frag:?}");
+        }
+        // Every space-separated token survives the wrap (join the
+        // fragments, re-split on whitespace, compare token multisets).
+        let mut got: Vec<&str> = out.iter().flat_map(|f| f.split_whitespace()).collect();
+        let mut want: Vec<&str> = line.split_whitespace().collect();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "a token was dropped or garbled by wrapping");
+    }
+
+    #[test]
+    fn wrap_line_hard_break_keeps_wide_glyphs_within_width() {
+        // A long unbroken run of wide glyphs must hard-break on grapheme
+        // boundaries without any chunk exceeding the column budget.
+        let word = "📅📅📅📅📅📅📅📅"; // 8 glyphs × 2 cols = 16 cols
+        let out = wrap_line(word, 6);
+        for chunk in &out {
+            assert!(cols(chunk) <= 6, "chunk overflows 6 cols: {chunk:?}");
+        }
+        // Reassembled, the glyphs round-trip verbatim (none sliced).
+        assert_eq!(out.concat(), word);
+    }
+
+    #[test]
+    fn pad_to_width_counts_columns_for_wide_glyphs() {
+        // Two glyphs = 4 columns; pad to 8 adds exactly 4 spaces.
+        assert_eq!(cols(&pad_to_width("📅📅", 8)), 8);
+        // Truncation is column-based and never slices a glyph: "📅📅" is
+        // 4 cols, capping at 3 keeps one glyph and pads the odd column.
+        let capped = pad_to_width("📅📅", 3);
+        assert_eq!(cols(&capped), 3);
+        assert_eq!(capped, "📅 ");
     }
 }
