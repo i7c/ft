@@ -245,12 +245,23 @@ links prefilled as `[[Foo]] [[Bar]]` in any-mode (the old gather
 behavior). From there:
 
 ```
-┌ Search — ANY · sort: relevance (14 results, 2 selected) ──────────┐
-│> [[Eigen-decomposition]] [[Memoization]]                          │
-│   notes/spectral.md L42-44        [[Eigen-decomposition]]         │
-│▶  notes/hessian.md L12-13         [[Eigen-decomposition]]         │
-└───────────────────────────────────────────────────────────────────┘
+┌ Search ────────────────────────────────────────────────────────────┐
+│┌ ANY · sort: relevance (14 results, 2 selected) ──────────────────┐│
+││> [[Eigen-decomposition]] [[Memoization]]                         ││
+│└──────────────────────────────────────────────────────────────────┘│
+│▶  notes/hessian.md L12-13  [[Eigen-decomposition]]                │
+│   notes/spectral.md L42-44  [[Eigen-decomposition]]               │
+│────────────────────────────────────────────────────────────────────│
+│notes/hessian.md · L12–13 · [[Eigen-decomposition]] · score 2.10   │
+│────────────────────────────────────────────────────────────────────│
+│The Hessian is the key matrix in second-order optimization.        │
+└────────────────────────────────────────────────────────────────────┘
 ```
+
+The query box's title carries the parse state (`AND/ANY · sort: … ·
+N results · M selected`); its bottom border is the separator from the
+result list. The list is capped at a 10-row viewport (it scrolls past
+that); the bottom pane previews the selected paragraph's body.
 
 | Key | Action |
 |-|-|

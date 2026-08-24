@@ -315,7 +315,7 @@ The TUI exposes the flow through the `Pulse` tab
 (`ft/src/tui/tabs/pulse.rs`) that hands selected links off to the
 `Search` tab (`ft/src/tui/tabs/search.rs`) via
 `AppRequest::SearchWithQuery` — the links become `[[…]]` clauses in
-any-mode. The Search tab's `/` input line re-queries the shared
+any-mode. The Search tab's query box (`/` to edit) re-queries the shared
 snapshot's index (`GraphSnapshot::search`) synchronously on every
 keystroke; `a` toggles all/any, `o` cycles relevance ↔ date, `Space`
 multi-selects, and `s`/`S` send the selection (or all results) to a

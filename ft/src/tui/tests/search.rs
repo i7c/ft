@@ -73,6 +73,16 @@ fn live_typing_updates_results_and_snapshot() -> Result<()> {
         frame.contains("(2 results"),
         "expected 2 eigen matches:\n{frame}"
     );
+    // The feed-split preview pane echoes the selected paragraph under a
+    // header band that carries the relevance score.
+    assert!(
+        frame.contains("· score "),
+        "preview header missing relevance score:\n{frame}"
+    );
+    assert!(
+        frame.contains("Eigen and memoization together in one paragraph."),
+        "preview pane missing selected paragraph body:\n{frame}"
+    );
     assert_tui_snapshot!("search_live_typing_80x24", frame);
     Ok(())
 }

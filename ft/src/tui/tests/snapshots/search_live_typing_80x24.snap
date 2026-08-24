@@ -3,16 +3,16 @@ source: ft/src/tui/tests/search.rs
 expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Gather  │  7 Tasks  │  8
-┌ Search — AND · sort: relevance (2 results, 0 selected) ────────────────────────────────┐
-│> eigen│                                                                                │
+┌ Search ────────────────────────────────────────────────────────────────────────────────┐
+│┌ AND · sort: relevance (2 results, 0 selected) ───────────────────────────────────────┐│
+││> eigen│                                                                              ││
+│└──────────────────────────────────────────────────────────────────────────────────────┘│
 │▶     notes.md L5-5  eigen  Eigen and memoization together in one paragraph.            │
 │      notes.md L1-1  eigen  The eigen decomposition is central.                         │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
+│────────────────────────────────────────────────────────────────────────────────────────│
+│notes.md · L5–5 · eigen · score 2.50                                                    │
+│────────────────────────────────────────────────────────────────────────────────────────│
+│Eigen and memoization together in one paragraph.                                        │
 │                                                                                        │
 │                                                                                        │
 │                                                                                        │

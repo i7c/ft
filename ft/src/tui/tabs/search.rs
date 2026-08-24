@@ -1,11 +1,15 @@
 //! `Search` tab — live paragraph search over the shared snapshot's
 //! search index.
 //!
-//! The input line at the top parses the query DSL on every keystroke
+//! The query box at the top parses the query DSL on every keystroke
 //! (`/` enters edit mode; `Enter`/`Esc` leave it — results update live
-//! while typing). Below it: a status line echoing the parse
-//! (`N terms · AND/ANY · sort: …`), then the result list. `Space`
-//! multi-selects paragraphs; `s`/`S` ship the selection (or all
+//! while typing). The box's title carries the parse state (`AND/ANY ·
+//! sort: … · N results · M selected`), visually distinct from the query
+//! text inside. Below the box — whose bottom border is the solid
+//! separator — sits a feed-split: the result list in a compact top
+//! viewport (max 10 rows, scrolls past that), and the selected
+//! paragraph's body as wrapped text in a preview pane at the bottom.
+//! `Space` multi-selects paragraphs; `s`/`S` ship the selection (or all
 //! results) into a synth note via the shared send-to-synth flow; `a`
 //! toggles all/any; `o` cycles relevance ↔ date sort; `Enter` opens
 //! the source at the paragraph.
@@ -38,8 +42,9 @@ use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
 use crate::tui::synth_send::{SynthSendFlow, SynthSendHost};
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind};
+use crate::tui::tabs::gather::{inline_markdown_spans, wrap_line};
 use crate::tui::widgets::{
-    render_inline_input, render_scroll_list, CursorMode, EditBuffer, InlineInput, ScrollListOpts,
+    render_feed_split, render_inline_input, CursorMode, EditBuffer, InlineInput,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -468,29 +473,37 @@ impl Tab for SearchTab {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        let block = Block::default().borders(Borders::ALL).title(" Search ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Query box (3 rows: title border + input row + bottom border —
+        // the bottom border doubles as the solid separator from the
+        // feed split below). Its title carries the parse state so the
+        // status stays visually distinct from the query text inside.
+        let (query_area, feed_area) = split_query_box(inner);
         let status = match (self.any, self.sort) {
             (false, Sort::Relevance) => "AND · sort: relevance",
             (true, Sort::Relevance) => "ANY · sort: relevance",
             (false, Sort::Date) => "AND · sort: date",
             (true, Sort::Date) => "ANY · sort: date",
         };
-        let title = format!(
-            " Search — {} ({} result{}, {} selected) ",
-            status,
-            self.results.len(),
-            if self.results.len() == 1 { "" } else { "s" },
-            self.selected.len()
-        );
-        let block = Block::default().borders(Borders::ALL).title(title);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        // Query bar (2 rows at the top of the inner area).
-        let (query_area, list_area) = split_query_bar(inner);
+        let qtitle = Line::from(Span::styled(
+            format!(
+                " {status} ({} result{}, {} selected) ",
+                self.results.len(),
+                if self.results.len() == 1 { "" } else { "s" },
+                self.selected.len()
+            ),
+            Style::default().fg(palette::PRIMARY),
+        ));
+        let qblock = Block::default().borders(Borders::ALL).title(qtitle);
+        let qinner = qblock.inner(query_area);
+        frame.render_widget(qblock, query_area);
         let prefix = if self.editing { "> " } else { "/ " };
         render_inline_input(
             frame,
-            query_area,
+            qinner,
             InlineInput {
                 buf: &self.input,
                 prefix: vec![Span::styled(prefix, Style::default().fg(palette::PRIMARY))],
@@ -513,7 +526,7 @@ impl Tab for SearchTab {
                     format!("error: {err}"),
                     Style::default().fg(palette::ERROR),
                 ))),
-                list_area,
+                feed_area,
             );
             self.synth_send.render(frame, area);
             return;
@@ -530,12 +543,13 @@ impl Tab for SearchTab {
                     text,
                     Style::default().fg(palette::DIM),
                 ))),
-                list_area,
+                feed_area,
             );
             self.synth_send.render(frame, area);
             return;
         }
 
+        // Compact list rows: one line per result.
         let mut items: Vec<ListItem<'_>> = Vec::with_capacity(self.results.len());
         for (i, row) in self.results.iter().enumerate() {
             let mark = if self.selected.contains(&i) {
@@ -566,15 +580,49 @@ impl Tab for SearchTab {
             ]);
             items.push(ListItem::new(line));
         }
-        let opts = ScrollListOpts {
-            highlight_symbol: "▶ ",
-            highlight_style: Style::default()
-                .fg(palette::BLACK)
-                .bg(palette::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-            scrollbar: true,
-        };
-        render_scroll_list(frame, list_area, items, Some(self.cursor), opts);
+
+        // Preview pane: a header band (path · lines · matched labels ·
+        // score, plus the blame date in date-sort mode) then the wrapped
+        // paragraph body with the gather-style inline markdown styling.
+        let mut preview_header: Vec<Line<'_>> = Vec::new();
+        let mut preview_body: Vec<Line<'_>> = Vec::new();
+        if let Some(row) = self.results.get(self.cursor) {
+            let mut h = format!(
+                "{} · L{}–{}",
+                row.path.display(),
+                row.line_start,
+                row.line_end
+            );
+            if !row.matched.is_empty() {
+                h.push_str(&format!(" · {}", row.matched.join(" · ")));
+            }
+            h.push_str(&format!(" · score {:.2}", row.score));
+            if let Some(d) = row.date {
+                h.push_str(&format!(" · {d}"));
+            }
+            preview_header.push(Line::from(Span::styled(
+                h,
+                Style::default()
+                    .fg(palette::PRIMARY)
+                    .bg(palette::ENTRY_HEADER_BG)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for body_line in row.body.lines() {
+                for wrapped in wrap_line(body_line, feed_area.width as usize) {
+                    preview_body.push(Line::from(inline_markdown_spans(&wrapped)));
+                }
+            }
+        }
+
+        render_feed_split(
+            frame,
+            feed_area,
+            items,
+            self.cursor,
+            &self.selected,
+            &preview_header,
+            &preview_body,
+        );
         self.synth_send.render(frame, area);
     }
 
@@ -609,12 +657,12 @@ impl Tab for SearchTab {
     }
 }
 
-/// Split the inner area into a 1-row query bar and the result list.
-fn split_query_bar(area: Rect) -> (Rect, Rect) {
+/// Split the inner area into a 3-row query box and the feed split.
+fn split_query_box(area: Rect) -> (Rect, Rect) {
     use ratatui::layout::{Constraint, Direction, Layout};
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(area);
     (rows[0], rows[1])
 }
