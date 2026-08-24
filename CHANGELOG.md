@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.1.10
+
+### Added
+
+- feat(search): feed-split layout with boxed query in the TUI tab
+- test: stop git auto-maintenance racing the no-IO assertion
+- feat: paragraph search replaces gather as the synth sourcing engine
+- feat(export): slack lists re-indented to 4 spaces per level
+- Architecture Review Skill
+
+### Fixed
+
+- fix(search): split trigrams on chars, not bytes
+
 ## 0.1.9
 
 ### Internal cleanup
