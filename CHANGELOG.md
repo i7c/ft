@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.11
+
+### Added
+
+- feat(search): add c to clear the query and results
+
+### Fixed
+
+- fix(search): keep negation on phrase and link clauses through render
+- fix(search): stop stale cells leaking across frames in the TUI tab
+
 ## 0.1.10
 
 ### Added
