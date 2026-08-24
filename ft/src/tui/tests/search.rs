@@ -137,6 +137,40 @@ fn sort_cycle_flips_status_and_order() -> Result<()> {
 }
 
 #[test]
+fn clear_returns_to_empty_state() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    app.dispatch(key('/'))?;
+    for c in "eigen".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("(2 results"),
+        "results before clear:\n{frame}"
+    );
+
+    // Leave the query editor, then clear with `c`.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("press / to start typing"),
+        "empty-state hint after clear:\n{frame}"
+    );
+    assert!(
+        !frame.contains("(2 results"),
+        "results must be gone after clear:\n{frame}"
+    );
+    assert!(
+        frame.contains("(0 results, 0 selected)"),
+        "status resets to zero counts:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
 fn pulse_handoff_opens_search_prefilled_in_any_mode() -> Result<()> {
     use crossterm::event::KeyModifiers;
     let (_dir, vault) = search_vault();

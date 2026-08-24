@@ -11,8 +11,9 @@
 //! paragraph's body as wrapped text in a preview pane at the bottom.
 //! `Space` multi-selects paragraphs; `s`/`S` ship the selection (or all
 //! results) into a synth note via the shared send-to-synth flow; `a`
-//! toggles all/any; `o` cycles relevance ↔ date sort; `Enter` opens
-//! the source at the paragraph.
+//! toggles all/any; `o` cycles relevance ↔ date sort; `c` clears back
+//! to the fresh-tab empty state; `Enter` opens the source at the
+//! paragraph.
 //!
 //! The index lives in the shared snapshot (`GraphSnapshot::search`) and
 //! is rebuilt by the App's background worker on generation change — the
@@ -140,6 +141,15 @@ pub(crate) static SEARCH_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "search.clear",
+        description: "Clear the query and results (back to the empty state)",
+        scope: CommandScope::Tab("search"),
+        group: "Source",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
 ];
 
 pub(crate) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
@@ -156,6 +166,7 @@ pub(crate) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("s", "search.send-to-synth-existing")
         .bind("S", "search.send-to-synth-new")
         .bind("R", "search.reload")
+        .bind("c", "search.clear")
 });
 
 pub struct SearchTab {
@@ -425,6 +436,18 @@ impl Tab for SearchTab {
                 self.run_query(ctx);
                 CommandOutcome::Handled
             }
+            "search.clear" => {
+                self.input = EditBuffer::default();
+                self.editing = false;
+                self.any = false;
+                self.sort = Sort::Relevance;
+                self.results.clear();
+                self.selected.clear();
+                self.cursor = 0;
+                self.last_query = None;
+                self.last_error = None;
+                CommandOutcome::Handled
+            }
             _ => CommandOutcome::NotHandled,
         }
     }
@@ -652,7 +675,13 @@ impl Tab for SearchTab {
                     ("S", "create a new synth note from the results"),
                 ],
             ),
-            HelpSection::new("Source", &[("R", "re-run the query")]),
+            HelpSection::new(
+                "Source",
+                &[
+                    ("R", "re-run the query"),
+                    ("c", "clear the query and results"),
+                ],
+            ),
         ]
     }
 }

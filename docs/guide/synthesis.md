@@ -269,6 +269,7 @@ that); the bottom pane previews the selected paragraph's body.
 | `Esc` / `Enter` | leave the query editor |
 | `a` | toggle all-match (AND) ↔ any-match (OR) |
 | `o` | cycle sort: relevance ↔ date |
+| `c` | clear the query and results |
 | `Space` | toggle multi-select on the current result |
 | `Enter` | open the source note at the paragraph |
 | `s` | append selected (or all) results to an **existing** note |
