@@ -1694,6 +1694,12 @@ pub(crate) fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![line.to_string()];
     }
+    // Expand tabs and drop stray control chars before measuring: a raw
+    // `\t` (common in nested markdown lists) is one char that the terminal
+    // expands to the next tab stop while ratatui reserves it a single
+    // cell, so unsanitized tabs visibly garble the wrapped body.
+    let sanitized = sanitize_display_line(line);
+    let line = sanitized.as_str();
     if line.is_empty() {
         return vec![String::new()];
     }
@@ -1778,6 +1784,24 @@ pub(crate) fn pad_to_width(s: &str, width: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// Expand tabs to spaces and drop stray C0/C1 control characters so the
+/// preview panes render vault prose faithfully. Terminals expand a raw
+/// `\t` to the next tab stop while ratatui reserves it a single cell, so
+/// unsanitized tabs — common in nested markdown lists — visibly garble
+/// the wrapped body. Tabs become a fixed four spaces (deterministic, and
+/// what most editors show for indent); other controls are dropped.
+fn sanitize_display_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    for c in line.chars() {
+        match c {
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Display width of `s` in terminal columns, matching ratatui's own
@@ -1950,6 +1974,20 @@ mod tests {
     /// Display width of a wrapped line, matching ratatui's own measure.
     fn cols(s: &str) -> usize {
         unicode_width::UnicodeWidthStr::width(s)
+    }
+
+    #[test]
+    fn wrap_line_expands_tabs_and_drops_control_chars() {
+        // Nested markdown list bodies carry raw tabs; a terminal expands
+        // them to a tab stop while ratatui gives them a single cell, so
+        // unsanitized tabs garble the preview. They must become spaces,
+        // and stray controls (here a carriage return) must be dropped.
+        let out = wrap_line("\t\t- deep item\r", 40);
+        assert_eq!(out, vec!["        - deep item"]);
+        assert!(
+            !out.iter().any(|l| l.contains('\t') || l.contains('\r')),
+            "no raw control chars may survive: {out:?}"
+        );
     }
 
     #[test]
