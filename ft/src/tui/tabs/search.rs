@@ -7,8 +7,9 @@
 //! sort: … · N results · M selected`), visually distinct from the query
 //! text inside. Below the box — whose bottom border is the solid
 //! separator — sits a feed-split: the result list in a compact top
-//! viewport (max 10 rows, scrolls past that), and the selected
-//! paragraph's body as wrapped text in a preview pane at the bottom.
+//! viewport (max 10 rows, scrolls past that; rows carry path · line
+//! range · matched labels, no body text), and the selected paragraph's
+//! body as wrapped text in a preview pane at the bottom.
 //! `Space` multi-selects paragraphs; `s`/`S` ship the selection (or all
 //! results) into a synth note via the shared send-to-synth flow; `a`
 //! toggles all/any; `o` cycles relevance ↔ date sort; `c` clears back
@@ -29,7 +30,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, ListItem, Paragraph},
     Frame,
 };
 
@@ -523,6 +524,9 @@ impl Tab for SearchTab {
         let qblock = Block::default().borders(Borders::ALL).title(qtitle);
         let qinner = qblock.inner(query_area);
         frame.render_widget(qblock, query_area);
+        // Clear the input row first so a shortened query can't leave
+        // the previous frame's longer text behind.
+        frame.render_widget(Clear, qinner);
         let prefix = if self.editing { "> " } else { "/ " };
         render_inline_input(
             frame,
@@ -572,7 +576,10 @@ impl Tab for SearchTab {
             return;
         }
 
-        // Compact list rows: one line per result.
+        // Compact list rows: `{mark}{path} L{start}-{end} {matched
+        // labels}` — no paragraph body (the preview pane below shows it)
+        // — padded to the full row width so a shorter row can't leave
+        // the previous frame's longer text behind.
         let mut items: Vec<ListItem<'_>> = Vec::with_capacity(self.results.len());
         for (i, row) in self.results.iter().enumerate() {
             let mark = if self.selected.contains(&i) {
@@ -580,27 +587,27 @@ impl Tab for SearchTab {
             } else {
                 "    "
             };
-            let labels = if row.matched.is_empty() {
-                String::new()
-            } else {
-                row.matched.join(" ")
-            };
-            let body = row.body.replace('\n', " ");
-            let line = Line::from(vec![
+            let loc = format!(
+                "{} L{}-{}",
+                row.path.display(),
+                row.line_start,
+                row.line_end
+            );
+            let mut spans = vec![
                 Span::styled(mark, Style::default().fg(palette::DIM)),
-                Span::styled(
-                    format!(
-                        "{} L{}-{}  ",
-                        row.path.display(),
-                        row.line_start,
-                        row.line_end
-                    ),
-                    Style::default().fg(palette::PRIMARY),
-                ),
-                Span::styled(labels, Style::default().fg(palette::DIM)),
-                Span::raw("  "),
-                Span::styled(body, Style::default().fg(palette::WHITE)),
-            ]);
+                Span::styled(loc, Style::default().fg(palette::PRIMARY)),
+            ];
+            if !row.matched.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", row.matched.join(" ")),
+                    Style::default().fg(palette::DIM),
+                ));
+            }
+            let mut line = Line::from(spans);
+            let pad = (feed_area.width as usize).saturating_sub(line.width());
+            if pad > 0 {
+                line.push_span(Span::raw(" ".repeat(pad)));
+            }
             items.push(ListItem::new(line));
         }
 

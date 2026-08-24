@@ -66,8 +66,8 @@ fn live_typing_updates_results_and_snapshot() -> Result<()> {
     // every paragraph containing "eigen".
     assert!(frame.contains("eigen"), "query bar missing term:\n{frame}");
     assert!(
-        frame.contains("Eigenvalue") || frame.contains("eigen decomposition"),
-        "result list missing matched paragraphs:\n{frame}"
+        frame.contains("L5-5  eigen") && frame.contains("L1-1  eigen"),
+        "result list missing path/lines/matched-label rows:\n{frame}"
     );
     assert!(
         frame.contains("(2 results"),

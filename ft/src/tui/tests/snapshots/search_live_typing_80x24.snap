@@ -7,8 +7,8 @@ expression: frame
 │┌ AND · sort: relevance (2 results, 0 selected) ───────────────────────────────────────┐│
 ││> eigen│                                                                              ││
 │└──────────────────────────────────────────────────────────────────────────────────────┘│
-│▶     notes.md L5-5  eigen  Eigen and memoization together in one paragraph.            │
-│      notes.md L1-1  eigen  The eigen decomposition is central.                         │
+│▶     notes.md L5-5  eigen                                                              │
+│      notes.md L1-1  eigen                                                              │
 │────────────────────────────────────────────────────────────────────────────────────────│
 │notes.md · L5–5 · eigen · score 2.50                                                    │
 │────────────────────────────────────────────────────────────────────────────────────────│

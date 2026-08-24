@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::palette;
@@ -93,6 +93,12 @@ pub fn render_feed_split(
     if preview_area.height == 0 {
         return;
     }
+
+    // Clear the whole preview pane first: the body paragraph only
+    // writes its own lines, and rows below a shorter paragraph would
+    // otherwise keep the previous frame's text (ratatui diffs against
+    // the prior frame and never clears cells a widget leaves alone).
+    frame.render_widget(Clear, preview_area);
 
     // Preview pane: a bordered block so the header reads as distinct
     // from the list, with a rule separating header from body.

@@ -585,6 +585,9 @@ mod synthesis;
 mod tasks;
 mod timeblocks;
 
+// Temporary reproduction — deleted once the investigation lands.
+mod stale_cells;
+
 // ── [tui] tab toggles (note-flow-renames) ────────────────────────────
 
 /// Default config: the adjacent tabs are off; the note-flow five are

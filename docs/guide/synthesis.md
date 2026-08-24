@@ -261,7 +261,8 @@ behavior). From there:
 The query box's title carries the parse state (`AND/ANY · sort: … ·
 N results · M selected`); its bottom border is the separator from the
 result list. The list is capped at a 10-row viewport (it scrolls past
-that); the bottom pane previews the selected paragraph's body.
+that); rows show path · line range · matched terms only. The bottom
+pane previews the selected paragraph's full body.
 
 | Key | Action |
 |-|-|
