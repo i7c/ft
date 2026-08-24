@@ -98,6 +98,7 @@ pub fn parse(input: &str, any: bool) -> SearchQuery {
             Some(t) if !t.is_empty() => (true, t),
             _ => (false, rest),
         };
+        let neg = if negated { "-" } else { "" };
 
         // `[[…]]` — atomic, spaces allowed. Scan for the closing `]]`.
         if let Some(inner) = after_neg.strip_prefix("[[") {
@@ -106,7 +107,7 @@ pub fn parse(input: &str, any: bool) -> SearchQuery {
                 let term = normalize_link_target(content);
                 if !term.is_empty() {
                     clauses.push(Clause {
-                        raw: format!("[[{content}]]"),
+                        raw: format!("{neg}[[{content}]]"),
                         negated,
                         mode: Mode::Link,
                         term,
@@ -123,7 +124,7 @@ pub fn parse(input: &str, any: bool) -> SearchQuery {
             if let Some(end) = inner.find('"') {
                 let content = &inner[..end];
                 clauses.push(Clause {
-                    raw: format!("\"{content}\""),
+                    raw: format!("{neg}\"{content}\""),
                     negated,
                     mode: Mode::Phrase,
                     term: content.to_lowercase(),
@@ -251,6 +252,24 @@ mod tests {
         assert_eq!(q.clauses[0].mode, Mode::Fuzzy);
         assert_eq!(q.clauses[1].mode, Mode::Link);
         assert_eq!(q.clauses[2].mode, Mode::Word);
+    }
+
+    #[test]
+    fn negated_phrase_and_link_keep_negation_in_raw() {
+        // Regression: the phrase and `[[…]]` branches built `raw`
+        // without the `-` prefix, so a negated phrase/link rendered
+        // back without the negation and broke the round-trip.
+        for (input, any) in [
+            ("-\"exact phrase\"", false),
+            ("-\"\"", false),
+            ("-[[Bar Foo]]", false),
+            ("eigen -\"two words\" -[[link]]", false),
+        ] {
+            let q = parse(input, any);
+            let rendered = q.render();
+            let q2 = parse(&rendered, any);
+            assert_eq!(q, q2, "render/parse round-trip for {input:?}");
+        }
     }
 
     #[test]
