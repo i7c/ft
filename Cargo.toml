@@ -42,6 +42,10 @@ dialoguer = { version = "0.11", default-features = false, features = ["fuzzy-sel
 similar = "2"
 ratatui = "0.29"
 crossterm = "0.28"
+# Match ratatui 0.29's own width tables so wrapping/padding column math
+# agrees with what the renderer actually reserves per grapheme.
+unicode-width = "0.2"
+unicode-segmentation = "1"
 
 # Dev / test (shared)
 assert_cmd = "2"
