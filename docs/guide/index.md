@@ -29,7 +29,7 @@ linked from each chapter.
 | Capture thoughts in one keystroke                        | [capture-and-templates.md](capture-and-templates.md) |
 | Plan your day in timeblocks                              | [timeblocks.md](timeblocks.md)        |
 | Query and walk the link graph                            | [graph.md](graph.md)                  |
-| Sweep recent mentions, gather a topic, build a synth note | [synthesis.md](synthesis.md)          |
+| Sweep recent mentions, assemble a topic, build a synth note | [synthesis.md](synthesis.md)          |
 | Live in the TUI                                          | [tui.md](tui.md)                      |
 | Keep the vault repo in sync                              | [git-sync.md](git-sync.md)            |
 | Wire `ft` into shell pipelines or other tools            | [scripting.md](scripting.md)          |
@@ -42,7 +42,7 @@ linked from each chapter.
   plugin's query language is parsed natively.
 - **Notes.** Fuzzy-open, create from templates, jump to today's daily
   note, rename across links, move between folders, append templates,
-  and gather a paragraph-level mention feed from `git blame`.
+  and search paragraphs across the vault.
 - **Timeblocks.** Read, add, edit, delete, and report on day-planner
   blocks (`- HH:MM - HH:MM <desc> @tag`) in daily notes.
 - **Link graph.** Walk wikilinks, markdown links, and embeds; query
@@ -51,7 +51,7 @@ linked from each chapter.
 - **Git sync.** Commit, pull, and push the vault repo in one command,
   with the same operation available on a background thread in the TUI.
 - **Interactive TUI.** The note-flow tabs (Graph, Notes, Pulse,
-  Recent, Gather) plus opt-in Tasks and Timeblocks tabs, tied together
+  Recent, Search) plus opt-in Tasks and Timeblocks tabs, tied together
   by a common command/keymap registry.
 - **Synthesis.** Pulse recently-mentioned `[[wikilinks]]`, aggregate
   cross-vault context across a chosen subset, and produce "synth

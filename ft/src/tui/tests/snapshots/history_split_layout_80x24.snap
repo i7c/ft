@@ -2,7 +2,7 @@
 source: ft/src/tui/tests/history.rs
 expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Gather  │  7 T
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Ti
 ┌ Recent (3 entries) ──────────────────────────────────────────────────────────┐
 │    2026-05-09  Daily                                                         │
 │    2026-05-09  Daily                                                         │

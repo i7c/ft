@@ -33,8 +33,8 @@ use crate::tui::{
     snapshot::{build_graph_snapshot, GraphSnapshot},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
-        gather::GatherTab, graph::GraphTab, notes::NotesTab, pulse::PulseTab, recent::RecentTab,
-        search::SearchTab, tasks::TasksTab, timeblocks::TimeblocksTab,
+        graph::GraphTab, notes::NotesTab, pulse::PulseTab, recent::RecentTab, search::SearchTab,
+        tasks::TasksTab, timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
@@ -773,41 +773,11 @@ impl App {
             AppRequest::Toast { text, style } => {
                 self.push_toast(text, style);
             }
-            AppRequest::GatherFor { target } => {
-                self.with_tab(TabKind::Gather, |tab, _| tab.queue_gather_for(&target));
-                if let Some(idx) = self.tab_index(TabKind::Gather) {
-                    self.switch_tab(idx)?;
-                }
-            }
             AppRequest::SearchWithQuery { query, any } => {
                 self.with_tab(TabKind::Search, |tab, _| tab.queue_search_query(query, any));
                 if let Some(idx) = self.tab_index(TabKind::Search) {
                     self.switch_tab(idx)?;
                 }
-            }
-            AppRequest::GatherForMulti { request } => {
-                self.with_tab(TabKind::Gather, |tab, _| {
-                    tab.queue_gather_for_multi(&request)
-                });
-                if let Some(idx) = self.tab_index(TabKind::Gather) {
-                    self.switch_tab(idx)?;
-                }
-            }
-            AppRequest::GatherAddSources {
-                targets,
-                default_mode,
-            } => {
-                self.with_tab(TabKind::Gather, |tab, _| {
-                    tab.queue_gather_add_sources(targets, default_mode)
-                });
-                if let Some(idx) = self.tab_index(TabKind::Gather) {
-                    self.switch_tab(idx)?;
-                }
-            }
-            AppRequest::GatherCommitSources { sources, window } => {
-                self.with_tab(TabKind::Gather, |tab, ctx| {
-                    tab.queue_gather_commit_sources(ctx, sources, window)
-                });
             }
             AppRequest::OpenModal(modal) => {
                 self.open_modal(*modal);
@@ -1320,9 +1290,8 @@ fn build_tabs_with_overlays(
     use crate::tui::{
         keymap::KeymapOverlay,
         tabs::{
-            gather::GATHER_KEYMAP, graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, pulse::PULSE_KEYMAP,
-            recent::RECENT_KEYMAP, search::SEARCH_KEYMAP, tasks::TASKS_KEYMAP,
-            timeblocks::TIMEBLOCKS_KEYMAP,
+            graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, pulse::PULSE_KEYMAP, recent::RECENT_KEYMAP,
+            search::SEARCH_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1362,7 +1331,6 @@ fn build_tabs_with_overlays(
     let tasks_overlay = build_overlay("tab/tasks", &TASKS_KEYMAP);
     let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
     let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
-    let gather_overlay = build_overlay("tab/gather", &GATHER_KEYMAP);
     let recent_overlay = build_overlay("tab/recent", &RECENT_KEYMAP);
     let pulse_overlay = build_overlay("tab/pulse", &PULSE_KEYMAP);
     let search_overlay = build_overlay("tab/search", &SEARCH_KEYMAP);
@@ -1427,9 +1395,8 @@ fn build_tabs_with_overlays(
     .collect();
 
     // Tab order reads the workflow: browse (Graph, Notes) → resurface
-    // in sweep-to-pull order (Pulse, Recent, Search). The deprecated
-    // Gather tab is opt-in via `[tui] show_gather` until it is removed.
-    // The adjacent features (Tasks, Timeblocks) are opt-in via `[tui]`
+    // in sweep-to-pull order (Pulse, Recent, Search). The adjacent
+    // features (Tasks, Timeblocks) are opt-in via `[tui]`
     // and append at the end; digits and cycling derive from the built
     // list.
     let mut tabs: Vec<Box<dyn Tab>> = vec![
@@ -1439,11 +1406,6 @@ fn build_tabs_with_overlays(
         Box::new(RecentTab::new().with_keymap_overlay(&recent_overlay)),
         Box::new(SearchTab::new().with_keymap_overlay(&search_overlay)),
     ];
-    if config.tui.show_gather {
-        tabs.push(Box::new(
-            GatherTab::new().with_keymap_overlay(&gather_overlay),
-        ));
-    }
     if config.tui.tasks_tab {
         tabs.push(Box::new(
             TasksTab::new().with_keymap_overlay(&tasks_overlay),
@@ -1630,13 +1592,10 @@ impl App {
     /// is itself a `TempDir` in tests, the log is cleaned up on drop.
     pub fn for_test(vault: Vault) -> Self {
         // Tests exercise the full layout; the production default hides
-        // the adjacent tabs (see `default_layout_hides_adjacent_tabs`)
-        // and the deprecated Gather tab (restore via `[tui]
-        // show_gather = true`).
+        // the adjacent tabs (see `default_layout_hides_adjacent_tabs`).
         let mut vault = vault;
         vault.config.config.tui.tasks_tab = true;
         vault.config.config.tui.timeblocks_tab = true;
-        vault.config.config.tui.show_gather = true;
         let recents = Self::test_recents_for(&vault);
         Self::new_with_recents(Arc::new(vault), recents).with_initial_snapshot_for_test()
     }
@@ -1657,7 +1616,7 @@ impl App {
             Box::new(NotesTab::new()),
             Box::new(PulseTab::new()),
             Box::new(RecentTab::new()),
-            Box::new(GatherTab::new()),
+            Box::new(SearchTab::new()),
             Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),
         ];
@@ -1695,7 +1654,7 @@ impl App {
             Box::new(NotesTab::new()),
             Box::new(PulseTab::new()),
             Box::new(RecentTab::new()),
-            Box::new(GatherTab::new()),
+            Box::new(SearchTab::new()),
             Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),
         ];
@@ -1826,31 +1785,6 @@ impl App {
     /// Used by tests to assert that an Enter keypress queued an editor open.
     pub fn take_pending_request(&self) -> Option<AppRequest> {
         self.pending_request.borrow_mut().take()
-    }
-
-    /// Forward a vault-relative note path to the Journal tab's queue.
-    /// Equivalent to the App servicing `AppRequest::GatherFor` with a
-    /// `GatherTarget::Note` without going through the request channel —
-    /// useful when a test wants to set up state without simulating the
-    /// keystrokes.
-    #[cfg(test)]
-    pub fn queue_gather_for_tab_test(&mut self, path: &str) {
-        let target = crate::tui::tab::GatherTarget::Note(std::path::PathBuf::from(path));
-        if let Some(idx) = self.tab_index(TabKind::Gather) {
-            self.tabs[idx].queue_gather_for(&target);
-        }
-    }
-
-    /// Queue a multi-target Journal request for tests. Mirrors what the
-    /// Review tab does when the user presses Enter on a selection.
-    #[cfg(test)]
-    pub fn queue_journal_for_multi_tab_test(
-        &mut self,
-        request: crate::tui::tab::MultiTargetRequest,
-    ) {
-        if let Some(idx) = self.tab_index(TabKind::Gather) {
-            self.tabs[idx].queue_gather_for_multi(&request);
-        }
     }
 
     /// Test-only: attach a completion provider to the active tab's

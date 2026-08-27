@@ -23,7 +23,7 @@ ft/
 │   │   │                       #   tab.rs, modal.rs, command.rs, keymap.rs,
 │   │   │                       #   help.rs, ui.rs, palette.rs, editor.rs
 │   │   ├── tabs/               # graph, tasks/, notes/, timeblocks/,
-│   │   │                       #   gather, pulse
+│   │   │                       #   pulse, recent, search
 │   │   ├── notes_actions/      # create/append/section-move/reslice flows
 │   │   └── widgets/            # picker, completion, edit buffer
 │   └── tests/                  # integration tests with assert_cmd
@@ -37,11 +37,10 @@ ft/
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
         ├── git.rs              # discover_repo + status + sync + blame
-        ├── blame_cache.rs      # msgpack blame cache (gather)
+        ├── blame_cache.rs      # msgpack blame cache (recent, --sort date)
         ├── graph/              # mod (Graph/NodeKind/EdgeKind/NodeKey),
         │                       #   parser, resolve, query (unified DSL),
         │                       #   preset, rename, delete
-        ├── gather.rs           # multi-source git-blame feed (synthesis)
         ├── pulse.rs            # git-log wikilink scan (synthesis)
         ├── synth/              # scaffold, verify, repair, reslice, callout
         ├── notes.rs + notes/   # note ops, append, templates
@@ -224,8 +223,7 @@ through three composable layers:
 // Engine 3: scan-derived paragraph search index + query DSL.
 // Substring default, `=word`, `~fuzzy`, `"phrase"`, `[[link]]`,
 // `-exclude`; AND by default, `--any` for OR; relevance or blame-date
-// sort. Sourcing engine for scaffold (the gather feed was deprecated
-// in its favor).
+// sort. Sourcing engine for scaffold.
 pub struct ft_core::search::SearchIndex;
 pub fn ft_core::search::parse_query(input: &str, any: bool) -> SearchQuery;
 pub fn ft_core::search::search(index: &SearchIndex, query: &SearchQuery)
@@ -237,19 +235,10 @@ pub fn ft_core::pulse::compute_pulse(
     window: &WindowRange, cfg: &Synth,
 ) -> Result<Pulse>;
 
-// Engine 1 (generalized): one gather feed across many targets.
-// targets.len() == 1 preserves the original Related-aliases +
-// self-exclusion semantics; multi-target skips both.
-pub fn ft_core::gather::build_gather(
-    graph: &Graph, targets: &[NoteId],
-    vault: &Vault, repo: &Path, cache: &mut BlameCache,
-) -> Result<GatherReport>;
-
-// Engine 1's untargeted, time-shaped sibling: every vault paragraph
+// Engine 1: the untargeted, time-shaped feed — every vault paragraph
 // edited within a window, recency-ordered. Selects by window-edit
-// (pulse added-lines overlap) instead of by link target; shares
-// the gather feed's blame dates and sort. Drives `ft notes recent` + the
-// Recent tab.
+// (pulse added-lines overlap) instead of by link target. Drives
+// `ft notes recent` + the Recent tab.
 pub fn ft_core::recent::build_recent(
     graph: &Graph, vault: &Vault, window: &WindowRange,
     cfg: &Synth, opts: &RecentOptions, cache: &mut BlameCache,
@@ -308,8 +297,7 @@ CommonMark or Slack mrkdwn (`--format`)). `ft notes search` is the
 sourcing front-end: a scan-derived paragraph index, the query DSL
 (`search::query::parse`), and relevance / blame-date sorts; it feeds
 `ft notes synth scaffold --search "<query>"`, the Pulse handoff, and
-ghost promotion. The deprecated `ft notes gather` / `ft notes journal`
-remain hidden-but-functional during the transition.
+ghost promotion.
 
 The TUI exposes the flow through the `Pulse` tab
 (`ft/src/tui/tabs/pulse.rs`) that hands selected links off to the
@@ -320,9 +308,7 @@ snapshot's index (`GraphSnapshot::search`) synchronously on every
 keystroke; `a` toggles all/any, `o` cycles relevance ↔ date, `Space`
 multi-selects, and `s`/`S` send the selection (or all results) to a
 synth note through the shared send-to-synth flow
-(`ft/src/tui/synth_send.rs`, also used by the Recent tab). The
-deprecated Gather tab is opt-in via `[tui] show_gather = true` until
-it is removed.
+(`ft/src/tui/synth_send.rs`, also used by the Recent tab).
 
 Config: a new `[synth]` table with `folder` (default `"Synthesis/"`)
 and `exclude_prefixes` (default empty; users typically add their
@@ -333,7 +319,7 @@ search.
 
 `plan_synth_scaffold`'s append path is idempotent by construction; the
 former `grow` command (and its watermark / self-describing-targets
-frontmatter) were removed with the gather deprecation:
+frontmatter) were removed with the gather feed:
 
 - **Dedup-on-append invariant** (`ft_core::synth::accrete::filter_missing`):
   the planner's append path drops entries whose `(source_path, body)`
@@ -344,11 +330,9 @@ frontmatter) were removed with the gather deprecation:
   (same body at a newer commit = unchanged paragraph, no reason to
   re-pin).
 - The last-synth watermark (`accrete::last_synth_watermark`) and the
-  self-describing `ft.synth.targets` frontmatter (helpers
-  `callout::parse_synth_targets` / `upsert_synth_frontmatter`) were
-  removed with `grow`. The helpers survive only as internals of the
-  deprecated Gather tab (its `n` new-only chord and `o` context mode
-  still use them) and die with the tab.
+  self-describing `ft.synth.targets` frontmatter
+  (`callout::parse_synth_targets`) were removed with `grow` and the
+  Gather tab.
 
 CLI: `ft notes synth scaffold <target.md> --search "<query>"
 [--any] [--sort relevance|date] [--from path:line] [--no-edit]`.
@@ -367,14 +351,13 @@ shared send-to-synth flow; the planner's dedup applies for free.
 
 ### A new TUI tab
 
-The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent, Search,
-Gather — plus opt-in Tasks and Timeblocks tabs (config `[tui]`,
-default off). Pulse drives the link-pick → Gather handoff (see
-§"Synthesis"). Recent is the untargeted, time-shaped sibling of
-Gather: it renders `build_recent` (recently-edited paragraphs,
-windowed, default 7d) and reuses Gather's row renderer +
-send-to-synth overlay and the shared section-move modal (seeded via
-`section_move::begin_for_source`).
+The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent, Search —
+plus opt-in Tasks and Timeblocks tabs (config `[tui]`, default off).
+Pulse drives the link-pick → Search handoff (see §"Synthesis"). Recent
+is the untargeted, time-shaped feed: it renders `build_recent`
+(recently-edited paragraphs, windowed, default 7d) and reuses the
+shared feed row renderer + send-to-synth overlay and the shared
+section-move modal (seeded via `section_move::begin_for_source`).
 
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
    `App::new`. `Tab::kind() -> TabKind` is required — it's the typed
@@ -449,8 +432,6 @@ pub enum ActiveModal {
     Rename(GraphRenameState), PresetPicker(PresetPickerModal),
     Related(RelatedModal), Search(SearchPickerModal),
     ConfirmDelete(ConfirmDeleteState), CreateSubdir(CreateSubdirState),
-    GatherSources(GatherSourcesModal),
-    GatherAppendOrReplace(GatherAppendOrReplaceModal),
     PeriodicLeader, QueryBar { view_id: usize },
 }
 ```
@@ -502,9 +483,9 @@ Tab-specific actions raised by modals route through `AppRequest`
 variants. There is exactly one routing table: `App::service_simple`.
 It services every variant that doesn't need the terminal or the event
 stream, looking the target tab up by its typed `Tab::kind()`
-(`TabKind::Graph`, `TabKind::Gather`, …) and calling a typed
-`Tab::graph_*` hook — same shape as the `Tab::queue_gather_for`
-precedent (typed hooks per action, default no-op, host overrides).
+(`TabKind::Graph`, …) and calling a typed
+`Tab::graph_*` hook — typed hooks per action, default no-op, host
+overrides.
 The four terminal-touching variants (`OpenInEditor`, `OpenInObsidian`,
 `SyncGit`, `CommitGit`) are deferred back to `App::service_request`,
 which the real event loop calls; `App::service_pending_requests`

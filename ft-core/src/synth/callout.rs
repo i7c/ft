@@ -246,25 +246,6 @@ pub fn is_synth_note(content: &str) -> bool {
     crate::frontmatter::ft_synth_enabled(content) == Some(true)
 }
 
-/// Parse the nested `ft.synth.targets` frontmatter key into a list
-/// of raw wikilink strings. Returns `None` when the key is absent (or
-/// the file has no frontmatter, or the value is not a YAML sequence).
-///
-/// Delegates to [`crate::frontmatter::ft_synth_targets`]. The legacy
-/// flat `ft-synth-targets` key is NOT recognized (breaking cutover).
-///
-/// Lenient on quote styles: accepts `"[[Foo]]"`, `'[[Foo]]'`, `[[Foo]]`,
-/// `Foo`, and a mix. The value is returned verbatim (with surrounding
-/// quotes stripped) — resolution to a `NoteId` happens at the call site
-/// via the same `resolve_link_to_id` path the CLI uses for `--link`.
-///
-/// Supports both flow-sequence form (`["[[Foo]]", "[[Bar]]"]` on one
-/// line) and block-sequence form (`- "[[Foo]]"` lines), since users may
-/// hand-author either.
-pub fn parse_synth_targets(content: &str) -> Option<Vec<String>> {
-    crate::frontmatter::ft_synth_targets(content)
-}
-
 /// Pure transform: idempotently ensure the result has the nested
 /// `ft:` frontmatter map with `synth.enabled: true` and, when `targets`
 /// is `Some`, `synth.targets` set to the YAML flow sequence of the
@@ -799,52 +780,6 @@ after
     }
 
     // ── ft.synth.targets frontmatter ──────────────────────────────────
-
-    #[test]
-    fn parse_synth_targets_absent_returns_none() {
-        let content = "---\nft:\n  synth:\n    enabled: true\n---\nbody\n";
-        assert!(parse_synth_targets(content).is_none());
-    }
-
-    #[test]
-    fn parse_synth_targets_no_frontmatter_returns_none() {
-        assert!(parse_synth_targets("# heading\n").is_none());
-    }
-
-    #[test]
-    fn parse_synth_targets_flow_sequence_quoted() {
-        let content =
-            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Foo]]\", \"[[Bar]]\"]\n---\n";
-        let got = parse_synth_targets(content).unwrap();
-        assert_eq!(got, vec!["[[Foo]]", "[[Bar]]"]);
-    }
-
-    #[test]
-    fn parse_synth_targets_flow_sequence_bare() {
-        // Bare (unquoted) values are accepted.
-        let content = "---\nft:\n  synth:\n    targets: [Foo, Bar]\n---\n";
-        let got = parse_synth_targets(content).unwrap();
-        assert_eq!(got, vec!["Foo", "Bar"]);
-    }
-
-    #[test]
-    fn parse_synth_targets_block_sequence() {
-        let content = "---\nft:\n  synth:\n    enabled: true\n    targets:\n      - \"[[Foo]]\"\n      - Bar\n---\n";
-        let got = parse_synth_targets(content).unwrap();
-        assert_eq!(got, vec!["[[Foo]]", "Bar"]);
-    }
-
-    #[test]
-    fn parse_synth_targets_empty_flow_sequence() {
-        let content = "---\nft:\n  synth:\n    targets: []\n---\n";
-        assert_eq!(parse_synth_targets(content), Some(Vec::new()));
-    }
-
-    #[test]
-    fn parse_synth_targets_legacy_flat_ignored() {
-        let content = "---\nft-synth-targets: [\"[[Foo]]\"]\n---\n";
-        assert!(parse_synth_targets(content).is_none());
-    }
 
     #[test]
     fn upsert_adds_frontmatter_when_missing_with_targets() {

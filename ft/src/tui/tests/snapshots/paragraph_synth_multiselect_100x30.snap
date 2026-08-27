@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests/notes.rs
-assertion_line: 2601
 expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Timeblocks            
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
 ┌ notes ───────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
 │  Notes — Obsidian-flavoured editing                                                              │

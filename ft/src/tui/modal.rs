@@ -55,9 +55,7 @@ use crate::tui::notes_actions::paragraph_synth::{
 use crate::tui::notes_actions::section_move::{
     handle_key as section_move_handle_key, MoveStep, SectionMoveState,
 };
-use crate::tui::tab::{
-    empty_keymap, AppRequest, AppendOrReplaceMode, GatherTarget, GatherWindow, GraphRequest, TabCtx,
-};
+use crate::tui::tab::{empty_keymap, AppRequest, GraphRequest, TabCtx};
 use crate::tui::tabs::graph::{
     CapturePickerModal, GraphMoveOuter, GraphRenameState, PresetPickerModal, RelatedModal,
     SearchPickerModal, TaskCreateState, TaskEditState, TaskLeader,
@@ -68,7 +66,6 @@ use crate::tui::tabs::notes::view::{
 };
 use crate::tui::tabs::tasks::modals::{TaskPresetPickerModal, TaskRetagPickerModal};
 use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
-use crate::tui::widgets::{FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PickerOutcome};
 
 // ── Trait ────────────────────────────────────────────────────────────
 
@@ -193,42 +190,6 @@ pub struct ConfirmDeleteState {
     pub focus: ConfirmChoice,
 }
 
-/// State for the Journal-tab Sources Manager modal. Owns a live
-/// `sources` working set the user can mutate (add/remove/clear) plus
-/// an optional inner fuzzy picker; on `Enter` it commits the working
-/// set back to the Journal tab via [`AppRequest::GatherCommitSources`].
-/// On `Esc` it cancels without committing.
-pub struct GatherSourcesModal {
-    /// Working copy of the source set — mutations stay local until the
-    /// user commits with Enter.
-    pub sources: Vec<GatherTarget>,
-    /// Row cursor into `sources`. Clamped on every mutation.
-    pub cursor: usize,
-    /// Window from the Journal tab's current state, passed back on
-    /// commit so the Journal tab can keep it attached after rebuild.
-    pub window: Option<GatherWindow>,
-    /// Inner add-source picker. `Some` while the picker overlay owns
-    /// the keyboard; cleared on selection or `Esc`.
-    pub picker: Option<FuzzyPicker<GatherSourcePickerSource>>,
-}
-
-/// State for the Append-or-Replace prompt modal. Raised when an
-/// external `AppRequest::GatherAddSources` arrives on the Journal
-/// tab; commits one of two `AppRequest::GatherCommitSources` shapes
-/// depending on the user's pick.
-pub struct GatherAppendOrReplaceModal {
-    /// Sources the Journal tab currently holds — needed to compute the
-    /// union when the user picks Append.
-    pub current_sources: Vec<GatherTarget>,
-    /// Targets being added by the external request.
-    pub incoming_targets: Vec<GatherTarget>,
-    /// Window from the Journal tab's current state, preserved on
-    /// either commit path (the prompt itself does not change the window).
-    pub window: Option<GatherWindow>,
-    /// Which choice is currently focused.
-    pub focus: AppendOrReplaceMode,
-}
-
 /// The set of modal variants the App may hold at a given time. Each
 /// variant wraps the state type that owns the modal's data; the variant
 /// itself is the discriminator for dispatch.
@@ -282,12 +243,6 @@ pub enum ActiveModal {
     /// Full-form task *create* popup hosted on the Graph tab
     /// (graph-task-edit-modal §4). Opened by the `TaskLeader`.
     TaskCreate(Box<TaskCreateState>),
-    /// Sources Manager for the Journal tab: view / add / remove /
-    /// clear sources, with an inner ghost-aware fuzzy picker.
-    GatherSources(GatherSourcesModal),
-    /// Append-or-Replace prompt raised on the Journal tab when an
-    /// external `GatherAddSources` request arrives.
-    GatherAppendOrReplace(GatherAppendOrReplaceModal),
     /// Fuzzy picker over task presets (user `Config::presets` + built-in
     /// `query::preset::builtin`), hosted by the Tasks tab. On Enter
     /// posts `AppRequest::Tasks(TasksRequest::ApplyPreset(dsl))`.
@@ -303,8 +258,8 @@ pub enum ActiveModal {
     /// closes with no write.
     TaskMove(Box<crate::tui::tabs::tasks::modals::TaskMoveModal>),
     /// Multi-step "pick paragraphs from a note → pin as protected
-    /// sections" flow. Source-driven copy-to-synth (the gather/recent
-    /// feeds' sibling). Driven via the shared
+    /// sections" flow. Source-driven copy-to-synth (the Search/Recent feed
+    /// tabs' sibling). Driven via the shared
     /// [`ParagraphSynthState`] step machine.
     ParagraphSynth(ParagraphSynthState),
 }
@@ -331,8 +286,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskLeader(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskCreate(s) => s.handle_event(ev, ctx),
-            ActiveModal::GatherSources(s) => s.handle_event(ev, ctx),
-            ActiveModal::GatherAppendOrReplace(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskMove(s) => s.handle_event(ev, ctx),
@@ -361,8 +314,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.render(frame, area, ctx),
             ActiveModal::TaskLeader(s) => s.render(frame, area, ctx),
             ActiveModal::TaskCreate(s) => s.render(frame, area, ctx),
-            ActiveModal::GatherSources(s) => s.render(frame, area, ctx),
-            ActiveModal::GatherAppendOrReplace(s) => s.render(frame, area, ctx),
             ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskMove(s) => s.render(frame, area, ctx),
@@ -389,8 +340,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.keymap_help(),
             ActiveModal::TaskLeader(s) => s.keymap_help(),
             ActiveModal::TaskCreate(s) => s.keymap_help(),
-            ActiveModal::GatherSources(s) => s.keymap_help(),
-            ActiveModal::GatherAppendOrReplace(s) => s.keymap_help(),
             ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
             ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
             ActiveModal::TaskMove(s) => s.keymap_help(),
@@ -417,8 +366,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(_) => "task-edit",
             ActiveModal::TaskLeader(_) => "task-leader",
             ActiveModal::TaskCreate(_) => "task-create",
-            ActiveModal::GatherSources(_) => "journal-sources",
-            ActiveModal::GatherAppendOrReplace(_) => "journal-append-or-replace",
             ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
             ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
             ActiveModal::TaskMove(_) => "task-move",
@@ -445,8 +392,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.commands(),
             ActiveModal::TaskLeader(s) => s.commands(),
             ActiveModal::TaskCreate(s) => s.commands(),
-            ActiveModal::GatherSources(s) => s.commands(),
-            ActiveModal::GatherAppendOrReplace(s) => s.commands(),
             ActiveModal::TaskPresetPicker(s) => s.commands(),
             ActiveModal::TaskRetagPicker(s) => s.commands(),
             ActiveModal::TaskMove(s) => s.commands(),
@@ -473,8 +418,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.keymap(),
             ActiveModal::TaskLeader(s) => s.keymap(),
             ActiveModal::TaskCreate(s) => s.keymap(),
-            ActiveModal::GatherSources(s) => s.keymap(),
-            ActiveModal::GatherAppendOrReplace(s) => s.keymap(),
             ActiveModal::TaskPresetPicker(s) => s.keymap(),
             ActiveModal::TaskRetagPicker(s) => s.keymap(),
             ActiveModal::TaskMove(s) => s.keymap(),
@@ -501,8 +444,6 @@ impl Modal for ActiveModal {
             ActiveModal::TaskEdit(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskLeader(_) => CommandOutcome::NotHandled,
             ActiveModal::TaskCreate(s) => s.dispatch_command(cmd, ctx),
-            ActiveModal::GatherSources(s) => s.dispatch_command(cmd, ctx),
-            ActiveModal::GatherAppendOrReplace(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskMove(s) => s.dispatch_command(cmd, ctx),
@@ -1141,356 +1082,4 @@ impl Modal for QueryBar {
     fn keymap(&self) -> &KeyMap {
         &mc::QUERY_BAR_KEYMAP
     }
-}
-
-// ── Journal sources manager ─────────────────────────────────────────
-
-impl Modal for GatherSourcesModal {
-    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
-        let Event::Key(k) = ev else {
-            return ModalOutcome::NotHandled;
-        };
-        // Inner picker captures the keyboard ahead of the row-list
-        // keymap. Selecting an item appends it to `sources` (deduping)
-        // and closes the picker back to the row list; Esc just closes
-        // the picker.
-        if let Some(picker) = self.picker.as_mut() {
-            match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => {
-                    let target = match hit {
-                        GatherSourceHit::Note(p) => GatherTarget::Note(p),
-                        GatherSourceHit::Ghost(r) => GatherTarget::Ghost(r),
-                    };
-                    if !self.sources.iter().any(|s| s == &target) {
-                        self.sources.push(target);
-                    }
-                    self.picker = None;
-                    self.clamp_cursor();
-                    return ModalOutcome::Consumed;
-                }
-                PickerOutcome::Cancelled => {
-                    self.picker = None;
-                    return ModalOutcome::Consumed;
-                }
-                PickerOutcome::StillOpen => return ModalOutcome::Consumed,
-                PickerOutcome::NotHandled => return ModalOutcome::Consumed,
-            }
-        }
-        // Row-list keymap.
-        match k.code {
-            KeyCode::Esc => ModalOutcome::Closed,
-            KeyCode::Enter => {
-                *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
-                    sources: self.sources.clone(),
-                    window: self.window.clone(),
-                });
-                ModalOutcome::Closed
-            }
-            KeyCode::Char('a') => {
-                self.open_picker(ctx);
-                ModalOutcome::Consumed
-            }
-            KeyCode::Char('d') => {
-                if !self.sources.is_empty() && self.cursor < self.sources.len() {
-                    self.sources.remove(self.cursor);
-                    self.clamp_cursor();
-                }
-                ModalOutcome::Consumed
-            }
-            KeyCode::Char('c') => {
-                self.sources.clear();
-                self.cursor = 0;
-                ModalOutcome::Consumed
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                }
-                ModalOutcome::Consumed
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.sources.is_empty() && self.cursor + 1 < self.sources.len() {
-                    self.cursor += 1;
-                }
-                ModalOutcome::Consumed
-            }
-            _ => ModalOutcome::Consumed,
-        }
-    }
-
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
-        render_journal_sources(frame, area, self);
-    }
-
-    fn keymap_help(&self) -> HelpSection {
-        HelpSection::new(
-            "Journal sources",
-            &[
-                ("a", "add"),
-                ("d", "remove"),
-                ("c", "clear"),
-                ("Enter", "commit"),
-                ("Esc", "cancel"),
-                ("↑/↓ · j/k", "navigate"),
-            ],
-        )
-    }
-
-    fn name(&self) -> &'static str {
-        "journal-sources"
-    }
-
-    fn commands(&self) -> &'static [CommandDef] {
-        mc::JOURNAL_SOURCES_COMMANDS
-    }
-
-    fn keymap(&self) -> &KeyMap {
-        &mc::JOURNAL_SOURCES_KEYMAP
-    }
-}
-
-impl GatherSourcesModal {
-    fn clamp_cursor(&mut self) {
-        if self.sources.is_empty() {
-            self.cursor = 0;
-        } else if self.cursor >= self.sources.len() {
-            self.cursor = self.sources.len() - 1;
-        }
-    }
-
-    /// Open the inner add-source fuzzy picker against the App-owned
-    /// shared snapshot, so ghost rows match what every tab shows. Stays
-    /// closed (no-op) in the brief window before the first snapshot.
-    fn open_picker(&mut self, ctx: &TabCtx) {
-        let Some(snap) = ctx.snapshot.as_ref() else {
-            return;
-        };
-        let source = GatherSourcePickerSource::with_scan(
-            std::sync::Arc::clone(ctx.vault),
-            std::sync::Arc::clone(ctx.recents),
-            &snap.graph,
-            Some(std::sync::Arc::clone(&snap.scan)),
-        );
-        self.picker = Some(FuzzyPicker::new(source));
-    }
-}
-
-fn render_journal_sources(frame: &mut Frame, area: Rect, state: &mut GatherSourcesModal) {
-    let popup_height = 16u16.min(area.height.saturating_sub(2));
-    let popup_width = 70u16.min(area.width.saturating_sub(4));
-    let popup_area = Rect {
-        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-        width: popup_width,
-        height: popup_height,
-    };
-    frame.render_widget(Clear, popup_area);
-    let title = format!(" Journal Sources — {} source(s) ", state.sources.len());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(Style::default().fg(crate::tui::palette::PRIMARY));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    if let Some(picker) = state.picker.as_mut() {
-        // Inner picker takes the whole inner area.
-        picker.render(frame, inner);
-        return;
-    }
-
-    // Layout: [row list … footer 1 row]
-    let list_height = inner.height.saturating_sub(1);
-    let list_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: list_height,
-    };
-    let footer_area = Rect {
-        x: inner.x,
-        y: inner.y + list_height,
-        width: inner.width,
-        height: 1,
-    };
-
-    // Row list (or empty hint).
-    if state.sources.is_empty() {
-        let hint = Line::from(Span::styled(
-            "no sources — press `a` to add",
-            Style::default().fg(crate::tui::palette::DIM),
-        ));
-        frame.render_widget(Paragraph::new(hint), list_area);
-    } else {
-        let lines: Vec<Line> = state
-            .sources
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let style = if i == state.cursor {
-                    Style::default()
-                        .fg(crate::tui::palette::PRIMARY)
-                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                let cursor = if i == state.cursor { "▶ " } else { "  " };
-                Line::from(Span::styled(format!("{cursor}{}", t.label()), style))
-            })
-            .collect();
-        frame.render_widget(Paragraph::new(lines), list_area);
-    }
-
-    let footer = Line::from(Span::styled(
-        "a add  d remove  c clear  Enter commit  Esc cancel",
-        Style::default().fg(crate::tui::palette::DIM),
-    ));
-    frame.render_widget(Paragraph::new(footer), footer_area);
-}
-
-// ── Journal append-or-replace prompt ────────────────────────────────
-
-impl Modal for GatherAppendOrReplaceModal {
-    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> ModalOutcome {
-        let Event::Key(k) = ev else {
-            return ModalOutcome::NotHandled;
-        };
-        match k.code {
-            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => ModalOutcome::Closed,
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                self.commit_append(ctx);
-                ModalOutcome::Closed
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                self.commit_replace(ctx);
-                ModalOutcome::Closed
-            }
-            KeyCode::Enter => {
-                match self.focus {
-                    AppendOrReplaceMode::Append => self.commit_append(ctx),
-                    AppendOrReplaceMode::Replace => self.commit_replace(ctx),
-                }
-                ModalOutcome::Closed
-            }
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                self.focus = match self.focus {
-                    AppendOrReplaceMode::Append => AppendOrReplaceMode::Replace,
-                    AppendOrReplaceMode::Replace => AppendOrReplaceMode::Append,
-                };
-                ModalOutcome::Consumed
-            }
-            _ => ModalOutcome::Consumed,
-        }
-    }
-
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
-        render_journal_append_or_replace(frame, area, self);
-    }
-
-    fn keymap_help(&self) -> HelpSection {
-        HelpSection::new(
-            "Append or replace",
-            &[
-                ("a", "append"),
-                ("r", "replace"),
-                ("c / Esc", "cancel"),
-                ("Enter", "commit focused choice"),
-                ("←/→ · Tab", "switch focus"),
-            ],
-        )
-    }
-
-    fn name(&self) -> &'static str {
-        "journal-append-or-replace"
-    }
-
-    fn commands(&self) -> &'static [CommandDef] {
-        mc::JOURNAL_APPEND_REPLACE_COMMANDS
-    }
-
-    fn keymap(&self) -> &KeyMap {
-        &mc::JOURNAL_APPEND_REPLACE_KEYMAP
-    }
-}
-
-impl GatherAppendOrReplaceModal {
-    fn commit_append(&self, ctx: &TabCtx) {
-        // Union: current sources, then incoming targets not already
-        // present, in insertion order. GatherTarget derives Eq, so
-        // equality is structural.
-        let mut sources = self.current_sources.clone();
-        for t in &self.incoming_targets {
-            if !sources.iter().any(|s| s == t) {
-                sources.push(t.clone());
-            }
-        }
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
-            sources,
-            window: self.window.clone(),
-        });
-    }
-
-    fn commit_replace(&self, ctx: &TabCtx) {
-        *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherCommitSources {
-            sources: self.incoming_targets.clone(),
-            // Replace clears any previous window — the incoming
-            // request didn't carry one.
-            window: None,
-        });
-    }
-}
-
-fn render_journal_append_or_replace(
-    frame: &mut Frame,
-    area: Rect,
-    state: &GatherAppendOrReplaceModal,
-) {
-    let height = 5u16.min(area.height);
-    let y = area.y + area.height.saturating_sub(height);
-    let prompt_area = Rect {
-        x: area.x,
-        y,
-        width: area.width,
-        height,
-    };
-    let title = format!(
-        " Add {} target(s) to Journal sources? ",
-        state.incoming_targets.len()
-    );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(Style::default().fg(crate::tui::palette::PRIMARY));
-    let inner = block.inner(prompt_area);
-    frame.render_widget(Clear, prompt_area);
-    frame.render_widget(block, prompt_area);
-
-    let (a_style, r_style) = match state.focus {
-        AppendOrReplaceMode::Append => (
-            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
-            Style::default().fg(crate::tui::palette::DIM),
-        ),
-        AppendOrReplaceMode::Replace => (
-            Style::default().fg(crate::tui::palette::DIM),
-            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
-        ),
-    };
-    let summary = Line::from(Span::styled(
-        format!(
-            "current: {} source(s); incoming: {} target(s)",
-            state.current_sources.len(),
-            state.incoming_targets.len()
-        ),
-        Style::default().fg(crate::tui::palette::DIM),
-    ));
-    let choices = Line::from(vec![
-        Span::styled(" [a] append ", a_style),
-        Span::raw("  "),
-        Span::styled(" [r] replace ", r_style),
-        Span::raw("    [c] cancel"),
-    ]);
-    frame.render_widget(
-        Paragraph::new(vec![summary, Line::from(""), choices]),
-        inner,
-    );
 }

@@ -65,74 +65,71 @@ impl GraphTab {
                 }
                 CommandOutcome::Handled
             }
-            "graph.journal" => {
-                let target = Self::graph_of(&self.snapshot).and_then(|graph| {
+            "graph.search-mentions" => {
+                let title = Self::graph_of(&self.snapshot).and_then(|graph| {
                     let row = self
                         .active_view()
                         .tree
                         .rows()
                         .get(self.active_view().selected)?;
                     match graph.node(row.note_id) {
-                        NodeKind::Note(n) => {
-                            Some(crate::tui::tab::GatherTarget::Note(n.path.clone()))
-                        }
-                        NodeKind::Ghost(g) => {
-                            Some(crate::tui::tab::GatherTarget::Ghost(g.raw.clone()))
-                        }
+                        NodeKind::Note(n) => Some(n.title.clone()),
+                        NodeKind::Ghost(g) => Some(g.raw.clone()),
                         _ => None,
                     }
                 });
-                if let Some(target) = target {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherFor { target });
+                if let Some(title) = title {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::SearchWithQuery {
+                        query: format!("[[{title}]]"),
+                        any: false,
+                    });
                 } else {
                     queue_toast(
                         ctx,
-                        "select a Note or Ghost row to open its journal",
+                        "select a Note or Ghost row to open its mentions in Search",
                         ToastStyle::Error,
                     );
                 }
                 CommandOutcome::Handled
             }
-            "graph.add-to-journal-sources" => {
-                let targets: Vec<crate::tui::tab::GatherTarget> =
-                    match Self::graph_of(&self.snapshot) {
-                        Some(graph) => {
-                            let v = self.active_view();
-                            // Multi-selection drives the target list when
-                            // non-empty; otherwise fall back to the cursor row.
-                            let ids: Vec<ft_core::graph::NoteId> = if v.multi_selected.is_empty() {
-                                v.tree
-                                    .rows()
-                                    .get(v.selected)
-                                    .map(|r| vec![r.note_id])
-                                    .unwrap_or_default()
-                            } else {
-                                v.multi_selected
-                                    .iter()
-                                    .filter_map(|k| graph.id_for_key(k))
-                                    .collect()
-                            };
-                            ids.into_iter()
-                                .filter_map(|id| match graph.node(id) {
-                                    NodeKind::Note(n) => {
-                                        Some(crate::tui::tab::GatherTarget::Note(n.path.clone()))
-                                    }
-                                    NodeKind::Ghost(g) => {
-                                        Some(crate::tui::tab::GatherTarget::Ghost(g.raw.clone()))
-                                    }
-                                    _ => None,
-                                })
+            "graph.search-mentions-multi" => {
+                let titles: Vec<String> = match Self::graph_of(&self.snapshot) {
+                    Some(graph) => {
+                        let v = self.active_view();
+                        // Multi-selection drives the target list when
+                        // non-empty; otherwise fall back to the cursor row.
+                        let ids: Vec<ft_core::graph::NoteId> = if v.multi_selected.is_empty() {
+                            v.tree
+                                .rows()
+                                .get(v.selected)
+                                .map(|r| vec![r.note_id])
+                                .unwrap_or_default()
+                        } else {
+                            v.multi_selected
+                                .iter()
+                                .filter_map(|k| graph.id_for_key(k))
                                 .collect()
-                        }
-                        None => Vec::new(),
-                    };
-                if targets.is_empty() {
+                        };
+                        ids.into_iter()
+                            .filter_map(|id| match graph.node(id) {
+                                NodeKind::Note(n) => Some(n.title.clone()),
+                                NodeKind::Ghost(g) => Some(g.raw.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    None => Vec::new(),
+                };
+                if titles.is_empty() {
                     queue_toast(ctx, "no Note or Ghost rows selected", ToastStyle::Error);
                 } else {
-                    *ctx.pending_request.borrow_mut() = Some(AppRequest::GatherAddSources {
-                        targets,
-                        default_mode: crate::tui::tab::AppendOrReplaceMode::Append,
-                    });
+                    let query = titles
+                        .iter()
+                        .map(|t| format!("[[{t}]]"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    *ctx.pending_request.borrow_mut() =
+                        Some(AppRequest::SearchWithQuery { query, any: true });
                 }
                 CommandOutcome::Handled
             }
@@ -803,7 +800,7 @@ impl GraphTab {
         if ft_core::git::discover_repo(&ctx.vault.path).is_none() {
             queue_toast(
                 ctx,
-                "vault is not inside a git repository — promote needs git history for the seeded journal",
+                "vault is not inside a git repository — promote needs git history for the pinned scaffold",
                 ToastStyle::Error,
             );
             return;

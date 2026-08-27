@@ -1,7 +1,7 @@
 //! Paragraph-synth flow: copy paragraphs from a source note into a
 //! target note as protected `[!ft-source]` callouts.
 //!
-//! This is the source-driven sibling of the gather/recent send-to-synth
+//! This is the source-driven sibling of the search/recent send-to-synth
 //! flows: instead of accepting pre-computed feed paragraphs, the user
 //! picks a note, multi-selects its paragraphs (with optional shrink-only
 //! range adjust), and commits them via the existing

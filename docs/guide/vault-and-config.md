@@ -218,9 +218,9 @@ All keys are optional; notes with no `ft:` map behave exactly as
 notes with no ft keys (tasks append to file end, not a synth note,
 etc.). The flat `ft-tasks-section` / `ft-append-section` /
 `ft-synth` / `ft-synth-targets` keys are no longer recognized — use
-the nested form above. Writers (`ft notes synth scaffold`, `grow`,
-the gather tab's mark-and-append) emit only the nested form and will
-strip any legacy flat synth keys from a note they touch.
+the nested form above. Writers (`ft notes synth scaffold` and the
+TUI's mark-and-append flow) emit only the nested form and will strip
+any legacy flat synth keys from a note they touch.
 
 ## Environment variables
 

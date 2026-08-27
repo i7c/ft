@@ -97,12 +97,11 @@ target (spaces allowed inside the brackets); `-term` **excludes**.
 Space-separated terms **AND** by default — every term must appear in
 the *same paragraph*, which is the cross-reference query (eigen AND
 memoization in one paragraph = co-occurrence). Add `--any` to OR
-them instead (the gather-parity form: paragraphs mentioning any of
-the links).
+them instead (OR over links, matching the old multi-link form).
 
 ```sh
 ft notes search "eigen memoization"        # both terms, one paragraph
-ft notes search "[[Foo]] [[Bar]]" --any    # links either → old gather form
+ft notes search "[[Foo]] [[Bar]]" --any    # links either → OR
 ft notes search "eigen -task"              # eigen, excluding task mentions
 ft notes search "~memoizaton"              # typo-tolerant
 ft notes search "eigen" --sort date        # newest edits first (git blame)
@@ -118,12 +117,6 @@ The AND form is the new capability the graph walk couldn't express:
 signal you want when synthesizing a bridge note. The `-` exclude form
 lets you subtract noise ("eigen -matrix" if one eigen thread is
 uninteresting).
-
-### Deprecation note
-
-`ft notes gather` (and the Gather tab) are deprecated: still
-functional, hidden from help, and pointing at `ft notes search`. The
-citation badges on `ft notes recent` are unchanged.
 
 ## Step 3: synthesis
 
@@ -241,8 +234,7 @@ Keymap:
 | `R` | reload |
 
 Pressing `Enter` switches to the **Search** tab with the selected
-links prefilled as `[[Foo]] [[Bar]]` in any-mode (the old gather
-behavior). From there:
+links prefilled as `[[Foo]] [[Bar]]` in any-mode. From there:
 
 ```
 ┌ Search ────────────────────────────────────────────────────────────┐

@@ -1,11 +1,10 @@
 //! `History` tab — interactive surface for
 //! [`ft_core::recent::build_recent`].
 //!
-//! Where the Journal tab is target-centric ("what mentions `[[X]]`?"),
 //! History is time-shaped: a whole-vault, reverse-chronological feed of
 //! the paragraphs edited within a window (default `7d`). It reuses the
-//! Journal tab's row renderer and send-to-synth overlay
-//! ([`crate::tui::tabs::gather`]'s `pub(crate)` helpers) and the shared
+//! shared feed row renderer and send-to-synth overlay
+//! (the `widgets::feed_text` helpers) and the shared
 //! section-move modal.
 //!
 //! Row actions: `Enter` opens the source note in `$EDITOR`; `Space`
@@ -39,10 +38,10 @@ use crate::tui::notes_actions::queue_toast;
 use crate::tui::palette;
 use crate::tui::synth_send::{SynthSendFlow, SynthSendHost};
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle};
-use crate::tui::tabs::gather::{
-    citation_badge_line, citation_detail_line, inline_markdown_spans, pad_to_width, wrap_line,
+use crate::tui::widgets::{
+    citation_badge_line, citation_detail_line, inline_markdown_spans, pad_to_width,
+    render_feed_split, wrap_line,
 };
-use crate::tui::widgets::render_feed_split;
 
 // ── Commands ─────────────────────────────────────────────────────────
 
@@ -389,7 +388,7 @@ impl RecentTab {
         if self.entries.is_empty() {
             return;
         }
-        self.synth_send.open_existing(ctx, false);
+        self.synth_send.open_existing(ctx);
     }
 
     /// `S` — open the folder picker for the create-new synth flow.
@@ -418,15 +417,14 @@ impl RecentTab {
     }
 }
 
-/// The Recent tab supplies its feed rows (selected, or the whole feed);
-/// it has no watermark flow (`new_only` is always false) and requests a
-/// graph refresh after a successful send so badges re-derive.
+/// The Recent tab supplies its feed rows (selected, or the whole feed)
+/// and requests a graph refresh after a successful send so badges
+/// re-derive.
 impl SynthSendHost for RecentTab {
     fn synth_sources(
         &mut self,
         _ctx: &mut TabCtx,
         _target: &Path,
-        _new_only: bool,
     ) -> Vec<ft_core::synth::source::SynthSource> {
         self.entries_to_send()
     }

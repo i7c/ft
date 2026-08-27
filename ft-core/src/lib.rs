@@ -5,7 +5,6 @@ pub mod error;
 pub mod export;
 pub mod frontmatter;
 pub mod fs;
-pub mod gather;
 pub mod git;
 pub mod graph;
 pub mod markdown;

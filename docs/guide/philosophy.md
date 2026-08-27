@@ -2,7 +2,7 @@
 
 `ft` is built around one bet about note-taking: **capture can't wait,
 and filing can't be predicted.** Everything else in the tool — the
-graph, the gather feed, the synthesis flow, the CLI/TUI split — follows
+graph, the search feed, the synthesis flow, the CLI/TUI split — follows
 from taking that bet seriously. This chapter is the long-form answer
 to *why the tool is shaped the way it is*.
 
@@ -47,7 +47,7 @@ Two properties make this cheap act load-bearing:
 
 - **The target doesn't need to exist.** Write `[[activation]]` even
   though there is no `activation.md`. `ft` tracks it as a *ghost*, and
-  ghosts participate in everything — backlinks, the gather feed, the
+  ghosts participate in everything — backlinks, the search feed, the
   pulse ranking. A concept accumulates weight before anyone decides
   it deserves a page.
 - **Completion keeps it frictionless.** If you write in Neovim,
@@ -67,10 +67,10 @@ Here is the payoff of that contract. Because every paragraph carries
 its concept mentions, the unsorted pile never becomes an unqueryable
 pile:
 
-- `ft notes gather --link "[[Foo]]"` regathers every paragraph in the
-  vault that mentions the concept, reverse-chronological, dated from
-  git history. Add more `--link` flags and co-occurring paragraphs get
-  a `matched:` badge — the places where two topics collided.
+- `ft notes search "[[Foo]]"` surfaces every paragraph in the vault
+  that mentions the concept. `--sort date` orders them
+  reverse-chronologically from git history; `--any` with more links
+  finds the places where two topics collided.
 - `ft notes related` scores which concepts appear together with a
   note, straight from the graph.
 
@@ -96,7 +96,7 @@ being precise about this, because they feel different in use:
 
 - **Pull** — topic-shaped, genuinely on demand. You need everything
   about `[[onboarding]]` *now*, perhaps minutes before a meeting:
-  `ft notes gather --link` and `ft notes related` answer from a
+  `ft notes search "[[onboarding]]"` and `ft notes related` answer from a
   standing start.
 - **Sweep** — time-shaped. You want to know what accumulated:
   `ft notes pulse --since 7d` ranks the concepts most mentioned in the
@@ -150,8 +150,8 @@ names, and every tool that counts references undercounts by three.
 1. **Completion at capture** (ft.nvim, Obsidian) makes the existing
    spelling the path of least resistance — most drift never happens.
 2. **Aliases when multiple names are legitimate.** Links listed under
-   a note's `## Related` heading act as aliases: the gather feed for that
-   note also gathers paragraphs mentioning them. Two names can
+   a note's `## Related` heading act as aliases: the search feed for that
+   note also surfaces paragraphs mentioning them. Two names can
    coexist without splitting the concept's history.
    `ft notes update-related` maintains the section interactively,
    suggesting candidates scored by graph co-occurrence.
@@ -168,7 +168,7 @@ names, and every tool that counts references undercounts by three.
 A concrete picture of the shape this produces. The capture surface is
 mostly the **daily note**: ad-hoc thought lands there as short
 sections, a few paragraphs each, named in the moment. The retrieval
-unit is the **paragraph** — gather, recent, and pulse all
+unit is the **paragraph** — search, recent, and pulse all
 operate at paragraph granularity, which is what makes a daily note of
 unrelated thoughts usable: each paragraph carries its own concepts and
 resurfaces independently. This is finer-grained than note-level
@@ -204,9 +204,10 @@ Practical consequences:
   and `ft` at the same time; changes from either land on disk and the
   other picks them up on the next read.
 - **No proprietary state.** No separate database, index, or sync log.
-  There's a small `git blame` cache so `ft notes gather` doesn't
-  re-shell-out, but it's derivative — delete it and the only cost is
-  the next gather taking longer.
+  There's a small `git blame` cache so `ft notes recent` and
+  `ft notes search --sort date` don't re-shell-out, but it's
+  derivative — delete it and the only cost is the next run taking
+  longer.
 - **Byte-compatible task writes.** A task rewritten by `ft` is
   byte-equivalent to what the Tasks plugin produces for the same
   fields, so the plugin keeps working over `ft`'s writes.

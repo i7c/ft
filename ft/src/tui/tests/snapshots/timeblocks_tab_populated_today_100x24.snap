@@ -1,9 +1,8 @@
 ---
 source: ft/src/tui/tests/timeblocks.rs
-assertion_line: 51
 expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Gather  │  6 Tasks  │  7 Timeblocks            
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
 ┌ sidebar ─────────────┐┌ Sun 2026-05-10 (today) ──────────────────────────────────────────────────┐
 │                      ││▶   1  09:00 - 10:00  standup @work                                       │
 │ Sun 10 May           ││    2  10:00 - 10:30  review @work/code                                   │

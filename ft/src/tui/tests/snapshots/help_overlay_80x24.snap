@@ -2,7 +2,7 @@
 source: ft/src/tui/tests/mod.rs
 expression: frame
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐er  │  7 T
+  1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
 > node whe│Keybindings — Graph                                      █│ note-link
  1: node w│                                                         █│          
 ┌ node whe│  Global                                                 █│─────────┐
@@ -23,6 +23,6 @@ expression: frame
 │         │                                                         ║│         │
 │         │  Notes                                                  ║│         │
 │         │  Shift+r        Open the Related panel for the selected ║│         │
-│         │  Shift+j        Open the Journal tab for the selected no║│         │
+│         │  Shift+j        Open Search for the selected note or gho║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

@@ -1,27 +1,18 @@
-//! Accrete support for synth notes: dedup incoming journal entries
-//! against what's already pinned, and compute a "last synth" watermark
-//! from a note's existing `[!ft-source]` callouts.
+//! Accrete support for synth notes: dedup incoming entries against
+//! what's already pinned in a note.
 //!
-//! These are the two pure-ish primitives behind `ft synth grow` and the
-//! Journal tab's new-only flow:
-//!
-//! - [`filter_missing`] drops entries whose body text is already pinned
-//!   in the note, making scaffold's append path idempotent. Pure (no I/O).
-//! - [`last_synth_watermark`] computes the newest pinned commit SHA among
-//!   a note's callouts and its committer date — the scope for `--new-only`.
-//!   It reads the git repo (one `rev-list` + one `log` call), so it is
-//!   **not** pure; callers pass a `repo_root`.
+//! [`filter_missing`] drops entries whose `(source_path, body)` is
+//! already pinned, making scaffold's append path idempotent. Pure
+//! (no I/O). The former `grow --new-only` watermark primitive
+//! (`last_synth_watermark`) was removed with the deprecated gather tab;
+//! append-dedup alone keeps re-running scaffold idempotent.
 //!
 //! See [`crate::synth`] for the higher-level synth-note contract and
-//! `docs/architecture.md` §"Synthesis" for the grow flow.
+//! `docs/architecture.md` §"Synthesis".
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use chrono::NaiveDate;
-
-use crate::error::{Error, Result};
-use crate::git;
 use crate::synth::callout::{compute_section_hash, ParsedCallout, CONTENT_HASH_PREFIX_LEN};
 use crate::synth::source::SynthSource;
 
@@ -66,79 +57,10 @@ pub fn filter_missing(existing: &[ParsedCallout], entries: Vec<SynthSource>) -> 
         .collect()
 }
 
-/// Compute the last-synth watermark from a note's existing callouts: the
-/// topological tip among the callouts' pinned `commit_sha` values (the
-/// descendant reachable from all of them), paired with that commit's
-/// committer date.
-///
-/// Each pinned short SHA is verified reachable via `git cat-file -e`
-/// before inclusion; unreachable SHAs (shallow clone, branch switch,
-/// dropped-by-rebase) are skipped. When all SHAs are unreachable, or the
-/// callout list is empty, returns `Ok(None)` — the caller degrades
-/// `--new-only` to "all missing" with a warning. An ambiguous short SHA
-/// (matches more than one commit) surfaces as `Err(SynthWatermark)`.
-///
-/// `repo_root` is the git repository root (not the vault root); callers
-/// typically obtain it via `git::RepoMap::discover`.
-pub fn last_synth_watermark(
-    repo_root: &Path,
-    existing: &[ParsedCallout],
-) -> Result<Option<(String, NaiveDate)>> {
-    // Collect distinct short SHAs.
-    let mut distinct: Vec<&str> = Vec::new();
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for c in existing {
-        if seen.insert(c.commit_sha.as_str()) {
-            distinct.push(c.commit_sha.as_str());
-        }
-    }
-    if distinct.is_empty() {
-        return Ok(None);
-    }
-
-    // Keep only reachable SHAs.
-    let reachable: Vec<&str> = distinct
-        .iter()
-        .copied()
-        .filter(|sha| git::object_exists(repo_root, sha))
-        .collect();
-    if reachable.is_empty() {
-        return Ok(None);
-    }
-
-    // Topological tip = the descendant reachable from all of them.
-    let tip = git::rev_list_tip(repo_root, &reachable).map_err(|e| Error::SynthWatermark {
-        sha: reachable.join(", "),
-        detail: format!("rev-list failed: {e}"),
-    })?;
-
-    let date_iso =
-        git::commit_committer_date_iso(repo_root, &tip).map_err(|e| Error::SynthWatermark {
-            sha: tip.clone(),
-            detail: format!("log -1 --format=%cI failed: {e}"),
-        })?;
-    let date = parse_iso_date(&date_iso).ok_or_else(|| Error::SynthWatermark {
-        sha: tip.clone(),
-        detail: format!("unparseable committer date `{date_iso}`"),
-    })?;
-
-    Ok(Some((tip, date)))
-}
-
-/// Parse the date portion (`YYYY-MM-DD`) out of an ISO 8601 committer
-/// timestamp like `2026-06-01T12:34:56+00:00`. Returns `None` on a
-/// malformed prefix.
-fn parse_iso_date(iso: &str) -> Option<NaiveDate> {
-    // Take everything up to 'T' (or the whole string if no 'T') and parse.
-    let date_part = iso.split('T').next()?;
-    NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::process::Command;
 
     // ── filter_missing ──────────────────────────────────────────────
 
@@ -236,135 +158,5 @@ mod tests {
             1,
             "hash-prefix match on a different body must NOT drop the entry"
         );
-    }
-
-    // ── last_synth_watermark ────────────────────────────────────────
-
-    /// Build a temp git repo, return its root path.
-    fn init_repo(tmp: &Path) {
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .current_dir(tmp)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .args(args)
-                .output()
-                .expect("git");
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        run(&["init", "-b", "main"]);
-        run(&["config", "user.name", "T"]);
-        run(&["config", "user.email", "t@e.com"]);
-        run(&["config", "commit.gpgsign", "false"]);
-        run(&["config", "maintenance.auto", "false"]);
-    }
-
-    fn commit_at(tmp: &Path, msg: &str, date: &str) -> String {
-        let out = Command::new("git")
-            .current_dir(tmp)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_AUTHOR_DATE", date)
-            .env("GIT_COMMITTER_DATE", date)
-            .args(["commit", "--allow-empty", "-m", msg])
-            .output()
-            .expect("git commit");
-        assert!(out.status.success());
-        // Resolve the new commit's full SHA.
-        let out = Command::new("git")
-            .current_dir(tmp)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("git rev-parse");
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
-    fn callout_with_sha(sha: &str, body: &str) -> ParsedCallout {
-        ParsedCallout {
-            source_path: PathBuf::from("notes/foo.md"),
-            line_start: 1,
-            line_end: 1,
-            commit_sha: sha.to_string(),
-            content_hash: compute_section_hash(body),
-            body: body.to_string(),
-            byte_range: 0..0,
-            header_line: 1,
-        }
-    }
-
-    #[test]
-    fn watermark_empty_callouts_is_none() {
-        let tmp = assert_fs::TempDir::new().unwrap();
-        init_repo(tmp.path());
-        commit_at(tmp.path(), "c1", "2026-01-01T00:00:00");
-        let out = last_synth_watermark(tmp.path(), &[]).unwrap();
-        assert!(out.is_none(), "empty callouts → None");
-    }
-
-    #[test]
-    fn watermark_descendant_tip_among_two() {
-        let tmp = assert_fs::TempDir::new().unwrap();
-        init_repo(tmp.path());
-        let sha_a = commit_at(tmp.path(), "c1", "2026-01-01T00:00:00");
-        let sha_b = commit_at(tmp.path(), "c2", "2026-06-01T00:00:00");
-        // Short SHAs to match callout storage.
-        let short_a = &sha_a[..7];
-        let short_b = &sha_b[..7];
-        let callouts = vec![
-            callout_with_sha(short_a, "body A"),
-            callout_with_sha(short_b, "body B"),
-        ];
-        let out = last_synth_watermark(tmp.path(), &callouts)
-            .unwrap()
-            .unwrap();
-        // Tip is the descendant (sha_b). Full SHA returned.
-        assert_eq!(out.0, sha_b);
-        assert_eq!(out.1, NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
-    }
-
-    #[test]
-    fn watermark_unreachable_sha_skipped() {
-        let tmp = assert_fs::TempDir::new().unwrap();
-        init_repo(tmp.path());
-        let sha_a = commit_at(tmp.path(), "c1", "2026-01-01T00:00:00");
-        let sha_b = commit_at(tmp.path(), "c2", "2026-06-01T00:00:00");
-        // Add a callout pinned to a clearly-bogus (unreachable) SHA.
-        let callouts = vec![
-            callout_with_sha("deadbee", "bogus body"),
-            callout_with_sha(&sha_b[..7], "body B"),
-        ];
-        let out = last_synth_watermark(tmp.path(), &callouts)
-            .unwrap()
-            .unwrap();
-        assert_eq!(out.0, sha_b, "unreachable SHA skipped, reachable tip used");
-        let _ = sha_a;
-    }
-
-    #[test]
-    fn watermark_all_unreachable_is_none() {
-        let tmp = assert_fs::TempDir::new().unwrap();
-        init_repo(tmp.path());
-        commit_at(tmp.path(), "c1", "2026-01-01T00:00:00");
-        let callouts = vec![
-            callout_with_sha("deadbee", "bogus A"),
-            callout_with_sha("feedfac", "bogus B"),
-        ];
-        let out = last_synth_watermark(tmp.path(), &callouts).unwrap();
-        assert!(out.is_none(), "all unreachable → None");
-    }
-
-    #[test]
-    fn parse_iso_date_extracts_yyyy_mm_dd() {
-        assert_eq!(
-            parse_iso_date("2026-06-01T12:34:56+00:00"),
-            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
-        );
-        assert_eq!(
-            parse_iso_date("2026-06-01"),
-            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
-        );
-        assert!(parse_iso_date("not-a-date").is_none());
     }
 }

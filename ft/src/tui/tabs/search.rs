@@ -44,9 +44,9 @@ use crate::tui::keymap::{KeyChord, KeyMap};
 use crate::tui::palette;
 use crate::tui::synth_send::{SynthSendFlow, SynthSendHost};
 use crate::tui::tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind};
-use crate::tui::tabs::gather::{inline_markdown_spans, wrap_line};
 use crate::tui::widgets::{
-    render_feed_split, render_inline_input, CursorMode, EditBuffer, InlineInput,
+    inline_markdown_spans, render_feed_split, render_inline_input, wrap_line, CursorMode,
+    EditBuffer, InlineInput,
 };
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -329,7 +329,6 @@ impl SynthSendHost for SearchTab {
         &mut self,
         _ctx: &mut TabCtx,
         _target: &std::path::Path,
-        _new_only: bool,
     ) -> Vec<ft_core::synth::source::SynthSource> {
         let chosen: Vec<&SearchResult> = if self.selected.is_empty() {
             self.results.iter().collect()
@@ -423,7 +422,7 @@ impl Tab for SearchTab {
             }
             "search.send-to-synth-existing" => {
                 if !self.results.is_empty() {
-                    self.synth_send.open_existing(ctx, false);
+                    self.synth_send.open_existing(ctx);
                 }
                 CommandOutcome::Handled
             }
@@ -613,7 +612,7 @@ impl Tab for SearchTab {
 
         // Preview pane: a header band (path · lines · matched labels ·
         // score, plus the blame date in date-sort mode) then the wrapped
-        // paragraph body with the gather-style inline markdown styling.
+        // paragraph body with the shared inline markdown styling.
         let mut preview_header: Vec<Line<'_>> = Vec::new();
         let mut preview_body: Vec<Line<'_>> = Vec::new();
         if let Some(row) = self.results.get(self.cursor) {

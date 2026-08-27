@@ -1,14 +1,13 @@
 //! Shared list/preview split widget for the paragraph-feed tabs
-//! (Recent, Gather).
+//! (Search, Recent).
 //!
 //! Both tabs render the same shape — a compact one-line-per-entry list
 //! on top and a single-entry paragraph preview on the bottom, like an
-//! email client. The two entry types (`RecentEntry`, `GatherEntry`)
-//! differ only in which fields they carry, so each tab builds its own
-//! compact list rows + preview header + wrapped body and hands them
-//! here; this widget owns only the split geometry, the list's
-//! cursor-follow + scrollbar (via [`render_scroll_list`]), and the
-//! preview pane's non-scrolling header/body render.
+//! email client. Each tab builds its own compact list rows + preview
+//! header + wrapped body and hands them here; this widget owns only the
+//! split geometry, the list's cursor-follow + scrollbar (via
+//! [`render_scroll_list`]), and the preview pane's non-scrolling
+//! header/body render.
 //!
 //! Contract: the caller renders empty / loading / error states itself
 //! (full-pane, no split) and only calls this widget when the feed is

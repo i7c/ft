@@ -432,7 +432,9 @@ mod tests {
         assert!(reg.lookup("tasks.complete").is_some());
         assert!(reg.lookup("notes.open-picker").is_some());
         assert!(reg.lookup("timeblocks.reload").is_some());
-        assert!(reg.lookup("gather.open-sources-manager").is_some());
+        assert!(reg.lookup("graph.search-mentions").is_some());
+        assert!(reg.lookup("graph.search-mentions-multi").is_some());
+        assert!(reg.lookup("pulse.handoff-to-search").is_some());
         // Modal commands
         assert!(reg.lookup("create.confirm").is_some());
         assert!(reg.lookup("query-bar.apply").is_some());

@@ -27,10 +27,8 @@ use std::process::{Command as ProcCommand, ExitCode};
 
 use crate::cmd::search::SortArg;
 use anyhow::{anyhow, Context, Result};
-use chrono::NaiveDate;
 use clap::{Args, Subcommand};
-use ft_core::blame_cache::{paragraph_date, BlameCache};
-use ft_core::gather::GatherEntry;
+use ft_core::blame_cache::BlameCache;
 use ft_core::graph::{Graph, NodeKind};
 use ft_core::search::{parse_query, search, search_with_dates, SearchIndex};
 use ft_core::synth::repair::{
@@ -39,7 +37,6 @@ use ft_core::synth::repair::{
 use ft_core::synth::reslice::{apply_reslice, plan_reslice, NewRange};
 use ft_core::synth::scaffold::{apply_synth_scaffold, plan_synth_scaffold};
 use ft_core::synth::verify::{verify_all, verify_synth_note, SectionStatus, VerificationResult};
-use ft_core::vault::Vault;
 
 #[derive(Subcommand, Debug)]
 pub enum SynthCommand {
@@ -127,7 +124,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
 
     // ── --search / --link sourcing via the search index ─────────────
     // `--link` lowers to an any-mode search over the given links
-    // (gather-parity: a paragraph mentioning any link qualifies).
+    // (any-mode: a paragraph mentioning any link qualifies).
     let query_text = if let Some(q) = &args.search {
         Some(q.clone())
     } else if !args.link.is_empty() {
@@ -172,8 +169,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
         let graph = crate::cmd::common::build_graph(&scan)?;
         for spec in &args.from {
             let (path, line) = parse_from_spec(spec)?;
-            let entry = pick_paragraph(&graph, &vault, &path, line)?;
-            sources.push(ft_core::synth::source::SynthSource::from(&entry));
+            sources.push(pick_paragraph(&graph, &path, line)?);
         }
     }
 
@@ -244,13 +240,12 @@ fn parse_from_spec(spec: &str) -> Result<(PathBuf, u32)> {
     Ok((PathBuf::from(path), line))
 }
 
-/// Build a [`GatherEntry`] for the paragraph at `(path, line_start)`.
+/// Build a [`SynthSource`] for the paragraph at `(path, line_start)`.
 fn pick_paragraph(
     graph: &Graph,
-    vault: &Vault,
     path: &Path,
     line_start: u32,
-) -> Result<GatherEntry> {
+) -> Result<ft_core::synth::source::SynthSource> {
     let p_id = graph
         .paragraph_by_loc(path, line_start)
         .ok_or_else(|| anyhow!("no paragraph found at {}:{}", path.display(), line_start))?;
@@ -261,45 +256,14 @@ fn pick_paragraph(
             line_start
         ));
     };
-    let source_title = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    // Resolve date via blame, best-effort.
-    let mut cache = BlameCache::load(&vault.path).unwrap_or_default();
-    let head = ft_core::git::head_hash(&vault.path).unwrap_or_default();
-    let date = if cache.get(&path.to_string_lossy(), &head).is_some() {
-        cache
-            .get(&path.to_string_lossy(), &head)
-            .and_then(|blame| paragraph_date(blame, p.line_start, p.line_end))
-            .unwrap_or_else(today_naive)
-    } else if let Ok(blame) = ft_core::git::blame_file(&vault.path, path) {
-        cache.insert(path.to_string_lossy().into_owned(), head.clone(), blame);
-        cache
-            .get(&path.to_string_lossy(), &head)
-            .and_then(|blame| paragraph_date(blame, p.line_start, p.line_end))
-            .unwrap_or_else(today_naive)
-    } else {
-        today_naive()
-    };
-    let _ = cache.save(&vault.path);
-    Ok(GatherEntry {
-        source_title,
+    Ok(ft_core::synth::source::SynthSource {
         source_path: p.source_file.clone(),
         line_start: p.line_start,
         line_end: p.line_end,
-        section_text: p.text.clone(),
-        date,
-        matched: vec![],
+        body: p.text.clone(),
     })
 }
 
-fn today_naive() -> NaiveDate {
-    ft_core::dates::today()
-}
-
-/// Dedup journal entries by `(source_path, line_start)`. Sorts by date
-/// desc afterward to preserve "newest first" scaffold order.
 /// Dedup sources by `(source_path, line_start)`. Order is preserved:
 /// search results arrive pre-sorted (relevance or date), and `--from`
 /// picks append after them.

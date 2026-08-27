@@ -240,7 +240,7 @@ feature, common workflows, and the design philosophy:
 | [install.md](docs/guide/install.md)                      | Build from source, completions, man pages, first run.      |
 | [vault-and-config.md](docs/guide/vault-and-config.md)    | Vault discovery, the two config layers, periodic notes.    |
 | [tasks.md](docs/guide/tasks.md)                          | List / filter / create / complete / move, CLI + TUI.       |
-| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, gather, recent. |
+| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, search, recent. |
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |

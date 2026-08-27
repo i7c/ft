@@ -89,8 +89,8 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
-        name: "graph.journal",
-        description: "Open the Journal tab for the selected note or ghost",
+        name: "graph.search-mentions",
+        description: "Open Search for the selected note or ghost's mentions",
         scope: CommandScope::Tab("graph"),
         group: "Notes",
         args_schema: &[],
@@ -98,8 +98,8 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
-        name: "graph.add-to-journal-sources",
-        description: "Append selected (or cursor) Note/Ghost rows to the Journal tab's sources",
+        name: "graph.search-mentions-multi",
+        description: "Search selected (or cursor) Note/Ghost rows' mentions (any-mode)",
         scope: CommandScope::Tab("graph"),
         group: "Notes",
         args_schema: &[],
@@ -507,8 +507,8 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Ctrl+PageUp", "graph.prev-view")
         // Cross-tab
         .bind("R", "graph.related")
-        .bind("J", "graph.journal")
-        .bind("Ctrl+j", "graph.add-to-journal-sources")
+        .bind("J", "graph.search-mentions")
+        .bind("Ctrl+j", "graph.search-mentions-multi")
         // Query bar / search
         .bind("/", "graph.query-bar")
         .bind("z", "graph.rewrite-for-root")

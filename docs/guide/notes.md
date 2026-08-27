@@ -2,7 +2,7 @@
 
 `ft notes` is the umbrella for everything that operates on whole notes:
 open them, create them, jump to periodic notes, move and rename them,
-walk their links, and gather a paragraph-level feed of how a note
+walk their links, and search paragraph-level mentions of a note
 has been referenced over time. Quick capture and append-template live
 in their own chapter — see
 [capture-and-templates.md](capture-and-templates.md).
@@ -261,52 +261,44 @@ links rewritten vault-wide); when both sides are real notes the
 suggestion is a `## Related` alias, since two files' *content* can
 only be merged by hand.
 
-## The Gather feed
+## Searching paragraphs
 
-`ft notes gather <note>` is a reverse-chronological feed of
-*paragraph-level* mentions of a note across the vault. Dates come from
-`git blame`, so the feed only makes sense inside a vault that's a git
-repository. The note's own `## Related` section feeds in aliases —
-every `[[wikilink]]` inside that section is treated as another name
-for the target, so mentions of the alias surface too.
+`ft notes search <query>` finds *paragraph-level* matches across the
+vault — any term, not just links. A link-target query (`[[finance]]`)
+is the modern form of the old "mentions over time" feed: every
+paragraph that links the note, without needing git history. The query
+grammar is substring by default, `=word` exact, `~fuzzy`,
+`"phrase"`, `[[Link]]`, `-exclude`; space-separated terms AND within
+one paragraph, `--any` ORs them. `--sort date` orders by `git blame`
+recency.
 
 ```sh
-ft notes gather finance              # human-readable feed
-ft notes gather finance --json       # machine-readable
+ft notes search finance              # paragraphs mentioning "finance"
+ft notes search "[[finance]]"        # paragraphs linking the note
+ft notes search "[[finance]]" --sort date   # newest edits first
+ft notes search "[[finance]]" --json # machine-readable
 ```
 
-A typical use: gather a project note before a status
+A typical use: search a project note before a status
 update, to see every paragraph (across daily notes, area notes,
-meeting notes) that touched it. The note itself is excluded from its
-own feed.
+meeting notes) that touched it. Multi-select results and `s` / `S`
+ship them into a synth note as protected `[!ft-source]` sections; see
+[synthesis.md](synthesis.md).
 
-Entries already woven into a synth note carry a citation badge:
-`cited: <note>` when the paragraph is pinned byte-identically in a
-`[!ft-source]` callout, `cited*: <note>` when it was edited *after*
-being cited (the pin is stale). `--json` carries the same data as a
-`cited_in` array of `{note, stale}` objects. Pass `--uncited` to keep
-only entries not yet cited — stale entries stay, since they still need
-attention — which turns a long feed into "what haven't I dealt with":
-
-```sh
-ft notes gather finance --uncited    # only the unsynthesized mentions
-```
-
-The TUI's Gather tab is the same feed with a fuzzy picker on top —
-press `5` in the TUI and pick a note. It shows the same badges, `u`
-toggles the uncited-only filter, and `o` picks a synth note to work
-*toward*: its `ft.synth.targets` load as the sources and every entry
-badges as `in note` / `missing` relative to that note. See
+The TUI's Search tab (press `5`) is the same engine with live
+as-you-type results — `/` edits the query, `a` toggles all/any, `o`
+cycles relevance/date, `u` filters to uncited paragraphs (those not
+yet pinned byte-identically in a synth note, stale counts as
+uncited), `s`/`S` send the selection to a synth note. See
 [tui.md](tui.md) and [synthesis.md](synthesis.md).
 
 ## The Recent feed
 
-Where gather is *target-shaped* ("what mentions this note?"),
-`ft notes recent` is *time-shaped*: a whole-vault, reverse-chronological
-feed of every paragraph edited within a window — "what did I actually
-write or change lately, everywhere?" It takes the same `--since` / `--range`
-window arguments as gather (defaulting to `7d`) and, like gather,
-needs a git-backed vault.
+`ft notes recent` is *time-shaped*: a whole-vault,
+reverse-chronological feed of every paragraph edited within a window —
+"what did I actually write or change lately, everywhere?" It takes
+`--since` / `--range` window arguments (defaulting to `7d`) and needs
+a git-backed vault.
 
 ```sh
 ft notes recent                      # last 7 days, human-readable
@@ -317,12 +309,12 @@ ft notes recent --range v1.0..HEAD   # a commit range
 Synth notes (`ft.synth.enabled: true`) are excluded by default; pass
 `--include-synth` to include them. Periodic/daily notes are included.
 
-Recent carries the same citation badges and `--uncited` filter as
-gather (`cited:` / `cited*:` lines, `cited_in` in `--json`), so a
+Recent carries the same citation badges and `--uncited` filter as the
+search feed (`cited:` / `cited*:` lines, `cited_in` in `--json`), so a
 sweep can be incremental: `ft notes recent --since 7d --uncited`
 shows only the paragraphs from the window you haven't synthesized yet.
 
-The TUI's Recent tab (press `6`) renders the same feed and adds the
+The TUI's Recent tab (press `4`) renders the same feed and adds the
 synthesis actions: select one/several/all rows and `s` / `S` them into a
 synth note as protected `[!ft-source]` sections, or press `m` to move the
 selected row's section into another note (the section-move flow, seeded to

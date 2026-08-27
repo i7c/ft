@@ -321,7 +321,6 @@ pub fn parse_scope(s: &str) -> Option<CommandScope> {
         "tab/tasks" => Some(CommandScope::Tab("tasks")),
         "tab/notes" => Some(CommandScope::Tab("notes")),
         "tab/timeblocks" => Some(CommandScope::Tab("timeblocks")),
-        "tab/gather" => Some(CommandScope::Tab("gather")),
         "tab/recent" => Some(CommandScope::Tab("recent")),
         "tab/pulse" => Some(CommandScope::Tab("pulse")),
         "modal/create" => Some(CommandScope::Modal("create")),

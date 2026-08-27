@@ -1,20 +1,14 @@
-//! Synthesis surfaces: Gather tab, capture presets, Pulse
-//! tab + multi-target handoff, sources manager, synth reslice flow.
+//! Synthesis surfaces: capture presets, Pulse tab, graph → Search
+//! handoffs, send-to-synth (via the Search tab), synth reslice flow.
 
 use super::*;
 
-// ── Journal tab ──────────────────────────────────────────────────────
+// ── Graph → Search handoffs ─────────────────────────────────────────
 
-/// Index of the Journal tab in the App's tab vector. Computed by
-/// `App::for_test_with_clock` adding it after the existing four tabs.
-fn gather_tab_idx() -> usize {
-    4
-}
-
-/// Build a vault with one commit so the blame cache resolves dates.
-/// `Target.md` is the note we'll open the journal for; `DailyA.md`
-/// mentions it once.
-fn gather_test_vault() -> (TempDir, Vault) {
+/// Build a vault with one git commit so blame/pulse dates resolve.
+/// `Target.md` plus one note mentioning it — enough for the review-tab
+/// fixtures that need a git-backed vault without history semantics.
+fn git_backed_vault() -> (TempDir, Vault) {
     use std::process::Command as StdCommand;
 
     let dir = TempDir::new().unwrap();
@@ -44,63 +38,14 @@ fn gather_test_vault() -> (TempDir, Vault) {
     (dir, vault)
 }
 
+/// `J` on a Note row opens the Search tab prefilled with the note as a
+/// `[[…]]` clause (replacing the removed journal tab jump).
 #[test]
-fn journal_tab_empty_state_shows_picker_prompt() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Sources (0)") && frame.contains("press / to manage sources"),
-        "empty Journal tab missing Sources strip:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_tab_renders_entries_after_queued_load() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    // Stage the cross-tab jump payload by sending the AppRequest directly:
-    // simulate what `service_request` does — queue the path on the
-    // Journal tab and switch to it.
-    app.queue_gather_for_tab_test("Target.md");
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("DailyA"),
-        "journal feed missing source title:\n{frame}"
-    );
-    assert!(
-        frame.contains("Mentions [[Target]] today."),
-        "journal feed missing paragraph body:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_tab_help_lists_keybindings() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-    let sections = app.active_tab_help_sections();
-    let merged: String = sections
-        .iter()
-        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
-        .collect();
-    for expected in ["/", "Shift+r", "c", "Enter", "↓ / j"] {
-        assert!(
-            merged.contains(expected),
-            "help missing `{expected}`:\n{merged}"
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn graph_shift_j_jumps_to_journal_tab_for_selected_note() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
+fn graph_j_jumps_to_search_for_selected_note() -> Result<()> {
+    // The note mentions itself so the prefilled `[[Target]]` query has a
+    // real result to render.
+    let (_dir, vault) = rename_vault(&[("Target.md", "# Target\n\nMentions [[Target]] today.\n")]);
+    let mut app = App::for_test(vault);
     // Default Graph tab focus + the dirs-style default query lists the
     // vault's root directory first; navigate down to a Note row.
     switch_to_graph(&mut app)?;
@@ -108,7 +53,6 @@ fn graph_shift_j_jumps_to_journal_tab_for_selected_note() -> Result<()> {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?; // expand root
-          // Walk down until a Note row is selected.
     for _ in 0..6 {
         if app.graph_tab_selected_is_note_for_test() {
             break;
@@ -120,22 +64,27 @@ fn graph_shift_j_jumps_to_journal_tab_for_selected_note() -> Result<()> {
         "test prelude must reach a Note row"
     );
 
-    // Shift+J should raise AppRequest::JournalForNote. The test driver
-    // services pending requests via the in-process helper.
+    // Shift+J raises SearchWithQuery; the App services it in-process.
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
     app.service_pending_requests()?;
 
-    assert_eq!(app.active_title(), "Gather");
+    assert_eq!(app.active_title(), "Search");
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("[[Target]]") && frame.contains("Mentions [[Target]] today."),
+        "Search tab must show the prefilled clause and the note's mentioning paragraph:\n{frame}"
+    );
     Ok(())
 }
 
+/// `J` on a non-Note row produces an error toast and stays on Graph.
 #[test]
-fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
+fn graph_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()> {
+    let (_dir, vault) = rename_vault(&[("Target.md", "# Target\n")]);
+    let mut app = App::for_test(vault);
     // Stay on Graph tab with the root directory selected (it's a
     // Directory row, not a Note).
     switch_to_graph(&mut app)?;
@@ -143,8 +92,6 @@ fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()>
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
-    // The routed outcome is a Toast (error guidance), NOT a
-    // JournalForNote jump — the active tab stays on Graph.
     let toast = app.current_toast().expect("expected an error toast");
     assert!(
         toast.text.to_lowercase().contains("note"),
@@ -155,50 +102,84 @@ fn graph_shift_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()>
     Ok(())
 }
 
+/// `J` on a Ghost row opens Search with the raw target as the clause.
 #[test]
-fn graph_shift_j_on_ghost_row_queues_journal_for_ghost() -> Result<()> {
+fn graph_j_on_ghost_row_opens_search_for_ghost() -> Result<()> {
     let (dir, vault) = rename_vault(&[("a.md", "see [[Phantom]]\n")]);
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let mut app = App::for_test(vault);
     switch_to_graph(&mut app)?;
-    // Expand root → row 0: D /, row 1: N a.
+    // Expand root → row 0: D /, row 1: N a. Expand a → G Phantom.
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    // Select a.md, expand it → reveals row 2: G Phantom.
     app.dispatch(key('j'))?;
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
     )))?;
-    // Select the ghost row.
     app.dispatch(key('j'))?;
 
     app.dispatch(Event::Key(KeyEvent::new(
         KeyCode::Char('J'),
         KeyModifiers::SHIFT,
     )))?;
-    // The GatherFor request is serviced through the real routing
-    // path: the app switches to the Journal tab with the ghost queued
-    // as its target.
-    let frame = render(&mut app, 100, 24);
+    let frame = render(&mut app, 90, 24);
     assert_eq!(
         app.active_title(),
-        "Gather",
-        "Shift+J on a ghost row must land on the Journal tab\nframe:\n{frame}"
+        "Search",
+        "Shift+J on a ghost row must land on the Search tab\nframe:\n{frame}"
     );
     assert!(
-        frame.contains("Phantom"),
-        "Journal tab must show the ghost target:\n{frame}"
+        frame.contains("[[Phantom]]") || frame.contains("Phantom"),
+        "Search tab must show the ghost clause/results:\n{frame}"
     );
     let _ = dir;
     Ok(())
 }
 
+/// `Ctrl+J` on a Note row opens Search with the row's mentions in
+/// any-mode (the old multi-target OR semantics).
 #[test]
-fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
+fn graph_ctrl_j_opens_search_with_mentions() -> Result<()> {
+    let (_dir, vault) = rename_vault(&[("Target.md", "# Target\n\nMentions [[Target]] today.\n")]);
+    let mut app = App::for_test(vault);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for _ in 0..6 {
+        if app.graph_tab_selected_is_note_for_test() {
+            break;
+        }
+        app.dispatch(key('j'))?;
+    }
+    assert!(
+        app.graph_tab_selected_is_note_for_test(),
+        "test prelude must reach a Note row"
+    );
+
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::CONTROL,
+    )))?;
+    app.service_pending_requests()?;
+
+    assert_eq!(app.active_title(), "Search");
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("[[Target]]") && frame.contains("Mentions [[Target]] today."),
+        "Search must show the prefilled clause and the note's mentioning paragraph:\n{frame}"
+    );
+    Ok(())
+}
+
+/// The graph tab's help overlay lists the Search handoff keys.
+#[test]
+fn graph_tab_help_lists_search_handoff_keys() -> Result<()> {
     let (_dir, vault) = related_modal_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let mut app = App::for_test(vault);
     switch_to_graph(&mut app)?;
     let sections = app.active_tab_help_sections();
     let merged: String = sections
@@ -207,7 +188,7 @@ fn graph_tab_help_lists_shift_j_jump() -> Result<()> {
         .collect();
     assert!(
         merged.contains("Shift+j"),
-        "graph-tab help must mention Shift+j for Journal jump:\n{merged}"
+        "graph-tab help must mention Shift+j for the Search jump:\n{merged}"
     );
     Ok(())
 }
@@ -930,7 +911,7 @@ fn pulse_test_vault() -> (TempDir, Vault) {
 
 #[test]
 fn review_tab_empty_window_shows_friendly_message() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
+    let (_dir, vault) = git_backed_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(pulse_tab_idx())?;
     // Default window is --since 7d; the fixture's commit is very recent.
@@ -1034,7 +1015,7 @@ fn review_tab_cursor_stays_visible_past_the_fold() -> Result<()> {
 
 #[test]
 fn review_tab_help_lists_keybindings() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
+    let (_dir, vault) = git_backed_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(pulse_tab_idx())?;
     let sections = app.active_tab_help_sections();
@@ -1053,245 +1034,6 @@ fn review_tab_help_lists_keybindings() -> Result<()> {
 
 /// Build a vault for the multi-target Journal test: two notes, one
 /// paragraph mentions both `[[Foo]]` and `[[Bar]]`. Returns the vault.
-fn multi_target_gather_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(
-        vault_path.join("DailyA.md"),
-        "Some thought about [[Foo]].\n\nLater, [[Bar]] came up.\n",
-    )
-    .unwrap();
-    std::fs::write(
-        vault_path.join("DailyB.md"),
-        "Cross-link: [[Foo]] and [[Bar]] in one paragraph.\n",
-    )
-    .unwrap();
-    let run_git = |args: &[&str]| {
-        let out = StdCommand::new("git")
-            .current_dir(&vault_path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git(&["init", "-b", "main"]);
-    run_git(&["config", "user.name", "T"]);
-    run_git(&["config", "user.email", "t@e.com"]);
-    run_git(&["config", "commit.gpgsign", "false"]);
-    run_git(&["config", "maintenance.auto", "false"]);
-    run_git(&["add", "."]);
-    run_git(&["commit", "-m", "init"]);
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
-
-#[test]
-fn journal_tab_multi_target_renders_matched_badge() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![
-            GatherTarget::Ghost("Foo".into()),
-            GatherTarget::Ghost("Bar".into()),
-        ],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    // DailyB's paragraph matches both Foo and Bar → badge present.
-    assert!(
-        frame.contains("matched:") && frame.contains("Foo") && frame.contains("Bar"),
-        "multi-target frame missing matched badge:\n{frame}"
-    );
-    // Title and strip reflect multi-source mode.
-    assert!(
-        frame.contains("2 sources") && frame.contains("Sources (2)"),
-        "title/strip missing `2 sources` indication:\n{frame}"
-    );
-    Ok(())
-}
-
-/// Two notes with distinct titles so the same-date feed order is
-/// deterministic (tiebreak is title-ascending): `Alpha` mentions only
-/// `[[Foo]]`, `Beta` mentions both. One git commit so both share a date.
-fn gather_blocks_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(vault_path.join("Alpha.md"), "Talk about [[Foo]].\n").unwrap();
-    std::fs::write(
-        vault_path.join("Beta.md"),
-        "Mention [[Foo]] and [[Bar]] together.\n",
-    )
-    .unwrap();
-    let run_git = |args: &[&str]| {
-        let out = StdCommand::new("git")
-            .current_dir(&vault_path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            // Pin the commit date so the journal's blame-derived entry
-            // dates are deterministic — otherwise the snapshot below
-            // renders the real wall-clock day and breaks daily.
-            .env("GIT_AUTHOR_DATE", "2026-05-10T14:32:05")
-            .env("GIT_COMMITTER_DATE", "2026-05-10T14:32:05")
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git(&["init", "-b", "main"]);
-    run_git(&["config", "user.name", "T"]);
-    run_git(&["config", "user.email", "t@e.com"]);
-    run_git(&["config", "commit.gpgsign", "false"]);
-    run_git(&["config", "maintenance.auto", "false"]);
-    run_git(&["add", "."]);
-    run_git(&["commit", "-m", "init"]);
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
-
-/// A vault where many notes each mention `[[Target]]` once, with
-/// distinct titles (`Note01`..`Note15`) so the same-date feed order is
-/// deterministic (title-ascending) and each entry carries a unique body
-/// marker we can assert is on screen.
-fn gather_scroll_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(vault_path.join("Target.md"), "# Target\n").unwrap();
-    for n in 1..=15 {
-        std::fs::write(
-            vault_path.join(format!("Note{n:02}.md")),
-            format!("MARKER-{n:02} unique body mentioning [[Target]] here.\n"),
-        )
-        .unwrap();
-    }
-    let run_git = |args: &[&str]| {
-        let out = StdCommand::new("git")
-            .current_dir(&vault_path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git(&["init", "-b", "main"]);
-    run_git(&["config", "user.name", "T"]);
-    run_git(&["config", "user.email", "t@e.com"]);
-    run_git(&["config", "commit.gpgsign", "false"]);
-    run_git(&["config", "maintenance.auto", "false"]);
-    run_git(&["add", "."]);
-    run_git(&["commit", "-m", "init"]);
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
-
-/// Scrolling invariant: whatever entry the cursor is on, a peek of its
-/// body must be visible — never just the header band stranded on the
-/// bottom row. Steps the cursor through every entry and asserts that
-/// entry's unique body marker is on screen.
-#[test]
-fn journal_tab_selected_entry_body_always_visible() -> Result<()> {
-    let (_dir, vault) = gather_scroll_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.queue_gather_for_tab_test("Target.md");
-    app.switch_to(gather_tab_idx())?;
-    // Order is title-ascending → Note01..Note15, so the entry under the
-    // cursor at step `i` carries `MARKER-{i+1}`.
-    for n in 1..=15 {
-        let frame = render(&mut app, 80, 24);
-        let marker = format!("MARKER-{n:02}");
-        assert!(
-            frame.contains(&marker),
-            "selected entry {n}'s body ({marker}) not visible — header band stranded:\n{frame}"
-        );
-        app.dispatch(key('j'))?; // cursor-down
-    }
-    Ok(())
-}
-
-/// Locks the split layout: Sources strip on top, compact list pane
-/// (one line per entry, `●` multi-select marker, cursor `▶`), and a
-/// preview pane whose header carries the `matched:` badge for the
-/// selected entry. Colors aren't captured by the snapshot backend, so
-/// this guards the text/layout half of the visual.
-#[test]
-fn journal_tab_entry_blocks_layout() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = gather_blocks_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![
-            GatherTarget::Ghost("Foo".into()),
-            GatherTarget::Ghost("Bar".into()),
-        ],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    // Multi-select the entry under the cursor so the `●` marker renders.
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Char(' '),
-        KeyModifiers::NONE,
-    )))?;
-    let frame = render(&mut app, 80, 24);
-    assert_tui_snapshot!("journal_entry_blocks_80x24", frame);
-    Ok(())
-}
-
-#[test]
-fn journal_tab_send_to_synth_existing_opens_picker_on_s() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![GatherTarget::Ghost("Foo".into())],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    // `s` opens the existing-note fuzzy picker.
-    app.dispatch(key('s'))?;
-    let frame = render(&mut app, 80, 24);
-    // The fuzzy picker shows a search input row + the vault's notes.
-    assert!(
-        frame.contains("DailyA") || frame.contains("DailyB"),
-        "existing-note picker should list vault notes:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_tab_send_to_synth_new_opens_folder_picker_on_shift_s() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![GatherTarget::Ghost("Foo".into())],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    // Shift+S opens the folder picker for create-new.
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Char('S'),
-        KeyModifiers::SHIFT,
-    )))?;
-    let frame = render(&mut app, 80, 24);
-    // The folder picker shows `.` (vault root) at minimum.
-    assert!(
-        frame.contains('.') || frame.contains("synth"),
-        "folder picker overlay should be open:\n{frame}"
-    );
-    Ok(())
-}
-
 // The pure `upsert_ft_synth_marker` transform has moved to
 // `ft_core::synth::callout::upsert_synth_frontmatter` (which also handles
 // the `ft.synth.targets` key). These three tests now exercise the core
@@ -1326,265 +1068,6 @@ fn upsert_ft_synth_marker_replaces_false_value() {
 }
 
 // ── Sources strip & manager modal ────────────────────────────────────
-
-/// Journal tab in empty state: strip shows `Sources (0)` plus the hint.
-#[test]
-fn journal_tab_sources_strip_empty_state() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Sources (0)") && frame.contains("press / to manage sources"),
-        "empty strip missing:\n{frame}"
-    );
-    Ok(())
-}
-
-/// Single-source mode still renders the strip (consistent layout).
-#[test]
-fn journal_tab_sources_strip_single_source() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.queue_gather_for_tab_test("Target.md");
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Sources (1)") && frame.contains("Target.md"),
-        "single-source strip missing:\n{frame}"
-    );
-    Ok(())
-}
-
-/// Multi-source mode: strip shows the count + comma-joined labels +
-/// the attached window. Window label uses `since <n>d`.
-#[test]
-fn journal_tab_sources_strip_multi_source_with_window() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, GatherWindow, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![
-            GatherTarget::Ghost("Foo".into()),
-            GatherTarget::Ghost("Bar".into()),
-        ],
-        window: Some(GatherWindow::Since(chrono::Duration::days(7))),
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Sources (2)") && frame.contains("window: since 7d"),
-        "multi-source strip missing count or window:\n{frame}"
-    );
-    assert!(
-        frame.contains("Foo (ghost)") && frame.contains("Bar (ghost)"),
-        "ghost labels missing:\n{frame}"
-    );
-    Ok(())
-}
-
-/// Many sources on a narrow terminal: truncation appends `…, +K more`.
-#[test]
-fn journal_tab_sources_strip_truncates_long_list() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    // Mostly-ghost targets so we get a long join string. Six ghosts
-    // with 8-char labels each = ~60 chars joined; a 40-col terminal
-    // forces truncation.
-    let request = MultiTargetRequest {
-        targets: vec![
-            GatherTarget::Ghost("AlphaSrc".into()),
-            GatherTarget::Ghost("BetaSrc".into()),
-            GatherTarget::Ghost("GammaSrc".into()),
-            GatherTarget::Ghost("DeltaSrc".into()),
-            GatherTarget::Ghost("EpsilonSrc".into()),
-            GatherTarget::Ghost("ZetaSrc".into()),
-        ],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 40, 12);
-    assert!(
-        frame.contains("Sources (6)"),
-        "count missing on narrow term:\n{frame}"
-    );
-    assert!(
-        frame.contains("+") && frame.contains("more"),
-        "truncation suffix missing:\n{frame}"
-    );
-    Ok(())
-}
-
-/// `/` on the Journal tab opens the Sources Manager modal.
-#[test]
-fn journal_tab_slash_opens_sources_manager() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-    app.dispatch(key('/'))?;
-    assert_eq!(app.active_modal_name(), Some("journal-sources"));
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Journal Sources"),
-        "manager title missing:\n{frame}"
-    );
-    Ok(())
-}
-
-/// `a` alias also opens the Sources Manager.
-#[test]
-fn journal_tab_a_alias_opens_sources_manager() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-    app.dispatch(key('a'))?;
-    assert_eq!(app.active_modal_name(), Some("journal-sources"));
-    Ok(())
-}
-
-/// The dedup invariant of the append commit path: if current sources
-/// already contain a target, it isn't duplicated when appending.
-#[test]
-fn journal_append_or_replace_modal_appends_dedups() {
-    use crate::tui::modal::GatherAppendOrReplaceModal;
-    use crate::tui::tab::{AppendOrReplaceMode, GatherTarget};
-    use std::cell::{Cell, RefCell};
-    use std::sync::Arc;
-    let modal = GatherAppendOrReplaceModal {
-        current_sources: vec![
-            GatherTarget::Note("Foo.md".into()),
-            GatherTarget::Note("Bar.md".into()),
-        ],
-        incoming_targets: vec![
-            GatherTarget::Note("Bar.md".into()),
-            GatherTarget::Note("Baz.md".into()),
-        ],
-        window: None,
-        focus: AppendOrReplaceMode::Append,
-    };
-    // Build a TabCtx scaffold; we only need pending_request to read.
-    let (_dir, vault) = gather_test_vault();
-    let vault = Arc::new(vault);
-    let recents = Arc::new(ft_core::recents::RecentsLog::with_log_path(
-        vault.path.clone(),
-        vault.path.join("recents.jsonl"),
-    ));
-    let last_refresh: Cell<Option<chrono::DateTime<chrono::Local>>> = Cell::new(None);
-    let pending: RefCell<Option<crate::tui::tab::AppRequest>> = RefCell::new(None);
-    let graph_refresh = Cell::new(false);
-    let ctx = crate::tui::tab::TabCtx {
-        vault: &vault,
-        recents: &recents,
-        today: chrono::NaiveDate::from_ymd_opt(2026, 6, 11).unwrap(),
-        last_refresh: &last_refresh,
-        pending_request: &pending,
-        active_modal_name: None,
-        host_popup_open: false,
-        snapshot: None,
-        graph_refresh: &graph_refresh,
-    };
-    // Trigger the append path via the modal's commit_append (private —
-    // exercise via key 'a').
-    use crate::tui::event::Event as TuiEvent;
-    use crate::tui::modal::Modal as _;
-    let mut modal = modal;
-    let _ = modal.handle_event(
-        TuiEvent::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('a'),
-            crossterm::event::KeyModifiers::NONE,
-        )),
-        &ctx,
-    );
-    let req = pending.borrow().as_ref().map(|r| match r {
-        crate::tui::tab::AppRequest::GatherCommitSources { sources, .. } => sources.clone(),
-        _ => panic!("expected GatherCommitSources"),
-    });
-    let sources = req.expect("modal should have raised commit");
-    let labels: Vec<String> = sources.iter().map(|t| t.label()).collect();
-    assert_eq!(labels, vec!["Foo.md", "Bar.md", "Baz.md"], "dedup failed");
-}
-
-/// Append-or-Replace prompt commits the replacement source set on `r`.
-#[test]
-fn journal_append_or_replace_modal_replaces_on_r() {
-    use crate::tui::modal::GatherAppendOrReplaceModal;
-    use crate::tui::tab::{AppendOrReplaceMode, GatherTarget};
-    use std::cell::{Cell, RefCell};
-    use std::sync::Arc;
-    let modal = GatherAppendOrReplaceModal {
-        current_sources: vec![GatherTarget::Note("Foo.md".into())],
-        incoming_targets: vec![GatherTarget::Note("Bar.md".into())],
-        window: None,
-        focus: AppendOrReplaceMode::Append,
-    };
-    let (_dir, vault) = gather_test_vault();
-    let vault = Arc::new(vault);
-    let recents = Arc::new(ft_core::recents::RecentsLog::with_log_path(
-        vault.path.clone(),
-        vault.path.join("recents.jsonl"),
-    ));
-    let last_refresh: Cell<Option<chrono::DateTime<chrono::Local>>> = Cell::new(None);
-    let pending: RefCell<Option<crate::tui::tab::AppRequest>> = RefCell::new(None);
-    let graph_refresh = Cell::new(false);
-    let ctx = crate::tui::tab::TabCtx {
-        vault: &vault,
-        recents: &recents,
-        today: chrono::NaiveDate::from_ymd_opt(2026, 6, 11).unwrap(),
-        last_refresh: &last_refresh,
-        pending_request: &pending,
-        active_modal_name: None,
-        host_popup_open: false,
-        snapshot: None,
-        graph_refresh: &graph_refresh,
-    };
-    use crate::tui::event::Event as TuiEvent;
-    use crate::tui::modal::Modal as _;
-    let mut modal = modal;
-    let _ = modal.handle_event(
-        TuiEvent::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('r'),
-            crossterm::event::KeyModifiers::NONE,
-        )),
-        &ctx,
-    );
-    let labels: Vec<String> = match pending.borrow().as_ref() {
-        Some(crate::tui::tab::AppRequest::GatherCommitSources { sources, .. }) => {
-            sources.iter().map(|t| t.label()).collect()
-        }
-        other => panic!("expected GatherCommitSources, got {other:?}"),
-    };
-    assert_eq!(labels, vec!["Bar.md"], "replace should drop current");
-}
-
-// ── Graph → Journal append flow ──────────────────────────────────────
-
-/// Pressing `Ctrl+J` on the Graph tab with a Note row selected raises
-/// `GatherAddSources` for that single row.
-#[test]
-fn graph_ctrl_j_appends_cursor_row_to_journal_sources() -> Result<()> {
-    let (_dir, vault) = gather_test_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    // Refresh graph so the tree populates.
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Char('r'),
-        KeyModifiers::CONTROL,
-    )))?;
-    // Open a preset/query so at least one row is visible. The graph
-    // tab seeds an empty view; press `/` to enter the query bar then
-    // type a wildcard. Simpler: just send Ctrl+J — without a row,
-    // the command toasts an error.
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Char('j'),
-        KeyModifiers::CONTROL,
-    )))?;
-    // With no row, expect either a toast or no request — either is
-    // acceptable; the test simply asserts no panic.
-    let _ = app.active_modal_name();
-    Ok(())
-}
 
 // ── Notes tab · synth reslice flow ───────────────────────────────────────
 
@@ -1734,299 +1217,5 @@ fn notes_reslice_edit_enter_commits_and_writes() -> Result<()> {
         body.contains("> delta"),
         "the new line should be in the protected body:\n{body}"
     );
-    Ok(())
-}
-
-// ── synth grow / new-only: dedup-on-append + watermark filter ────────
-
-/// Helper: drive the Journal tab's send-to-synth flow by typing a note
-/// name into the existing-note picker and pressing Enter to select the
-/// first match. Mirrors how a user appends to a specific synth note.
-fn select_existing_note_in_picker(app: &mut App, query: &str) -> Result<()> {
-    // The fuzzy picker filters on each keystroke.
-    for ch in query.chars() {
-        app.dispatch(Event::Key(KeyEvent::new(
-            KeyCode::Char(ch),
-            KeyModifiers::NONE,
-        )))?;
-    }
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )))?;
-    Ok(())
-}
-
-#[test]
-fn journal_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let vault_path = vault.path.clone();
-
-    // Pre-create a synth note that already pins the DailyA paragraph
-    // (so the Foo journal has one entry already captured). We scaffold
-    // it via the core planner so the pin matches HEAD exactly.
-    let abs = vault_path.join("Synth/topic.md");
-    std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let scan = vault.scan();
-    let graph = ft_core::graph::Graph::build(&scan).unwrap();
-    let foo = graph.ghost_by_raw("Foo").unwrap();
-    let mut cache = ft_core::blame_cache::BlameCache::default();
-    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache, &scan)?;
-    // Pin only the first entry (DailyA) — leave DailyB missing.
-    let first: Vec<ft_core::synth::source::SynthSource> =
-        report.entries.iter().map(Into::into).collect();
-    let first = first.into_iter().next().unwrap();
-    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
-        &vault,
-        std::path::Path::new("Synth/topic.md"),
-        std::slice::from_ref(&first),
-    )?;
-    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
-
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![GatherTarget::Ghost("Foo".into())],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    app.pump_graph_rebuild_for_test();
-
-    // `s` opens the existing-note picker; type "topic" + Enter.
-    app.dispatch(key('s'))?;
-    select_existing_note_in_picker(&mut app, "topic")?;
-    app.service_pending_requests()?;
-
-    let body = std::fs::read_to_string(&abs).unwrap();
-    let count = body.matches("[!ft-source]").count();
-    // DailyA was already pinned; only DailyB should be newly appended.
-    assert_eq!(
-        count, 2,
-        "dedup should keep the existing section and add only the missing one:\n{body}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_send_to_synth_new_only_scopes_to_watermark() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let vault_path = vault.path.clone();
-
-    // Pre-create the synth note with BOTH paragraphs pinned at HEAD (so
-    // the watermark == today, and --new-only should find nothing newer).
-    let abs = vault_path.join("Synth/topic.md");
-    std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    let scan = vault.scan();
-    let graph = ft_core::graph::Graph::build(&scan).unwrap();
-    let foo = graph.ghost_by_raw("Foo").unwrap();
-    let mut cache = ft_core::blame_cache::BlameCache::default();
-    let report = ft_core::gather::build_gather(&graph, &[foo], &vault, &mut cache, &scan)?;
-    let sources: Vec<ft_core::synth::source::SynthSource> =
-        report.entries.iter().map(Into::into).collect();
-    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
-        &vault,
-        std::path::Path::new("Synth/topic.md"),
-        &sources,
-    )?;
-    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
-
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![GatherTarget::Ghost("Foo".into())],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    app.pump_graph_rebuild_for_test();
-
-    // `n` opens the existing-note picker in new-only mode.
-    app.dispatch(key('n'))?;
-    select_existing_note_in_picker(&mut app, "topic")?;
-    app.service_pending_requests()?;
-
-    let body = std::fs::read_to_string(&abs).unwrap();
-    let count = body.matches("[!ft-source]").count();
-    // All entries are at-or-before the watermark (HEAD == watermark) →
-    // nothing new appended. Note keeps its two sections.
-    assert_eq!(
-        count, 2,
-        "new-only should append nothing when all entries are at the watermark:\n{body}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_send_to_synth_new_only_empty_note_falls_back() -> Result<()> {
-    use crate::tui::tab::{GatherTarget, MultiTargetRequest};
-    let (_dir, vault) = multi_target_gather_vault();
-    let vault_path = vault.path.clone();
-
-    // An empty synth note (no callouts → no watermark).
-    let abs = vault_path.join("Synth/empty.md");
-    std::fs::create_dir_all(abs.parent().unwrap()).ok();
-    std::fs::write(&abs, "---\nft:\n  synth:\n    enabled: true\n---\n\n").unwrap();
-
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    let request = MultiTargetRequest {
-        targets: vec![GatherTarget::Ghost("Foo".into())],
-        window: None,
-    };
-    app.queue_journal_for_multi_tab_test(request);
-    app.switch_to(gather_tab_idx())?;
-    app.pump_graph_rebuild_for_test();
-
-    // `n` → pick the empty note → fallback to all missing.
-    app.dispatch(key('n'))?;
-    select_existing_note_in_picker(&mut app, "empty")?;
-    app.service_pending_requests()?;
-
-    let body = std::fs::read_to_string(&abs).unwrap();
-    let count = body.matches("[!ft-source]").count();
-    assert!(
-        count >= 1,
-        "empty-note new-only should fall back to shipping all missing entries:\n{body}"
-    );
-    Ok(())
-}
-
-// ── Citation badges + context-note mode ──────────────────────────────
-
-/// Vault with two paragraphs mentioning `[[Target]]` and a synth note
-/// citing the first one byte-identically. The callout is hand-built
-/// with a genuine content hash; its pinned SHA is never dereferenced
-/// by the citation index. Commit dates are pinned so blame dates in
-/// frames are deterministic.
-fn citation_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-
-    let dir = TempDir::new().unwrap();
-    let vp = dir.path().join("vault");
-    std::fs::create_dir_all(vp.join(".obsidian")).unwrap();
-    std::fs::write(vp.join("Target.md"), "# Target\n").unwrap();
-    std::fs::write(vp.join("DailyA.md"), "Alpha mentions [[Target]].\n").unwrap();
-    std::fs::write(vp.join("DailyB.md"), "Beta mentions [[Target]].\n").unwrap();
-    let body = "Alpha mentions [[Target]].";
-    let hash = ft_core::synth::callout::compute_section_hash(body);
-    std::fs::write(
-        vp.join("Synth.md"),
-        format!(
-            "---\nft:\n  synth:\n    enabled: true\n    targets: [\"[[Target]]\"]\n---\n\n\
-             > [!ft-source] \"DailyA.md\" L1-1 @abc1234 #{hash}\n> {body}\n"
-        ),
-    )
-    .unwrap();
-
-    let run_git = |args: &[&str]| {
-        let out = StdCommand::new("git")
-            .current_dir(&vp)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_AUTHOR_DATE", "2025-01-02T00:00:00")
-            .env("GIT_COMMITTER_DATE", "2025-01-02T00:00:00")
-            .args(args)
-            .output()
-            .expect("git binary on PATH");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git(&["init", "-b", "main"]);
-    run_git(&["config", "user.name", "T"]);
-    run_git(&["config", "user.email", "t@e.com"]);
-    run_git(&["config", "commit.gpgsign", "false"]);
-    run_git(&["config", "maintenance.auto", "false"]);
-    run_git(&["add", "."]);
-    run_git(&["commit", "-m", "init"]);
-
-    let vault = Vault::discover(Some(vp)).unwrap();
-    (dir, vault)
-}
-
-#[test]
-fn journal_rows_show_citation_badges() -> Result<()> {
-    let (_dir, vault) = citation_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.queue_gather_for_tab_test("Target.md");
-    app.switch_to(gather_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("cited: Synth"),
-        "cited entry missing badge:\n{frame}"
-    );
-    // The uncited entry (DailyB) must carry no citation badge on its
-    // list row. The cited entry (DailyA) shows the badge both in its
-    // list row (compact) and in the preview header (detail), so we
-    // check the uncited row's line directly rather than counting total
-    // occurrences.
-    let uncited_row = frame
-        .lines()
-        .find(|l| l.contains("DailyB"))
-        .unwrap_or_else(|| panic!("DailyB row missing:\n{frame}"));
-    assert!(
-        !uncited_row.contains("cited"),
-        "uncited entry must carry no badge: {uncited_row}"
-    );
-    insta::assert_snapshot!(frame);
-    Ok(())
-}
-
-#[test]
-fn journal_uncited_toggle_filters_cited_entries() -> Result<()> {
-    let (_dir, vault) = citation_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.queue_gather_for_tab_test("Target.md");
-    app.switch_to(gather_tab_idx())?;
-
-    app.dispatch(key('u'))?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("[filter: uncited]"),
-        "strip missing filter flag:\n{frame}"
-    );
-    assert!(
-        !frame.contains("Alpha mentions"),
-        "cited entry should be filtered:\n{frame}"
-    );
-    assert!(
-        frame.contains("Beta mentions"),
-        "uncited entry should remain:\n{frame}"
-    );
-
-    app.dispatch(key('u'))?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Alpha mentions"),
-        "toggle off should restore the full feed:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn journal_context_note_flow_badges_in_note_vs_missing() -> Result<()> {
-    let (_dir, vault) = citation_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(gather_tab_idx())?;
-
-    // `o` opens the synth-note picker; Enter takes the only hit
-    // (Synth.md), which loads its ft.synth.targets ([[Target]]) as the
-    // source set and installs it as the badge context.
-    app.dispatch(key('o'))?;
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )))?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("[context: Synth]"),
-        "strip missing context indicator:\n{frame}"
-    );
-    assert!(
-        frame.contains("in note"),
-        "cited-in-context entry missing `in note` badge:\n{frame}"
-    );
-    assert!(
-        frame.contains("missing"),
-        "entry absent from the context note must show `missing`:\n{frame}"
-    );
-    insta::assert_snapshot!(frame);
     Ok(())
 }

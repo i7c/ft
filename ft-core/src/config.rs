@@ -55,7 +55,7 @@ pub struct Config {
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
     pub keymap: Option<KeymapConfig>,
-    /// Synthesis settings (pulse, multi-source gather,
+    /// Synthesis settings (pulse, search,
     /// synth notes). See [`Synth`].
     #[serde(default)]
     pub synth: Synth,
@@ -285,11 +285,6 @@ pub struct Tui {
     /// Show the Timeblocks tab in the TUI. Defaults to `false`.
     #[serde(default)]
     pub timeblocks_tab: bool,
-    /// Show the deprecated Gather tab in the TUI. Defaults to `false`:
-    /// the Search tab replaced it in the default lineup, and the flag
-    /// exists only for the transition until the tab is removed.
-    #[serde(default)]
-    pub show_gather: bool,
 }
 
 impl Default for Synth {

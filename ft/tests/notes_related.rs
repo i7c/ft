@@ -213,8 +213,8 @@ fn related_unknown_note_exits_non_zero() {
 #[test]
 fn related_works_without_git_repository() {
     // The make_related_vault vault is never `git init`-ed. Success here
-    // is the spec's "no git/blame dependency" guarantee: `ft notes
-    // journal` would fail on this vault; `ft notes related` must not.
+    // is the spec's "no git/blame dependency" guarantee: a blame-based
+    // feed command would fail on this vault; `ft notes related` must not.
     let tmp = make_related_vault();
     ft().args([
         "--vault",

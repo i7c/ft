@@ -1,13 +1,11 @@
-//! Shared send-to-synth state machine for the Gather and Search tabs.
+//! Shared send-to-synth state machine for the Search and Recent tabs.
 //!
 //! Both tabs ship paragraphs into a synth note via the same multi-step
 //! flow: `s` picks an existing note (append, with a 3-way prompt when
 //! the picked note lacks the `ft.synth.enabled: true` marker), `S`
-//! creates a new note (folder picker → title prompt), and `n`
-//! appends only entries newer than the note's last-synth watermark
-//! (a gather-only refinement; search has no dates). The Gather tab
-//! additionally has `o` (load a synth note's targets as the source
-//! set + badge context), which the Search tab never opens.
+//! creates a new note (folder picker → title prompt). The former
+//! gather-only `n` new-only watermark flow and `o` context-note flow
+//! were removed with the gather tab.
 //!
 //! A host implements [`SynthSendHost`] to supply the paragraphs to pin
 //! when a target is committed (`synth_sources`) and to react to a
@@ -49,26 +47,17 @@ pub enum NonSynthChoice {
 /// Multi-step send-to-synth state. Active only while a picker or prompt
 /// overlay owns the keyboard; cleared on completion or `Esc`.
 pub enum SynthSendState {
-    /// `s` / `n` — fuzzy picker over every `.md` in the vault. `new_only`
-    /// records which command opened this picker so the on-pick handler
-    /// knows whether to apply the watermark filter.
+    /// `s` — fuzzy picker over every `.md` in the vault.
     PickExisting {
         picker: FuzzyPicker<VaultFilePickerSource>,
-        new_only: bool,
     },
     /// User picked a real note but its frontmatter lacks
     /// `ft.synth.enabled: true`. Inline 3-way prompt: append anyway, mark and
-    /// append, or cancel. `new_only` is carried through so the `n` flow
-    /// still filters after the mark/append decision.
+    /// append, or cancel.
     NonSynthPrompt {
         path: PathBuf,
         focus: NonSynthChoice,
-        new_only: bool,
     },
-    /// `o` — fuzzy picker over the vault's synth notes. Picking one
-    /// loads its `ft.synth.targets` as the source set and installs it
-    /// as the badge context note (Gather tab only).
-    PickContextNote(FuzzyPicker<PathListPickerSource>),
     /// `S` — fuzzy picker over every vault folder. `.` selects the
     /// vault root.
     PickFolder(FuzzyPicker<PathListPickerSource>),
@@ -85,25 +74,13 @@ pub enum SynthSendState {
 pub trait SynthSendHost {
     /// The paragraphs to ship to the target note: user-selected entries,
     /// or all candidates when nothing is selected. Called once per
-    /// committed target. `new_only` asks the host to drop entries at or
-    /// before the target note's last-synth watermark (the gather host
-    /// has dated entries and honors it; the search host ignores it).
-    fn synth_sources(
-        &mut self,
-        ctx: &mut TabCtx,
-        target: &Path,
-        new_only: bool,
-    ) -> Vec<SynthSource>;
+    /// committed target.
+    fn synth_sources(&mut self, ctx: &mut TabCtx, target: &Path) -> Vec<SynthSource>;
 
     /// Called after a successful scaffold write + editor handoff so the
-    /// host can update its badge context (Gather tab sets its
-    /// context-note here; Recent requests a graph refresh). Default:
+    /// host can react (e.g. Recent requests a graph refresh). Default:
     /// no-op.
     fn on_synth_committed(&mut self, _ctx: &mut TabCtx, _target: &Path) {}
-
-    /// `o` picked a context synth note. Default: no-op (only the Gather
-    /// tab uses this flow).
-    fn on_context_note_picked(&mut self, _ctx: &mut TabCtx, _path: PathBuf) {}
 }
 
 /// One tab's send-to-synth state machine.
@@ -123,7 +100,7 @@ impl SynthSendFlow {
     }
 
     /// `s` — open the existing-note fuzzy picker (append, all entries).
-    pub fn open_existing(&mut self, ctx: &TabCtx, new_only: bool) {
+    pub fn open_existing(&mut self, ctx: &TabCtx) {
         let source = VaultFilePickerSource::with_scan(
             Arc::clone(ctx.vault),
             Arc::clone(ctx.recents),
@@ -131,7 +108,6 @@ impl SynthSendFlow {
         );
         self.state = Some(SynthSendState::PickExisting {
             picker: FuzzyPicker::new(source),
-            new_only,
         });
     }
 
@@ -140,12 +116,6 @@ impl SynthSendFlow {
         let folders = enumerate_vault_folders(ctx.vault);
         let source = PathListPickerSource::new(folders);
         self.state = Some(SynthSendState::PickFolder(FuzzyPicker::new(source)));
-    }
-
-    /// `o` — open the synth-note context picker (Gather tab only).
-    pub fn open_context_note(&mut self, _ctx: &TabCtx, synth_notes: Vec<PathBuf>) {
-        let source = PathListPickerSource::new(synth_notes);
-        self.state = Some(SynthSendState::PickContextNote(FuzzyPicker::new(source)));
     }
 
     /// Drive one key through the state machine. Returns `Consumed` while
@@ -160,36 +130,23 @@ impl SynthSendFlow {
             return EventOutcome::NotHandled;
         };
         match state {
-            SynthSendState::PickExisting {
-                mut picker,
-                new_only,
-            } => match picker.handle_key(k) {
-                PickerOutcome::Selected(hit) => {
-                    self.on_existing_picked(ctx, host, hit.path, new_only)
-                }
+            SynthSendState::PickExisting { mut picker } => match picker.handle_key(k) {
+                PickerOutcome::Selected(hit) => self.on_existing_picked(ctx, host, hit.path),
                 PickerOutcome::Cancelled => {}
                 PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
-                    self.state = Some(SynthSendState::PickExisting { picker, new_only });
+                    self.state = Some(SynthSendState::PickExisting { picker });
                 }
             },
-            SynthSendState::NonSynthPrompt {
-                path,
-                focus,
-                new_only,
-            } => match k.code {
+            SynthSendState::NonSynthPrompt { path, focus } => match k.code {
                 KeyCode::Esc => {}
-                KeyCode::Enter => self.commit_send(
-                    ctx,
-                    host,
-                    &path,
-                    focus == NonSynthChoice::MarkAndAppend,
-                    new_only,
-                ),
+                KeyCode::Enter => {
+                    self.commit_send(ctx, host, &path, focus == NonSynthChoice::MarkAndAppend)
+                }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
-                    self.commit_send(ctx, host, &path, false, new_only);
+                    self.commit_send(ctx, host, &path, false);
                 }
                 KeyCode::Char('m') | KeyCode::Char('M') => {
-                    self.commit_send(ctx, host, &path, true, new_only);
+                    self.commit_send(ctx, host, &path, true);
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {}
                 KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
@@ -197,25 +154,10 @@ impl SynthSendFlow {
                         NonSynthChoice::AppendAnyway => NonSynthChoice::MarkAndAppend,
                         NonSynthChoice::MarkAndAppend => NonSynthChoice::AppendAnyway,
                     };
-                    self.state = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus: next,
-                        new_only,
-                    });
+                    self.state = Some(SynthSendState::NonSynthPrompt { path, focus: next });
                 }
                 _ => {
-                    self.state = Some(SynthSendState::NonSynthPrompt {
-                        path,
-                        focus,
-                        new_only,
-                    });
-                }
-            },
-            SynthSendState::PickContextNote(mut picker) => match picker.handle_key(k) {
-                PickerOutcome::Selected(path) => host.on_context_note_picked(ctx, path),
-                PickerOutcome::Cancelled => {}
-                PickerOutcome::StillOpen | PickerOutcome::NotHandled => {
-                    self.state = Some(SynthSendState::PickContextNote(picker));
+                    self.state = Some(SynthSendState::NonSynthPrompt { path, focus });
                 }
             },
             SynthSendState::PickFolder(mut picker) => match picker.handle_key(k) {
@@ -263,7 +205,7 @@ impl SynthSendFlow {
                         };
                         // Create-new: `apply_synth_scaffold` will write
                         // frontmatter and content. No need to mark.
-                        self.commit_send(ctx, host, &target, false, false);
+                        self.commit_send(ctx, host, &target, false);
                     }
                 }
                 // All text edits + cursor moves + readline chords go
@@ -289,19 +231,17 @@ impl SynthSendFlow {
         ctx: &mut TabCtx,
         host: &mut H,
         path: PathBuf,
-        new_only: bool,
     ) {
         let abs = ctx.vault.path.join(&path);
         let is_synth = std::fs::read_to_string(&abs)
             .map(|c| ft_core::synth::callout::is_synth_note(&c))
             .unwrap_or(false);
         if is_synth {
-            self.commit_send(ctx, host, &path, false, new_only);
+            self.commit_send(ctx, host, &path, false);
         } else {
             self.state = Some(SynthSendState::NonSynthPrompt {
                 path,
                 focus: NonSynthChoice::MarkAndAppend,
-                new_only,
             });
         }
     }
@@ -309,17 +249,15 @@ impl SynthSendFlow {
     /// Perform the scaffold write + editor handoff. `mark_synth` ensures
     /// the on-disk file's frontmatter includes `ft.synth.enabled: true`
     /// before the scaffold is applied (no-op when the file already has
-    /// the marker or is being created). `new_only` is forwarded to the
-    /// host, which applies the watermark filter to its dated entries.
+    /// the marker or is being created).
     fn commit_send<H: SynthSendHost>(
         &mut self,
         ctx: &mut TabCtx,
         host: &mut H,
         vault_rel_path: &Path,
         mark_synth: bool,
-        new_only: bool,
     ) {
-        let sources = host.synth_sources(ctx, vault_rel_path, new_only);
+        let sources = host.synth_sources(ctx, vault_rel_path);
         if sources.is_empty() {
             crate::tui::notes_actions::queue_toast(
                 ctx,
@@ -390,7 +328,7 @@ impl SynthSendFlow {
                 frame.render_widget(Clear, popup);
                 picker.render(frame, popup);
             }
-            SynthSendState::PickContextNote(picker) | SynthSendState::PickFolder(picker) => {
+            SynthSendState::PickFolder(picker) => {
                 let popup = centered_rect(70, 70, area);
                 frame.render_widget(Clear, popup);
                 picker.render(frame, popup);

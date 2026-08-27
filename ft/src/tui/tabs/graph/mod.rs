@@ -915,8 +915,8 @@ impl Tab for GraphTab {
             HelpSection::new(
                 "Cross-tab",
                 &[
-                    ("Shift+J", "open Journal tab for the selected note"),
-                    ("Ctrl+J", "append selected (or cursor) to Journal sources"),
+                    ("Shift+J", "open Search for the selected note"),
+                    ("Ctrl+J", "search selected (or cursor) rows' mentions"),
                 ],
             ),
             HelpSection::new(

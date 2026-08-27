@@ -1,18 +1,16 @@
 //! Notes History — a whole-vault, windowed, recency-ordered feed of the
 //! paragraphs that were edited within a git window.
 //!
-//! Where [`crate::gather`] selects paragraphs by *link target* ("what
-//! mentions `[[X]]`?"), history selects them by *recency of edit* ("what
-//! did I change anywhere in the vault lately?"). It is the untargeted,
-//! time-shaped sibling of the journal and shares its entry shape, blame
-//! dates, and sort.
+//! History selects paragraphs by *recency of edit* ("what did I change
+//! anywhere in the vault lately?"), the untargeted, time-shaped
+//! sibling of a link-target mention feed; it shares the paragraph entry
+//! shape, blame dates, and sort used across the feed output.
 //!
 //! Selection reuses the link-review engine's `added_lines` map for the
 //! window: a paragraph is included iff its line range overlaps a line
 //! added within the window. That map's keys are the only files touched in
 //! the window, so it doubles as the perf prefilter — only those files are
-//! blamed. Dates come from `git blame` via [`crate::blame_cache`], exactly
-//! as in the journal.
+//! blamed. Dates come from `git blame` via [`crate::blame_cache`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -29,8 +27,8 @@ use crate::pulse::{compute_pulse, WindowRange};
 
 use crate::vault::Vault;
 
-/// One row of the history feed. Mirrors [`crate::gather::GatherEntry`]
-/// minus the `matched` field — history has no link target to attribute.
+/// One row of the history feed. Same shape as the paragraph-feed rows
+/// (`source_title`, `source_path`, line range, text, blame date).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentEntry {
     /// Filename stem of the note the paragraph lives in (no `.md`).
@@ -48,8 +46,7 @@ pub struct RecentEntry {
 }
 
 /// Result of [`build_recent`]: the feed plus per-file blame diagnostics,
-/// matching [`crate::gather::GatherReport`] so callers can warn instead
-/// of silently dropping entries.
+/// so callers can warn instead of silently dropping entries.
 #[derive(Debug, Default, Clone)]
 pub struct RecentReport {
     /// The feed, already sorted reverse-chronologically.

@@ -613,7 +613,7 @@ fn default_layout_hides_adjacent_tabs() {
 }
 
 /// `[tui] tasks_tab/timeblocks_tab = true` appends the adjacent tabs
-/// after Gather.
+/// after Search.
 #[test]
 fn tui_config_enables_adjacent_tabs() {
     let (_dir, vault) = test_vault();

@@ -193,3 +193,96 @@ fn pulse_handoff_opens_search_prefilled_in_any_mode() -> Result<()> {
     );
     Ok(())
 }
+
+/// Type into the existing-note picker and press Enter to select the
+/// first match (the shared synth-send flow's append path).
+fn select_existing_note_in_picker(app: &mut App, query: &str) -> Result<()> {
+    for ch in query.chars() {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Char(ch),
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(())
+}
+
+/// `s` on the Search tab opens the shared existing-note picker.
+#[test]
+fn search_send_to_synth_existing_opens_picker_on_s() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    app.dispatch(key('/'))?;
+    for c in "Foo".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?; // apply the query (leaves edit mode)
+          // `s` opens the existing-note fuzzy picker.
+    app.dispatch(key('s'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("notes.md") || frame.contains("baseline.md"),
+        "existing-note picker should list vault notes:\n{frame}"
+    );
+    Ok(())
+}
+
+/// Sending search results to a synth note applies append-dedup: an
+/// already-pinned paragraph is not re-added.
+#[test]
+fn search_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let vault_path = vault.path.clone();
+
+    // Pre-create a synth note that already pins the "See [[Foo]] and
+    // [[Bar]] here." paragraph (notes.md line 7), leaving the second
+    // Foo result ("Only [[Foo]] here.", line 9) unpinned.
+    let abs = vault_path.join("Synth/topic.md");
+    std::fs::create_dir_all(abs.parent().unwrap()).ok();
+    let pinned = ft_core::synth::source::SynthSource {
+        source_path: std::path::PathBuf::from("notes.md"),
+        line_start: 7,
+        line_end: 7,
+        body: "See [[Foo]] and [[Bar]] here.".to_string(),
+    };
+    let plan = ft_core::synth::scaffold::plan_synth_scaffold(
+        &vault,
+        std::path::Path::new("Synth/topic.md"),
+        std::slice::from_ref(&pinned),
+    )?;
+    ft_core::synth::scaffold::apply_synth_scaffold(&vault, &plan)?;
+
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    app.dispatch(key('/'))?;
+    for c in "Foo".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?; // apply the query (leaves edit mode)
+    app.pump_graph_rebuild_for_test();
+
+    // `s` → type "topic" + Enter.
+    app.dispatch(key('s'))?;
+    select_existing_note_in_picker(&mut app, "topic")?;
+    app.service_pending_requests()?;
+
+    let body = std::fs::read_to_string(&abs).unwrap();
+    let count = body.matches("[!ft-source]").count();
+    // The pinned paragraph is skipped; only the second Foo result is
+    // newly appended.
+    assert_eq!(
+        count, 2,
+        "dedup should keep the existing section and add only the missing one:\n{body}"
+    );
+    Ok(())
+}

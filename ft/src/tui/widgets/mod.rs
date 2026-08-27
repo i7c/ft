@@ -5,6 +5,7 @@ pub mod edit_buffer;
 pub mod edit_keymap;
 pub mod edit_render;
 pub mod feed_split;
+pub mod feed_text;
 pub mod picker;
 pub mod scroll_list;
 
@@ -17,12 +18,15 @@ pub use edit_buffer::EditBuffer;
 pub use edit_keymap::{EDIT_COMMANDS, EDIT_KEYMAP};
 pub use edit_render::{horizontal_scroll, render_inline_input, CursorMode, InlineInput};
 pub use feed_split::render_feed_split;
+pub use feed_text::{
+    citation_badge_line, citation_detail_line, inline_markdown_spans, pad_to_width, wrap_line,
+};
 pub use scroll_list::{render_scroll_list, ScrollListOpts};
 // Re-exported eagerly so the picker is reachable as
 // `crate::tui::widgets::FuzzyPicker` once plan-004 session 4 wires it in.
 // `#[allow(unused_imports)]` keeps the re-exports legal until then.
 #[allow(unused_imports)]
 pub use picker::{
-    FuzzyPicker, GatherSourceHit, GatherSourcePickerSource, PathListPickerSource, PickerItem,
-    PickerOutcome, PickerSource, VaultFilePickerSource,
+    FuzzyPicker, PathListPickerSource, PickerItem, PickerOutcome, PickerSource,
+    VaultFilePickerSource,
 };

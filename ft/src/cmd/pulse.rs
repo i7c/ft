@@ -1,7 +1,7 @@
 //! `ft review` — paragraph-level frequency of `[[wikilinks]]` newly
 //! mentioned in a commit/date window. Drives the "what's been on my
-//! mind?" sweep half of the consolidation flow; the multi-source gather
-//! (`ft notes journal --link`) picks up from there.
+//! mind?" sweep half of the consolidation flow; the multi-source search
+//! (`ft notes search --any`) picks up from there.
 //!
 //! All heavy lifting lives in [`ft_core::pulse`]; this module is
 //! flag parsing, window validation, and output rendering.

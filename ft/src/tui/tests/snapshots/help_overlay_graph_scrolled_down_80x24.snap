@@ -2,7 +2,7 @@
 source: ft/src/tui/tests/notes.rs
 expression: down
 ---
-  1 Graph ┌ help ────────────────────────────────────────────────────┐er  │  7 T
+  1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
 > node whe│  Tab            Switch to the next tab                  ║│ note-link
  1: node w│  BackTab        Switch to the previous tab              █│          
 ┌ node whe│  1..9           Switch to the tab at the given 0-based i█│─────────┐
@@ -17,8 +17,8 @@ expression: down
 │         │                                                         ║│         │
 │         │  Notes                                                  ║│         │
 │         │  Shift+r        Open the Related panel for the selected ║│         │
-│         │  Shift+j        Open the Journal tab for the selected no║│         │
-│         │  Ctrl+j         Append selected (or cursor) Note/Ghost r║│         │
+│         │  Shift+j        Open Search for the selected note or gho║│         │
+│         │  Ctrl+j         Search selected (or cursor) Note/Ghost r║│         │
 │         │  o              Open the selected note in $EDITOR       ║│         │
 │         │  Ctrl+o         Open the selected note in Obsidian      ║│         │
 │         │  c              Create a new note (blank) in the selecte║│         │

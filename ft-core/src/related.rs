@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fs::write_atomic;
-use crate::gather::resolve_related_aliases;
 use crate::graph::{EdgeKind, Graph, NodeKind, NoteId};
 use crate::markdown::extract_headings;
 use crate::vault::Vault;
@@ -42,7 +41,7 @@ pub struct RelatedScore {
 /// `already_in_related = true`.
 pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Vec<RelatedScore>> {
     // Ghost targets have no backing file, so there is no Related
-    // section to read aliases from — mirror gather::build_gather's
+    // section to read aliases from — mirror the former gather feed's
     // ghost handling (note_path = None, aliases = []). The
     // co-occurrence walk below runs unchanged because ghosts can be
     // the target of incoming ParagraphLink edges.
@@ -177,6 +176,67 @@ pub fn score_related(graph: &Graph, note_id: NoteId, vault: &Vault) -> Result<Ve
     }
     rows.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
     Ok(rows)
+}
+
+/// Resolve the alias `NoteId`s declared in `note_id`'s `## Related`
+/// section. Aliases are the targets of outgoing `Link` edges that fall
+/// within the Related section's line range (inclusive of the heading
+/// line, exclusive of the next equal-or-higher heading).
+///
+/// Returns an empty vec when the note has no Related heading (case
+/// insensitive on the heading text).
+pub fn resolve_related_aliases(
+    graph: &Graph,
+    note_id: NoteId,
+    headings: &[crate::markdown::Heading],
+    total_lines: u32,
+) -> Result<Vec<NoteId>> {
+    let related_range = match find_related_range(headings, total_lines) {
+        Some(r) => r,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut alias_ids: Vec<NoteId> = Vec::new();
+    let mut seen: HashSet<NoteId> = HashSet::new();
+    for (dst, edge) in graph.outgoing(note_id) {
+        let link = match edge {
+            EdgeKind::NoteLink(l) => l,
+            _ => continue,
+        };
+        let line = link.line as u32;
+        if line < related_range.0 || line > related_range.1 {
+            continue;
+        }
+        if seen.insert(dst) {
+            alias_ids.push(dst);
+        }
+    }
+    Ok(alias_ids)
+}
+
+/// Return the inclusive 1-indexed `(start_line, end_line)` of the
+/// `## Related` heading and its body — up to the next heading of equal
+/// or higher level, or end of file. Heading text match is
+/// case-insensitive; comparison ignores trailing whitespace and `#`s.
+fn find_related_range(
+    headings: &[crate::markdown::Heading],
+    total_lines: u32,
+) -> Option<(u32, u32)> {
+    for (i, h) in headings.iter().enumerate() {
+        if h.text.eq_ignore_ascii_case("Related") {
+            let start = h.line as u32;
+            // Find the next heading of equal-or-higher level (lower
+            // or equal numeric level).
+            let end = headings
+                .iter()
+                .skip(i + 1)
+                .find(|next| next.level <= h.level)
+                .map(|next| (next.line as u32) - 1)
+                .unwrap_or(total_lines);
+            return Some((start, end));
+        }
+    }
+    None
 }
 
 // ── Plan / apply ────────────────────────────────────────────────────────
@@ -368,6 +428,42 @@ fn extract_wiki_targets(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use assert_fs::prelude::*;
+
+    // ── find_related_range ────────────────────────────────────────────
+
+    #[test]
+    fn find_related_range_no_related_heading() {
+        let headings = vec![crate::markdown::Heading {
+            text: "Other".into(),
+            level: 2,
+            line: 1,
+        }];
+        assert!(find_related_range(&headings, "## Other\n".lines().count() as u32).is_none());
+    }
+
+    #[test]
+    fn find_related_range_to_eof() {
+        let content = "# Top\n\n## Related\n- [[Bar]]\n";
+        let headings = crate::markdown::extract_headings(content);
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
+        assert_eq!(r, (3, 4));
+    }
+
+    #[test]
+    fn find_related_range_bounded_by_next_heading() {
+        let content = "## Related\n- [[Bar]]\n\n## Next\nbody\n";
+        let headings = crate::markdown::extract_headings(content);
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
+        assert_eq!(r, (1, 3));
+    }
+
+    #[test]
+    fn find_related_range_case_insensitive_match() {
+        let content = "## related\n- [[Bar]]\n";
+        let headings = crate::markdown::extract_headings(content);
+        let r = find_related_range(&headings, content.lines().count() as u32).unwrap();
+        assert_eq!(r.0, 1);
+    }
 
     fn build_vault_and_graph(
         setup: impl FnOnce(&assert_fs::TempDir),

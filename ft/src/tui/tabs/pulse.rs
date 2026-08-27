@@ -1,13 +1,12 @@
 //! `Review` tab — frequency-ranked `[[wikilinks]]` mentioned in a
 //! commit/date window. Drives synthesis' discovery step:
 //! user selects N links with `<space>`, hits `<enter>`, and the
-//! Journal tab opens in multi-target mode with those targets queued.
+//! Search tab opens with those links prefilled as any-mode clauses.
 //!
 //! v1 computes the link review synchronously on focus / window-change.
 //! For very large vaults that becomes a UX problem; the codebase's
-//! single-threaded + mpsc background-worker pattern (see
-//! `gather::load_for` and the `g s` worker) can be applied here if
-//! needed — track separately.
+//! single-threaded + mpsc background-worker pattern (see the git-sync
+//! worker) can be applied here if needed — track separately.
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -64,8 +63,8 @@ pub(crate) static PULSE_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
-        name: "pulse.handoff-to-gather",
-        description: "Open the Gather tab with selected (or cursor) links as multi-targets",
+        name: "pulse.handoff-to-search",
+        description: "Open Search with selected (or cursor) links as any-mode clauses",
         scope: CommandScope::Tab("pulse"),
         group: "Handoff",
         args_schema: &[],
@@ -108,7 +107,7 @@ pub(crate) static PULSE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Down", "pulse.cursor-down")
         .bind("j", "pulse.cursor-down")
         .bind("Space", "pulse.toggle-selection")
-        .bind("Enter", "pulse.handoff-to-gather")
+        .bind("Enter", "pulse.handoff-to-search")
         .bind("]", "pulse.window-wider")
         .bind("[", "pulse.window-narrower")
         .bind("R", "pulse.reload")
@@ -223,7 +222,7 @@ impl PulseTab {
         // Lower each row's target name to a `[[…]]` search clause. The
         // Search tab matches link targets, so no graph round-trip is
         // needed — ghosts and notes alike become link clauses. Any-mode
-        // mirrors the deprecated gather's multi-target OR semantics.
+        // any-mode: a paragraph matching any clause qualifies.
         let mut clauses: Vec<String> = Vec::new();
         for idx in row_indices {
             let row = &self.rows[idx];
@@ -316,7 +315,7 @@ impl Tab for PulseTab {
                 self.toggle_selection();
                 CommandOutcome::Handled
             }
-            "pulse.handoff-to-gather" => {
+            "pulse.handoff-to-search" => {
                 self.handoff(ctx);
                 CommandOutcome::Handled
             }
@@ -437,7 +436,7 @@ impl Tab for PulseTab {
             HelpSection::new("Window", &[("[", "narrower window"), ("]", "wider window")]),
             HelpSection::new(
                 "Handoff",
-                &[("Enter", "open Gather tab with selected (or cursor) links")],
+                &[("Enter", "open Search with selected (or cursor) links")],
             ),
             HelpSection::new("Source", &[("R", "reload the pulse")]),
         ]

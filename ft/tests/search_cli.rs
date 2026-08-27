@@ -2,6 +2,7 @@
 
 use assert_cmd::Command;
 use assert_fs::prelude::*;
+use predicates::prelude::*;
 use serde_json::Value;
 
 fn ft() -> Command {
@@ -243,47 +244,17 @@ fn no_match_prints_nothing_exit_zero() {
 }
 
 #[test]
-fn gather_is_deprecated_hidden_and_still_works() {
+fn removed_gather_subcommand_is_unknown() {
+    // `ft notes gather` (and its `journal` alias) were removed with the
+    // deprecated gather feed; the subcommand must not exist anymore.
     let tmp = make_vault();
-    let repo = tmp.path();
-    let run = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .current_dir(repo)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run(&["init", "-b", "main"]);
-    run(&["config", "user.name", "T"]);
-    run(&["config", "user.email", "t@e.com"]);
-    run(&["config", "commit.gpgsign", "false"]);
-    run(&["config", "maintenance.auto", "false"]);
-    run(&["add", "."]);
-    run(&["commit", "-m", "c1"]);
-
-    // Hidden from help.
-    let help = ft().args(["notes", "--help"]).assert().success();
-    let help_stdout = String::from_utf8_lossy(&help.get_output().stdout).to_string();
-    assert!(
-        !help_stdout
-            .lines()
-            .any(|l| l.trim_start().starts_with("gather")),
-        "gather must be hidden from help:\n{help_stdout}"
-    );
-
-    // Still functional, with a deprecation warning on stderr.
-    let out = ft()
-        .args(["notes", "gather", "a", "--vault"])
+    ft().args(["notes", "gather", "a", "--vault"])
         .arg(tmp.path())
         .assert()
-        .success();
-    let stderr = String::from_utf8_lossy(&out.get_output().stderr);
-    assert!(
-        stderr.contains("deprecated") && stderr.contains("search"),
-        "expected deprecation warning, got stderr: {stderr}"
-    );
-    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
-    assert!(!stdout.is_empty(), "gather still prints the feed");
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+    ft().args(["notes", "journal", "a", "--vault"])
+        .arg(tmp.path())
+        .assert()
+        .failure();
 }

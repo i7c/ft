@@ -1,8 +1,9 @@
 ---
 source: ft/src/tui/tests/search.rs
+assertion_line: 86
 expression: frame
 ---
-  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Gather  │  7 Tasks  │  8
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks  
 ┌ Search ────────────────────────────────────────────────────────────────────────────────┐
 │┌ AND · sort: relevance (2 results, 0 selected) ───────────────────────────────────────┐│
 ││> eigen│                                                                              ││
