@@ -2,7 +2,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: Handoff to Search tab on enter
+### Requirement: Handoff to Gather tab on enter
 
 Pressing `<enter>` on the Pulse tab SHALL lower the currently selected link
 targets to `[[…]]` search clauses and raise `AppRequest::SearchWithQuery` with

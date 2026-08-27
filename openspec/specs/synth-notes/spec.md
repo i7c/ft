@@ -105,6 +105,7 @@ A protected section SHALL be an Obsidian-style callout whose header line matches
 
 - **WHEN** `--in-window`, `--since`, or `--range` is passed
 - **THEN** the command fails with clap's unknown-argument error
+
 ### Requirement: Scaffold content sourcing
 
 With `--search`, the scaffold SHALL be sourced from the paragraph-search index for the parsed query, deduplicated by `(source_path, line_start)`, with sections emitted in result order — relevance descending by default, newest-first with `--sort date` (see the paragraph-search capability). With the transitional `--link` form, sections SHALL be sourced from an any-mode search over the given links (paragraphs mentioning any link qualify; Related-alias resolution is not performed on this path). With `--from <path>:<line>` (repeatable), the scaffold SHALL additionally include the specified source paragraphs (identified by the line in which they start). Sections in the resulting scaffold SHALL be ordered by the search result order (which the `--sort` flag controls).
@@ -126,20 +127,25 @@ The scaffold's per-section body text SHALL be taken verbatim from the source par
 #### Scenario: Paragraph beginning at a heading line includes the heading
 - **WHEN** a sourced paragraph begins at a `## Section` heading line
 - **THEN** the scaffolded callout body begins with `## Section` (the heading line is part of the paragraph text, per Fork A2)
+
 ### Requirement: Plan/apply split for synth mutations
-A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), NOT `GatherEntry`; feed callers (`GatherEntry`, `RecentEntry`) SHALL lower into `SynthSource` via `From` at the call boundary. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
+
+A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), NOT `GatherEntry`; the `RecentEntry` feed caller SHALL lower into `SynthSource` via `From` at the call boundary, and search results, `--from` picks, and TUI flows SHALL construct `SynthSource` directly. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
 
 #### Scenario: Planner does no I/O
+
 - **WHEN** `plan_synth_scaffold` is invoked
 - **THEN** no files on disk are modified
 
 #### Scenario: Applier uses write_atomic
+
 - **WHEN** `apply_synth_scaffold` writes the scaffold
 - **THEN** the write goes through `ft_core::fs::write_atomic` (same-dir tempfile + rename)
 
 #### Scenario: Planner accepts SynthSource inputs
-- **WHEN** `plan_synth_scaffold` is called with a slice of `SynthSource` values
-- **THEN** it builds one `ProtectedSection` per `SynthSource`, pinning that source's `source_path`, `line_start`, `line_end`, and a blake3 hash of `body` to the repo HEAD commit SHA
+
+- **WHEN** `plan_synth_scaffold` is invoked with `&[SynthSource]`
+- **THEN** each source pins its path, line range, HEAD commit SHA, and the blake3 content hash of its body; no feed-specific metadata (date, matched targets) is consulted
 
 ### Requirement: Synth configuration
 The `Config` struct SHALL gain a `synth: Synth` sub-struct with two fields: `folder: String` (default `"Synthesis/"`) and `exclude_prefixes: Vec<String>` (default contains the configured periodic-notes folder prefix when one is configured, else empty). Unknown keys under `[synth]` SHALL be rejected per the existing `deny_unknown_fields` convention.

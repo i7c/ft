@@ -1,14 +1,8 @@
 # synth-source-input
 
-## RENAMED Requirements
-
-### Requirement: Conversion from GatherEntry and RecentEntry
-FROM: Conversion from GatherEntry and RecentEntry
-TO: Conversion from RecentEntry
-
 ## MODIFIED Requirements
 
-### Requirement: Conversion from RecentEntry
+### Requirement: Conversion from GatherEntry and RecentEntry
 
 `SynthSource` SHALL implement `From<&RecentEntry>`, copying the four pinning
 fields and dropping the feed-specific fields. This conversion SHALL be the

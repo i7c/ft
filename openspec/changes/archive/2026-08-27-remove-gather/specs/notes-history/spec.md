@@ -1,11 +1,5 @@
 # notes-history
 
-## RENAMED Requirements
-
-### Requirement: Recency ordering
-FROM: Recency ordering matches the journal
-TO: Recency ordering
-
 ## MODIFIED Requirements
 
 ### Requirement: build_history core feed
@@ -42,7 +36,7 @@ shared window resolver (`ft_core::pulse::WindowRange`).
 - **WHEN** a paragraph's lines do not overlap any line added within the window
 - **THEN** that paragraph does NOT appear, even if its file changed elsewhere in the window
 
-### Requirement: Recency ordering
+### Requirement: Recency ordering matches the journal
 
 History entries SHALL each carry a blame date computed as the most recent commit
 touching any line in the paragraph (via `blame_cache`'s `paragraph_date`), and

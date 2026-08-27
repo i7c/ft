@@ -2,7 +2,6 @@
 
 ## Purpose
 Source-driven copy-to-synth TUI flow: pick a note (Graph tab `y` on a Note node, or Notes tab `y` → source picker), multi-select its paragraphs with shrink-only range adjust, and pin them into a target note as protected `[!ft-source]` callouts via the existing scaffold plan/apply path. The source-driven sibling of the gather/recent feed-driven send-to-synth flows.
-
 ## Requirements
 ### Requirement: Paragraph-synth entry point on the Graph tab
 The TUI SHALL provide a `graph.synth-from-note` command bound to `y` on the Graph tab. When a Note node is focused and `y` is pressed, the TUI SHALL first check the git working-tree status; if the tree is not clean, the TUI SHALL emit an error toast and NOT open the paragraph-synth modal. When the tree is clean, the TUI SHALL open the paragraph-synth modal seeded directly into the paragraph-multi-select step with the focused note as the source (no source-picker step, no confirmation step). Ghost, Heading, Paragraph, Task, and Directory nodes SHALL NOT trigger the flow; pressing `y` on a non-Note node SHALL be a no-op (or fall through to the tab's other bindings).
@@ -103,19 +102,18 @@ The paragraph-synth target-pick step SHALL offer two paths: pick an existing not
 - **THEN** an error is shown in the modal footer and the step stays at target pick
 
 ### Requirement: Commit runs the scaffold plan/apply and editor handoff
-On commit, the flow SHALL build a `SynthSource` for each selected paragraph (carrying its effective range and re-sliced body), call `plan_synth_scaffold` then `apply_synth_scaffold`, and hand the resulting file off to `$EDITOR` — identical to the gather tab's send-to-synth commit path. When appending to an existing non-synth note, the flow SHALL first mark the target with the `ft-synth` marker. Sections SHALL append in selection order. Dedup (entries already pinned by `(source_path, body)`) SHALL apply and the count of skipped duplicates SHALL be reported via toast.
+
+On commit, the flow SHALL build a `SynthSource` for each selected paragraph (carrying its effective range and re-sliced body), call `plan_synth_scaffold` then `apply_synth_scaffold`, and hand the resulting file off to `$EDITOR` — identical to the shared send-to-synth commit path used by the Search and Recent tabs. When appending to an existing non-synth note, the flow SHALL first mark the target with the `ft-synth` marker. Sections SHALL append in selection order. Dedup (entries already pinned by `(source_path, body)`) SHALL apply and the count of skipped duplicates SHALL be reported via toast.
 
 #### Scenario: Commit appends protected sections
+
 - **WHEN** two paragraphs are selected and the user commits to an existing synth note
 - **THEN** two `[!ft-source]` callouts are appended to the target, each pinning the effective range and body, and `$EDITOR` opens on the target
 
 #### Scenario: Dedup reports already-pinned paragraphs
+
 - **WHEN** a selected paragraph is already pinned byte-identically in the target and the user commits
 - **THEN** no new callout is added for it and a toast reports that N entries were skipped as already pinned
-
-#### Scenario: New target is marked synth
-- **WHEN** the target is a newly created note
-- **THEN** the note's frontmatter includes the synth marker before the scaffold is applied
 
 ### Requirement: Dirty-source detection still applies at commit
 The existing `plan_synth_scaffold` dirty/untracked-source refusal SHALL remain in effect at commit time. If a source file has become dirty or untracked between the entry guard and commit, the commit SHALL fail with the `SynthDirtySources` error surfaced as a toast, and the modal SHALL return to the paragraph-multi-select step (state preserved) so the user can retry after committing/stashing.
@@ -123,3 +121,4 @@ The existing `plan_synth_scaffold` dirty/untracked-source refusal SHALL remain i
 #### Scenario: Source dirtied mid-flow fails at commit
 - **WHEN** the source file is clean at entry but becomes dirty before commit
 - **THEN** the commit fails with a dirty-sources error toast and the modal returns to the paragraph-multi-select step
+

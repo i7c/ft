@@ -63,4 +63,4 @@
 
 - [x] 9.1 Run all five build invariants clean: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`
 - [x] 9.2 Final sweep: `rg -i gather` returns only the historical premise-review doc and openspec archives; `ft notes gather` exits with an unknown-subcommand error; `ft commands list` no longer shows gather/pulse.handoff-to-gather
-- [ ] 9.3 Delete the empty canonical spec folders (`openspec/specs/journal-tui-tab`, `openspec/specs/notes-journal`, `openspec/specs/graph-to-journal-jump`, and the leftover empty `openspec/specs/synth-grow`) at archive/sync time, and confirm the synced `graph-to-search-jump` spec exists
+- [x] 9.3 Delete the empty canonical spec folders (`openspec/specs/journal-tui-tab`, `openspec/specs/notes-journal`, `openspec/specs/graph-to-journal-jump`, and the leftover empty `openspec/specs/synth-grow`) at archive/sync time, and confirm the synced `graph-to-search-jump` spec exists

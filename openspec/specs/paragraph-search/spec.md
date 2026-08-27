@@ -6,7 +6,6 @@ default, word, fuzzy, phrase, wikilink, exclude; AND by default, any-mode
 optional), relevance and date sorts, a `ft notes search` CLI, a live Search TUI
 tab, and scaffold `--search` sourcing. Replaces the graph-based gather as the
 sourcing front-end for the synthesis flow; gather is deprecated separately.
-
 ## Requirements
 ### Requirement: Paragraph index built from the scan
 
@@ -33,6 +32,7 @@ SHALL be rebuilt whenever the scan changes (a new scan generation).
 
 - **WHEN** a paragraph contains `[[Foo Bar]]`, `[[Baz#Section]]`, and `[[Qux|Alias]]`
 - **THEN** the index stores link tokens `Foo Bar`, `Baz`, and `Alias` (anchor stripped, alias used)
+
 ### Requirement: Query grammar
 
 A single parser SHALL accept the query string used by the CLI argument, the TUI
@@ -70,6 +70,7 @@ keyword SHALL be recognized.
 
 - **WHEN** the query `[[foo]] [[bar]]` is parsed with `--any` (or the TUI any toggle)
 - **THEN** it is two link clauses ORed: a paragraph mentioning either link qualifies
+
 ### Requirement: Matching semantics per mode
 
 Matching SHALL be case-insensitive throughout. A substring clause SHALL match a
@@ -110,6 +111,7 @@ paragraphs from the result set after positive clauses have been applied.
 
 - **WHEN** the query `eigen -task` is run
 - **THEN** a paragraph containing `eigen` and `task` is excluded; a paragraph containing only `eigen` is included
+
 ### Requirement: Relevance ranking and deterministic order
 
 The default sort SHALL order results by relevance score descending. The score
@@ -129,6 +131,7 @@ the same index SHALL produce identical ordering across runs.
 
 - **WHEN** two paragraphs have equal scores
 - **THEN** the one with the lexicographically smaller vault-relative path ranks first, then the smaller line start
+
 ### Requirement: Date sort via blame
 
 `--sort date` SHALL order results by the paragraph's most recent `git blame`
@@ -141,6 +144,7 @@ result-set files, lazily; paragraphs whose blame fails SHALL sort as oldest
 
 - **WHEN** two paragraphs match and one was last edited more recently
 - **THEN** the more recently edited paragraph ranks first under `--sort date`
+
 ### Requirement: ft notes search command
 
 `ft notes search <query> [--any] [--sort relevance|date] [--limit N] [--json]` SHALL be a subcommand of `ft notes`. The default sort SHALL be `relevance`.
@@ -167,6 +171,7 @@ and exit 0.
 
 - **WHEN** the config sets `[synth] exclude_prefixes = ["journal/"]` and the only match is under `journal/`
 - **THEN** the command prints nothing and exits 0
+
 ### Requirement: Scaffold search sourcing
 
 `ft notes synth scaffold <target.md> --search "<query>" [--any] [--sort relevance|date] [--from <path>:<line> ...] [--no-edit]` SHALL source scaffold sections from the search index for the parsed query. The scaffold SHALL require at least one of `--search`, `--link`, or `--from`. Each result SHALL become a `SynthSource` (path, line range, verbatim body); results SHALL be deduplicated by `(source_path, line_start)` before planning. The existing plan/apply path (`plan_synth_scaffold` / `apply_synth_scaffold`, append-dedup, dirty-source guard, `$EDITOR` handoff) SHALL be used unchanged. Sections SHALL emit in result order — relevance descending by default, newest-first with `--sort date`. The transitional `--link "[[X]]"` form SHALL lower to an any-mode search over the given links (Related-alias resolution is not performed on this path). `--from <path>:<line>` SHALL continue to add the specified paragraphs to the section set, unchanged.
@@ -189,15 +194,16 @@ and exit 0.
 #### Scenario: Link lowering preserves any-of semantics
 
 - **WHEN** `ft notes synth scaffold Synthesis/topic.md --link "[[Foo]]" --link "[[Bar]]" --no-edit` is run
-- **THEN** sections cover paragraphs mentioning either link (any-mode), matching the deprecated gather's multi-target behavior
+- **THEN** sections cover paragraphs mentioning either link (any-mode, OR over the given links)
 
 #### Scenario: No source flag is an error
 
 - **WHEN** `ft notes synth scaffold Synthesis/topic.md --no-edit` is run with no `--search`, `--link`, or `--from`
 - **THEN** the command exits non-zero with a clear "one of --search, --link, or --from is required" error
+
 ### Requirement: Search TUI tab
 
-The TUI SHALL register a `Search` tab in the default tab lineup (in the slot the Gather tab previously occupied) with a `<TAB>_COMMANDS`/`<TAB>_KEYMAP` pair, a keymap overlay, a `help_sections()` entry, and a `TestBackend` snapshot. The tab SHALL show an inline input line and a live results list. The results SHALL re-query synchronously on every input change against the snapshot's search index (an `Arc<SearchIndex>` rebuilt on graph generation change; the tab SHALL re-derive on `on_graph_ready` / `on_focus`, never by scanning the vault itself). A status bar SHALL render the live parse: term count, AND/ANY, and sort mode. Keys: `a` SHALL toggle all/any; `o` SHALL cycle sort relevance ↔ date; `Space` SHALL toggle multi-select on the focused row; `Enter` SHALL open the source note in `$EDITOR` at the paragraph's line; `s` SHALL append selected (or all) results to an existing synth note; `S` SHALL create a new synth note from them; `R` SHALL re-run the query. Send-to-synth SHALL reuse the shared synth-send machinery (extracted from the Gather tab).
+The TUI SHALL register a `Search` tab in the default tab lineup (in the slot the Gather tab previously occupied) with a `<TAB>_COMMANDS`/`<TAB>_KEYMAP` pair, a keymap overlay, a `help_sections()` entry, and a `TestBackend` snapshot. The tab SHALL show an inline input line and a live results list. The results SHALL re-query synchronously on every input change against the snapshot's search index (an `Arc<SearchIndex>` rebuilt on graph generation change; the tab SHALL re-derive on `on_graph_ready` / `on_focus`, never by scanning the vault itself). A status bar SHALL render the live parse: term count, AND/ANY, and sort mode. Keys: `a` SHALL toggle all/any; `o` SHALL cycle sort relevance ↔ date; `Space` SHALL toggle multi-select on the focused row; `Enter` SHALL open the source note in `$EDITOR` at the paragraph's line; `s` SHALL append selected (or all) results to an existing synth note; `S` SHALL create a new synth note from them; `R` SHALL re-run the query. Send-to-synth SHALL reuse the shared synth-send machinery (shared with the Recent tab).
 
 #### Scenario: Live results update per keystroke
 
@@ -214,15 +220,6 @@ The TUI SHALL register a `Search` tab in the default tab lineup (in the slot the
 - **WHEN** the user presses `o`
 - **THEN** the status bar shows the new sort mode and the result order updates
 
-#### Scenario: Send selected to synth
-
-- **WHEN** the user selects rows with `Space` and presses `s`
-- **THEN** the synth-note picker opens with only the selected paragraphs as sources
-
-#### Scenario: Enter opens the source
-
-- **WHEN** the user presses `Enter` on a result
-- **THEN** `$EDITOR` opens the source note at the paragraph's line start
 ### Requirement: Pulse handoff to Search
 
 Pressing `Enter` on the Pulse tab with selected (or cursor) rows SHALL switch to the Search tab with an input prefilled with one `[[<target>]]` clause per selected row and any-mode enabled (gather-parity: any of the links qualifies). The handoff SHALL use an app-level request (`AppRequest::SearchWithQuery { query, any: true }`), not a gather handoff.
@@ -231,6 +228,7 @@ Pressing `Enter` on the Pulse tab with selected (or cursor) rows SHALL switch to
 
 - **WHEN** the Pulse tab shows rows for `[[Foo]]` and `[[Bar]]`, the user selects both, and presses `Enter`
 - **THEN** the Search tab opens with the query `[[Foo]] [[Bar]]` and any-mode active
+
 ### Requirement: Search performance budget
 
 Index build from a scan SHALL be a single pass over the captured paragraphs (no re-reads, no git). Under the `FT_PERF_TESTS=1` gate, a query over a 5,000-paragraph vault SHALL complete in under 10 ms end-to-end (parse + match + rank + limit), and fuzzy queries SHALL examine only trigram-filtered candidates rather than the full dictionary.
@@ -239,3 +237,4 @@ Index build from a scan SHALL be a single pass over the captured paragraphs (no 
 
 - **WHEN** `FT_PERF_TESTS=1` is set and a 5,000-paragraph fixture vault is searched with a substring query and a fuzzy query
 - **THEN** each query completes within the 10 ms budget
+

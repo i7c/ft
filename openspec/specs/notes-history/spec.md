@@ -4,36 +4,36 @@
 TBD - created by archiving change notes-history-tab. Update Purpose after archive.
 ## Requirements
 ### Requirement: build_history core feed
+
 `ft_core::history::build_history` SHALL produce a whole-vault, paragraph-granular,
 recency-ordered feed of paragraphs edited within a time window, without requiring
 any link target. It SHALL enumerate paragraph nodes from the graph
 (`Graph::nodes` filtered to `NodeKind::Paragraph`), reading each paragraph's
 `source_file`, `line_start`, `line_end`, and text from `ParagraphData` — the same
-node data the journal reads, so paragraph and owning-heading structure is reused,
-not re-parsed. `build_journal` and its semantics SHALL be left unchanged; this is a
-sibling builder.
+node data the paragraph-graph consumers read, so paragraph and owning-heading
+structure is reused, not re-parsed.
 
 #### Scenario: Feed needs no target
+
 - **WHEN** `build_history` is called with a window and a vault containing edited paragraphs
 - **THEN** it returns entries for those paragraphs with no note/link target supplied
 
-#### Scenario: Journal is untouched
-- **WHEN** this change is applied
-- **THEN** `build_journal`'s signature and behavior are unchanged (verified by its existing tests still passing)
-
 ### Requirement: Edit-window inclusion filter
+
 A paragraph SHALL be included in the history feed if and only if its line range
 `line_start..=line_end` overlaps at least one line added or changed within the
 resolved window, as reported by the link-review engine's added-lines map for that
 same window. The window SHALL be resolvable from either a `--since <duration>`
-(e.g. `7d`, `24h`, `2w`, `1m`) or a `--range <X>..<Y>` commit range, exactly as
-`ft notes gather` resolves its window arguments.
+(e.g. `7d`, `24h`, `2w`, `1m`) or a `--range <X>..<Y>` commit range, via the
+shared window resolver (`ft_core::pulse::WindowRange`).
 
 #### Scenario: Edited paragraph included
+
 - **WHEN** a paragraph's lines overlap a line added within the window
 - **THEN** that paragraph appears in the feed
 
 #### Scenario: Unedited paragraph excluded
+
 - **WHEN** a paragraph's lines do not overlap any line added within the window
 - **THEN** that paragraph does NOT appear, even if its file changed elsewhere in the window
 
@@ -49,18 +49,21 @@ a `7d` window. The feed SHALL always be windowed — there is no all-time mode.
 - **WHEN** `ft notes recent --since 2w` is run
 - **THEN** the feed uses the 2-week window rather than the 7-day default
 
-### Requirement: Recency ordering matches the journal
+### Requirement: Recency ordering
+
 History entries SHALL each carry a blame date computed as the most recent commit
 touching any line in the paragraph (via `blame_cache`'s `paragraph_date`), and
 SHALL be sorted by that date descending, then by source note title ascending, then
-by `line_start` ascending — identical to the journal's sort. The `line_start`
+by `line_start` ascending. The `line_start`
 tiebreak SHALL never override a date or title difference.
 
 #### Scenario: Reverse-chronological order
+
 - **WHEN** two edited paragraphs have blame dates 2026-06-20 and 2026-07-01
 - **THEN** the 2026-07-01 entry appears first
 
 #### Scenario: Same-date same-title ordered by document position
+
 - **WHEN** two edited paragraphs in one source note share a blame date with `line_start` 4 and 12
 - **THEN** they appear in ascending `line_start` order
 
@@ -111,41 +114,50 @@ repository, erroring clearly otherwise. It SHALL NOT modify any files.
 - **THEN** the command exits non-zero with an error stating git history is required
 
 ### Requirement: History output formats
+
 The default (table) output SHALL render each entry as a date line
 (`YYYY-MM-DD  <Source Note Title>`), a separator, and the paragraph text, with a
-blank line between entries — reusing the journal's renderer. Paths SHALL be
+blank line between entries — using the shared paragraph-feed renderer
+(`ft_core::output::feed`). Paths SHALL be
 vault-relative. ANSI styling SHALL auto-disable under `--no-color` / `NO_COLOR` /
 non-TTY. With `--json`, the command SHALL emit a JSON array whose elements have
 `date`, `source_title`, `source_path`, and `section` fields.
 
 #### Scenario: Table output
+
 - **WHEN** `ft notes recent` runs in a TTY with color
 - **THEN** stdout shows date, source title, separator, and paragraph text per entry
 
 #### Scenario: No-color mode
+
 - **WHEN** `NO_COLOR=1 ft notes recent` runs
 - **THEN** output contains no ANSI escape sequences
 
 #### Scenario: JSON output structure
+
 - **WHEN** `ft notes recent --json` runs with two entries
 - **THEN** stdout is a valid JSON array of two objects, each with `date`, `source_title`, `source_path`, and `section`
 
 ### Requirement: Cited badge in history text output
-`ft notes recent` SHALL annotate entries with the same badge grammar
-as `ft notes gather`: `cited: <note stem>` / `cited*: <note stem>`,
-first citing note plus `+N` overflow, uncited entries unchanged.
+
+`ft notes recent` SHALL annotate entries with the citation-index badge grammar
+(`cited: <note stem>` / `cited*: <note stem>`,
+first citing note plus `+N` overflow), with uncited entries unchanged.
 
 #### Scenario: History entry shows badge
+
 - **WHEN** a paragraph edited in the window is pinned in a synth note
 - **THEN** its history entry renders the `cited:` badge line
 
 ### Requirement: cited_in in history JSON
-`ft notes recent --json` entries SHALL gain the same additive
-`cited_in` array of `{note, stale}` objects as the journal.
 
-#### Scenario: JSON parity with journal
-- **WHEN** the same paragraph appears in both journal and history JSON
-- **THEN** both report identical `cited_in` contents
+`ft notes recent --json` entries SHALL include an additive
+`cited_in` array of `{note, stale}` objects, derived from the citation index.
+
+#### Scenario: cited_in reflects the citation index
+
+- **WHEN** a paragraph edited in the window is pinned in a synth note
+- **THEN** its JSON entry carries `cited_in` with that note and the correct staleness flag
 
 ### Requirement: --uncited filter on history
 `ft notes recent --uncited` SHALL keep only entries whose state is
@@ -155,3 +167,4 @@ not `Cited` (stale kept), composing with the existing window flags.
 - **WHEN** the user runs `ft notes recent --since 7d --uncited`
 - **THEN** only paragraphs from the window not yet pinned
   byte-identically in any synth note are listed
+

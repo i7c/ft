@@ -55,19 +55,29 @@ The Pulse tab SHALL allow adjusting the window from within the tab. At least one
 - **THEN** the window shrinks and the list re-runs
 
 ### Requirement: Handoff to Gather tab on enter
-Pressing `<enter>` on the Pulse tab SHALL queue the currently selected link targets to the Gather tab and switch focus to it. If no rows are selected when `<enter>` is pressed, the link under the cursor SHALL be used as the sole target. The window range in effect at handoff SHALL also be passed so the Gather tab can offer its in-window-only toggle.
+
+Pressing `<enter>` on the Pulse tab SHALL lower the currently selected link
+targets to `[[…]]` search clauses and raise `AppRequest::SearchWithQuery` with
+`any: true`, switching focus to the Search tab and running the query. If no
+rows are selected when `<enter>` is pressed, the link under the cursor SHALL be
+used as the sole clause. The command SHALL be named `pulse.handoff-to-search`
+(previously `pulse.handoff-to-gather`; behavior already routed to Search). No
+window range is passed — the Search tab has no in-window toggle.
 
 #### Scenario: Selected rows handed off
+
 - **WHEN** the user selects three links and presses `<enter>`
-- **THEN** focus switches to the Gather tab and it loads the multi-source journal for those three link targets
+- **THEN** focus switches to the Search tab prefilled with `[[A]] [[B]] [[C]]` in any-mode and the results list paragraphs mentioning any of the three
 
 #### Scenario: No selection falls back to cursor
-- **WHEN** no rows are selected and the user presses `<enter>` on a row
-- **THEN** the Gather tab loads the multi-source journal for that one link's target
 
-#### Scenario: Window range passed along
-- **WHEN** the Pulse tab's window is the last 14 days at handoff
-- **THEN** the Gather tab's in-window-only toggle uses that same window
+- **WHEN** no rows are selected and the user presses `<enter>` on a row
+- **THEN** the Search tab opens with that one link as a single any-mode clause
+
+#### Scenario: Ghost targets become link clauses
+
+- **WHEN** a selected row is a ghost target
+- **THEN** it is lowered to a `[[<raw target>]]` clause like any note, and the search covers paragraphs mentioning the ghost
 
 ### Requirement: Help overlay via Tab::help_sections
 The Pulse tab SHALL override `Tab::help_sections()` so the `?` overlay shows its keymap: navigation, `<space>` to select, `<enter>` to hand off, window-adjustment keys, and any others.
@@ -86,3 +96,4 @@ The Pulse tab's link-review computation SHALL run on a background worker thread 
 #### Scenario: Result posted on completion
 - **WHEN** the worker finishes computing the review
 - **THEN** the main loop receives the result via the mpsc channel and the body updates
+
