@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.12
+
+### Added
+
+- feat(export): resolve soft-wrapped lines (--unwrap)
+- feat: remove the deprecated gather functionality
+
+### Fixed
+
+- fix(tui): expand tabs in paragraph previews so they don't garble
+- fix(tui): wrap paragraph previews by column width, not char count
+
 ## 0.1.11
 
 ### Added
