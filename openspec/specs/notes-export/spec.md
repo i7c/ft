@@ -16,18 +16,22 @@ target seam; `commonmark` is the v1 target, with `plaintext` and
 ### Requirement: ft notes export command surface
 
 `ft notes export <FILE> [--lines A-B] [--format TARGET]` SHALL print
-the vault-stripped content of the given vault file to stdout. `<FILE>`
-SHALL be a vault-relative path (absolute paths SHALL be accepted and
-relativized; the `.md` extension SHALL NOT be auto-appended). `--lines`
-SHALL be optional and 1-indexed inclusive with the short alias `-l`;
-when absent the whole file SHALL be exported. `--format` SHALL accept
-`commonmark` and `slack`, and SHALL default to `commonmark`; any other
-value SHALL be rejected. The command SHALL be read-only: it SHALL NOT
-write, create, or modify any file, SHALL NOT launch an editor, SHALL
-NOT prompt, and SHALL NOT require or consult git. The output SHALL be
-printed to stdout with a single trailing newline; an empty export
-SHALL print no bytes. The exit code SHALL be 0 on success and 1 on any
-error, with a human-readable message on stderr.
+the vault-stripped content of the given vault file to stdout, and
+`--unwrap` / `--no-unwrap` SHALL be accepted as optional flags. `<FILE>` SHALL be a vault-relative path
+(absolute paths SHALL be accepted and relativized; the `.md`
+extension SHALL NOT be auto-appended). `--lines` SHALL be optional and
+1-indexed inclusive with the short alias `-l`; when absent the whole
+file SHALL be exported. `--format` SHALL accept `commonmark` and
+`slack`, and SHALL default to `commonmark`; any other value SHALL be
+rejected. `--unwrap` and `--no-unwrap` SHALL be optional and mutually
+exclusive, controlling soft-break resolution (see Soft-break
+resolution); when absent the target's default SHALL apply. The command
+SHALL be read-only: it SHALL NOT write, create, or modify any file,
+SHALL NOT launch an editor, SHALL NOT prompt, and SHALL NOT require or
+consult git. The output SHALL be printed to stdout with a single
+trailing newline; an empty export SHALL print no bytes. The exit code
+SHALL be 0 on success and 1 on any error, with a human-readable
+message on stderr.
 
 #### Scenario: Export a whole note
 - **WHEN** `notes/foo.md` contains a frontmatter block followed by a
@@ -53,6 +57,13 @@ error, with a human-readable message on stderr.
 - **WHEN** the user runs `ft notes export notes/foo.md --format slack`
 - **THEN** the command succeeds and prints the note's content
   transformed per the Slack target rules
+
+#### Scenario: Unwrap flags default per target
+- **WHEN** the user runs `ft notes export notes/foo.md --format slack`
+  with no unwrap flag, and `ft notes export notes/foo.md` with no
+  unwrap flag
+- **THEN** the slack export applies soft-break resolution by default
+  and the commonmark export does not
 
 #### Scenario: Absolute path is relativized
 - **WHEN** the user runs `ft notes export /vault/path/notes/foo.md`
@@ -222,7 +233,11 @@ blockquotes, fenced and indented code blocks, lists, tables, markdown
 links and images, and horizontal rules. The `slack` target SHALL pass
 through the same content after applying the Slack target rules, and
 SHALL pass through `&`, `<`, and `>` characters raw (no HTML-entity
-escaping), tables and horizontal rules as literal text.
+escaping), tables and horizontal rules as literal text. Under
+soft-break resolution (see Soft-break resolution), the pass-through
+SHALL join hard-wrapped lines into single logical lines, preserving
+every character except inter-line whitespace; the `commonmark` target
+SHALL join only when `--unwrap` is given.
 
 #### Scenario: Task lines preserved with emoji (commonmark target)
 - **WHEN** the body contains `- [ ] ⏫ 📅 2026-08-05 Finish the report`
@@ -332,13 +347,18 @@ indentation already matches its level times 4 SHALL be unchanged
 indented code blocks SHALL NOT be re-indented. A non-list, non-blank
 content line with no leading whitespace between list items SHALL reset
 the nesting — the list SHALL be considered interrupted — so a following
-indented item SHALL start a new top-level list. Lines that are not
-list items SHALL keep their source indentation: continuation lines of
-multi-line items and lists nested inside blockquote lines
-(`> - foo`) are out of scope for normalization. The target SHALL NOT
-escape `&`, `<`, or `>` (no HTML-entity conversion), and SHALL NOT
-produce tables, images, or horizontal rules. The `commonmark` target
-SHALL be unaffected by the list rules: its list output SHALL remain
+indented item SHALL start a new top-level list. Under soft-break
+resolution (the default for this target, see Soft-break resolution),
+continuation lines of multi-line items SHALL join into the item's
+logical line rather than appear as separate indented lines; lists
+nested inside blockquote lines (`> - foo`) SHALL keep their source
+indentation, and their continuation lines SHALL follow the blockquote
+join rule. With `--no-unwrap`, lines that are not list items SHALL
+keep their source indentation and continuation lines of multi-line
+items SHALL appear as separate lines. The target SHALL NOT escape `&`,
+`<`, or `>` (no HTML-entity conversion), and SHALL NOT produce tables,
+images, or horizontal rules. The `commonmark` target SHALL be
+unaffected by the list rules: its list output SHALL remain
 byte-identical.
 
 #### Scenario: Heading becomes bold
@@ -465,4 +485,118 @@ byte-identical.
 - **WHEN** the body contains a 2-space-indented nested list and the
   format is `commonmark`
 - **THEN** the list lines appear byte-identical to the source
+
+### Requirement: Soft-break resolution (--unwrap)
+
+The export driver SHALL resolve hard-wrapped source lines into single
+logical lines when soft-break resolution is enabled: lines separated
+only by a bare `\n` within the same block (a CommonMark soft break,
+which renders as a space) SHALL join with a single space. Soft-break
+resolution SHALL be enabled by default for the `slack` target and
+disabled by default for the `commonmark` target. `--unwrap` SHALL
+enable it and `--no-unwrap` SHALL disable it for either target;
+passing both SHALL fail with an error and print nothing to stdout.
+The join SHALL apply only within a block, never across a block
+boundary:
+
+- Consecutive paragraph lines SHALL join into one line.
+- An indented line that is not a list-item marker following an open
+  list item SHALL join into that item's first line, preserving the
+  item marker, the target's indentation normalization, and all other
+  target transforms.
+- Consecutive blockquote lines SHALL join (`> a` / `> b` → `> a b`,
+  the first line's `>` prefixes winning), except that a line SHALL NOT
+  join into a callout-title line (`> [!type] Title` keeps its body on
+  a separate line), and a blockquote line whose content is empty
+  (`>`) SHALL be a boundary that never joins.
+
+The join SHALL NOT cross: blank lines, list-item marker lines, ATX
+headings, thematic rules, code lines (fenced or indented), or a line
+ending in a CommonMark hard break (a lone trailing `\` or two or more
+spaces). Code lines SHALL pass through verbatim and SHALL NOT join.
+A dropped line (an ft-source callout header) SHALL act as a boundary:
+it flushes any open logical line and contributes nothing. A `--lines`
+range whose first selected line is a continuation SHALL begin a fresh
+logical line (no join across the range boundary).
+
+#### Scenario: Wrapped paragraph joins (slack default)
+- **WHEN** the body contains a paragraph split across two lines
+  (`first line` / `second line`, no blank between) and the format is
+  `slack`
+- **THEN** the output contains a single line `first line second line`
+
+#### Scenario: Wrapped list item joins
+- **WHEN** the body contains `- line items that are long` followed by
+  an indented continuation `  and thus are broken` and the format is
+  `slack`
+- **THEN** the output contains a single bullet line
+  `- line items that are long and thus are broken`
+
+#### Scenario: Nested items do not join
+- **WHEN** the body contains `- a` / `  - b` and the format is `slack`
+- **THEN** the output contains two bullet lines (`- a` and a nested
+  `    - b`) — a marker line always starts a new item
+
+#### Scenario: Blank lines separate paragraphs
+- **WHEN** the body contains two wrapped paragraphs separated by a
+  blank line and the format is `slack`
+- **THEN** the output contains the two joined paragraphs on separate
+  lines with the blank line between them
+
+#### Scenario: Hard breaks are preserved
+- **WHEN** a paragraph line ends with a lone trailing `\` or two or
+  more spaces and the format is `slack`
+- **THEN** the following line does not join into it — both lines
+  appear separately
+
+#### Scenario: Code blocks are never joined
+- **WHEN** a fenced or indented code block contains consecutive lines
+  and the format is `slack`
+- **THEN** the lines pass through verbatim, each on its own output
+  line
+
+#### Scenario: Callout title does not absorb its body
+- **WHEN** the body contains `> [!note] Title` followed by `> body`
+  and the format is `slack`
+- **THEN** the output contains `> Title` and `> body` on separate
+  lines
+
+#### Scenario: Quoted paragraph joins
+- **WHEN** the body contains `> quoted line one` followed by
+  `> quoted line two` (no callout marker) and the format is `slack`
+- **THEN** the output contains a single line `> quoted line one
+  quoted line two`
+
+#### Scenario: Headings do not absorb the following paragraph
+- **WHEN** the body contains `# H` followed by a wrapped paragraph
+  and the format is `slack`
+- **THEN** the output contains `*H*` on its own line, and the
+  paragraph is joined on the following line
+
+#### Scenario: Commonmark stays verbatim by default
+- **WHEN** the body contains a wrapped paragraph and the format is
+  `commonmark`
+- **THEN** the output is byte-identical to the source lines
+
+#### Scenario: Unwrap is opt-in for commonmark
+- **WHEN** the body contains a wrapped paragraph and the command is
+  `ft notes export notes/foo.md --unwrap`
+- **THEN** the output contains the paragraph joined on one line
+
+#### Scenario: No-unwrap restores verbatim slack output
+- **WHEN** the body contains a wrapped paragraph and the command is
+  `ft notes export notes/foo.md --format slack --no-unwrap`
+- **THEN** the output keeps the source line breaks
+
+#### Scenario: Both flags are rejected
+- **WHEN** the user runs `ft notes export notes/foo.md --unwrap
+  --no-unwrap`
+- **THEN** the command fails with an error and prints nothing to
+  stdout
+
+#### Scenario: Mid-block range starts fresh
+- **WHEN** the user exports `--lines` a range whose first selected
+  line is a paragraph continuation and the format is `slack`
+- **THEN** the first line appears as its own logical line, not joined
+  to anything before the range
 
