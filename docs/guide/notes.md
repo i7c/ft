@@ -404,14 +404,48 @@ converts:
   already-correct 4-space lists are unchanged. Lines inside code
   blocks are never touched, and an unindented heading/paragraph
   between items resets the nesting (it interrupts the list).
-  Continuation lines of multi-line items and lists inside blockquote
-  lines (`> - foo`) keep their source indentation.
+  Continuation lines of multi-line items join into the item's logical
+  line (see Soft-break resolution below); lists inside blockquote
+  lines (`> - foo`) keep their source indentation and their
+  continuations follow the quote join rule.
 - **Code fences** — language tags drop (```` ```rust ```` → ```` ``` ````)
   and `~~~` fences become ` ``` `; the code itself is verbatim.
 
 `&`, `<` and `>` are **not** escaped — the output targets the Slack
 composer, which does not decode HTML entities. Tables and `---` rules
 stay literal (Slack can't render them in messages).
+
+### Soft-break resolution (`--unwrap`)
+
+Notes are often hard-wrapped at a column width: a paragraph or list
+item continues on the next line with a bare newline. That newline is a
+**soft break** in markdown — it renders as a space, not a line break.
+`ft notes export` can resolve these into single logical lines, exactly
+what a CommonMark renderer produces, which is what you want when the
+receiver (Slack) renders *every* newline as a real break:
+
+| Source | Slack export (default) |
+|---|---|
+| `first paragraph line` / `second paragraph line` | `first paragraph line second paragraph line` |
+| `- line items that are long` / `  and thus are broken` | `- line items that are long and thus are broken` |
+| `> quoted line one` / `> quoted line two` | `> quoted line one quoted line two` |
+
+The join never crosses a real break: blank lines, list-item marker
+lines, headings, thematic rules, code blocks, and hard breaks (a line
+ending in `\` or two or more spaces) all stay separate. A callout
+title (`> [!note] Title`) never absorbs its body, and two list items
+inside a blockquote stay two items.
+
+**`--format slack` joins by default** (the Slack composer is the
+receiver that needs it); `--no-unwrap` restores the verbatim source
+line breaks. **`commonmark` keeps source lines by default** — wrapped
+source is idiomatic when the receiver is a markdown tool — and
+`--unwrap` opts into joining (e.g. piping to a plain-text consumer).
+Passing both flags is an error.
+
+Known limits: unindented text after a list item is treated as a new
+paragraph (not a lazy continuation), setext headings aren't
+recognized, and hard-break markers are kept verbatim.
 
 ### Line ranges are original-file lines
 

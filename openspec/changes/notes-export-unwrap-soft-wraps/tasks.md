@@ -2,11 +2,11 @@
 
 ## 1. Core: shared block-classification primitives
 
-- [ ] 1.1 Make `is_rule_separator` in `ft-core/src/markdown.rs`
+- [x] 1.1 Make `is_rule_separator` in `ft-core/src/markdown.rs`
       `pub(crate)` (no behavior change; currently private, used by
       `extract_paragraphs`). Verify the existing paragraph tests still
       pass.
-- [ ] 1.2 Factor the callout-marker detection in `ft-core/src/export.rs`
+- [x] 1.2 Factor the callout-marker detection in `ft-core/src/export.rs`
       into a shared predicate `callout_marker_end(line) ->
       Option<usize>` (byte offset just past the `]` of a `[!type]`
       marker that starts the content after the `>` prefixes of a
@@ -16,7 +16,7 @@
 
 ## 2. Core: BlockKind classifier + join pass
 
-- [ ] 2.1 Add `enum BlockKind { Blank, Code, Heading, ListItem,
+- [x] 2.1 Add `enum BlockKind { Blank, Code, Heading, ListItem,
       Blockquote, Paragraph, Break }` and a `classify(line, in_code)`
       helper in `ft-core/src/export.rs` using the `markdown.rs`
       primitives (`leading_ws`, `is_list_item_marker`, `parse_atx`,
@@ -25,11 +25,11 @@
       Order matters: rule/heading/blockquote checks before the list
       marker check; code and blank short-circuit first. Unit tests:
       every kind, plus the blockquote-title flag.
-- [ ] 2.2 Add `fn unwrap_soft_wraps(&self) -> bool { false }` to
+- [x] 2.2 Add `fn unwrap_soft_wraps(&self) -> bool { false }` to
       `ExportTarget`; override to `true` in `SlackExport` (design D3).
       Add a unit test asserting `SlackExport::unwrap_soft_wraps()` is
       true and `CommonMarkExport::unwrap_soft_wraps()` is false.
-- [ ] 2.3 Extend `export_content` with an `unwrap: Option<bool>`
+- [x] 2.3 Extend `export_content` with an `unwrap: Option<bool>`
       parameter (`None` → the target's `unwrap_soft_wraps()` policy)
       and implement the join pass per design D1/D2/D5: a `pending`
       accumulator (text + `BlockKind` + `was_callout_title` +
@@ -42,7 +42,7 @@
       pending text's trailing whitespace. Update the existing
       `export` / `slack_export` test helpers to pass `None`; all
       existing export tests must pass unchanged.
-- [ ] 2.4 Driver unit tests in `ft-core/src/export.rs` for the spec
+- [x] 2.4 Driver unit tests in `ft-core/src/export.rs` for the spec
       scenarios: wrapped paragraph joins (slack default), wrapped
       list item joins (the user's exact
       `- …and` / `  …to continue` / `  - sub` / `    follows` /
@@ -56,7 +56,7 @@
 
 ## 3. CLI: unwrap flags
 
-- [ ] 3.1 Add `--unwrap` / `--no-unwrap` to `ExportArgs` in
+- [x] 3.1 Add `--unwrap` / `--no-unwrap` to `ExportArgs` in
       `ft/src/cmd/export.rs` (mutually exclusive via
       `conflicts_with`, the `--has-due`/`--no-due` precedent) and
       resolve the effective policy in `run_export`: flag wins, else
@@ -67,7 +67,7 @@
 
 ## 4. Integration tests (`ft/tests/notes_export.rs`)
 
-- [ ] 4.1 Add integration tests mirroring the spec scenarios: the
+- [x] 4.1 Add integration tests mirroring the spec scenarios: the
       user's wrapped-paragraph + wrapped-list fixture exports joined
       under `--format slack`; `--no-unwrap` restores verbatim;
       commonmark default byte-identical and `--unwrap` joins;
@@ -78,7 +78,7 @@
 
 ## 5. Docs
 
-- [ ] 5.1 Update `docs/guide/notes.md` §"Exporting for Slack": add a
+- [x] 5.1 Update `docs/guide/notes.md` §"Exporting for Slack": add a
       "Soft-break resolution" subsection describing the join
       (paragraphs, list-item continuations, quoted paragraphs), the
       protections (blank lines, headings, code, hard breaks, callout
@@ -88,12 +88,12 @@
       verbatim). Update the §"Exporting for Slack" list-indentation
       bullet's continuation-line sentence (continuations now join by
       default).
-- [ ] 5.2 Update the README `ft notes export` mention to note the
+- [x] 5.2 Update the README `ft notes export` mention to note the
       Slack unwrap default and the flags.
 
 ## 6. Build invariants
 
-- [ ] 6.1 Verify the five clean:
+- [x] 6.1 Verify the five clean:
       `cargo build --release`, `cargo test --workspace`,
       `cargo clippy --workspace --tests -- -D warnings`,
       `cargo fmt --check`,

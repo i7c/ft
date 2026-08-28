@@ -14,7 +14,9 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
-use ft_core::export::{export_content, CommonMarkExport, ExportError, ExportTarget, SlackExport};
+use ft_core::export::{
+    export_content_with, CommonMarkExport, ExportError, ExportTarget, SlackExport,
+};
 
 #[derive(Args, Debug)]
 pub struct ExportArgs {
@@ -38,6 +40,19 @@ pub struct ExportArgs {
     /// accepted.
     #[arg(long, value_enum, default_value_t = ExportFormat::CommonMark)]
     pub format: ExportFormat,
+
+    /// Join hard-wrapped source lines (CommonMark soft breaks) into
+    /// single logical lines — a wrapped paragraph or list item
+    /// exports as one line, pastable into receivers that render every
+    /// newline (Slack). Defaults on for `slack`, off for
+    /// `commonmark`; conflicts with `--no-unwrap`.
+    #[arg(long, conflicts_with = "no_unwrap")]
+    pub unwrap: bool,
+
+    /// Keep source line breaks verbatim — the inverse of `--unwrap`;
+    /// restores the pre-join output for `--format slack`.
+    #[arg(long, conflicts_with = "unwrap")]
+    pub no_unwrap: bool,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,18 +94,28 @@ pub fn run_export(args: ExportArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     let content = std::fs::read_to_string(&absolute)
         .with_context(|| format!("cannot read source file `{}`", rel.display()))?;
 
-    let outcome = export_content(&content, range, args.format.target()).map_err(|e| match e {
-        ExportError::RangePastEnd {
-            file_lines,
-            requested_end,
-        } => anyhow!(
-            "line range L{}-{} outside file `{}` (file has {} lines)",
-            range.map_or(0, |(a, _)| a),
-            requested_end,
-            rel.display(),
-            file_lines
-        ),
-    })?;
+    // Explicit `--unwrap` / `--no-unwrap` wins; otherwise the target's
+    // default policy applies (clap rejects both flags together).
+    let unwrap = match (args.unwrap, args.no_unwrap) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    };
+
+    let outcome = export_content_with(&content, range, args.format.target(), unwrap).map_err(
+        |e| match e {
+            ExportError::RangePastEnd {
+                file_lines,
+                requested_end,
+            } => anyhow!(
+                "line range L{}-{} outside file `{}` (file has {} lines)",
+                range.map_or(0, |(a, _)| a),
+                requested_end,
+                rel.display(),
+                file_lines
+            ),
+        },
+    )?;
 
     if !outcome.text.is_empty() {
         println!("{}", outcome.text);

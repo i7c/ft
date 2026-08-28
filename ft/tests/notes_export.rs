@@ -565,3 +565,105 @@ fn commonmark_list_indentation_unchanged() {
         .success()
         .stdout("- foo\n  - bar\n    - lol\n- baz\n");
 }
+
+// ── soft-break resolution (--unwrap) ─────────────────────────────────
+
+/// A hard-wrapped note: a wrapped paragraph, the user's wrapped-list
+/// example, and a wrapped quote. No frontmatter.
+fn make_wrapped() -> assert_fs::TempDir {
+    use assert_fs::prelude::*;
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("notes/wrapped.md")
+        .write_str(
+            "First paragraph that is wrapped at\nthe column width for readability.\n\n\
+             - line items that are longer than the column width and\n  thus are broken with an indent on the following line\n  to continue\n  - we can still indent and have a sub item that\n    follows the same rules\n- and return to first level\n\n\
+             > quoted line one\n> quoted line two\n",
+        )
+        .unwrap();
+    tmp
+}
+
+#[test]
+fn slack_joins_wrapped_content_by_default() {
+    let tmp = make_wrapped();
+    export(&tmp, &["notes/wrapped.md", "--format", "slack"])
+        .success()
+        .stdout(
+            "First paragraph that is wrapped at the column width for readability.\n\n\
+             - line items that are longer than the column width and thus are broken with an indent on the following line to continue\n    - we can still indent and have a sub item that follows the same rules\n- and return to first level\n\n\
+             > quoted line one quoted line two\n",
+        );
+}
+
+#[test]
+fn slack_no_unwrap_restores_verbatim_lines() {
+    let tmp = make_wrapped();
+    export(&tmp, &["notes/wrapped.md", "--format", "slack", "--no-unwrap"])
+        .success()
+        .stdout(
+            "First paragraph that is wrapped at\nthe column width for readability.\n\n\
+             - line items that are longer than the column width and\n  thus are broken with an indent on the following line\n  to continue\n    - we can still indent and have a sub item that\n    follows the same rules\n- and return to first level\n\n\
+             > quoted line one\n> quoted line two\n",
+        );
+}
+
+#[test]
+fn commonmark_stays_verbatim_by_default() {
+    let tmp = make_wrapped();
+    export(&tmp, &["notes/wrapped.md"])
+        .success()
+        .stdout(
+            "First paragraph that is wrapped at\nthe column width for readability.\n\n\
+             - line items that are longer than the column width and\n  thus are broken with an indent on the following line\n  to continue\n  - we can still indent and have a sub item that\n    follows the same rules\n- and return to first level\n\n\
+             > quoted line one\n> quoted line two\n",
+        );
+}
+
+#[test]
+fn commonmark_unwrap_is_opt_in() {
+    let tmp = make_wrapped();
+    export(&tmp, &["notes/wrapped.md", "--unwrap"])
+        .success()
+        .stdout(
+            "First paragraph that is wrapped at the column width for readability.\n\n\
+             - line items that are longer than the column width and thus are broken with an indent on the following line to continue\n  - we can still indent and have a sub item that follows the same rules\n- and return to first level\n\n\
+             > quoted line one quoted line two\n",
+        );
+}
+
+#[test]
+fn unwrap_and_no_unwrap_are_mutually_exclusive() {
+    let tmp = make_wrapped();
+    export(&tmp, &["notes/wrapped.md", "--unwrap", "--no-unwrap"])
+        .failure()
+        .stdout("");
+}
+
+#[test]
+fn slack_callout_title_keeps_body_separate() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/callout.md")
+        .write_str("> [!note] Keep me\n> see [[Baz]]\n")
+        .unwrap();
+    // The title line is a callout title — its body never joins into
+    // it, so this output is byte-identical to the pre-unwrap behavior.
+    export(&tmp, &["notes/callout.md", "--format", "slack"])
+        .success()
+        .stdout("> Keep me\n> see Baz\n");
+}
+
+#[test]
+fn slack_range_starting_on_continuation_starts_fresh() {
+    use assert_fs::prelude::*;
+    let tmp = make_vault();
+    tmp.child("notes/range.md")
+        .write_str("first paragraph line\nsecond paragraph line\n\nafter\n")
+        .unwrap();
+    // Line 2 is a wrapped continuation in the source, but the range
+    // starts there — it exports as its own logical line, unjoined.
+    export(&tmp, &["notes/range.md", "-l", "2-2", "--format", "slack"])
+        .success()
+        .stdout("second paragraph line\n");
+}

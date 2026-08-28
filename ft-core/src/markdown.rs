@@ -121,7 +121,7 @@ fn is_atx_heading(line: &str) -> bool {
 /// two or more `-` characters. CommonMark's stricter rule (3+ matching
 /// `-`/`*`/`_`) isn't enforced — we accept the wider Obsidian-friendly
 /// form including the spec's `--` separator.
-fn is_rule_separator(line: &str) -> bool {
+pub(crate) fn is_rule_separator(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.len() >= 2 && trimmed.chars().all(|c| c == '-')
 }

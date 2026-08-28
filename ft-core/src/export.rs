@@ -57,6 +57,16 @@ pub trait ExportTarget {
     fn name(&self) -> &'static str;
     /// Render one line for this target. `None` drops the line.
     fn transform_line(&self, line: &str, ctx: LineContext) -> Option<String>;
+    /// Whether this target resolves hard-wrapped source lines
+    /// (CommonMark soft breaks) into single logical lines. Slack
+    /// defaults to true — its mrkdwn renders every newline as a line
+    /// break, so wrapped paragraphs and list items must be joined to
+    /// paste cleanly. CommonMark stays verbatim (wrapped source is
+    /// idiomatic when the receiver is a markdown tool). The CLI
+    /// `--unwrap` / `--no-unwrap` flags override the target default.
+    fn unwrap_soft_wraps(&self) -> bool {
+        false
+    }
 }
 
 /// v1 target: clean CommonMark.
@@ -99,6 +109,10 @@ pub struct SlackExport;
 impl ExportTarget for SlackExport {
     fn name(&self) -> &'static str {
         "slack"
+    }
+
+    fn unwrap_soft_wraps(&self) -> bool {
+        true
     }
 
     fn transform_line(&self, line: &str, ctx: LineContext) -> Option<String> {
@@ -403,45 +417,10 @@ fn structural_rewrites(line: &str) -> String {
 /// title survives as the quote's first line. Only the first marker
 /// token is removed; non-callout blockquotes are untouched.
 fn strip_callout_marker(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-        i += 1;
-    }
-    // Consume `>` prefixes (each with optional surrounding spaces).
-    let mut prefix_end = 0;
-    loop {
-        if bytes.get(i) == Some(&b'>') {
-            i += 1;
-            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-            prefix_end = i;
-        } else {
-            break;
-        }
-    }
-    if prefix_end == 0 {
+    let Some((prefix_end, marker_end)) = callout_marker(line) else {
         return line.to_string();
-    }
-    let rest = &bytes[prefix_end..];
-    if !rest.starts_with(b"[!") {
-        return line.to_string();
-    }
-    let close = match rest.iter().position(|&b| b == b']') {
-        Some(c) => c,
-        None => return line.to_string(),
     };
-    let token = &rest[2..close];
-    let is_type = !token.is_empty()
-        && token[0].is_ascii_alphabetic()
-        && token
-            .iter()
-            .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    if !is_type {
-        return line.to_string();
-    }
-    let after = std::str::from_utf8(&rest[close + 1..]).unwrap_or("");
+    let after = &line[marker_end..];
     let remainder = after.strip_prefix([' ', '\t']).unwrap_or(after);
     let mut out = String::with_capacity(line.len());
     out.push_str(&line[..prefix_end]);
@@ -450,6 +429,62 @@ fn strip_callout_marker(line: &str) -> String {
     }
     out.push_str(remainder);
     out
+}
+
+/// Detect a callout marker (`[!type]`) at the start of a blockquote
+/// line's content. Returns `(prefix_end, marker_end)` — the byte
+/// offset just past the trailing `>` prefixes (where the marker
+/// starts) and just past the marker's closing `]`. `None` for
+/// non-blockquote lines, blockquotes without a leading `[!type]`
+/// token, and tokens that are not a callout type (empty, or
+/// containing characters outside `[A-Za-z0-9_-]`). Shared by
+/// [`strip_callout_marker`] and the join pass's callout-title
+/// detection.
+fn callout_marker(line: &str) -> Option<(usize, usize)> {
+    let prefix_end = blockquote_prefix_end(line);
+    if prefix_end == 0 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let rest = &bytes[prefix_end..];
+    if !rest.starts_with(b"[!") {
+        return None;
+    }
+    let close = rest.iter().position(|&b| b == b']')?;
+    let token = &rest[2..close];
+    let is_type = !token.is_empty()
+        && token[0].is_ascii_alphabetic()
+        && token
+            .iter()
+            .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !is_type {
+        return None;
+    }
+    Some((prefix_end, prefix_end + close + 1))
+}
+
+/// Byte offset just past the leading whitespace and `>` prefixes of a
+/// blockquote line — each `>` followed by optional spaces/tabs, per
+/// the callout grammar. 0 when the line is not a blockquote. Also the
+/// offset of the content a blockquote continuation contributes to a
+/// joined logical line.
+fn blockquote_prefix_end(line: &str) -> usize {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    loop {
+        if bytes.get(i) == Some(&b'>') {
+            i += 1;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    i
 }
 
 /// Re-indent a list-item line to Slack's 4-space-per-level rule: a
@@ -558,7 +593,211 @@ pub enum ExportError {
     RangePastEnd { file_lines: u32, requested_end: u32 },
 }
 
-/// Export `content` for `target`.
+// ── soft-break resolution (the join pass) ──────────────────────────
+//
+// Hard-wrapped source lines — a bare `\n` inside a paragraph or list
+// item — are CommonMark *soft breaks*: they render as a space. The
+// Slack target's receiver renders every newline as a line break, so
+// wrapped content pastes shattered. The join pass below resolves soft
+// breaks into single logical lines, matching what a CommonMark
+// renderer produces. It runs in the driver *after* the per-line
+// transform but classifies the *source* line: target rewrites
+// (heading → `*H*`, checkbox drop) make the transformed text
+// ambiguous, so the join decision must see the real structure.
+
+/// Coarse block kind of a source line, for the join state machine.
+/// Unlike [`LineContext`] (per-line transform context), this answers
+/// the cross-line question "what may continue what".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockKind {
+    /// Blank (or whitespace-only) line — a paragraph boundary.
+    Blank,
+    /// Fence delimiter, in-fence content, or indented code — opaque,
+    /// never joined.
+    Code,
+    /// ATX heading (`# …` through `###### …`).
+    Heading,
+    /// List-item marker line (`-`, `*`, `+`, `N.`) at any depth.
+    ListItem,
+    /// Blockquote line (`> …`). `callout_title` marks a `[!type]`
+    /// callout title — its body must not join into it; `inner_list`
+    /// marks a line whose content (after the `>` prefixes) starts a
+    /// list item, so two items inside a quote never join.
+    Blockquote {
+        callout_title: bool,
+        inner_list: bool,
+    },
+    /// Ordinary paragraph text.
+    Paragraph,
+    /// Thematic rule (`--`, `---`, …).
+    Break,
+}
+
+/// Classify `line` for the join pass. `in_code` comes from
+/// [`LineSkipState`](crate::markdown::LineSkipState): fences and
+/// indented code are opaque and never join.
+fn classify(line: &str, in_code: bool) -> BlockKind {
+    if in_code {
+        return BlockKind::Code;
+    }
+    if line.trim().is_empty() {
+        return BlockKind::Blank;
+    }
+    let trimmed = line.trim_start();
+    if crate::markdown::is_rule_separator(trimmed) {
+        return BlockKind::Break;
+    }
+    if crate::markdown::parse_atx(line, 0).is_some() {
+        return BlockKind::Heading;
+    }
+    if crate::markdown::is_blockquote_line(line) {
+        let inner = blockquote_content(line);
+        return BlockKind::Blockquote {
+            callout_title: callout_marker(line).is_some(),
+            inner_list: crate::markdown::is_list_item_marker(inner),
+        };
+    }
+    let (_, off) = crate::markdown::leading_ws(line);
+    if crate::markdown::is_list_item_marker(&line[off..]) {
+        return BlockKind::ListItem;
+    }
+    BlockKind::Paragraph
+}
+
+/// The open logical line of the join pass.
+struct PendingLine {
+    /// Joined output so far, with no trailing whitespace.
+    text: String,
+    /// Block kind of the *first* line in this logical line — the
+    /// flags the join decision reads (a merged continuation must not
+    /// change what the line is).
+    kind: BlockKind,
+    /// The last appended source line ended in a CommonMark hard break
+    /// (trailing lone `\` or two+ spaces) — the next line must not
+    /// join.
+    hard_break: bool,
+}
+
+/// Advance the join state machine with one source line (already
+/// transformed to `transformed`): merge it into the pending logical
+/// line, flush the pending line and start a new one, or — for dropped
+/// lines — flush and contribute nothing.
+fn join_line(
+    out_lines: &mut Vec<String>,
+    pending: &mut Option<PendingLine>,
+    line: &str,
+    in_code: bool,
+    transformed: Option<String>,
+) {
+    let kind = classify(line, in_code);
+    let Some(t) = transformed else {
+        // Dropped lines (ft-source callout headers) are boundaries:
+        // flush any open logical line, contribute nothing. (In
+        // CommonMark a `>` line interrupts a paragraph anyway.)
+        if let Some(p) = pending.take() {
+            out_lines.push(p.text);
+        }
+        return;
+    };
+    let hard_break = has_hard_break(line);
+    if pending.as_ref().is_some_and(|p| can_join(p, kind, line)) {
+        let p = pending.as_mut().unwrap();
+        // Join with a single space; drop any trailing whitespace the
+        // pending text picked up from its source lines.
+        let len = p.text.trim_end().len();
+        p.text.truncate(len);
+        p.text.push(' ');
+        p.text.push_str(continuation_content(line, kind));
+        p.hard_break = hard_break;
+    } else {
+        if let Some(p) = pending.take() {
+            out_lines.push(p.text);
+        }
+        // Boundary lines (blank, code, headings, thematic rules, and
+        // empty `>` spacers) pass through verbatim and never open a
+        // pending line — nothing may join into them.
+        let opens = matches!(
+            kind,
+            BlockKind::ListItem | BlockKind::Paragraph | BlockKind::Blockquote { .. }
+        ) && !(matches!(kind, BlockKind::Blockquote { .. })
+            && blockquote_content(line).is_empty());
+        if opens {
+            *pending = Some(PendingLine {
+                text: t,
+                kind,
+                hard_break,
+            });
+        } else {
+            out_lines.push(t);
+        }
+    }
+}
+
+/// Whether `line` (kind `kind`) may merge into the open pending
+/// logical line. Implements the merge table: paragraph→paragraph and
+/// indented-paragraph→list-item join (soft breaks); blockquote→
+/// blockquote joins except into a callout title, across a list item,
+/// or across an empty `>` line; everything else — blank lines, code,
+/// headings, thematic rules, list markers, block boundary changes —
+/// does not join.
+fn can_join(pending: &PendingLine, kind: BlockKind, line: &str) -> bool {
+    if pending.hard_break {
+        return false;
+    }
+    match (pending.kind, kind) {
+        (BlockKind::Paragraph, BlockKind::Paragraph) => true,
+        (BlockKind::ListItem, BlockKind::Paragraph) => {
+            // An indented line continues the open item's text; an
+            // unindented one is a new paragraph (the same heuristic
+            // `ListDepthTracker` uses for list interruption).
+            let (w, _) = crate::markdown::leading_ws(line);
+            w > 0
+        }
+        (
+            BlockKind::Blockquote {
+                callout_title: false,
+                ..
+            },
+            BlockKind::Blockquote {
+                inner_list: false, ..
+            },
+        ) => !blockquote_content(line).is_empty(),
+        _ => false,
+    }
+}
+
+/// Content of a blockquote line after its `>` prefixes and leading
+/// whitespace — empty for spacer lines like `>` or `> `.
+fn blockquote_content(line: &str) -> &str {
+    &line[blockquote_prefix_end(line)..]
+}
+
+/// Content appended when `line` joins a pending logical line: for a
+/// blockquote continuation the `>` prefixes are dropped (the first
+/// line's prefix structure wins), otherwise just the leading
+/// whitespace.
+fn continuation_content(line: &str, kind: BlockKind) -> &str {
+    if matches!(kind, BlockKind::Blockquote { .. }) {
+        blockquote_content(line)
+    } else {
+        let (_, off) = crate::markdown::leading_ws(line);
+        &line[off..]
+    }
+}
+
+/// True when `line` ends in a CommonMark hard break: a lone trailing
+/// `\` or two or more trailing spaces. Hard breaks are real line
+/// breaks — the next line must not join into this one.
+fn has_hard_break(line: &str) -> bool {
+    if line.ends_with('\\') {
+        return true;
+    }
+    let trailing_spaces = line.bytes().rev().take_while(|&b| b == b' ').count();
+    trailing_spaces >= 2
+}
+
+/// Export `content` for `target`, applying the target's default
+/// soft-break policy ([`ExportTarget::unwrap_soft_wraps`]).
 ///
 /// `range` is 1-indexed inclusive in **original-file** line numbers;
 /// `None` means the whole file. The range start is clamped to the
@@ -572,6 +811,20 @@ pub fn export_content(
     content: &str,
     range: Option<(u32, u32)>,
     target: &dyn ExportTarget,
+) -> Result<ExportOutcome, ExportError> {
+    export_content_with(content, range, target, None)
+}
+
+/// Like [`export_content`], with an explicit soft-break policy:
+/// `Some(true)` resolves hard-wrapped lines (soft breaks become
+/// spaces), `Some(false)` keeps source line breaks verbatim, and
+/// `None` falls back to the target's
+/// [`ExportTarget::unwrap_soft_wraps`] default.
+pub fn export_content_with(
+    content: &str,
+    range: Option<(u32, u32)>,
+    target: &dyn ExportTarget,
+    unwrap: Option<bool>,
 ) -> Result<ExportOutcome, ExportError> {
     let first_body = frontmatter_end_line(content)
         .map(|close| close + 1)
@@ -603,6 +856,7 @@ pub fn export_content(
     // `start <= end <= total` and `start >= 1` are guaranteed above,
     // so the shared slice primitive cannot return `None` here.
     let body = slice_lines(content, start, end).expect("export range validated before slicing");
+    let join = unwrap.unwrap_or_else(|| target.unwrap_soft_wraps());
     let mut out_lines: Vec<String> = Vec::new();
     // Fence / indented-code tracking is target-independent markdown
     // structure (same rules as the graph parser and heading extractor).
@@ -612,6 +866,8 @@ pub fn export_content(
     // blocks are opaque and must not feed the stack) and the resulting
     // depth feeds the Slack target's re-indent.
     let mut lists = crate::markdown::ListDepthTracker::new();
+    // One open logical line while soft-break resolution is active.
+    let mut pending: Option<PendingLine> = None;
     for line in body.split('\n') {
         ls.skip_line(line);
         let in_code = ls.last_was_code();
@@ -622,9 +878,15 @@ pub fn export_content(
             fence_char: ls.fence_char(),
             list_depth,
         };
-        if let Some(t) = target.transform_line(line, ctx) {
+        let transformed = target.transform_line(line, ctx);
+        if join {
+            join_line(&mut out_lines, &mut pending, line, in_code, transformed);
+        } else if let Some(t) = transformed {
             out_lines.push(t);
         }
+    }
+    if let Some(p) = pending.take() {
+        out_lines.push(p.text);
     }
     Ok(ExportOutcome {
         text: out_lines.join("\n"),
@@ -1565,5 +1827,232 @@ mod tests {
             export_content(c, None, &CommonMarkExport).unwrap().text,
             "- foo\n  - bar\n    - lol\n- baz"
         );
+    }
+
+    // ── soft-break resolution: classifier ────────────────────────────
+
+    #[test]
+    fn classify_every_kind() {
+        use BlockKind::{Blank, Blockquote, Break, Code, Heading, ListItem, Paragraph};
+        assert_eq!(classify("", false), Blank);
+        assert_eq!(classify("   ", false), Blank);
+        assert_eq!(classify("# H", false), Heading);
+        assert_eq!(classify("###", false), Heading);
+        assert_eq!(classify("- item", false), ListItem);
+        assert_eq!(classify("1. item", false), ListItem);
+        assert_eq!(classify("  - nested", false), ListItem);
+        assert_eq!(
+            classify("> quote", false),
+            Blockquote {
+                callout_title: false,
+                inner_list: false
+            }
+        );
+        assert_eq!(
+            classify("> [!note] Title", false),
+            Blockquote {
+                callout_title: true,
+                inner_list: false
+            }
+        );
+        assert_eq!(
+            classify("> - item", false),
+            Blockquote {
+                callout_title: false,
+                inner_list: true
+            }
+        );
+        assert_eq!(
+            classify(">> deep", false),
+            Blockquote {
+                callout_title: false,
+                inner_list: false
+            }
+        );
+        assert_eq!(classify("---", false), Break);
+        assert_eq!(classify("--", false), Break);
+        assert_eq!(classify("plain text", false), Paragraph);
+        assert_eq!(classify("  continuation", false), Paragraph);
+        assert_eq!(classify("```rust", true), Code);
+        assert_eq!(classify("    indented", true), Code);
+    }
+
+    #[test]
+    fn unwrap_policy_per_target() {
+        assert!(SlackExport.unwrap_soft_wraps());
+        assert!(!CommonMarkExport.unwrap_soft_wraps());
+    }
+
+    // ── soft-break resolution: driver ────────────────────────────────
+
+    fn slack_join(doc: &str) -> String {
+        export_content(doc, None, &SlackExport).unwrap().text
+    }
+
+    fn cm_join(doc: &str) -> String {
+        export_content_with(doc, None, &CommonMarkExport, Some(true))
+            .unwrap()
+            .text
+    }
+
+    #[test]
+    fn wrapped_paragraph_joins_slack_default() {
+        assert_eq!(
+            slack_join("first line\nsecond line\n\nafter\n"),
+            "first line second line\n\nafter"
+        );
+    }
+
+    #[test]
+    fn wrapped_list_item_joins_user_example() {
+        let c = "- line items that are longer than the column width and\n  thus are broken with an indent on the following line\n  to continue\n  - we can still indent and have a sub item that\n    follows the same rules\n- and return to first level\n";
+        assert_eq!(
+            slack_join(c),
+            "- line items that are longer than the column width and thus are broken with an indent on the following line to continue\n    - we can still indent and have a sub item that follows the same rules\n- and return to first level"
+        );
+    }
+
+    #[test]
+    fn wrapped_task_item_joins() {
+        assert_eq!(
+            slack_join("- [ ] ⏫ task that\n  continues here\n"),
+            "- ⏫ task that continues here"
+        );
+    }
+
+    #[test]
+    fn nested_items_do_not_join() {
+        assert_eq!(slack_join("- a\n  - b\n"), "- a\n    - b");
+    }
+
+    #[test]
+    fn unindented_paragraph_after_item_is_new_paragraph() {
+        assert_eq!(
+            slack_join("- item\nnew paragraph\n"),
+            "- item\nnew paragraph"
+        );
+    }
+
+    #[test]
+    fn blank_lines_separate_paragraphs() {
+        assert_eq!(
+            slack_join("one\ntwo\n\nthree\nfour\n"),
+            "one two\n\nthree four"
+        );
+    }
+
+    #[test]
+    fn hard_breaks_preserved_backslash() {
+        assert_eq!(slack_join("line one\\\nline two\n"), "line one\\\nline two");
+    }
+
+    #[test]
+    fn hard_breaks_preserved_trailing_spaces() {
+        assert_eq!(
+            slack_join("line three  \nline four\n"),
+            "line three  \nline four"
+        );
+    }
+
+    #[test]
+    fn code_blocks_never_joined() {
+        assert_eq!(
+            slack_join("```\nline one\nline two\n```\n\nafter\n"),
+            "```\nline one\nline two\n```\n\nafter"
+        );
+        assert_eq!(
+            slack_join("intro\n\n    code one\n    code two\n\nafter\n"),
+            "intro\n\n    code one\n    code two\n\nafter"
+        );
+    }
+
+    #[test]
+    fn callout_title_does_not_absorb_body() {
+        assert_eq!(
+            slack_join("> [!note] Title\n> body line one\n> body line two\n"),
+            "> Title\n> body line one body line two"
+        );
+    }
+
+    #[test]
+    fn quoted_paragraph_joins() {
+        assert_eq!(
+            slack_join("> quoted line one\n> quoted line two\n"),
+            "> quoted line one quoted line two"
+        );
+    }
+
+    #[test]
+    fn quote_inner_list_items_do_not_join() {
+        assert_eq!(
+            slack_join("> - item one\n> - item two\n"),
+            "> - item one\n> - item two"
+        );
+        // An item's indented continuation joins into it.
+        assert_eq!(
+            slack_join("> - item one\n>   continuation\n"),
+            "> - item one continuation"
+        );
+    }
+
+    #[test]
+    fn empty_quote_line_is_boundary() {
+        assert_eq!(slack_join("> one\n>\n> two\n"), "> one\n>\n> two");
+    }
+
+    #[test]
+    fn heading_does_not_absorb_following_paragraph() {
+        assert_eq!(
+            slack_join("# Heading\nwrapped first\nwrapped second\n"),
+            "*Heading*\nwrapped first wrapped second"
+        );
+    }
+
+    #[test]
+    fn commonmark_verbatim_by_default() {
+        assert_eq!(
+            export_content("wrapped first\nwrapped second\n", None, &CommonMarkExport)
+                .unwrap()
+                .text,
+            "wrapped first\nwrapped second"
+        );
+    }
+
+    #[test]
+    fn commonmark_unwrap_joins() {
+        assert_eq!(
+            cm_join("wrapped first\nwrapped second\n"),
+            "wrapped first wrapped second"
+        );
+    }
+
+    #[test]
+    fn slack_no_unwrap_restores_verbatim() {
+        assert_eq!(
+            export_content_with(
+                "- item that is long\n  and continues\n",
+                None,
+                &SlackExport,
+                Some(false)
+            )
+            .unwrap()
+            .text,
+            "- item that is long\n  and continues"
+        );
+    }
+
+    #[test]
+    fn mid_block_range_starts_fresh() {
+        let c = "first paragraph line\nsecond paragraph line\n\nafter\n";
+        assert_eq!(
+            export_content(c, Some((2, 2)), &SlackExport).unwrap().text,
+            "second paragraph line"
+        );
+    }
+
+    #[test]
+    fn dropped_header_acts_as_boundary_under_join() {
+        let c = "para one\n> [!ft-source] \"a.md\" L1-1 @aaaaaaa #aaaaaa\npara two\n";
+        assert_eq!(cm_join(c), "para one\npara two");
     }
 }
