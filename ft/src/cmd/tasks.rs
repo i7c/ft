@@ -671,8 +671,8 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
 /// Returns an absolute path. Thin wrapper over `Vault::ensure_target` so the
 /// CLI error type stays anyhow.
 fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Result<PathBuf> {
-    let (today_n, now_n) = dates::now_pair();
-    Ok(vault.ensure_target(today, args.file.as_deref(), today_n, now_n)?)
+    let (_, now_n) = dates::now_pair();
+    Ok(vault.ensure_target(today, args.file.as_deref(), now_n)?)
 }
 
 /// Resolve a `--parent` selector into exactly one task. Zero matches error;

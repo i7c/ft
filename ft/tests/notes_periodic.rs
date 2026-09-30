@@ -485,3 +485,240 @@ fn custom_vault_name_in_obsidian_url() {
     let stdout = String::from_utf8(out).unwrap();
     assert!(stdout.contains("vault=MyVault"), "{stdout:?}");
 }
+
+// ── anchoring to the start of the period ─────────────────────────────────────
+
+fn weekly_day_bearing_config() -> assert_fs::TempDir {
+    vault_with_config(
+        r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+    )
+}
+
+#[test]
+fn weekly_day_bearing_format_anchors_to_monday() {
+    let dir = weekly_day_bearing_config();
+    // FT_TODAY defaults to 2026-05-13 (a Wednesday); the week's Monday is 05-11.
+    let out = ft()
+        .args([
+            "--vault",
+            dir.path().to_str().unwrap(),
+            "notes",
+            "periodic",
+            "weekly",
+            "--no-open",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(stdout.contains("journal/2026/2026-05-11.md"), "{stdout:?}");
+    assert!(dir.child("journal/2026/2026-05-11.md").path().exists());
+    let body = std::fs::read_to_string(dir.child("journal/2026/2026-05-11.md").path()).unwrap();
+    assert_eq!(body, "# 2026-05-11\n\n");
+}
+
+#[test]
+fn weekly_reopened_on_sunday_opens_same_monday_file() {
+    let dir = weekly_day_bearing_config();
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "weekly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+
+    // Sunday of the same ISO week must resolve to the same Monday file.
+    let out = ft()
+        .env("FT_TODAY", "2026-05-17")
+        .args([
+            "--vault",
+            dir.path().to_str().unwrap(),
+            "notes",
+            "periodic",
+            "weekly",
+            "--no-open",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(stdout.starts_with("Opened "), "{stdout:?}");
+    assert!(stdout.contains("journal/2026/2026-05-11.md"), "{stdout:?}");
+    assert!(
+        !dir.child("journal/2026/2026-05-17.md").path().exists(),
+        "a Sunday open must not create a second weekly file"
+    );
+}
+
+#[test]
+fn weekly_offset_minus_one_anchors_to_previous_monday() {
+    let dir = weekly_day_bearing_config();
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "weekly",
+        "--offset",
+        "-1",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-05-04.md").path().exists());
+}
+
+#[test]
+fn monthly_day_bearing_format_anchors_to_first() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.monthly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+    );
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "monthly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-05-01.md").path().exists());
+}
+
+#[test]
+fn quarterly_day_bearing_format_anchors_to_first_of_quarter() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.quarterly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+    );
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "quarterly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-04-01.md").path().exists());
+}
+
+#[test]
+fn yearly_day_bearing_format_anchors_to_jan_first() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.yearly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+    );
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "yearly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-01-01.md").path().exists());
+}
+
+#[test]
+fn monthly_offset_clamps_then_anchors() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.monthly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+    );
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "monthly",
+        "--date",
+        "2026-01-31",
+        "--offset",
+        "1",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-02-01.md").path().exists());
+}
+
+#[test]
+fn weekly_sunday_week_start_anchors_to_sunday() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+week_start = "sunday"
+"#,
+    );
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "weekly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    assert!(dir.child("journal/2026/2026-05-10.md").path().exists());
+}
+
+#[test]
+fn periodic_template_today_renders_anchored_date() {
+    let dir = vault_with_config(
+        r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+template = "anchor"
+"#,
+    );
+    dir.child("templates-ft").create_dir_all().unwrap();
+    dir.child("templates-ft/anchor.md")
+        .write_str("# {{ today | date(format=\"%Y-%m-%d\") }}\n")
+        .unwrap();
+    ft().args([
+        "--vault",
+        dir.path().to_str().unwrap(),
+        "notes",
+        "periodic",
+        "weekly",
+        "--no-open",
+    ])
+    .assert()
+    .success();
+    let body = std::fs::read_to_string(dir.child("journal/2026/2026-05-11.md").path()).unwrap();
+    assert_eq!(body, "# 2026-05-11\n");
+}

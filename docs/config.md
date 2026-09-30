@@ -87,6 +87,7 @@ template = "daily"
 [periodic_notes.weekly]
 path = "journal/%Y"
 format = "%G-W%V"
+week_start = "monday"
 template = "weeks"
 
 [periodic_notes.monthly]
@@ -108,10 +109,17 @@ format = "%Y"
 | `path`     | string (pattern) | yes      | Folder pattern, vault-relative. Empty string means "vault root."         |
 | `format`   | string (pattern) | yes      | Filename pattern, **without `.md`**.                                     |
 | `template` | string           | no       | Template name resolved under `[notes].templates_dir`; absolute paths (starting with `/`) used as-is. When unset, new notes get a blank `# <title>\n\n` body. |
+| `week_start` | `"monday"` \| `"sunday"` | no | First day of the week for the **weekly** period. Defaults to `monday`; ignored by the other periods. |
 
 `path` and `format` both accept the chrono-strftime tokens listed below.
-`ft` resolves them against the target date — `today` by default, or the
-date supplied via `--date`/`--offset`.
+`ft` resolves them against the **start of the period** containing the target
+date — `today` by default, or the date supplied via `--date`/`--offset` (the
+offset is applied first, then the date is anchored). For weeks that is the
+configured week start (Monday by default), for months the 1st, for quarters
+the first day of the quarter, and for years January 1. A weekly note therefore
+resolves to the same file on every day of the week: a `format` such as
+`%Y-%m-%d` always names the note after its Monday. The anchored date is also
+what the template's `today` variable sees.
 
 The `daily` period is special: it's also consulted by `ft tasks create`
 (and the TUI quickline) when no `--file` is supplied, so most users

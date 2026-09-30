@@ -2240,6 +2240,42 @@ fn notes_tab_t_opens_today_when_daily_configured() -> Result<()> {
     Ok(())
 }
 
+/// Notes-tab `p` then `w` on a day-bearing weekly format must resolve the
+/// week's Monday, not the clock's day (Sun 2026-05-10 → Mon 2026-05-04).
+#[test]
+fn notes_tab_weekly_open_anchors_to_monday() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.weekly]\npath = \"journal/%Y\"\nformat = \"%Y-%m-%d\"\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('p'))?;
+    app.dispatch(key('w'))?;
+
+    let req = app
+        .take_pending_request()
+        .expect("p,w should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            let expected = dir
+                .path()
+                .join("test-vault/journal/2026/2026-05-04.md")
+                .canonicalize()
+                .unwrap();
+            assert_eq!(path.canonicalize().unwrap(), expected);
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+    Ok(())
+}
+
 #[test]
 fn notes_tab_t_emits_error_toast_when_daily_unconfigured() -> Result<()> {
     let (_dir, vault) = periodic_vault_no_config();

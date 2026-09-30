@@ -1398,11 +1398,11 @@ impl SearchView {
                 },
             ),
             None => {
-                let (today_n, now_n) = ft_core::dates::now_pair();
+                let (_, now_n) = ft_core::dates::now_pair();
                 let resolved =
                     match ctx
                         .vault
-                        .ensure_target(ctx.today, target_path.as_deref(), today_n, now_n)
+                        .ensure_target(ctx.today, target_path.as_deref(), now_n)
                     {
                         Ok(p) => p,
                         Err(e) => {
@@ -1570,13 +1570,11 @@ impl SearchView {
                 },
             ),
             None => {
-                let (today_n, now_n) = ft_core::dates::now_pair();
-                let t = match ctx.vault.ensure_target(
-                    ctx.today,
-                    parse.target.as_deref(),
-                    today_n,
-                    now_n,
-                ) {
+                let (_, now_n) = ft_core::dates::now_pair();
+                let t = match ctx
+                    .vault
+                    .ensure_target(ctx.today, parse.target.as_deref(), now_n)
+                {
                     Ok(p) => p,
                     Err(e) => {
                         self.quickline.as_mut().unwrap().error = Some(e.to_string());

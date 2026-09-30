@@ -1131,9 +1131,9 @@ fn run_periodic_inner(
     let (abs_path, created) = match create_or_get_periodic_path(
         &vault.path,
         &vault.templates_dir(),
+        period,
         cfg,
         target_date,
-        today,
         now,
     ) {
         Ok(pair) => pair,

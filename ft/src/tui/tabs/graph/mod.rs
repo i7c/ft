@@ -440,7 +440,8 @@ impl GraphTab {
         };
 
         let abs_path =
-            match ft_core::periodic::resolve_periodic_path(&ctx.vault.path, cfg, ctx.today) {
+            match ft_core::periodic::resolve_periodic_path(&ctx.vault.path, period, cfg, ctx.today)
+            {
                 Ok(p) => p,
                 Err(e) => {
                     queue_toast(ctx, &format!("{e}"), ToastStyle::Error);

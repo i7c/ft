@@ -36,25 +36,21 @@ pub fn run_periodic_open(ctx: &TabCtx, period: Period) {
 
     // `today` is the App-wide ctx.today (FT_TODAY-aware via the test
     // clock); `now` honors the same FT_TODAY override so template
-    // timestamps stay deterministic in tests.
+    // timestamps stay deterministic in tests. Core anchors `today` to the
+    // start of `period` before resolving the path and template context.
     let today = ctx.today;
     let (_, now) = ft_core::dates::now_pair();
 
     let templates_dir = ctx.vault.templates_dir();
-    let (abs_path, _created) = match create_or_get_periodic_path(
-        &ctx.vault.path,
-        &templates_dir,
-        cfg,
-        today,
-        today,
-        now,
-    ) {
-        Ok(pair) => pair,
-        Err(e) => {
-            queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
-            return;
-        }
-    };
+    let (abs_path, _created) =
+        match create_or_get_periodic_path(&ctx.vault.path, &templates_dir, period, cfg, today, now)
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
+                return;
+            }
+        };
 
     if let Ok(rel) = abs_path.strip_prefix(&ctx.vault.path) {
         ctx.recents.record_open(rel);

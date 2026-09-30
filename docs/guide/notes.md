@@ -88,8 +88,14 @@ whether the file was new.
 
 `--date YYYY-MM-DD` overrides today; `--offset N` shifts by N period
 units relative to that base, so `--offset -1` on `weekly` is "last
-week" regardless of the current weekday. Out-of-month overflow on
-`monthly` clamps to the last day of the destination month.
+week" regardless of the current weekday. The shifted date is then
+anchored to the **start of the period** (Monday for `weekly`, the 1st
+for `monthly`, the first day of the quarter, January 1 for `yearly`),
+so every day of a week resolves to the same weekly note and a
+day-bearing weekly format such as `%Y-%m-%d` names the note after its
+Monday. Out-of-month overflow on `monthly` clamps to the last day of
+the destination month before anchoring. Set `week_start = "sunday"` on
+`[periodic_notes.weekly]` to anchor weeks to Sunday instead.
 
 The TUI's `p` leader (then `d`/`w`/`m`/`q`/`y`) does the same thing
 without leaving the alt-screen.

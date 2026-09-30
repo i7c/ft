@@ -198,12 +198,13 @@ fn expand_sigil(
                 pos: byte_pos,
             }
         })?;
-        let abs = periodic::resolve_periodic_path(ctx.vault_root, cfg, date).map_err(|_| {
-            InterpolationError::InvalidOffset {
-                raw: date.format("%Y-%m-%d").to_string(),
-                pos: byte_pos,
-            }
-        })?;
+        let abs =
+            periodic::resolve_periodic_path(ctx.vault_root, period, cfg, date).map_err(|_| {
+                InterpolationError::InvalidOffset {
+                    raw: date.format("%Y-%m-%d").to_string(),
+                    pos: byte_pos,
+                }
+            })?;
         let rel = abs.strip_prefix(ctx.vault_root).unwrap_or(&abs);
         rel.to_string_lossy().into_owned()
     };
@@ -270,6 +271,7 @@ mod tests {
                 path: path.into(),
                 format: format.into(),
                 template: None,
+                ..Default::default()
             }),
             ..Default::default()
         }
@@ -281,6 +283,7 @@ mod tests {
                 path: path.into(),
                 format: format.into(),
                 template: None,
+                ..Default::default()
             }),
             ..Default::default()
         }
@@ -292,6 +295,7 @@ mod tests {
                 path: "journal/%Y".into(),
                 format: format.into(),
                 template: None,
+                ..Default::default()
             }),
             ..Default::default()
         }
@@ -383,6 +387,38 @@ mod tests {
         assert_eq!(
             interpolate("path = @weekly-2", ctx(d(2026, 5, 14), dir.path(), &pn)).unwrap(),
             r#"path = "journal/2026/2026-W18.md""#
+        );
+    }
+
+    #[test]
+    fn weekly_day_bearing_format_anchors_to_monday() {
+        let dir = TempDir::new().unwrap();
+        let pn = weekly_cfg("journal/%Y", "%Y-%m-%d");
+        // Thu 2026-05-14 → the week's Monday 2026-05-11.
+        assert_eq!(
+            interpolate("path = @weekly", ctx(d(2026, 5, 14), dir.path(), &pn)).unwrap(),
+            r#"path = "journal/2026/2026-05-11.md""#
+        );
+    }
+
+    #[test]
+    fn weekly_offset_day_bearing_anchors_to_monday() {
+        let dir = TempDir::new().unwrap();
+        let pn = weekly_cfg("journal/%Y", "%Y-%m-%d");
+        // Thu 2026-05-14 → Mon 2026-05-11, minus two weeks → Mon 2026-04-27.
+        assert_eq!(
+            interpolate("path = @weekly-2", ctx(d(2026, 5, 14), dir.path(), &pn)).unwrap(),
+            r#"path = "journal/2026/2026-04-27.md""#
+        );
+    }
+
+    #[test]
+    fn monthly_day_bearing_format_anchors_to_first() {
+        let dir = TempDir::new().unwrap();
+        let pn = monthly_cfg("%Y-%m-%d");
+        assert_eq!(
+            interpolate("path = @monthly", ctx(d(2026, 5, 14), dir.path(), &pn)).unwrap(),
+            r#"path = "journal/2026/2026-05-01.md""#
         );
     }
 

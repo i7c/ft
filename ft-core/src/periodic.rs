@@ -50,7 +50,7 @@ use std::str::FromStr;
 
 use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime};
 
-use crate::config::PeriodicPeriod;
+use crate::config::{PeriodicPeriod, WeekStart};
 use crate::error::{Error, Result};
 use crate::fs::write_atomic;
 use crate::notes::template::{render_path as render_template_path, TemplateContext};
@@ -99,6 +99,44 @@ impl Period {
             Period::Yearly => apply_months(date, n.checked_mul(12)?),
         }
     }
+
+    /// Representative date for a note of this period.
+    ///
+    /// - `Daily` → the date itself.
+    /// - `Weekly` → the configured week start (Monday by default) of the
+    ///   date's week.
+    /// - `Monthly` → the first day of the date's month.
+    /// - `Quarterly` → the first day of the date's calendar quarter.
+    /// - `Yearly` → January 1 of the date's year.
+    ///
+    /// `week_start` only affects `Weekly`.
+    pub fn start_of(self, date: NaiveDate, week_start: WeekStart) -> NaiveDate {
+        match self {
+            Period::Daily => date,
+            Period::Weekly => {
+                let back = match week_start {
+                    WeekStart::Monday => date.weekday().num_days_from_monday(),
+                    WeekStart::Sunday => date.weekday().num_days_from_sunday(),
+                };
+                back_off_days(date, back)
+            }
+            Period::Monthly => {
+                NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap_or(date)
+            }
+            Period::Quarterly => {
+                let month = ((date.month() - 1) / 3) * 3 + 1;
+                NaiveDate::from_ymd_opt(date.year(), month, 1).unwrap_or(date)
+            }
+            Period::Yearly => NaiveDate::from_ymd_opt(date.year(), 1, 1).unwrap_or(date),
+        }
+    }
+}
+
+/// `date` minus `days`, saturating at the representable minimum instead of
+/// panicking.
+fn back_off_days(date: NaiveDate, days: u32) -> NaiveDate {
+    date.checked_sub_days(Days::new(u64::from(days)))
+        .unwrap_or(date)
 }
 
 fn apply_days(date: NaiveDate, n: i32) -> Option<NaiveDate> {
@@ -195,13 +233,18 @@ fn format_with_quarter(fmt: &str, date: NaiveDate) -> Result<String> {
 
 /// Resolve the absolute on-disk path for a periodic note.
 ///
-/// Joins the rendered `path` (folder, may be empty) and `format`
-/// (filename, no `.md`) under `vault_root`, appending `.md`.
+/// The supplied `date` is first anchored to the start of `period` (see
+/// [`Period::start_of`]), so a weekly note opened mid-week resolves to the
+/// same file as one opened on the week start. The rendered `path` (folder,
+/// may be empty) and `format` (filename, no `.md`) are joined under
+/// `vault_root` with `.md` appended.
 pub fn resolve_periodic_path(
     vault_root: &Path,
+    period: Period,
     cfg: &PeriodicPeriod,
     date: NaiveDate,
 ) -> Result<PathBuf> {
+    let date = period.start_of(date, cfg.week_start);
     let folder = format_with_quarter(&cfg.path, date)?;
     let filename = format_with_quarter(&cfg.format, date)?;
     if filename.is_empty() {
@@ -262,18 +305,24 @@ fn resolve_template_candidate(template: &str, vault_templates_dir: &Path) -> Pat
 /// Resolve the absolute path for a periodic note and, when the file does
 /// not yet exist, render its template and write it atomically.
 ///
+/// `date` is anchored to the start of `period` once, and that anchored date
+/// drives both the path and the template's `today` variable, so periodic
+/// templates render deterministically regardless of the day they are
+/// opened. `now` remains the live instant for `{{ now }}`.
+///
 /// Returns `(path, created)` where `created = true` means the file was
 /// just written by this call; `false` means it existed and was left
 /// untouched.
 pub fn create_or_get_periodic_path(
     vault_root: &Path,
     vault_templates_dir: &Path,
+    period: Period,
     cfg: &PeriodicPeriod,
     date: NaiveDate,
-    today: NaiveDate,
     now: NaiveDateTime,
 ) -> Result<(PathBuf, bool)> {
-    let path = resolve_periodic_path(vault_root, cfg, date)?;
+    let date = period.start_of(date, cfg.week_start);
+    let path = resolve_periodic_path(vault_root, period, cfg, date)?;
     if path.exists() {
         return Ok((path, false));
     }
@@ -284,7 +333,7 @@ pub fn create_or_get_periodic_path(
         .map(|s| s.to_string())
         .ok_or_else(|| Error::Periodic("resolved path has no filename stem".to_string()))?;
 
-    let body = render_periodic_note(cfg, vault_templates_dir, &title, today, now)?;
+    let body = render_periodic_note(cfg, vault_templates_dir, &title, date, now)?;
     write_atomic(&path, &body)?;
     Ok((path, true))
 }
@@ -405,6 +454,104 @@ mod tests {
         );
     }
 
+    // ── Period::start_of ──────────────────────────────────────────────────
+
+    #[test]
+    fn start_of_daily_is_identity() {
+        assert_eq!(
+            Period::Daily.start_of(d(2026, 5, 13), WeekStart::Monday),
+            d(2026, 5, 13)
+        );
+    }
+
+    #[test]
+    fn start_of_weekly_anchors_to_monday() {
+        // Wed 2026-05-13 → Mon 2026-05-11.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 13), WeekStart::Monday),
+            d(2026, 5, 11)
+        );
+        // Sunday 2026-05-17 → Mon 2026-05-11.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 17), WeekStart::Monday),
+            d(2026, 5, 11)
+        );
+        // Monday is its own anchor.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 11), WeekStart::Monday),
+            d(2026, 5, 11)
+        );
+    }
+
+    #[test]
+    fn start_of_weekly_sunday_week_start() {
+        // Wed 2026-05-13 → Sun 2026-05-10.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 13), WeekStart::Sunday),
+            d(2026, 5, 10)
+        );
+        // Sunday is its own anchor.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 10), WeekStart::Sunday),
+            d(2026, 5, 10)
+        );
+        // Monday 2026-05-11 → Sun 2026-05-10.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 5, 11), WeekStart::Sunday),
+            d(2026, 5, 10)
+        );
+    }
+
+    #[test]
+    fn start_of_weekly_crosses_year_boundary() {
+        // 2027-01-01 is a Friday; its ISO week starts Mon 2026-12-28.
+        assert_eq!(
+            Period::Weekly.start_of(d(2027, 1, 1), WeekStart::Monday),
+            d(2026, 12, 28)
+        );
+        // 2026-01-01 is a Thursday; its ISO week starts Mon 2025-12-29.
+        assert_eq!(
+            Period::Weekly.start_of(d(2026, 1, 1), WeekStart::Monday),
+            d(2025, 12, 29)
+        );
+    }
+
+    #[test]
+    fn start_of_monthly_first_of_month() {
+        assert_eq!(
+            Period::Monthly.start_of(d(2026, 5, 14), WeekStart::Monday),
+            d(2026, 5, 1)
+        );
+        assert_eq!(
+            Period::Monthly.start_of(d(2026, 5, 1), WeekStart::Monday),
+            d(2026, 5, 1)
+        );
+    }
+
+    #[test]
+    fn start_of_quarterly_first_of_quarter() {
+        assert_eq!(
+            Period::Quarterly.start_of(d(2026, 5, 14), WeekStart::Monday),
+            d(2026, 4, 1)
+        );
+        assert_eq!(
+            Period::Quarterly.start_of(d(2026, 11, 30), WeekStart::Monday),
+            d(2026, 10, 1)
+        );
+        assert_eq!(
+            Period::Quarterly.start_of(d(2026, 1, 5), WeekStart::Monday),
+            d(2026, 1, 1)
+        );
+    }
+
+    #[test]
+    fn start_of_yearly_jan_first() {
+        assert_eq!(
+            Period::Yearly.start_of(d(2026, 5, 14), WeekStart::Monday),
+            d(2026, 1, 1)
+        );
+    }
+
     // ── %q / %Q pre-processor ─────────────────────────────────────────────
 
     #[test]
@@ -447,8 +594,9 @@ mod tests {
             path: "journal/%Y".into(),
             format: "%Y-%m-%d".into(),
             template: None,
+            ..Default::default()
         };
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Daily, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("journal/2026/2026-05-14.md"));
     }
 
@@ -459,9 +607,10 @@ mod tests {
             path: "journal/%Y".into(),
             format: "%G-W%V".into(),
             template: None,
+            ..Default::default()
         };
         // 2026-05-14 falls in ISO week 20 of 2026 (Mon..Sun = May 11..17).
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Weekly, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("journal/2026/2026-W20.md"));
     }
 
@@ -472,8 +621,9 @@ mod tests {
             path: "journal/%Y".into(),
             format: "%Y-%m".into(),
             template: None,
+            ..Default::default()
         };
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Monthly, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("journal/2026/2026-05.md"));
     }
 
@@ -484,8 +634,9 @@ mod tests {
             path: "journal/%Y".into(),
             format: "%Y-Q%q".into(),
             template: None,
+            ..Default::default()
         };
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Quarterly, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("journal/2026/2026-Q2.md"));
     }
 
@@ -496,8 +647,9 @@ mod tests {
             path: "journal".into(),
             format: "%Y".into(),
             template: None,
+            ..Default::default()
         };
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Yearly, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("journal/2026.md"));
     }
 
@@ -508,8 +660,9 @@ mod tests {
             path: "".into(),
             format: "%Y-%m-%d".into(),
             template: None,
+            ..Default::default()
         };
-        let p = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap();
+        let p = resolve_periodic_path(dir.path(), Period::Daily, &cfg, d(2026, 5, 14)).unwrap();
         assert_eq!(p, dir.path().join("2026-05-14.md"));
     }
 
@@ -520,8 +673,10 @@ mod tests {
             path: "journal".into(),
             format: "".into(),
             template: None,
+            ..Default::default()
         };
-        let err = resolve_periodic_path(dir.path(), &cfg, d(2026, 5, 14)).unwrap_err();
+        let err =
+            resolve_periodic_path(dir.path(), Period::Daily, &cfg, d(2026, 5, 14)).unwrap_err();
         assert!(matches!(err, Error::Periodic(_)));
     }
 
@@ -534,6 +689,7 @@ mod tests {
             path: "journal".into(),
             format: "%Y-%m-%d".into(),
             template: None,
+            ..Default::default()
         };
         let body = render_periodic_note(
             &cfg,
@@ -557,6 +713,7 @@ mod tests {
             path: "journal".into(),
             format: "%Y-%m-%d".into(),
             template: Some("daily".into()),
+            ..Default::default()
         };
         let body = render_periodic_note(
             &cfg,
@@ -576,6 +733,7 @@ mod tests {
             path: "journal".into(),
             format: "%Y-%m-%d".into(),
             template: Some("nope".into()),
+            ..Default::default()
         };
         let err = render_periodic_note(
             &cfg,
@@ -602,13 +760,14 @@ mod tests {
             path: "journal/%Y".into(),
             format: "%Y-%m-%d".into(),
             template: None,
+            ..Default::default()
         };
 
         let (path1, created1) = create_or_get_periodic_path(
             vault.path(),
             templates.path(),
+            Period::Daily,
             &cfg,
-            d(2026, 5, 14),
             d(2026, 5, 14),
             dt(2026, 5, 14, 0, 0),
         )
@@ -623,8 +782,8 @@ mod tests {
         let (path2, created2) = create_or_get_periodic_path(
             vault.path(),
             templates.path(),
+            Period::Daily,
             &cfg,
-            d(2026, 5, 14),
             d(2026, 5, 14),
             dt(2026, 5, 14, 0, 0),
         )
@@ -647,12 +806,13 @@ mod tests {
             path: "journal/%Y/%m".into(),
             format: "%Y-%m-%d".into(),
             template: None,
+            ..Default::default()
         };
         let (path, created) = create_or_get_periodic_path(
             vault.path(),
             templates.path(),
+            Period::Daily,
             &cfg,
-            d(2026, 5, 14),
             d(2026, 5, 14),
             dt(2026, 5, 14, 0, 0),
         )

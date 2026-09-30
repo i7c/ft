@@ -761,13 +761,13 @@ impl TimeblocksTab {
             );
             return;
         };
-        let (today_n, now_n) = today_now_for_template(ctx, self.clock);
+        let (_, now_n) = today_now_for_template(ctx, self.clock);
         match ft_core::periodic::create_or_get_periodic_path(
             &ctx.vault.path,
             &ctx.vault.templates_dir(),
+            ft_core::periodic::Period::Daily,
             daily_cfg,
             date,
-            today_n,
             now_n,
         ) {
             Ok((_path, _created)) => {
@@ -954,9 +954,9 @@ impl TimeblocksTab {
         if ctx.vault.config.config.periodic_notes.daily.is_none() {
             return Ok(());
         }
-        let (today_n, now_n) = today_now_for_template(ctx, self.clock);
+        let (_, now_n) = today_now_for_template(ctx, self.clock);
         ctx.vault
-            .ensure_target(date, None, today_n, now_n)
+            .ensure_target(date, None, now_n)
             .map(|_| ())
             .map_err(|e| anyhow::anyhow!("{e}"))
     }

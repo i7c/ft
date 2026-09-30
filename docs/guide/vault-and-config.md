@@ -120,6 +120,13 @@ Both accept the standard `chrono` strftime tokens — `%Y`, `%m`, `%d`,
 `Q2`). The full token table is in
 [docs/config.md](../config.md#token-surface).
 
+`path`, `format`, and the template's `today` are resolved against the
+**start of the period** — the week's Monday by default, the 1st of the
+month, the first day of the quarter, or January 1 — never the raw day.
+A weekly note opened mid-week therefore opens the same file as one
+opened on Monday. Add `week_start = "sunday"` to
+`[periodic_notes.weekly]` to anchor weeks to Sunday instead.
+
 `template` is resolved as `<vault>/<templates_dir>/<template>.md`. If
 the file doesn't exist when you open the daily note, `ft` renders the
 template through MiniJinja with `title`, `today`, `now`, and your

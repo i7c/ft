@@ -225,7 +225,18 @@ pub struct PeriodicNotes {
     pub yearly: Option<PeriodicPeriod>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// First day of the week used to anchor a weekly periodic note.
+///
+/// Defaults to Monday, matching `ft timeblocks spent` and ISO 8601.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WeekStart {
+    #[default]
+    Monday,
+    Sunday,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeriodicPeriod {
     /// Folder pattern, vault-relative. Chrono strftime tokens supported,
@@ -237,6 +248,10 @@ pub struct PeriodicPeriod {
     /// Template name resolved under `[notes].templates_dir` (or an
     /// absolute path). When unset, the new note's body is `# <title>\n\n`.
     pub template: Option<String>,
+    /// First day of the week for the weekly period. Defaults to Monday and
+    /// is ignored by the other periods.
+    #[serde(default)]
+    pub week_start: WeekStart,
 }
 
 /// Synthesis configuration. Governs the `ft notes pulse` /
@@ -548,6 +563,57 @@ format = "%Y"
             lc.config.periodic_notes.quarterly.as_ref().unwrap().format,
             "%Y-Q%q"
         );
+    }
+
+    #[test]
+    fn periodic_notes_week_start_defaults_to_monday() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        let w = lc.config.periodic_notes.weekly.as_ref().unwrap();
+        assert_eq!(w.week_start, WeekStart::Monday);
+    }
+
+    #[test]
+    fn periodic_notes_week_start_sunday_parses() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+week_start = "sunday"
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        let w = lc.config.periodic_notes.weekly.as_ref().unwrap();
+        assert_eq!(w.week_start, WeekStart::Sunday);
+    }
+
+    #[test]
+    fn periodic_notes_week_start_invalid_errors() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[periodic_notes.weekly]
+path = "journal/%Y"
+format = "%Y-%m-%d"
+week_start = "tuesday"
+"#,
+        )
+        .unwrap();
+        assert!(load(user.path(), &tmp.path().join("no-vault.toml")).is_err());
     }
 
     #[test]

@@ -132,7 +132,12 @@ impl Vault {
                         .to_string(),
                 )
             })?;
-        crate::periodic::resolve_periodic_path(&self.path, daily, today)
+        crate::periodic::resolve_periodic_path(
+            &self.path,
+            crate::periodic::Period::Daily,
+            daily,
+            today,
+        )
     }
 
     /// Resolve a write target like [`Self::resolve_target`], but when it is
@@ -146,15 +151,15 @@ impl Vault {
     /// *write* site (task create, timeblock add); leave [`Self::resolve_target`]
     /// for read-only/display sites that must not create files.
     ///
-    /// `date` is the note's date (e.g. tomorrow for a timeblocks pane);
-    /// `today`/`now` are the template-rendering context. They are accepted
-    /// explicitly so callers with an injected clock (the TUI) and the CLI
+    /// `date` is the note's date (e.g. tomorrow for a timeblocks pane) and
+    /// is anchored to the start of the day (a no-op for daily notes); `now`
+    /// is the template-rendering instant. It is accepted explicitly so
+    /// callers with an injected clock (the TUI) and the CLI
     /// (`dates::now_pair()`) agree on "now".
     pub fn ensure_target(
         &self,
         date: chrono::NaiveDate,
         file_override: Option<&Path>,
-        today: chrono::NaiveDate,
         now: chrono::NaiveDateTime,
     ) -> Result<PathBuf> {
         if file_override.is_some() {
@@ -175,9 +180,9 @@ impl Vault {
         let (path, _created) = crate::periodic::create_or_get_periodic_path(
             &self.path,
             &self.templates_dir(),
+            crate::periodic::Period::Daily,
             daily,
             date,
-            today,
             now,
         )?;
         Ok(path)
@@ -489,7 +494,7 @@ mod tests {
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
         let now = date.and_hms_opt(8, 0, 0).unwrap();
-        let path = vault.ensure_target(date, None, date, now).unwrap();
+        let path = vault.ensure_target(date, None, now).unwrap();
 
         assert_eq!(
             path,
@@ -516,7 +521,7 @@ mod tests {
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
         let now = date.and_hms_opt(8, 0, 0).unwrap();
-        vault.ensure_target(date, None, date, now).unwrap();
+        vault.ensure_target(date, None, now).unwrap();
 
         let body = std::fs::read_to_string(dir.path().join("journal/2026-05-09.md")).unwrap();
         assert_eq!(body, "existing body\n");
@@ -536,9 +541,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 5, 9).unwrap();
         let now = date.and_hms_opt(8, 0, 0).unwrap();
         let explicit = Path::new("Inbox.md");
-        let path = vault
-            .ensure_target(date, Some(explicit), date, now)
-            .unwrap();
+        let path = vault.ensure_target(date, Some(explicit), now).unwrap();
 
         assert_eq!(path, dir.path().canonicalize().unwrap().join("Inbox.md"));
         // Explicit paths are resolved but never created/templated here.

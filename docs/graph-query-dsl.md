@@ -295,7 +295,11 @@ on every run).
 
 Each sigil takes an optional signed integer offset (in the period's own
 units — days for `@today`/`@daily`, weeks for `@weekly`, months for
-`@monthly`/`@quarterly`/`@yearly`):
+`@monthly`/`@quarterly`/`@yearly`). The period sigils resolve against the
+**start of the period** containing the resolved date (the week's Monday by
+default, the 1st of the month, the first day of the quarter, or January 1),
+the same anchor the periodic-note CLI and TUI use — so `@weekly` is the same
+path every day of the week:
 
 ```dsl
 path includes @today            -- path includes "2026-07-29"

@@ -1288,6 +1288,64 @@ fn graph_p_then_d_navigates_to_daily_when_reachable() -> Result<()> {
     Ok(())
 }
 
+/// Vault with a weekly note on disk, named after its Monday
+/// (2026-05-04) via a day-bearing format, so the graph tracks it.
+fn periodic_vault_with_weekly_file() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+    std::fs::create_dir_all(vault_path.join("journal/2026")).unwrap();
+    std::fs::write(
+        vault_path.join(".ft/config.toml"),
+        "[periodic_notes.weekly]\npath = \"journal/%Y\"\nformat = \"%Y-%m-%d\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("journal/2026/2026-05-04.md"),
+        "# 2026-05-04\n\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+#[test]
+fn graph_weekly_navigation_anchors_to_monday() -> Result<()> {
+    let (_dir, vault) = periodic_vault_with_weekly_file();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.switch_to(0)?;
+
+    // Include every note in the tree so the weekly note is reachable.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "node where kind = Note;".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+
+    // Clock is Sunday 2026-05-10; the week's Monday note is 2026-05-04.
+    app.dispatch(key('p'))?;
+    app.dispatch(key('w'))?;
+    app.service_pending_requests()?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2026-05-04"),
+        "weekly note (Monday) should be visible after p+w navigation:\n{frame}"
+    );
+    Ok(())
+}
+
 // ── Graph tab · move section (021 · session 5) ────────────────────────
 
 #[test]

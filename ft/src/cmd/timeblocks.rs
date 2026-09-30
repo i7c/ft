@@ -196,9 +196,9 @@ fn run_add(args: AddArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     // is rendered from its template so the file matches what `ft notes today`
     // would produce, rather than a bare `## Time Blocks`-only file. Explicit
     // `--file` paths are left to `add_block` to create.
-    let (today_n, now_n) = dates::now_pair();
+    let (_, now_n) = dates::now_pair();
     let path = vault
-        .ensure_target(date, args.file.as_deref(), today_n, now_n)
+        .ensure_target(date, args.file.as_deref(), now_n)
         .map_err(|e| {
             anyhow!(
                 "{e}\nhint: add `[periodic_notes.daily]` to your config or pass `--file <PATH>`"
@@ -546,7 +546,12 @@ fn run_spent(args: SpentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let mut all_blocks: Vec<Timeblock> = Vec::new();
     let mut cur = from;
     while cur <= to {
-        let path = ft_core::periodic::resolve_periodic_path(&vault.path, daily_cfg, cur)?;
+        let path = ft_core::periodic::resolve_periodic_path(
+            &vault.path,
+            ft_core::periodic::Period::Daily,
+            daily_cfg,
+            cur,
+        )?;
         if path.exists() {
             let doc = Document::read(&path, &heading)?;
             all_blocks.extend(doc.blocks);
