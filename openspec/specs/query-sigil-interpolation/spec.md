@@ -11,9 +11,7 @@ AST, and evaluator are unchanged; the parser only ever sees normal
 quoted strings. This makes date/path-derived filters expressible without
 typing an ISO date, and — critically — makes them usable inside stored
 presets, which previously had to bake the date in literally.
-
 ## Requirements
-
 ### Requirement: Sigil interpolation runs before DSL parsing
 
 The system SHALL provide an interpolation pass that transforms a query
@@ -54,12 +52,16 @@ require any `[periodic_notes]` configuration.
 
 ### Requirement: Period sigils resolve to the vault-relative periodic-note path
 
-The `@daily`, `@weekly`, `@monthly`, `@quarterly`, and `@yearly` sigils
-SHALL each expand to the double-quoted **vault-relative** path of the
-corresponding periodic note for the resolved "today", computed via
-`periodic::resolve_periodic_path` with the vault-root prefix stripped.
-The vault-relative form SHALL match what the DSL `path` attribute
-compares against (e.g. `journal/2026/2026-07-29.md`).
+The `@daily`, `@weekly`, `@monthly`, `@quarterly`, and `@yearly` sigils SHALL
+each expand to the double-quoted **vault-relative** path of the corresponding
+periodic note, computed via `periodic::resolve_periodic_path` with the
+vault-root prefix stripped. The path SHALL be resolved from the **start of the
+period** containing the resolved date (Monday or the configured week start for
+`@weekly`, the 1st for `@monthly`, the first day of the quarter for
+`@quarterly`, January 1 for `@yearly`; `@daily` is unchanged), matching the
+anchor used by the periodic-note CLI and TUI. The vault-relative form SHALL
+match what the DSL `path` attribute compares against (e.g.
+`journal/2026/2026-05-11.md`).
 
 #### Scenario: @daily expands to the vault-relative daily path
 - **WHEN** `interpolate("path = @daily", ctx)` is called with `ctx.today = 2026-07-29`, `ctx.vault_root = /vault`, and `[periodic_notes.daily]` with `path = "journal/%Y"`, `format = "%Y-%m-%d"`
@@ -68,6 +70,18 @@ compares against (e.g. `journal/2026/2026-07-29.md`).
 #### Scenario: @weekly expands using the weekly format
 - **WHEN** `interpolate("path = @weekly", ctx)` is called with `ctx.today = 2026-05-14` and `[periodic_notes.weekly]` with `format = "%G-W%V"`
 - **THEN** it returns `path = "journal/2026/2026-W20.md"` (ISO-week form, vault-relative)
+
+#### Scenario: @weekly with a day-bearing format anchors to Monday
+- **WHEN** `interpolate("path = @weekly", ctx)` is called with `ctx.today = 2026-05-14` (a Thursday) and `[periodic_notes.weekly]` with `format = "%Y-%m-%d"`
+- **THEN** it returns `path = "journal/2026/2026-05-11.md"` (the Monday of that week, vault-relative)
+
+#### Scenario: @monthly with a day-bearing format anchors to the 1st
+- **WHEN** `interpolate("path = @monthly", ctx)` is called with `ctx.today = 2026-05-14` and `[periodic_notes.monthly]` with `format = "%Y-%m-%d"`
+- **THEN** it returns `path = "journal/2026/2026-05-01.md"` (the first of the month, vault-relative)
+
+#### Scenario: @weekly offset anchors to the offset week's Monday
+- **WHEN** `interpolate("path = @weekly-2", ctx)` is called with `ctx.today = 2026-05-14` and `[periodic_notes.weekly]` with `format = "%Y-%m-%d"`
+- **THEN** it returns `path = "journal/2026/2026-04-27.md"` (the Monday two weeks before)
 
 ### Requirement: Signed integer offsets shift by the period's own units
 
@@ -98,9 +112,8 @@ semantics.
 
 ### Requirement: Unknown sigils and missing periodic config are hard errors
 
-An `@` followed by ASCII letters that is not one of the recognized
-sigil names SHALL produce an `UnknownSigil` error naming the offending
-text and the valid set. A period sigil (`@daily`/`@weekly`/…) SHALL
+An unrecognized `@`-sigil SHALL produce an `UnknownSigil` error naming
+the offending text and the valid set. A period sigil (`@daily`/`@weekly`/…) SHALL
 produce a `MissingPeriodicConfig` error when the corresponding
 `[periodic_notes.<period>]` block is not configured. An offset that is
 not a valid signed integer SHALL produce an `InvalidOffset` error. These
@@ -138,3 +151,4 @@ queries and existing presets are unaffected in behavior.
 #### Scenario: Existing preset without sigils is unchanged
 - **WHEN** a stored preset `overdue = "(status in {Open, InProgress}) and due < today"` is resolved and interpolated
 - **THEN** the interpolated string equals the stored string exactly
+
