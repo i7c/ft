@@ -1,0 +1,24 @@
+---
+source: ft/src/tui/tests/sources.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│(status in {Open, InProgress} and due < +1w) or (completed = today)                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         no matching tasks                                        │
+│                                                                                                  │
+│             ┌ status conflicts · l local · r remote · s skip · Enter apply ────────┐             │
+│             │                                                                      │             │
+│             │▶ ABC-123        local=Done       remote=Cancelled  → skip            │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             └──────────────────────────────────────────────────────────────────────┘             │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                 jira: 0 new · 1 updated · 1 comodal: conflict-reso

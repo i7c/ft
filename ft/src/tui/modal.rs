@@ -262,6 +262,9 @@ pub enum ActiveModal {
     /// tabs' sibling). Driven via the shared
     /// [`ParagraphSynthState`] step machine.
     ParagraphSynth(ParagraphSynthState),
+    /// Per-issue local / remote choice for status conflicts found by a
+    /// remote-source sync.
+    ConflictResolve(crate::tui::conflict_modal::ConflictResolveModal),
 }
 
 impl Modal for ActiveModal {
@@ -290,6 +293,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskMove(s) => s.handle_event(ev, ctx),
             ActiveModal::ParagraphSynth(s) => s.handle_event(ev, ctx),
+            ActiveModal::ConflictResolve(s) => s.handle_event(ev, ctx),
         }
     }
 
@@ -318,6 +322,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskMove(s) => s.render(frame, area, ctx),
             ActiveModal::ParagraphSynth(s) => s.render(frame, area, ctx),
+            ActiveModal::ConflictResolve(s) => s.render(frame, area, ctx),
         }
     }
 
@@ -344,6 +349,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
             ActiveModal::TaskMove(s) => s.keymap_help(),
             ActiveModal::ParagraphSynth(s) => s.keymap_help(),
+            ActiveModal::ConflictResolve(s) => s.keymap_help(),
         }
     }
 
@@ -370,6 +376,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
             ActiveModal::TaskMove(_) => "task-move",
             ActiveModal::ParagraphSynth(_) => "paragraph-synth",
+            ActiveModal::ConflictResolve(_) => "conflict-resolve",
         }
     }
 
@@ -396,6 +403,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.commands(),
             ActiveModal::TaskMove(s) => s.commands(),
             ActiveModal::ParagraphSynth(s) => s.commands(),
+            ActiveModal::ConflictResolve(s) => s.commands(),
         }
     }
 
@@ -422,6 +430,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.keymap(),
             ActiveModal::TaskMove(s) => s.keymap(),
             ActiveModal::ParagraphSynth(s) => s.keymap(),
+            ActiveModal::ConflictResolve(s) => s.keymap(),
         }
     }
 
@@ -448,6 +457,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskMove(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::ParagraphSynth(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::ConflictResolve(s) => s.dispatch_command(cmd, ctx),
         }
     }
 }

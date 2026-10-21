@@ -138,6 +138,9 @@ pub enum TasksRequest {
     /// `apply_retag` writes it via `ops::retag_task`, swapping out any
     /// prior tag from the same configured list.
     RetagSelected(String),
+    /// Put the cursor on this task (expanding its ancestors) after the
+    /// next snapshot refresh — e.g. a freshly promoted issue anchor.
+    SelectAfterRefresh(ft_core::task::TaskKey),
 }
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate
@@ -215,12 +218,22 @@ pub enum AppRequest {
     /// carried [`TasksRequest`]. A parallel of [`AppRequest::Graph`] for
     /// Tasks-targeted, modal-raised requests (today: the preset picker).
     Tasks(TasksRequest),
+    /// Promote a task to a remote issue in the background (Tasks tab `I`).
+    PromoteTask {
+        task: Box<ft_core::task::Task>,
+        target: ft_core::sources::promote::PromoteTarget,
+    },
 }
 
 impl std::fmt::Debug for AppRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::tui::modal::Modal;
         match self {
+            AppRequest::PromoteTask { task, target } => f
+                .debug_struct("PromoteTask")
+                .field("task", &task.description)
+                .field("target", target)
+                .finish(),
             AppRequest::OpenInEditor { path, line } => f
                 .debug_struct("OpenInEditor")
                 .field("path", path)

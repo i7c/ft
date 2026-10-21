@@ -46,6 +46,8 @@ pub enum JobKind {
     Commit,
     /// Remote task-source sync (startup, interval, or `g r`).
     Sources,
+    /// Promote a task to a remote issue (Tasks tab `I`).
+    Promote,
 }
 
 impl JobKind {
@@ -56,6 +58,7 @@ impl JobKind {
             JobKind::Sync => "sync",
             JobKind::Commit => "commit",
             JobKind::Sources => "sources",
+            JobKind::Promote => "promote",
         }
     }
 }

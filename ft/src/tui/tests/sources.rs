@@ -190,3 +190,163 @@ fn edits_made_during_a_sync_are_not_overwritten() -> Result<()> {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
     Ok(())
 }
+
+// ── Phase 4: push, conflicts, promote ───────────────────────────────
+
+#[test]
+fn background_push_is_summarised() -> Result<()> {
+    let (dir, vault) = sources_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let next = fetcher(&mut app);
+    app.tick_for_test()?;
+    // The fake reports a push and the remote now Done.
+    *next.lock().unwrap() = Ok(FetchResult {
+        active: vec![issue(Status::Done)],
+        ..Default::default()
+    });
+    let pushed = Arc::new(Mutex::new(vec!["ABC-123".to_string()]));
+    let shared = Arc::clone(&next);
+    let p = Arc::clone(&pushed);
+    app.set_source_fetcher_for_test(Arc::new(move |_, _, _, _| {
+        shared
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|fetched| ft_core::sources::run::SourceOutcome {
+                fetched,
+                push: ft_core::sources::push::PushReport {
+                    pushed: p.lock().unwrap().clone(),
+                    failures: Vec::new(),
+                },
+            })
+    }));
+    app.switch_to(5)?;
+    app.dispatch(key('g'))?;
+    app.dispatch(key('r'))?;
+    assert_eq!(toast(&app), "jira: 0 new · 1 updated · 1 pushed");
+    assert!(note(&dir).contains("      status: Done\n"));
+    Ok(())
+}
+
+#[test]
+fn conflict_modal_opens_and_takes_remote() -> Result<()> {
+    let (dir, vault) = sources_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    let next = fetcher(&mut app);
+    app.tick_for_test()?;
+    // Tick locally; the remote meanwhile cancelled the issue.
+    let ticked = note(&dir).replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+    std::fs::write(dir.path().join("test-vault/jira/ABC-123.md"), ticked).unwrap();
+    *next.lock().unwrap() = Ok(FetchResult {
+        active: vec![issue(Status::Cancelled)],
+        ..Default::default()
+    });
+    app.switch_to(5)?;
+    app.dispatch(key('g'))?;
+    app.dispatch(key('r'))?;
+    assert_eq!(app.active_modal_name(), Some("conflict-resolve"));
+    let frame = render(&mut app, 100, 20);
+    assert!(
+        frame.contains("ABC-123")
+            && frame.contains("local=Done")
+            && frame.contains("remote=Cancelled"),
+        "{frame}"
+    );
+    assert_tui_snapshot!("conflict_resolve_modal_100x20", frame);
+    app.dispatch(key('r'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    assert_eq!(app.active_modal_name(), None);
+    app.service_pending_requests()?;
+    assert_eq!(toast(&app), "resolved 1 conflict(s)");
+    let n = note(&dir);
+    assert!(
+        n.contains("- [-] [ABC-123]") && !n.contains("conflict:"),
+        "{n}"
+    );
+    Ok(())
+}
+
+#[test]
+fn promote_from_tasks_tab() -> Result<()> {
+    let (dir, vault) = sources_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    fetcher(&mut app);
+    app.tick_for_test()?;
+    std::fs::write(
+        dir.path().join("test-vault/today.md"),
+        "- [ ] write regression test [[ABC-123]] 📅 2026-05-11\n  - [ ] cover Safari\n",
+    )
+    .unwrap();
+    app.set_promoter_for_test(Arc::new(|_, _, parent, new, _| {
+        Ok((
+            RemoteIssue {
+                key: "ABC-124".into(),
+                url: "https://example.test/browse/ABC-124".into(),
+                title: new.title.clone(),
+                status_name: "To Do".into(),
+                parent: Some(parent.key.clone()),
+                due: new.due,
+                updated: "2026-05-10T10:00:00.000+0000".into(),
+                ..Default::default()
+            },
+            None,
+        ))
+    }));
+    app.switch_to(5)?;
+    app.dispatch(key('R'))?;
+    app.pump_graph_rebuild_for_test();
+    // Rows: ABC-123 (due 05-12) with its linked child collapsed; the
+    // linked task is nested, so expand the anchor and step onto it.
+    let frame = render(&mut app, 100, 14);
+    assert!(frame.contains("Fix login"), "{frame}");
+    app.dispatch(key('l'))?;
+    app.dispatch(key('j'))?;
+    app.dispatch(key('I'))?;
+    app.service_pending_requests()?;
+    assert_eq!(toast(&app), "promoted to ABC-124");
+    app.pump_graph_rebuild_for_test();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("test-vault/today.md")).unwrap(),
+        ""
+    );
+    let n = std::fs::read_to_string(dir.path().join("test-vault/jira/ABC-124.md")).unwrap();
+    assert!(n.contains("🆔 ABC-124\n  - [ ] cover Safari\n"), "{n}");
+    let frame = render(&mut app, 100, 14);
+    let selected = frame
+        .lines()
+        .find(|l| l.contains('▶'))
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        selected.contains("ABC-124"),
+        "cursor on the new anchor:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn promote_precondition_toast_without_network() -> Result<()> {
+    let (dir, vault) = sources_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    fetcher(&mut app);
+    app.tick_for_test()?;
+    std::fs::write(
+        dir.path().join("test-vault/today.md"),
+        "- [ ] plain 📅 2026-05-11\n",
+    )
+    .unwrap();
+    app.set_promoter_for_test(Arc::new(|_, _, _, _, _| panic!("no network call expected")));
+    app.switch_to(5)?;
+    app.dispatch(key('R'))?;
+    app.pump_graph_rebuild_for_test();
+    app.dispatch(key('I'))?;
+    app.service_pending_requests()?;
+    assert_eq!(
+        toast(&app),
+        "promote needs a parent that is a remote issue — move or link it under one first"
+    );
+    Ok(())
+}

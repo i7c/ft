@@ -391,6 +391,16 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         opens_modal: true,
         is_primary: false,
     },
+    CommandDef {
+        name: "tasks.promote",
+        description:
+            "Promote the selected task to a remote issue (Jira sub-task / GitHub sub-issue)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Restructure",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
 ];
 
 pub struct TasksTab {
@@ -486,6 +496,11 @@ impl Tab for TasksTab {
                     v.apply_retag(&tag, ctx);
                 }
             }
+            TasksRequest::SelectAfterRefresh(key) => {
+                if let Some(v) = self.views.get_mut(self.active_view) {
+                    v.select_after_refresh(key);
+                }
+            }
         }
     }
 
@@ -524,6 +539,7 @@ impl Tab for TasksTab {
                     ("> / <", "indent / outdent"),
                     ("L", "link cut tasks under selected (no move)"),
                     ("U", "unlink selected from its parent"),
+                    ("I", "promote selected to a remote issue"),
                 ],
             ),
             HelpSection::new(

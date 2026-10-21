@@ -1,6 +1,7 @@
 mod app;
 mod app_commands;
 mod command;
+mod conflict_modal;
 mod editor;
 mod event;
 mod help;
@@ -71,6 +72,7 @@ pub mod registry {
             modal_commands::CAPTURE_PICKER_COMMANDS,
             modal_commands::RELATED_COMMANDS,
             modal_commands::MOVE_OUTER_COMMANDS,
+            modal_commands::CONFLICT_RESOLVE_COMMANDS,
         ];
 
         let widget_slices: &[&'static [CommandDef]] = &[crate::tui::widgets::EDIT_COMMANDS];

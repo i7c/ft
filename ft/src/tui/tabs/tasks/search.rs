@@ -97,6 +97,7 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("L", "tasks.link")
         .bind("U", "tasks.unlink")
         .bind("S", "tasks.new-linked-subtask")
+        .bind("I", "tasks.promote")
 });
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -882,6 +883,11 @@ impl View for SearchView {
     fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
         let _ = self.adopt_snapshot(ctx);
     }
+
+    fn select_after_refresh(&mut self, key: ft_core::task::TaskKey) {
+        self.pending_anchors = vec![key];
+        self.reveal_anchor = true;
+    }
 }
 
 impl SearchView {
@@ -1067,6 +1073,10 @@ impl SearchView {
             }
             "tasks.unlink" => {
                 self.unlink_selected(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.promote" => {
+                self.promote_selected(ctx);
                 Ok(CommandOutcome::Handled)
             }
             "tasks.new-linked-subtask" => {
@@ -1287,6 +1297,29 @@ impl SearchView {
                 toast(ctx, &e, ToastStyle::Error);
                 Ok(())
             }
+        }
+    }
+
+    /// Check promote's local preconditions, then hand the task to the App
+    /// for the background promote job.
+    fn promote_selected(&mut self, ctx: &mut TabCtx) {
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a task first", ToastStyle::Error);
+            return;
+        };
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return;
+        };
+        let task = self.tasks[i].clone();
+        match ft_core::sources::promote::check(&snap.scan, &task, &ctx.vault.config.config.sources)
+        {
+            Ok(target) => {
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::PromoteTask {
+                    task: Box::new(task),
+                    target,
+                });
+            }
+            Err(e) => toast(ctx, &e, ToastStyle::Error),
         }
     }
 

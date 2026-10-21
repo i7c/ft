@@ -33,11 +33,11 @@
 
 ## 6. TUI
 
-- [ ] 6.1 Push step inside `SourcesJob`; summary `N pushed`; toast new push failures only.
-- [ ] 6.2 `ActiveModal::ConflictResolve` (rows, `j`/`k`/`l`/`r`/`s`/`Enter`/`Esc`), opened on new conflicts (or manual sync); applies `resolve_conflict` with the unchanged-file guard.
-- [ ] 6.3 `tasks.promote` (`I`), precondition toasts, `JobKind::Promote` + `BgEvent::PromoteDone`, main-thread apply, cursor on new anchor.
-- [ ] 6.4 `TestBackend` tests with fake source: tick → push → toast; conflict modal snapshot + take remote; promote happy path + precondition toast.
-- [ ] 6.5 Regenerate `docs/keybindings.md`.
+- [x] 6.1 Push step inside `SourcesJob`; summary `N pushed`; toast new push failures only.
+- [x] 6.2 `ActiveModal::ConflictResolve` (rows, `j`/`k`/`l`/`r`/`s`/`Enter`/`Esc`), opened on new conflicts (or manual sync); applies `resolve_conflict` with the unchanged-file guard.
+- [x] 6.3 `tasks.promote` (`I`), precondition toasts, `JobKind::Promote` + `BgEvent::PromoteDone`, main-thread apply, cursor on new anchor.
+- [x] 6.4 `TestBackend` tests with fake source: tick → push → toast; conflict modal snapshot + take remote; promote happy path + precondition toast.
+- [x] 6.5 Regenerate `docs/keybindings.md`.
 
 ## 7. ft.nvim
 

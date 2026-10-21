@@ -749,6 +749,63 @@ pub static CONFIRM_DELETE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("l", "confirm-delete.cursor-right")
 });
 
+// ── Conflict resolution (task-sources-push) ─────────────────────────
+
+const CONFLICT_RESOLVE_SCOPE: CommandScope = CommandScope::Modal("conflict-resolve");
+
+pub static CONFLICT_RESOLVE_COMMANDS: &[CommandDef] = &[
+    confirm_def("conflict-resolve.apply", CONFLICT_RESOLVE_SCOPE),
+    cancel_def("conflict-resolve.cancel", CONFLICT_RESOLVE_SCOPE),
+    nav_def(
+        "conflict-resolve.cursor-up",
+        "Select the previous conflict",
+        CONFLICT_RESOLVE_SCOPE,
+    ),
+    nav_def(
+        "conflict-resolve.cursor-down",
+        "Select the next conflict",
+        CONFLICT_RESOLVE_SCOPE,
+    ),
+    CommandDef {
+        name: "conflict-resolve.take-local",
+        description: "Keep the local status (it becomes a pending push)",
+        scope: CONFLICT_RESOLVE_SCOPE,
+        group: "Resolve",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "conflict-resolve.take-remote",
+        description: "Take the remote status",
+        scope: CONFLICT_RESOLVE_SCOPE,
+        group: "Resolve",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "conflict-resolve.skip",
+        description: "Leave this conflict unresolved",
+        scope: CONFLICT_RESOLVE_SCOPE,
+        group: "Resolve",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+];
+
+pub static CONFLICT_RESOLVE_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "conflict-resolve.apply")
+        .bind("Esc", "conflict-resolve.cancel")
+        .bind("k", "conflict-resolve.cursor-up")
+        .bind("j", "conflict-resolve.cursor-down")
+        .bind("l", "conflict-resolve.take-local")
+        .bind("r", "conflict-resolve.take-remote")
+        .bind("s", "conflict-resolve.skip")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

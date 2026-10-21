@@ -42,4 +42,8 @@ pub trait View {
     /// by the task-retag-picker modal via `TasksTab::handle_tasks_request`.
     /// Default: no-op (only `SearchView` overrides).
     fn apply_retag(&mut self, _tag: &str, _ctx: &mut TabCtx) {}
+
+    /// Select `key` (revealing its ancestors) once the next snapshot is
+    /// adopted. Default: no-op.
+    fn select_after_refresh(&mut self, _key: ft_core::task::TaskKey) {}
 }

@@ -40,6 +40,7 @@ pub enum BgEvent {
     CommitCompleted(CommitJobResult),
     GraphReady(GraphJobResult),
     SourcesFetched(crate::tui::source_sync::SourcesJobResult),
+    PromoteDone(crate::tui::source_sync::PromoteJobResult),
 }
 
 /// Result of one background `scan → build` pass. The snapshot rides in

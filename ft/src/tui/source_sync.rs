@@ -222,3 +222,105 @@ pub fn summary(
     }
     (noteworthy && !parts.is_empty()).then(|| (parts.join("  |  "), error))
 }
+
+/// What the promote worker posts back: the created key, the planned
+/// vault edits (applied on the main thread with the unchanged-file guard),
+/// and where the new anchor will be.
+#[derive(Debug, Clone)]
+pub struct PromoteJobResult {
+    pub outcome: Result<PromotePlanned, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PromotePlanned {
+    pub key: String,
+    pub edits: Vec<ft_core::task::ops::FileEdit>,
+    /// Vault-relative note + 1-indexed anchor line, for the cursor.
+    pub anchor: ft_core::task::TaskKey,
+    pub push_failure: Option<String>,
+}
+
+/// The promote worker: create the remote issue, then scan and plan the
+/// local restructuring (reads only).
+/// The remote half of a promote; `run::promote` in production.
+pub type Promoter = Arc<
+    dyn Fn(
+            &str,
+            &SourceCfg,
+            &ft_core::sources::IssueRef,
+            &ft_core::sources::NewIssue,
+            ft_core::task::Status,
+        ) -> Result<(ft_core::sources::RemoteIssue, Option<String>), FetchFailure>
+        + Send
+        + Sync,
+>;
+
+pub fn default_promoter() -> Promoter {
+    Arc::new(run::promote)
+}
+
+pub struct PromoteJob {
+    pub promoter: Promoter,
+    pub vault: Arc<Vault>,
+    pub task: ft_core::task::Task,
+    pub target: ft_core::sources::promote::PromoteTarget,
+    pub today: NaiveDate,
+}
+
+impl PromoteJob {
+    pub fn run(self) -> PromoteJobResult {
+        use ft_core::sources::promote;
+        let outcome = (|| {
+            let cfg = self
+                .vault
+                .config
+                .config
+                .sources
+                .get(&self.target.source)
+                .ok_or_else(|| format!("source `{}` is not configured", self.target.source))?;
+            let name = &self.target.source;
+            let (created, push_failure) = (self.promoter)(
+                name,
+                cfg,
+                &self.target.parent,
+                &promote::new_issue(&self.task),
+                self.task.status,
+            )
+            .map_err(|f| match f {
+                FetchFailure::Offline(_) => format!("{name}: offline — promote needs a connection"),
+                other => format!("{name}: {}", other.message(name)),
+            })?;
+            let scan = self.vault.scan();
+            let plan = promote::plan_local(
+                &self.vault.path,
+                &self.vault.templates_dir(),
+                &scan,
+                name,
+                cfg,
+                self.vault.task_format(),
+                self.today,
+                &self.task,
+                &created,
+            )
+            .map_err(|e| format!("created {} but couldn't update the vault: {e}", created.key))?;
+            let note_abs = self.vault.path.join(&plan.note);
+            let line = plan
+                .edits
+                .iter()
+                .find(|e| e.path == note_abs)
+                .and_then(|e| {
+                    e.new
+                        .split('\n')
+                        .position(|l| l.contains(&format!("🆔 {}", created.key)))
+                })
+                .map_or(1, |i| i + 1);
+            Ok(PromotePlanned {
+                key: created.key,
+                edits: plan.edits,
+                anchor: (plan.note, line),
+                push_failure,
+            })
+        })();
+        PromoteJobResult { outcome }
+    }
+}

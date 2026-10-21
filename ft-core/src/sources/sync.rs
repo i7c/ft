@@ -36,6 +36,8 @@ pub struct SyncReport {
     pub pending: Vec<String>,
     /// `(key, local, remote)` where both sides changed status.
     pub conflicts: Vec<(String, Status, Status)>,
+    /// Vault-relative note of each entry in `conflicts`, same order.
+    pub conflict_notes: Vec<PathBuf>,
     /// Keys that moved out of scope this sync.
     pub out_of_scope: Vec<String>,
     pub warnings: Vec<String>,
@@ -300,6 +302,7 @@ fn update_note(
             }
             if let Some(r) = conflict {
                 report.conflicts.push((issue.key.clone(), l, r));
+                report.conflict_notes.push(known.rel.clone());
             }
             (l, base.unwrap_or(l), conflict)
         }

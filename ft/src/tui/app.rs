@@ -139,6 +139,11 @@ pub struct App {
     source_schedule: crate::tui::source_sync::Schedule,
     /// Fetches a source (network); swapped for a fake in tests.
     source_fetcher: crate::tui::source_sync::Fetcher,
+    /// Conflicts already shown in the resolve modal this session
+    /// (`(key, remote status)`), so background syncs don't reopen it.
+    shown_conflicts: std::collections::HashSet<(String, ft_core::task::Status)>,
+    /// Creates remote issues for promote; swapped for a fake in tests.
+    promoter: crate::tui::source_sync::Promoter,
     should_quit: bool,
 }
 
@@ -216,6 +221,8 @@ impl App {
             graph_refresh: Cell::new(false),
             source_schedule: Default::default(),
             source_fetcher: crate::tui::source_sync::default_fetcher(),
+            shown_conflicts: Default::default(),
+            promoter: crate::tui::source_sync::default_promoter(),
             should_quit: false,
         }
     }
@@ -810,6 +817,9 @@ impl App {
                     tab.handle_graph_request(req, ctx)
                 });
             }
+            AppRequest::PromoteTask { task, target } => {
+                self.spawn_promote(*task, target);
+            }
             AppRequest::Tasks(req) => {
                 self.with_tab(TabKind::Tasks, |tab, ctx| {
                     tab.handle_tasks_request(req, ctx)
@@ -874,6 +884,10 @@ impl App {
             BgEvent::GraphReady(result) => self.apply_graph_result(result),
             BgEvent::SourcesFetched(result) => {
                 self.apply_sources_result(result);
+                Ok(())
+            }
+            BgEvent::PromoteDone(result) => {
+                self.apply_promote_result(result);
                 Ok(())
             }
         }
@@ -974,6 +988,7 @@ impl App {
         if wrote {
             self.request_graph_rebuild();
         }
+        self.offer_conflict_resolution(&result);
         if let Some((text, error)) = summary(&result, &applied, &fresh_failures) {
             let style = if error {
                 ToastStyle::Error
@@ -982,6 +997,117 @@ impl App {
             };
             self.push_toast(text, style);
         }
+    }
+
+    /// Open the conflict modal for conflicts not yet shown this session
+    /// (all of them after a manual `g r`), unless another modal is up.
+    fn offer_conflict_resolution(&mut self, result: &crate::tui::source_sync::SourcesJobResult) {
+        use crate::tui::conflict_modal::{ConflictResolveModal, ConflictRow};
+        let mut rows = Vec::new();
+        let mut fresh = false;
+        for run in &result.runs {
+            let Ok(plan) = &run.outcome else { continue };
+            let r = &plan.report;
+            for ((key, local, remote), note) in r.conflicts.iter().zip(&r.conflict_notes) {
+                fresh |= self.shown_conflicts.insert((key.clone(), *remote));
+                rows.push(ConflictRow {
+                    note: note.clone(),
+                    key: key.clone(),
+                    local: *local,
+                    remote: *remote,
+                    choice: None,
+                });
+            }
+        }
+        if rows.is_empty() || !(fresh || result.manual) || self.active_modal.borrow().is_some() {
+            return;
+        }
+        self.open_modal(ActiveModal::ConflictResolve(ConflictResolveModal::new(
+            rows,
+        )));
+    }
+
+    /// Start the background promote job (Tasks tab `I`).
+    fn spawn_promote(
+        &mut self,
+        task: ft_core::task::Task,
+        target: ft_core::sources::promote::PromoteTarget,
+    ) {
+        if self.jobs.borrow().is_some() {
+            self.push_toast(
+                "a background job is running — try again shortly",
+                ToastStyle::Info,
+            );
+            return;
+        }
+        let job = crate::tui::source_sync::PromoteJob {
+            promoter: Arc::clone(&self.promoter),
+            vault: Arc::clone(&self.vault),
+            task,
+            target,
+            today: self.today,
+        };
+        *self.jobs.borrow_mut() = Some(JobHandle::new(JobKind::Promote));
+        match self.bg_tx.clone() {
+            Some(tx) => {
+                std::thread::spawn(move || {
+                    let result = job.run();
+                    let _ = tx.send(Event::Background(BgEvent::PromoteDone(result)));
+                });
+            }
+            None => {
+                let result = job.run();
+                self.apply_promote_result(result);
+            }
+        }
+    }
+
+    /// Apply a promote's planned vault edits (only if every file is
+    /// unchanged since planning), refresh, select the new anchor, toast.
+    fn apply_promote_result(&mut self, result: crate::tui::source_sync::PromoteJobResult) {
+        if matches!(
+            self.jobs.borrow().as_ref().map(|j| j.kind),
+            Some(JobKind::Promote)
+        ) {
+            self.jobs.borrow_mut().take();
+        }
+        let planned = match result.outcome {
+            Ok(p) => p,
+            Err(e) => {
+                self.push_toast(e, ToastStyle::Error);
+                return;
+            }
+        };
+        if let Err(e) = ft_core::sources::promote::apply_guarded(&planned.edits) {
+            self.push_toast(
+                format!("created {} but couldn't update the vault: {e}", planned.key),
+                ToastStyle::Error,
+            );
+            return;
+        }
+        self.with_tab(TabKind::Tasks, |tab, ctx| {
+            tab.handle_tasks_request(
+                crate::tui::tab::TasksRequest::SelectAfterRefresh(planned.anchor.clone()),
+                ctx,
+            )
+        });
+        self.request_graph_rebuild();
+        match planned.push_failure {
+            Some(reason) => self.push_toast(
+                format!(
+                    "promoted to {} · couldn't set its status: {reason}",
+                    planned.key
+                ),
+                ToastStyle::Error,
+            ),
+            None => self.push_toast(format!("promoted to {}", planned.key), ToastStyle::Success),
+        }
+    }
+
+    /// Replace the promote backend (tests).
+    #[cfg(test)]
+    pub fn set_promoter_for_test(&mut self, promoter: crate::tui::source_sync::Promoter) {
+        self.promoter = promoter;
     }
 
     /// Replace the source fetcher (tests).
@@ -1577,6 +1703,7 @@ fn build_registry(tabs: &[Box<dyn Tab>]) -> CommandRegistry {
         modal_commands::CAPTURE_PICKER_COMMANDS,
         modal_commands::RELATED_COMMANDS,
         modal_commands::MOVE_OUTER_COMMANDS,
+        modal_commands::CONFLICT_RESOLVE_COMMANDS,
     ];
     CommandRegistry::build(tabs, modal_slices, APP_COMMANDS)
 }
