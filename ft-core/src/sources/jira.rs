@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use super::http::{Http, Secret};
-use super::{adf, Comment, IssueRef, PushOutcome, RemoteIssue, SourceError, TaskSource};
+use super::{adf, Comment, IssueRef, NewIssue, PushOutcome, RemoteIssue, SourceError, TaskSource};
 use crate::task::{Priority, Status};
 
 /// Fields requested from the search endpoint — exactly what's mapped.
@@ -183,6 +183,107 @@ impl JiraSource {
 }
 
 impl TaskSource for JiraSource {
+    fn create_child(&self, parent: &IssueRef, new: &NewIssue) -> Result<RemoteIssue, SourceError> {
+        let base = &self.base_url;
+        let meta = self
+            .http
+            .get_json(
+                &format!(
+                    "{base}/rest/api/3/issue/{}?fields=issuetype,project",
+                    urlencoding::encode(&parent.key)
+                ),
+                "application/json",
+            )?
+            .json;
+        let level = meta["fields"]["issuetype"]["hierarchyLevel"]
+            .as_i64()
+            .unwrap_or(0);
+        if meta["fields"]["issuetype"]["subtask"].as_bool() == Some(true) || level < 0 {
+            return Err(SourceError::Refused(format!(
+                "{} is a sub-task; Jira can't nest sub-tasks",
+                parent.key
+            )));
+        }
+        let project = meta["fields"]["project"]["key"]
+            .as_str()
+            .ok_or_else(|| SourceError::Parse("parent without project".into()))?
+            .to_string();
+        let types = self
+            .http
+            .get_json(
+                &format!(
+                    "{base}/rest/api/3/issue/createmeta/{}/issuetypes",
+                    urlencoding::encode(&project)
+                ),
+                "application/json",
+            )?
+            .json;
+        let types = types["issueTypes"]
+            .as_array()
+            .or_else(|| types["values"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let is_sub = |t: &Value| t["subtask"].as_bool() == Some(true);
+        let chosen = if level >= 1 {
+            types
+                .iter()
+                .find(|t| !is_sub(t) && t["name"].as_str() == Some("Task"))
+                .or_else(|| {
+                    types
+                        .iter()
+                        .find(|t| !is_sub(t) && t["hierarchyLevel"].as_i64().unwrap_or(0) == 0)
+                })
+        } else {
+            types.iter().find(|t| is_sub(t))
+        }
+        .ok_or_else(|| {
+            SourceError::Refused(format!("no suitable issue type in project {project}"))
+        })?;
+        let me = self
+            .http
+            .get_json(&format!("{base}/rest/api/3/myself"), "application/json")?
+            .json;
+        let fields = serde_json::json!({
+            "project": {"key": project},
+            "parent": {"key": parent.key},
+            "summary": new.title,
+            "issuetype": {"id": chosen["id"]},
+            "assignee": {"accountId": me["accountId"]},
+        });
+        let mut optional = serde_json::Map::new();
+        if let Some(d) = new.due {
+            optional.insert("duedate".into(), Value::String(d.to_string()));
+        }
+        if let Some(p) = new.priority {
+            optional.insert("priority".into(), serde_json::json!({"name": p.as_str()}));
+        }
+        let mut with_optional = fields.clone();
+        if let Some(obj) = with_optional.as_object_mut() {
+            obj.extend(optional.clone());
+        }
+        let url = format!("{base}/rest/api/3/issue");
+        let created = match self.http.post_json(
+            &url,
+            "application/json",
+            &serde_json::json!({"fields": with_optional}),
+        ) {
+            // Due date / priority may not be on the project's create screen.
+            Err(SourceError::Remote { status: 400, .. }) if !optional.is_empty() => {
+                self.http.post_json(
+                    &url,
+                    "application/json",
+                    &serde_json::json!({"fields": fields}),
+                )?
+            }
+            other => other?,
+        };
+        let key = created.json["key"]
+            .as_str()
+            .ok_or_else(|| SourceError::Parse("create response without key".into()))?;
+        self.current(key)?
+            .ok_or_else(|| SourceError::Parse(format!("created {key} but can't read it back")))
+    }
+
     fn push_status(
         &self,
         issue: &IssueRef,
@@ -585,5 +686,101 @@ mod tests {
             "{out:?}"
         );
         assert_eq!(h.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn create_child_subtask_under_story_and_refusals() {
+        use crate::sources::http::tests::body_json;
+        let story = json!({"fields": {"issuetype": {"subtask": false, "hierarchyLevel": 0}, "project": {"key": "ABC"}}});
+        let types = json!({"issueTypes": [
+            {"id": "10001", "name": "Task", "subtask": false, "hierarchyLevel": 0},
+            {"id": "10003", "name": "Sub-task", "subtask": true, "hierarchyLevel": -1}
+        ]});
+        let me = json!({"accountId": "acc-1", "displayName": "Me"});
+        let created = json!({"id": "1", "key": "ABC-124"});
+        let mut fetched = raw_issue("ABC-124", "new", "To Do");
+        fetched["fields"]["parent"] = json!({"key": "ABC-123"});
+        let (url, h) = serve(vec![
+            ok_json(&story.to_string()),
+            ok_json(&types.to_string()),
+            ok_json(&me.to_string()),
+            ok_json(&created.to_string()),
+            ok_json(&fetched.to_string()),
+        ]);
+        // NOT VALID — test data only.
+        let src = JiraSource::new(
+            &url,
+            "fake-user@example.test",
+            &Secret::new("FAKE_TEST_token"),
+            BTreeMap::new(),
+        );
+        let new = NewIssue {
+            title: "write regression test".into(),
+            due: NaiveDate::from_ymd_opt(2026, 10, 28),
+            priority: None,
+        };
+        let issue = src.create_child(&IssueRef::key("ABC-123"), &new).unwrap();
+        assert_eq!(issue.key, "ABC-124");
+        assert_eq!(issue.parent.as_deref(), Some("ABC-123"));
+        let reqs = h.join().unwrap();
+        assert!(reqs[1].starts_with("GET /rest/api/3/issue/createmeta/ABC/issuetypes"));
+        assert!(reqs[3].starts_with("POST /rest/api/3/issue "));
+        assert_eq!(
+            body_json(&reqs[3]),
+            json!({"fields": {
+                "project": {"key": "ABC"}, "parent": {"key": "ABC-123"}, "summary": "write regression test",
+                "issuetype": {"id": "10003"}, "assignee": {"accountId": "acc-1"}, "duedate": "2026-10-28"
+            }})
+        );
+
+        let sub = json!({"fields": {"issuetype": {"subtask": true, "hierarchyLevel": -1}, "project": {"key": "ABC"}}});
+        let (url, _h) = serve(vec![ok_json(&sub.to_string())]);
+        // NOT VALID — test data only.
+        let src = JiraSource::new(
+            &url,
+            "fake-user@example.test",
+            &Secret::new("FAKE_TEST_token"),
+            BTreeMap::new(),
+        );
+        let err = src.create_child(&IssueRef::key("ABC-9"), &new).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ABC-9 is a sub-task; Jira can't nest sub-tasks"
+        );
+    }
+
+    #[test]
+    fn create_child_task_under_epic() {
+        use crate::sources::http::tests::body_json;
+        let epic = json!({"fields": {"issuetype": {"subtask": false, "hierarchyLevel": 1}, "project": {"key": "ABC"}}});
+        let types = json!({"issueTypes": [
+            {"id": "10000", "name": "Epic", "subtask": false, "hierarchyLevel": 1},
+            {"id": "10001", "name": "Task", "subtask": false, "hierarchyLevel": 0},
+            {"id": "10003", "name": "Sub-task", "subtask": true, "hierarchyLevel": -1}
+        ]});
+        let (url, h) = serve(vec![
+            ok_json(&epic.to_string()),
+            ok_json(&types.to_string()),
+            ok_json(r#"{"accountId": "acc-1"}"#),
+            ok_json(r#"{"key": "ABC-200"}"#),
+            ok_json(&raw_issue("ABC-200", "new", "To Do").to_string()),
+        ]);
+        // NOT VALID — test data only.
+        let src = JiraSource::new(
+            &url,
+            "fake-user@example.test",
+            &Secret::new("FAKE_TEST_token"),
+            BTreeMap::new(),
+        );
+        src.create_child(
+            &IssueRef::key("EPIC-7"),
+            &NewIssue {
+                title: "t".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reqs = h.join().unwrap();
+        assert_eq!(body_json(&reqs[3])["fields"]["issuetype"]["id"], "10001");
     }
 }

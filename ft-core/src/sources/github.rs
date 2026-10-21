@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use super::http::{Http, Secret};
-use super::{Comment, IssueRef, PushOutcome, RemoteIssue, SourceError, TaskSource};
+use super::{Comment, IssueRef, NewIssue, PushOutcome, RemoteIssue, SourceError, TaskSource};
 use crate::task::Status;
 
 const ACCEPT: &str = "application/vnd.github+json";
@@ -131,6 +131,36 @@ impl GithubSource {
 }
 
 impl TaskSource for GithubSource {
+    fn create_child(&self, parent: &IssueRef, new: &NewIssue) -> Result<RemoteIssue, SourceError> {
+        let (owner, repo, n) =
+            parent
+                .url
+                .as_deref()
+                .and_then(parse_issue_url)
+                .ok_or_else(|| {
+                    SourceError::Refused(format!("{}: no issue URL in the note", parent.key))
+                })?;
+        let login = self.whoami()?;
+        let repo_api = format!("{}/repos/{owner}/{repo}", self.api);
+        let raw = self
+            .http
+            .post_json(
+                &format!("{repo_api}/issues"),
+                ACCEPT,
+                &serde_json::json!({"title": new.title, "assignees": [login]}),
+            )?
+            .json;
+        let id = raw["id"]
+            .as_u64()
+            .ok_or_else(|| SourceError::Parse("created issue without id".into()))?;
+        self.http.post_json(
+            &format!("{repo_api}/issues/{n}/sub_issues"),
+            ACCEPT,
+            &serde_json::json!({"sub_issue_id": id}),
+        )?;
+        self.complete(raw)
+    }
+
     fn push_status(
         &self,
         issue: &IssueRef,
@@ -460,5 +490,44 @@ mod tests {
             json!({"state": "closed", "state_reason": "not_planned"})
         );
         assert_eq!(body_json(&reqs[3]), json!({"state": "open"}));
+    }
+
+    #[test]
+    fn create_child_adds_sub_issue() {
+        use crate::sources::http::tests::body_json;
+        let mut created = raw("o", "r", 10, "open", None);
+        created["id"] = json!(9001);
+        let parent = raw("o", "r", 3, "open", None);
+        let (url, h) = serve(vec![
+            ok_json(r#"{"login": "octo"}"#),
+            ok_json(&created.to_string()),
+            ok_json("{}"),
+            ok_json("[]"),
+            ok_json(&parent.to_string()),
+        ]);
+        // NOT VALID — test data only.
+        let src = GithubSource::new(Some(&url), &Secret::new("FAKE_TEST_token"), BTreeMap::new());
+        let p = IssueRef {
+            key: "o-r-3".into(),
+            url: Some("https://github.com/o/r/issues/3".into()),
+        };
+        let issue = src
+            .create_child(
+                &p,
+                &NewIssue {
+                    title: "sub".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(issue.key, "o-r-10");
+        assert_eq!(issue.parent.as_deref(), Some("o-r-3"));
+        let reqs = h.join().unwrap();
+        assert_eq!(
+            body_json(&reqs[1]),
+            json!({"title": "sub", "assignees": ["octo"]})
+        );
+        assert!(reqs[2].starts_with("POST /repos/o/r/issues/3/sub_issues "));
+        assert_eq!(body_json(&reqs[2]), json!({"sub_issue_id": 9001}));
     }
 }

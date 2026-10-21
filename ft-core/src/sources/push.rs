@@ -144,6 +144,13 @@ mod tests {
         ) -> Result<Vec<super::super::RemoteIssue>, SourceError> {
             Ok(Vec::new())
         }
+        fn create_child(
+            &self,
+            _: &IssueRef,
+            _: &super::super::NewIssue,
+        ) -> Result<super::super::RemoteIssue, SourceError> {
+            unimplemented!()
+        }
         fn push_status(
             &self,
             _: &IssueRef,

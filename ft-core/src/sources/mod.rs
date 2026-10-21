@@ -67,6 +67,17 @@ pub enum SourceError {
     Remote { status: u16, excerpt: String },
     #[error("unexpected response: {0}")]
     Parse(String),
+    /// The remote can't do what was asked (e.g. nest a sub-task).
+    #[error("{0}")]
+    Refused(String),
+}
+
+/// Fields for a new remote issue (promote).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewIssue {
+    pub title: String,
+    pub due: Option<NaiveDate>,
+    pub priority: Option<Priority>,
 }
 
 /// An issue to look up by key. `url` (the note's `ft.source.url`) lets
@@ -102,6 +113,9 @@ pub trait TaskSource {
         target: Status,
         transitions: &BTreeMap<Status, String>,
     ) -> Result<PushOutcome, SourceError>;
+    /// Create an issue as a child of `parent`, assigned to the
+    /// authenticated user, and return it as fetched.
+    fn create_child(&self, parent: &IssueRef, new: &NewIssue) -> Result<RemoteIssue, SourceError>;
 }
 
 /// Result of one status push.
@@ -253,6 +267,22 @@ pub(crate) mod tests {
                 .borrow_mut()
                 .push(format!("push:{}:{}", issue.key, target.as_str()));
             Ok(PushOutcome::Pushed)
+        }
+
+        fn create_child(
+            &self,
+            parent: &IssueRef,
+            new: &NewIssue,
+        ) -> Result<RemoteIssue, SourceError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("create:{}:{}", parent.key, new.title));
+            Ok(RemoteIssue {
+                key: "NEW-1".into(),
+                title: new.title.clone(),
+                parent: Some(parent.key.clone()),
+                ..issue("NEW-1", Some(&parent.key))
+            })
         }
 
         fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError> {
