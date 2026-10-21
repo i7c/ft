@@ -943,12 +943,28 @@ impl App {
             self.jobs.borrow_mut().take();
         }
         let mut applied = Vec::new();
+        let mut fresh_failures = Vec::new();
         let mut wrote = false;
         for run in &result.runs {
             let status = match &run.outcome {
                 Ok(plan) => {
                     wrote |= plan.edits.iter().any(|e| e.original != e.new);
                     applied.push((run.name.clone(), apply_plan(plan)));
+                    let pushes = self
+                        .vault
+                        .config
+                        .config
+                        .sources
+                        .get(&run.name)
+                        .is_some_and(|c| c.push);
+                    if pushes {
+                        let fresh = ft_core::sources::run::AttemptLog::record_push_failures(
+                            &self.vault.path,
+                            &run.name,
+                            &plan.report.push_failures,
+                        );
+                        fresh_failures.push((run.name.clone(), fresh));
+                    }
                     "ok"
                 }
                 Err(f) => f.status(),
@@ -958,7 +974,7 @@ impl App {
         if wrote {
             self.request_graph_rebuild();
         }
-        if let Some((text, error)) = summary(&result, &applied) {
+        if let Some((text, error)) = summary(&result, &applied, &fresh_failures) {
             let style = if error {
                 ToastStyle::Error
             } else {

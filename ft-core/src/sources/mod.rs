@@ -9,6 +9,7 @@ pub mod github;
 pub mod http;
 pub mod jira;
 pub mod note;
+pub mod push;
 pub mod run;
 pub mod sync;
 
@@ -93,6 +94,24 @@ pub trait TaskSource {
     /// The issues with these keys; keys that no longer exist (or aren't
     /// visible) are simply absent from the result.
     fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError>;
+    /// Move the issue to `target` (Jira transition, GitHub close/reopen).
+    /// Checks the current remote status first.
+    fn push_status(
+        &self,
+        issue: &IssueRef,
+        target: Status,
+        transitions: &BTreeMap<Status, String>,
+    ) -> Result<PushOutcome, SourceError>;
+}
+
+/// Result of one status push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushOutcome {
+    Pushed,
+    /// The remote already had the target status.
+    AlreadyThere,
+    /// Nothing was sent; the reason says why (no transition, not found…).
+    NotPushable(String),
 }
 
 /// Everything one sync of one source fetched.
@@ -224,6 +243,18 @@ pub(crate) mod tests {
                 .cloned()
                 .collect())
         }
+        fn push_status(
+            &self,
+            issue: &IssueRef,
+            target: Status,
+            _transitions: &BTreeMap<Status, String>,
+        ) -> Result<PushOutcome, SourceError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("push:{}:{}", issue.key, target.as_str()));
+            Ok(PushOutcome::Pushed)
+        }
+
         fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError> {
             let keys: Vec<String> = refs.iter().map(|r| r.key.clone()).collect();
             self.calls

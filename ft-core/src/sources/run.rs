@@ -12,7 +12,7 @@ use super::credentials;
 use super::github::GithubSource;
 use super::http::Secret;
 use super::jira::JiraSource;
-use super::{fetch_all, FetchResult, IssueRef, SourceError, TaskSource};
+use super::{fetch_all, FetchResult, SourceError, TaskSource};
 use crate::config::{SourceCfg, SourceKind};
 
 /// Why a source produced no fetch result.
@@ -99,20 +99,38 @@ pub fn verify_token(cfg: &SourceCfg, token: &Secret) -> Result<String, FetchFail
     who.map_err(FetchFailure::from)
 }
 
-/// Resolve credentials and fetch everything for one source.
-pub fn fetch_source(
+/// What one source run produced: the push step's report and the fetch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceOutcome {
+    pub push: super::push::PushReport,
+    pub fetched: FetchResult,
+}
+
+/// Resolve credentials, push pending statuses (when `push` and the source
+/// allow it), then fetch everything for one source. Pushing first means the
+/// fetch already sees the new remote state.
+pub fn run_source(
     name: &str,
     cfg: &SourceCfg,
-    known: &[IssueRef],
-) -> Result<FetchResult, FetchFailure> {
+    scan: &crate::scan::Scan,
+    push: bool,
+) -> Result<SourceOutcome, FetchFailure> {
     let (token, _) = credentials::resolve(name, cfg).ok_or(FetchFailure::NoCredentials)?;
     let source = build_source(cfg, &token);
-    Ok(fetch_all(
+    let push = if push && cfg.push {
+        let pending = super::push::pending(scan, name);
+        super::push::push_pending(source.as_ref(), &pending, &cfg.transitions)?
+    } else {
+        super::push::PushReport::default()
+    };
+    let known = super::sync::known_issues(scan, name);
+    let fetched = fetch_all(
         source.as_ref(),
         &cfg.effective_queries(),
         cfg.fetch_parents,
-        known,
-    )?)
+        &known,
+    )?;
+    Ok(SourceOutcome { push, fetched })
 }
 
 /// Machine-local sync attempt times, informational only.
@@ -174,22 +192,17 @@ impl AttemptLog {
         vault_root: &Path,
         source: &str,
         failures: &[(String, String)],
-        cleared: &[String],
     ) -> Vec<String> {
         let mut log = Self::load(vault_root);
-        let entry = log.push_failures.entry(source.to_string()).or_default();
-        let mut fresh = Vec::new();
-        for key in cleared {
-            entry.remove(key);
-        }
-        for (key, reason) in failures {
-            if entry.get(key) != Some(reason) {
-                fresh.push(key.clone());
-            }
-            entry.insert(key.clone(), reason.clone());
-        }
-        if entry.is_empty() {
-            log.push_failures.remove(source);
+        let old = log.push_failures.remove(source).unwrap_or_default();
+        let fresh = failures
+            .iter()
+            .filter(|(k, r)| old.get(k) != Some(r))
+            .map(|(k, _)| k.clone())
+            .collect();
+        if !failures.is_empty() {
+            log.push_failures
+                .insert(source.to_string(), failures.iter().cloned().collect());
         }
         log.save(vault_root);
         fresh

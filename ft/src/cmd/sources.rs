@@ -150,6 +150,7 @@ pub fn run_sync(
     vault: &Vault,
     only: &[String],
     dry_run: bool,
+    no_push: bool,
     format: MoveFormat,
 ) -> Result<ExitCode> {
     let sources = &vault.config.config.sources;
@@ -169,14 +170,15 @@ pub fn run_sync(
         if !only.is_empty() && !only.contains(name) {
             continue;
         }
-        let known = sync::known_issues(&scan, name);
-        let fetched = run::fetch_source(name, cfg, &known);
+        // A dry run never writes — remotely either.
+        let push = !dry_run && !no_push;
+        let outcome = run::run_source(name, cfg, &scan, push);
         if !dry_run {
-            let status = fetched.as_ref().map_or_else(|f| f.status(), |_| "ok");
+            let status = outcome.as_ref().map_or_else(|f| f.status(), |_| "ok");
             run::AttemptLog::record(&vault.path, name, status);
         }
-        let fetched = match fetched {
-            Ok(f) => f,
+        let outcome = match outcome {
+            Ok(o) => o,
             Err(f) => {
                 failed |= !f.is_benign();
                 if format == MoveFormat::Text {
@@ -198,7 +200,12 @@ pub fn run_sync(
             format: vault.task_format(),
             today: ft_core::dates::today(),
         };
-        let plan = sync::plan_sync(&ctx, &fetched);
+        let mut plan = sync::plan_sync(&ctx, &outcome.fetched);
+        plan.report.pushed = outcome.push.pushed.clone();
+        plan.report.push_failures = outcome.push.failures.clone();
+        if push && cfg.push {
+            run::AttemptLog::record_push_failures(&vault.path, name, &outcome.push.failures);
+        }
         if dry_run && format == MoveFormat::Text {
             for e in plan.edits.iter().filter(|e| e.original != e.new) {
                 super::tasks::print_diff(&vault.relativize(&e.path), &e.original, &e.new);
@@ -218,7 +225,13 @@ pub fn run_sync(
             if !r.out_of_scope.is_empty() {
                 line.push_str(&format!(" · {} out of scope", r.out_of_scope.len()));
             }
+            if !r.pushed.is_empty() {
+                line.push_str(&format!(" · {} pushed", r.pushed.len()));
+            }
             println!("{line}");
+            for (key, reason) in &r.push_failures {
+                println!("  push failed {key}: {reason}");
+            }
             for (key, local, remote) in &r.conflicts {
                 println!(
                     "  conflict {key} local={} remote={}",
@@ -235,6 +248,10 @@ pub fn run_sync(
             "created": r.created.len(), "updated": r.updated.len(),
             "pending": r.pending.len(), "conflicts": r.conflicts.len(),
             "out_of_scope": r.out_of_scope.len(),
+            "pushed": r.pushed.len(),
+            "push_failures": r.push_failures.iter()
+                .map(|(k, reason)| serde_json::json!({"key": k, "reason": reason}))
+                .collect::<Vec<_>>(),
             "message": r.warnings.join("; "),
         }));
     }

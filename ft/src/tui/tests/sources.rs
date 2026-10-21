@@ -42,7 +42,16 @@ fn fetcher(app: &mut App) -> Arc<Mutex<Result<FetchResult, FetchFailure>>> {
         ..Default::default()
     })));
     let shared = Arc::clone(&next);
-    app.set_source_fetcher_for_test(Arc::new(move |_, _, _| shared.lock().unwrap().clone()));
+    app.set_source_fetcher_for_test(Arc::new(move |_, _, _, _| {
+        shared
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|fetched| ft_core::sources::run::SourceOutcome {
+                fetched,
+                ..Default::default()
+            })
+    }));
     next
 }
 
@@ -158,11 +167,14 @@ fn edits_made_during_a_sync_are_not_overwritten() -> Result<()> {
     let job = SourcesJob {
         vault: Arc::clone(&vault),
         sources: vec!["jira".into()],
-        fetcher: Arc::new(|_, _, _| {
+        fetcher: Arc::new(|_, _, _, _| {
             let mut i = issue(Status::InProgress);
             i.title = "Renamed".into();
-            Ok(FetchResult {
-                active: vec![i],
+            Ok(ft_core::sources::run::SourceOutcome {
+                fetched: FetchResult {
+                    active: vec![i],
+                    ..Default::default()
+                },
                 ..Default::default()
             })
         }),

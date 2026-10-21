@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use super::http::{Http, Secret};
-use super::{adf, Comment, IssueRef, RemoteIssue, SourceError, TaskSource};
+use super::{adf, Comment, IssueRef, PushOutcome, RemoteIssue, SourceError, TaskSource};
 use crate::task::{Priority, Status};
 
 /// Fields requested from the search endpoint — exactly what's mapped.
@@ -84,7 +84,149 @@ impl JiraSource {
     }
 }
 
+/// One available workflow transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transition {
+    pub id: String,
+    pub name: String,
+    /// Target status name.
+    pub to: String,
+    /// Target status category key (`new`, `indeterminate`, `done`).
+    pub category: String,
+}
+
+/// Choose the transition that moves an issue to `target`: the configured
+/// name when there is one, otherwise the unique transition into the
+/// target's status category (preferring the category's default status
+/// name). `Cancelled` is only ever pushed through a configured name.
+pub fn select_transition<'a>(
+    available: &'a [Transition],
+    target: Status,
+    overrides: &BTreeMap<Status, String>,
+) -> Result<&'a Transition, String> {
+    if let Some(name) = overrides.get(&target) {
+        return available
+            .iter()
+            .find(|t| &t.name == name)
+            .ok_or_else(|| format!("no transition \"{name}\" available"));
+    }
+    let (category, default_name) = match target {
+        Status::Open => ("new", "To Do"),
+        Status::InProgress => ("indeterminate", "In Progress"),
+        Status::Done => ("done", "Done"),
+        Status::Cancelled => return Err("cancel isn't pushed — set transitions.Cancelled".into()),
+    };
+    let matching: Vec<&Transition> = available
+        .iter()
+        .filter(|t| t.category == category)
+        .collect();
+    match matching.as_slice() {
+        [] => Err(format!("no transition into a {category} status available")),
+        [one] => Ok(one),
+        many => {
+            let preferred: Vec<&&Transition> =
+                many.iter().filter(|t| t.to == default_name).collect();
+            match preferred.as_slice() {
+                [one] => Ok(one),
+                _ => Err(format!(
+                    "ambiguous transitions: {} — set transitions.{}",
+                    many.iter()
+                        .map(|t| format!("\"{}\"", t.name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    target.as_str()
+                )),
+            }
+        }
+    }
+}
+
+impl JiraSource {
+    /// The issue's current state, or `None` when it doesn't exist.
+    fn current(&self, key: &str) -> Result<Option<RemoteIssue>, SourceError> {
+        let url = format!(
+            "{}/rest/api/3/issue/{}?fields={FIELDS}",
+            self.base_url,
+            urlencoding::encode(key)
+        );
+        match self.http.get_json(&url, "application/json") {
+            Ok(r) => Ok(Some(map_issue(&r.json, &self.base_url, &self.status_map)?)),
+            Err(SourceError::Remote { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn transitions(&self, key: &str) -> Result<Vec<Transition>, SourceError> {
+        let url = format!(
+            "{}/rest/api/3/issue/{}/transitions",
+            self.base_url,
+            urlencoding::encode(key)
+        );
+        let r = self.http.get_json(&url, "application/json")?;
+        Ok(r.json["transitions"]
+            .as_array()
+            .map(|ts| {
+                ts.iter()
+                    .map(|t| Transition {
+                        id: t["id"].as_str().unwrap_or("").to_string(),
+                        name: t["name"].as_str().unwrap_or("").to_string(),
+                        to: t["to"]["name"].as_str().unwrap_or("").to_string(),
+                        category: t["to"]["statusCategory"]["key"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+}
+
 impl TaskSource for JiraSource {
+    fn push_status(
+        &self,
+        issue: &IssueRef,
+        target: Status,
+        transitions: &BTreeMap<Status, String>,
+    ) -> Result<PushOutcome, SourceError> {
+        let Some(current) = self.current(&issue.key)? else {
+            return Ok(PushOutcome::NotPushable("issue not found".into()));
+        };
+        if current.status == target {
+            return Ok(PushOutcome::AlreadyThere);
+        }
+        let available = self.transitions(&issue.key)?;
+        let chosen = match select_transition(&available, target, transitions) {
+            Ok(t) => t,
+            Err(reason) => {
+                return Ok(PushOutcome::NotPushable(format!(
+                    "{reason} (from {})",
+                    current.status_name
+                )))
+            }
+        };
+        let url = format!(
+            "{}/rest/api/3/issue/{}/transitions",
+            self.base_url,
+            urlencoding::encode(&issue.key)
+        );
+        match self.http.post_json(
+            &url,
+            "application/json",
+            &serde_json::json!({"transition": {"id": chosen.id}}),
+        ) {
+            Ok(_) => Ok(PushOutcome::Pushed),
+            Err(SourceError::Remote { status, excerpt })
+                if status == 400 || status == 404 || status == 409 =>
+            {
+                Ok(PushOutcome::NotPushable(format!(
+                    "rejected ({status}): {excerpt}"
+                )))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError> {
         self.search(query)
     }
@@ -324,5 +466,124 @@ mod tests {
             .fetch_keys(&[IssueRef::key("A-1"), IssueRef::key("GONE-9")])
             .unwrap();
         assert_eq!(got.len(), 1);
+    }
+
+    fn t(id: &str, name: &str, to: &str, cat: &str) -> Transition {
+        Transition {
+            id: id.into(),
+            name: name.into(),
+            to: to.into(),
+            category: cat.into(),
+        }
+    }
+
+    #[test]
+    fn transition_selection() {
+        let none = BTreeMap::new();
+        let avail = [
+            t("11", "Start Progress", "In Progress", "indeterminate"),
+            t("31", "Resolve", "Done", "done"),
+            t("41", "Won't Do", "Closed", "done"),
+        ];
+        assert_eq!(
+            select_transition(&avail, Status::InProgress, &none)
+                .unwrap()
+                .id,
+            "11"
+        );
+        // Two done-category targets: the one into `Done` wins.
+        assert_eq!(
+            select_transition(&avail, Status::Done, &none).unwrap().id,
+            "31"
+        );
+        assert!(select_transition(&avail, Status::Open, &none)
+            .unwrap_err()
+            .contains("no transition into a new"));
+        assert!(select_transition(&avail, Status::Cancelled, &none)
+            .unwrap_err()
+            .contains("set transitions.Cancelled"));
+        let o = [(Status::Cancelled, "Won't Do".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            select_transition(&avail, Status::Cancelled, &o).unwrap().id,
+            "41"
+        );
+        let o = [(Status::Done, "Ship".to_string())].into_iter().collect();
+        assert!(select_transition(&avail, Status::Done, &o)
+            .unwrap_err()
+            .contains("\"Ship\""));
+        let amb = [
+            t("1", "A", "Closed", "done"),
+            t("2", "B", "Shipped", "done"),
+        ];
+        assert!(select_transition(&amb, Status::Done, &none)
+            .unwrap_err()
+            .contains("ambiguous"));
+    }
+
+    fn raw_with_status(category: &str, name: &str) -> Value {
+        let mut r = raw_issue("ABC-123", category, name);
+        r["fields"]["comment"] = json!({"comments": []});
+        r
+    }
+
+    #[test]
+    fn push_status_applies_transition() {
+        use crate::sources::http::tests::body_json;
+        let current = raw_with_status("indeterminate", "In Review").to_string();
+        let transitions = json!({"transitions": [
+            {"id": "31", "name": "Resolve", "to": {"name": "Done", "statusCategory": {"key": "done"}}}
+        ]})
+        .to_string();
+        let no_content = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string();
+        let (url, h) = serve(vec![ok_json(&current), ok_json(&transitions), no_content]);
+        // NOT VALID — test data only.
+        let src = JiraSource::new(
+            &url,
+            "fake-user@example.test",
+            &Secret::new("FAKE_TEST_token"),
+            BTreeMap::new(),
+        );
+        let out = src
+            .push_status(&IssueRef::key("ABC-123"), Status::Done, &BTreeMap::new())
+            .unwrap();
+        assert_eq!(out, PushOutcome::Pushed);
+        let reqs = h.join().unwrap();
+        assert!(reqs[0].starts_with("GET /rest/api/3/issue/ABC-123?fields="));
+        assert!(reqs[1].starts_with("GET /rest/api/3/issue/ABC-123/transitions"));
+        assert!(reqs[2].starts_with("POST /rest/api/3/issue/ABC-123/transitions"));
+        assert_eq!(body_json(&reqs[2]), json!({"transition": {"id": "31"}}));
+    }
+
+    #[test]
+    fn push_status_already_there_and_not_pushable() {
+        let done = raw_with_status("done", "Done").to_string();
+        let open = raw_with_status("new", "To Do").to_string();
+        let (url, h) = serve(vec![
+            ok_json(&done),
+            ok_json(&open),
+            ok_json(r#"{"transitions": []}"#),
+        ]);
+        // NOT VALID — test data only.
+        let src = JiraSource::new(
+            &url,
+            "fake-user@example.test",
+            &Secret::new("FAKE_TEST_token"),
+            BTreeMap::new(),
+        );
+        assert_eq!(
+            src.push_status(&IssueRef::key("ABC-123"), Status::Done, &BTreeMap::new())
+                .unwrap(),
+            PushOutcome::AlreadyThere
+        );
+        let out = src
+            .push_status(&IssueRef::key("ABC-123"), Status::Done, &BTreeMap::new())
+            .unwrap();
+        assert!(
+            matches!(&out, PushOutcome::NotPushable(r) if r.contains("from To Do")),
+            "{out:?}"
+        );
+        assert_eq!(h.join().unwrap().len(), 3);
     }
 }

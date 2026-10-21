@@ -11,17 +11,18 @@ use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use ft_core::config::SourceCfg;
+use ft_core::scan::Scan;
+use ft_core::sources::run::SourceOutcome;
 use ft_core::sources::run::{self, FetchFailure};
 use ft_core::sources::sync::{self, SyncPlan};
-use ft_core::sources::{FetchResult, IssueRef};
 use ft_core::vault::Vault;
 
 /// Fetches one source; `run::fetch_source` in production, a fake in tests.
 pub type Fetcher =
-    Arc<dyn Fn(&str, &SourceCfg, &[IssueRef]) -> Result<FetchResult, FetchFailure> + Send + Sync>;
+    Arc<dyn Fn(&str, &SourceCfg, &Scan, bool) -> Result<SourceOutcome, FetchFailure> + Send + Sync>;
 
 pub fn default_fetcher() -> Fetcher {
-    Arc::new(run::fetch_source)
+    Arc::new(run::run_source)
 }
 
 /// One source's planned sync (or why it couldn't run).
@@ -57,8 +58,7 @@ impl SourcesJob {
             .iter()
             .filter_map(|name| {
                 let cfg = self.vault.config.config.sources.get(name)?;
-                let known = sync::known_issues(&scan, name);
-                let outcome = (self.fetcher)(name, cfg, &known).map(|fetched| {
+                let outcome = (self.fetcher)(name, cfg, &scan, true).map(|o| {
                     let ctx = sync::SyncCtx {
                         vault_root: &self.vault.path,
                         templates_dir: &templates_dir,
@@ -68,7 +68,10 @@ impl SourcesJob {
                         format: self.vault.task_format(),
                         today: self.today,
                     };
-                    sync::plan_sync(&ctx, &fetched)
+                    let mut plan = sync::plan_sync(&ctx, &o.fetched);
+                    plan.report.pushed = o.push.pushed;
+                    plan.report.push_failures = o.push.failures;
+                    plan
                 });
                 Some(SourceRun {
                     name: name.clone(),
@@ -138,6 +141,7 @@ pub fn apply_plan(plan: &SyncPlan) -> Result<usize, String> {
 pub fn summary(
     result: &SourcesJobResult,
     applied: &[(String, Result<usize, String>)],
+    fresh_failures: &[(String, Vec<String>)],
 ) -> Option<(String, bool)> {
     let mut parts = Vec::new();
     let mut error = false;
@@ -157,8 +161,22 @@ pub fn summary(
                         r.updated.len()
                     )
                 };
-                if !r.pending.is_empty() {
+                if !r.pushed.is_empty() {
+                    s.push_str(&format!(" · {} pushed", r.pushed.len()));
+                    noteworthy = true;
+                } else if !r.pending.is_empty() {
                     s.push_str(&format!(" · {} pending push", r.pending.len()));
+                }
+                // Only failures whose reason is new — no nagging every tick.
+                let fresh = fresh_failures
+                    .iter()
+                    .find(|(n, _)| n == &run.name)
+                    .map(|(_, keys)| keys.as_slice())
+                    .unwrap_or(&[]);
+                for (key, reason) in r.push_failures.iter().filter(|(k, _)| fresh.contains(k)) {
+                    s.push_str(&format!(" · push failed {key}: {reason}"));
+                    error = true;
+                    noteworthy = true;
                 }
                 if !r.conflicts.is_empty() {
                     s.push_str(&format!(

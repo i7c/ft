@@ -11,11 +11,11 @@
 
 ## 3. Push
 
-- [ ] 3.1 `TaskSource::push_status` + `PushOutcome`; `transitions` selection logic as a pure function with tests (category match, default-name preference, ambiguity, override, Cancelled rules).
-- [ ] 3.2 Jira: `GET …/transitions`, `POST …/transitions`, pre-check of current status (`AlreadyThere`); stub tests.
-- [ ] 3.3 GitHub: `PATCH` close (completed / not_planned) / reopen; stub tests.
-- [ ] 3.4 `sources::push::pending(scan, source)` + `push_pending(source, pending, cfg) -> PushReport`; failure cache in `AttemptLog` (`push_failures`, set/clear); offline/unauthorized abort the step.
-- [ ] 3.5 Wire push-before-fetch into `run::fetch_source` (or a new `run_source`) honouring `push`/`--no-push`; `SyncReport` gains `pushed`, `push_failures`.
+- [x] 3.1 `TaskSource::push_status` + `PushOutcome`; `transitions` selection logic as a pure function with tests (category match, default-name preference, ambiguity, override, Cancelled rules).
+- [x] 3.2 Jira: `GET …/transitions`, `POST …/transitions`, pre-check of current status (`AlreadyThere`); stub tests.
+- [x] 3.3 GitHub: `PATCH` close (completed / not_planned) / reopen; stub tests.
+- [x] 3.4 `sources::push::pending(scan, source)` + `push_pending(source, pending, cfg) -> PushReport`; failure cache in `AttemptLog` (`push_failures`, set/clear); offline/unauthorized abort the step.
+- [x] 3.5 Wire push-before-fetch into `run::fetch_source` (or a new `run_source`) honouring `push`/`--no-push`; `SyncReport` gains `pushed`, `push_failures`.
 
 ## 4. Promote
 

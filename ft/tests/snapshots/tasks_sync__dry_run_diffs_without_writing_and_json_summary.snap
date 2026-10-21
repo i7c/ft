@@ -9,6 +9,8 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
     "message": "",
     "out_of_scope": 0,
     "pending": 0,
+    "push_failures": [],
+    "pushed": 0,
     "source": "jira",
     "status": "ok",
     "updated": 0

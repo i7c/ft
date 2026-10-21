@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use super::http::{Http, Secret};
-use super::{Comment, IssueRef, RemoteIssue, SourceError, TaskSource};
+use super::{Comment, IssueRef, PushOutcome, RemoteIssue, SourceError, TaskSource};
 use crate::task::Status;
 
 const ACCEPT: &str = "application/vnd.github+json";
@@ -131,6 +131,48 @@ impl GithubSource {
 }
 
 impl TaskSource for GithubSource {
+    fn push_status(
+        &self,
+        issue: &IssueRef,
+        target: Status,
+        _transitions: &BTreeMap<Status, String>,
+    ) -> Result<PushOutcome, SourceError> {
+        let Some((owner, repo, n)) = issue.url.as_deref().and_then(parse_issue_url) else {
+            return Ok(PushOutcome::NotPushable("no issue URL in the note".into()));
+        };
+        let url = format!("{}/repos/{owner}/{repo}/issues/{n}", self.api);
+        let raw = match self.http.get_json(&url, ACCEPT) {
+            Ok(r) => r.json,
+            Err(SourceError::Remote {
+                status: 404 | 410, ..
+            }) => return Ok(PushOutcome::NotPushable("issue not found".into())),
+            Err(e) => return Err(e),
+        };
+        let current = map_issue(&raw, &self.status_map)?.status;
+        let open = |s: Status| matches!(s, Status::Open | Status::InProgress);
+        if current == target || (open(current) && open(target)) {
+            return Ok(PushOutcome::AlreadyThere);
+        }
+        let body = match target {
+            Status::Done => serde_json::json!({"state": "closed", "state_reason": "completed"}),
+            Status::Cancelled => {
+                serde_json::json!({"state": "closed", "state_reason": "not_planned"})
+            }
+            Status::Open | Status::InProgress => serde_json::json!({"state": "open"}),
+        };
+        match self.http.patch_json(&url, ACCEPT, &body) {
+            Ok(_) => Ok(PushOutcome::Pushed),
+            Err(SourceError::Remote { status, excerpt })
+                if status == 404 || status == 410 || status == 422 =>
+            {
+                Ok(PushOutcome::NotPushable(format!(
+                    "rejected ({status}): {excerpt}"
+                )))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError> {
         let wants_prs = query.contains("is:pr") || query.contains("type:pr");
         let mut url = Some(format!(
@@ -377,5 +419,46 @@ mod tests {
             IssueRef::key("no-url-1"),
         ];
         assert!(src.fetch_keys(&refs).unwrap().is_empty());
+    }
+
+    #[test]
+    fn push_status_closes_and_reopens() {
+        use crate::sources::http::tests::body_json;
+        let open = raw("o", "r", 3, "open", None).to_string();
+        let closed = raw("o", "r", 3, "closed", Some("completed")).to_string();
+        let (url, h) = serve(vec![
+            ok_json(&open),
+            ok_json("{}"),
+            ok_json(&closed),
+            ok_json("{}"),
+            ok_json(&open),
+        ]);
+        // NOT VALID — test data only.
+        let src = GithubSource::new(Some(&url), &Secret::new("FAKE_TEST_token"), BTreeMap::new());
+        let r = IssueRef {
+            key: "o-r-3".into(),
+            url: Some("https://github.com/o/r/issues/3".into()),
+        };
+        assert_eq!(
+            src.push_status(&r, Status::Cancelled, &BTreeMap::new())
+                .unwrap(),
+            PushOutcome::Pushed
+        );
+        assert_eq!(
+            src.push_status(&r, Status::InProgress, &BTreeMap::new())
+                .unwrap(),
+            PushOutcome::Pushed
+        );
+        assert_eq!(
+            src.push_status(&r, Status::Open, &BTreeMap::new()).unwrap(),
+            PushOutcome::AlreadyThere
+        );
+        let reqs = h.join().unwrap();
+        assert!(reqs[1].starts_with("PATCH /repos/o/r/issues/3 "));
+        assert_eq!(
+            body_json(&reqs[1]),
+            json!({"state": "closed", "state_reason": "not_planned"})
+        );
+        assert_eq!(body_json(&reqs[3]), json!({"state": "open"}));
     }
 }

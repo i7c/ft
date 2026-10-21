@@ -39,6 +39,10 @@ pub struct SyncReport {
     /// Keys that moved out of scope this sync.
     pub out_of_scope: Vec<String>,
     pub warnings: Vec<String>,
+    /// Keys whose status was pushed before this sync's fetch.
+    pub pushed: Vec<String>,
+    /// `(key, reason)` for pushes that failed or weren't possible.
+    pub push_failures: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,13 +75,13 @@ pub struct SyncCtx<'a> {
 
 /// An existing issue note of this source, from the scan.
 #[derive(Debug, Clone)]
-struct Known {
-    rel: PathBuf,
-    fm: FtSource,
+pub(crate) struct Known {
+    pub(crate) rel: PathBuf,
+    pub(crate) fm: FtSource,
 }
 
 /// The source's issue notes, by key (first path wins on duplicates).
-fn index_notes(scan: &Scan, source: &str) -> (BTreeMap<String, Known>, Vec<String>) {
+pub(crate) fn index_notes(scan: &Scan, source: &str) -> (BTreeMap<String, Known>, Vec<String>) {
     let mut by_key: BTreeMap<String, Known> = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut files: Vec<_> = scan.files.iter().collect();

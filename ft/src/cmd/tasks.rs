@@ -72,9 +72,14 @@ pub struct SyncArgs {
     #[arg(long = "source", value_name = "NAME")]
     pub sources: Vec<String>,
 
-    /// Print a unified diff of every note that would change; write nothing.
+    /// Print a unified diff of every note that would change; write (and
+    /// push) nothing.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Don't push local status changes this run.
+    #[arg(long)]
+    pub no_push: bool,
 
     /// Output format for the per-source summary.
     #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
@@ -234,7 +239,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Check(a) => run_check(a, vault_flag),
         TasksCommand::Sync(a) => {
             let vault = crate::cmd::common::discover_vault(vault_flag)?;
-            crate::cmd::sources::run_sync(&vault, &a.sources, a.dry_run, a.format)
+            crate::cmd::sources::run_sync(&vault, &a.sources, a.dry_run, a.no_push, a.format)
         }
     }
 }
