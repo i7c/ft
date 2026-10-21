@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::{
     frontmatter,
-    graph::parser::{extract_links, RawLink},
+    graph::parser::{extract_links_and_self_block_refs, RawLink},
     markdown::{extract_headings, extract_paragraphs, Heading, LineSkipState, Paragraph},
     task::{
         emoji::EmojiFormat,
@@ -49,6 +49,10 @@ pub struct ParsedFile {
     /// Vault-relative path.
     pub rel: PathBuf,
     pub links: Vec<RawLink>,
+    /// Same-file block references (`[[#^id]]`). Kept apart from `links`
+    /// because they name no other note; read by task parent-link
+    /// resolution only.
+    pub self_block_refs: Vec<RawLink>,
     pub paragraphs: Vec<Paragraph>,
     pub headings: Vec<Heading>,
     /// The raw frontmatter block text (between the YAML fences), when
@@ -138,6 +142,7 @@ pub fn scan_vault(root: &Path, ignored: &[String]) -> Scan {
         }
     }
     scan.dirs = dirs;
+    crate::task::links::resolve_parent_links(&mut scan);
     scan
 }
 
@@ -265,9 +270,11 @@ fn parse_file(
     }
     resolve_hierarchy(&mut tasks);
 
+    let (links, self_block_refs) = extract_links_and_self_block_refs(&content);
     let parsed = ParsedFile {
         rel: rel.to_path_buf(),
-        links: extract_links(&content),
+        links,
+        self_block_refs,
         paragraphs: extract_paragraphs(&content),
         headings: extract_headings(&content),
         frontmatter: frontmatter::block(&content).map(str::to_string),

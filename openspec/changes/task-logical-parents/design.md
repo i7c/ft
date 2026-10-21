@@ -63,8 +63,7 @@ links at all.
 
 ```rust
 pub struct ParentLink {
-    pub raw: String,                  // e.g. "[[proj#^vo1]]"
-    pub range: std::ops::Range<usize>, // byte range within the task line
+    pub raw: String,                  // e.g. "[[proj#^vo1]]"; located in the guarded line at edit time
     pub extra: Vec<String>,           // later candidates, diagnostics only
     pub state: ParentLinkState,
 }
@@ -91,8 +90,8 @@ runs serially:
    `Ignored` if the task has a physical parent, otherwise `Resolved` or
    `Dangling`.
 3. **Detect cycles.** Over effective parents, use iterative colouring.
-   For each cycle found, mark the member with the greatest `TaskKey` as
-   `Cycle`.
+   For each cycle found, mark the link-parented member with the greatest
+   `TaskKey` as `Cycle`.
 
 Storing the result on `Task` (rather than in a side table) means every
 consumer holding a `&[Task]` (CLI, TUI snapshot, graph build) sees the
@@ -132,8 +131,8 @@ format: parse the line, edit `description`, `serialize_line`, keep the
 leading whitespace. This puts the link before the emoji fields and
 preserves canonical order.
 
-Removing a link deletes `raw` plus one adjacent space, using the `range`
-recorded by the scan, which is validated by the expected-task guard.
+Removing a link deletes `raw` plus one adjacent space, found in the
+line the expected-task guard has just validated.
 
 Link text rules (title if unique, path otherwise, `[[#^id]]` within the
 same file, anchor-note form for anchor tasks) live in one function,
@@ -150,10 +149,10 @@ no new crate. Tests inject a fixed time and counter through a
 
 **Strip on nest.** `plan_move` already has each source's `expected:
 Option<Task>`. For `UnderTask` targets, when `expected.parent_link` is
-`Some`, the head line is rewritten without `raw` (located by `range` in
-the original line, which the guard has just validated) before it is
-re-indented. This lives in `plan_move` itself, so the CLI, the TUI
-paste, indent and outdent all get it for free.
+`Some`, the head line is rewritten without `raw` (found in the original
+line, which the guard has just validated) before it is re-indented.
+This lives in `plan_move` itself, so the CLI, the TUI paste, indent and
+outdent all get it for free.
 
 **Retarget on move.** `plan_retarget(plan, scan, ctx)` is a second,
 optional pure step, because it needs vault-wide link data that

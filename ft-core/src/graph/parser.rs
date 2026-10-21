@@ -48,6 +48,13 @@ pub struct RawLink {
 /// skipped at the span level (the line still contributes other links
 /// outside the span).
 pub fn extract_links(content: &str) -> Vec<RawLink> {
+    extract_links_and_self_block_refs(content).0
+}
+
+/// [`extract_links`] plus, separately, the same-file block references
+/// (`[[#^id]]`, which have an empty `target_text`). Those name no other
+/// note, so the graph never sees them; task parent-link resolution does.
+pub fn extract_links_and_self_block_refs(content: &str) -> (Vec<RawLink>, Vec<RawLink>) {
     let mut out = Vec::new();
     let mut state = LineSkipState::new();
 
@@ -72,7 +79,7 @@ pub fn extract_links(content: &str) -> Vec<RawLink> {
         line_start += line.len();
     }
 
-    out
+    out.into_iter().partition(|l| !l.target_text.is_empty())
 }
 
 /// Scan a single content line for links, emitting [`RawLink`] records
@@ -339,8 +346,10 @@ fn push_wikilink(
     let body_start_in_token = if is_embed { 3 } else { 2 };
     let body = &raw_text[body_start_in_token..raw_text.len() - 2];
     let (target_text, anchor, display) = split_wiki_body(body);
-    if target_text.is_empty() {
-        return; // `[[#anchor]]` or `[[|alias]]` with no target — ignore
+    // `[[#anchor]]` / `[[|alias]]` name no target; only same-file block
+    // references survive, for `extract_links_and_self_block_refs`.
+    if target_text.is_empty() && !anchor.as_deref().is_some_and(|a| a.starts_with('^')) {
+        return;
     }
     let file_span =
         (line_start_offset + intra_line_span.start)..(line_start_offset + intra_line_span.end);

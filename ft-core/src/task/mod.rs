@@ -7,6 +7,7 @@ pub mod aging;
 pub mod emoji;
 pub mod format;
 pub mod hierarchy;
+pub mod links;
 pub mod ops;
 pub mod recurrence;
 pub mod resolve;
@@ -95,8 +96,14 @@ pub struct Task {
     pub source_line: usize,
     /// Leading-whitespace byte count (used for hierarchy detection).
     pub indent_level: usize,
-    /// `source_line` of the nearest ancestor task with smaller `indent_level`.
+    /// `source_line` of the nearest ancestor task with smaller `indent_level`
+    /// (the physical parent, same file). See [`hierarchy::parent_key`] for
+    /// the effective parent, which also follows [`Task::parent_link`].
     pub parent: Option<usize>,
+    /// The parent named by a wikilink on this task's line, resolved by the
+    /// scan's post-pass ([`links::resolve_parent_links`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_link: Option<links::ParentLink>,
 }
 
 #[cfg(test)]

@@ -132,6 +132,7 @@ fn parse_line(line: &str, ctx: ParseContext) -> Option<Task> {
         source_line: ctx.source_line,
         indent_level,
         parent: None,
+        parent_link: None,
     })
 }
 
@@ -1021,6 +1022,7 @@ mod tests {
                 source_line: 1,
                 indent_level: 0,
                 parent: None,
+                parent_link: None,
             };
 
             let line = EmojiFormat.serialize_line(&task);
@@ -1072,6 +1074,7 @@ mod tests {
                 source_line: 1,
                 indent_level: 0,
                 parent: None,
+                parent_link: None,
             };
 
             let line1 = EmojiFormat.serialize_line(&task);

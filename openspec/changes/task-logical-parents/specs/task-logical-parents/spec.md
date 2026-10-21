@@ -35,12 +35,12 @@ Links to notes without `ft.tasks.anchor`, links with heading anchors, and markdo
 
 ### Requirement: `ParentLink` resolution states
 
-`Task` SHALL carry `parent_link: Option<ParentLink>`, filled in by a post-pass at the end of `Vault::scan` (after every file is parsed, using only data the scan already holds). It SHALL be `None` when the task has no candidate. `ParentLink` SHALL hold the candidate's raw link text, its byte range within the task line, the list of extra candidates' raw texts, and a state:
+`Task` SHALL carry `parent_link: Option<ParentLink>`, filled in by a post-pass at the end of `Vault::scan` (after every file is parsed, using only data the scan already holds). It SHALL be `None` when the task has no candidate. `ParentLink` SHALL hold the candidate's raw link text (edits locate it within the guard-validated task line), the list of extra candidates' raw texts, and a state:
 
 - `Resolved(TaskKey)`: the candidate resolved to a task, and the task is not physically nested.
 - `Dangling`: the candidate did not resolve to a task.
 - `Ignored`: the task already has a physical (indentation) parent. Physical nesting wins.
-- `Cycle`: following effective parents from this task leads back to it. Within each cycle, exactly one link is marked `Cycle` and treated as unresolved: the link of the cycle member with the greatest `TaskKey` in `(path, line)` order. Every other member of that cycle keeps `Resolved`.
+- `Cycle`: following effective parents from this task leads back to it. Within each cycle, exactly one link is marked `Cycle` and treated as unresolved: the link of the member with the greatest `TaskKey` in `(path, line)` order, among the members whose effective parent comes from a link. Physical edges alone can't form a cycle, so such a member always exists. Every other member of that cycle keeps `Resolved`.
 
 #### Scenario: Physical parent wins
 - **WHEN** a task is indented under another task and also contains `[[proj#^vo1]]` that resolves
@@ -118,5 +118,5 @@ The task preset table SHALL include `orphaned` (`status in {Open, InProgress} an
 The parent-link post-pass SHALL perform no file I/O, and SHALL run in time linear in the number of tasks plus the number of links on task lines.
 
 #### Scenario: Perf gate
-- **WHEN** the perf tests run with `FT_PERF_TESTS=1` on the `realistic` fixture
-- **THEN** `Vault::scan` with the post-pass stays within 10% of the baseline without it
+- **WHEN** the perf tests run with `FT_PERF_TESTS=1` on a synthetic 2,000-note vault where every note has tasks and cross-file parent links
+- **THEN** the parent-link post-pass takes less than 10% of the full `scan_vault` time

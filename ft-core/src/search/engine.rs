@@ -612,6 +612,7 @@ mod tests {
             files.push(ParsedFile {
                 rel: PathBuf::from(format!("notes/file-{f:04}.md")),
                 links: Vec::new(),
+                self_block_refs: Vec::new(),
                 paragraphs,
                 headings: Vec::new(),
                 frontmatter: None,

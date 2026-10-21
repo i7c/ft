@@ -1,17 +1,17 @@
 ## 1. Resolution plumbing
 
-- [ ] 1.1 `frontmatter::ft_tasks_anchor_in` (+ `ft_tasks_anchor`) with tests mirroring `ft_tasks_section_in`.
-- [ ] 1.2 `ParsedFile::block_ids: Vec<(String, usize)>` collected in the parse pass (trailing `^id` on any non-skipped line).
-- [ ] 1.3 `NoteLookup` trait in `graph/resolve.rs`; make `resolve_wiki`/`resolve_md` generic; impl for `Graph` (no behavior change) and a `ScanNoteIndex` built from `scan.files`. Existing resolve tests stay green.
+- [x] 1.1 `frontmatter::ft_tasks_anchor_in` (+ `ft_tasks_anchor`) with tests mirroring `ft_tasks_section_in`.
+- [x] 1.2 `ParsedFile::block_ids: Vec<(String, usize)>` collected in the parse pass (trailing `^id` on any non-skipped line).
+- [x] 1.3 `NoteLookup` trait in `graph/resolve.rs`; make `resolve_wiki`/`resolve_md` generic; impl for `Graph` (no behavior change) and a `ScanNoteIndex` built from `scan.files`. Existing resolve tests stay green.
 
 ## 2. Parent links in the scan
 
-- [ ] 2.1 `ParentLink` / `ParentLinkState` types; `Task::parent_link: Option<ParentLink>` (serde skip when `None`).
-- [ ] 2.2 `task::links::resolve_parent_links(&mut Scan)`: indexes (block, anchor), per-task candidate classification (block-ref, anchor-note, dangling, extras), `Ignored` when physically nested.
-- [ ] 2.3 Cycle detection over effective parents; mark greatest-`TaskKey` member `Cycle`.
-- [ ] 2.4 Call the post-pass at the end of `scan_vault`.
-- [ ] 2.5 Tests: block-ref cross-file, same-file `[[#^id]]`, anchor note, ordinary link ignored, non-task block id ignored, dangling (missing note / missing id / anchor without 🆔), extras, ignored, 2- and 3-cycles, deleted parent.
-- [ ] 2.6 Perf test (`FT_PERF_TESTS=1`) comparing scan with/without post-pass on the `realistic` fixture.
+- [x] 2.1 `ParentLink` / `ParentLinkState` types; `Task::parent_link: Option<ParentLink>` (serde skip when `None`).
+- [x] 2.2 `task::links::resolve_parent_links(&mut Scan)`: indexes (block, anchor), per-task candidate classification (block-ref, anchor-note, dangling, extras), `Ignored` when physically nested.
+- [x] 2.3 Cycle detection over effective parents; mark greatest-`TaskKey` member `Cycle`.
+- [x] 2.4 Call the post-pass at the end of `scan_vault`.
+- [x] 2.5 Tests: block-ref cross-file, same-file `[[#^id]]`, anchor note, ordinary link ignored, non-task block id ignored, dangling (missing note / missing id / anchor without 🆔), extras, ignored, 2- and 3-cycles, deleted parent.
+- [x] 2.6 Perf test (`FT_PERF_TESTS=1`): post-pass < 10% of `scan_vault` on a synthetic 2k-note vault with tasks + cross-file parent links.
 
 ## 3. Effective hierarchy
 

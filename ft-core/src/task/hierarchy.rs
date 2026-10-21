@@ -7,6 +7,18 @@ use super::Task;
 /// line. The same key the graph uses for its task nodes.
 pub type TaskKey = (PathBuf, usize);
 
+/// The effective parent of `task`: its physical (indentation) parent when
+/// it has one, otherwise the task its resolved parent link points at.
+pub fn parent_key(task: &Task) -> Option<TaskKey> {
+    if let Some(line) = task.parent {
+        return Some((task.source_file.clone(), line));
+    }
+    match &task.parent_link.as_ref()?.state {
+        super::links::ParentLinkState::Resolved(key) => Some(key.clone()),
+        _ => None,
+    }
+}
+
 /// A node in a depth-annotated task forest: an index into the caller's task
 /// slice, the node's depth (0 = root), and whether it has any subtasks in the
 /// underlying vault (for a collapse/expand affordance).
