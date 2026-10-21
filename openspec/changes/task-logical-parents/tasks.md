@@ -36,9 +36,9 @@
 
 ## 6. Move integration
 
-- [ ] 6.1 `plan_move` strips `expected.parent_link` from head lines for `UnderTask` targets; tests (paste, indent keep other links, `--to` keeps link).
-- [ ] 6.2 `plan_retarget(plan, scan, ctx)`: collect moved `^id`s, rewrite incoming links on `new`/disk content, merge edits; same-file ↔ explicit form conversions.
-- [ ] 6.3 Tests: parent moved cross-file retargets journal link; link inside moved block; target file already edited; embed + alias preserved; same-file move no-op.
+- [x] 6.1 `plan_move` strips `expected.parent_link` from head lines for `UnderTask` targets; tests (paste, indent keep other links, `--to` keeps link).
+- [x] 6.2 `plan_retarget(plan, scan, ctx)`: collect moved `^id`s, rewrite incoming links on `new`/disk content, merge edits; same-file ↔ explicit form conversions.
+- [x] 6.3 Tests: parent moved cross-file retargets journal link; link inside moved block; target file already edited; embed + alias preserved; same-file move no-op.
 
 ## 7. CLI
 

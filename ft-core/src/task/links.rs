@@ -326,23 +326,31 @@ pub fn link_text<L: NoteLookup>(
     anchor: LinkAnchor<'_>,
     notes: &L,
 ) -> String {
-    let same_file = from_rel == to_rel;
-    let note = if same_file && matches!(anchor, LinkAnchor::Block(_)) {
-        String::new()
-    } else {
-        let title = crate::graph::title_of(to_rel);
-        if notes.by_title(&title).len() == 1 {
-            title
-        } else {
-            to_rel
-                .with_extension("")
-                .to_string_lossy()
-                .replace('\\', "/")
-        }
-    };
+    let note = note_part(from_rel, to_rel, anchor, notes);
     match anchor {
         LinkAnchor::Block(id) => format!("[[{note}#^{id}]]"),
         LinkAnchor::Note => format!("[[{note}]]"),
+    }
+}
+
+/// The target part of a wikilink (before `#`) per [`link_text`]'s rules.
+fn note_part<L: NoteLookup>(
+    from_rel: &Path,
+    to_rel: &Path,
+    anchor: LinkAnchor<'_>,
+    notes: &L,
+) -> String {
+    if from_rel == to_rel && matches!(anchor, LinkAnchor::Block(_)) {
+        return String::new();
+    }
+    let title = crate::graph::title_of(to_rel);
+    if notes.by_title(&title).len() == 1 {
+        title
+    } else {
+        to_rel
+            .with_extension("")
+            .to_string_lossy()
+            .replace('\\', "/")
     }
 }
 
@@ -469,6 +477,7 @@ pub struct LinkCtx<'a> {
     pub root: PathBuf,
     pub notes: ScanNoteIndex,
     pub tasks: &'a [Task],
+    pub files: &'a [crate::scan::ParsedFile],
 }
 
 impl<'a> LinkCtx<'a> {
@@ -477,6 +486,18 @@ impl<'a> LinkCtx<'a> {
             root: root.to_path_buf(),
             notes: ScanNoteIndex::new(scan.files.iter().map(|f| f.rel.as_path())),
             tasks: &scan.tasks,
+            files: &scan.files,
+        }
+    }
+
+    /// The vault-relative file a wikilink written in `from` points at.
+    fn target_of(&self, from: &Path, target: &str) -> Option<PathBuf> {
+        if target.trim().is_empty() {
+            return Some(from.to_path_buf());
+        }
+        match resolve_wiki(target, &self.notes) {
+            Resolution::Resolved(i) => self.notes.path_of(i).map(Path::to_path_buf),
+            _ => None,
         }
     }
 
@@ -724,6 +745,143 @@ pub fn plan_link(
         children: linked,
         parent: Some((parent.path.clone(), parent.line)),
     })
+}
+
+/// Extend a move plan so block references survive cross-file moves:
+/// links anywhere that pointed at a block id carried by a moved line now
+/// name the target file; same-file references (`[[#^id]]`) inside moved
+/// blocks whose target stayed behind become explicit; explicit references
+/// inside moved blocks that now point into their own file collapse to
+/// `[[#^id]]`. Works on the plan's post-move content. Returns the number of
+/// links rewritten.
+pub fn plan_retarget(plan: &mut ops::MovePlan, ctx: &LinkCtx<'_>) -> Result<usize, LinkError> {
+    // (source rel, id) → target rel, for every block id on a moved line.
+    let mut moved_ids: HashMap<(PathBuf, String), PathBuf> = HashMap::new();
+    // Moved-in line ranges: (target rel, first line, last line, source rel).
+    let mut moved_in: Vec<(PathBuf, usize, usize, PathBuf)> = Vec::new();
+    for block in &plan.blocks {
+        let Some((dest_abs, dest_line)) = &block.dest else {
+            continue;
+        };
+        let (src, dst) = (ctx.rel(&block.source.path), ctx.rel(dest_abs));
+        if src == dst {
+            continue;
+        }
+        let len = block.end_line - block.source.line + 1;
+        moved_in.push((dst.clone(), *dest_line, dest_line + len - 1, src.clone()));
+        let Some(original) = plan
+            .edits
+            .iter()
+            .find(|e| e.path == block.source.path)
+            .map(|e| e.original.as_str())
+        else {
+            continue;
+        };
+        for l in original.lines().skip(block.source.line - 1).take(len) {
+            if let Some(id) = crate::scan::trailing_block_id(l) {
+                moved_ids.insert((src.clone(), id.to_string()), dst.clone());
+            }
+        }
+    }
+    if moved_in.is_empty() {
+        return Ok(0);
+    }
+
+    // Files to revisit: those with a scanned link at a moved id, plus every
+    // file the plan touches (moved blocks carry their own links along).
+    let mut candidates: Vec<PathBuf> = plan.edits.iter().map(|e| ctx.rel(&e.path)).collect();
+    for f in ctx.files {
+        let hits = f.links.iter().chain(&f.self_block_refs).any(|l| {
+            l.anchor
+                .as_deref()
+                .and_then(|a| a.strip_prefix('^'))
+                .is_some_and(|id| {
+                    ctx.target_of(&f.rel, &l.target_text)
+                        .is_some_and(|t| moved_ids.contains_key(&(t, id.to_string())))
+                })
+        });
+        if hits && !candidates.contains(&f.rel) {
+            candidates.push(f.rel.clone());
+        }
+    }
+
+    let mut rewritten = 0;
+    for rel in candidates {
+        let abs = ctx.root.join(&rel);
+        let idx = match plan.edits.iter().position(|e| e.path == abs) {
+            Some(i) => i,
+            None => {
+                let original = crate::markdown::lines::read_or_empty(&abs).map_err(|source| {
+                    LinkError::Read {
+                        path: abs.clone(),
+                        source,
+                    }
+                })?;
+                plan.edits.push(FileEdit {
+                    path: abs.clone(),
+                    new: original.clone(),
+                    original,
+                });
+                plan.edits.len() - 1
+            }
+        };
+        let content = plan.edits[idx].new.clone();
+        let (links, self_refs) = crate::graph::parser::extract_links_and_self_block_refs(&content);
+        let mut replacements: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+        for l in links.iter().chain(&self_refs) {
+            if l.form != LinkForm::WikiLink {
+                continue;
+            }
+            let Some(id) = l.anchor.as_deref().and_then(|a| a.strip_prefix('^')) else {
+                continue;
+            };
+            let moved_from = moved_in
+                .iter()
+                .find(|(dst, first, last, _)| *dst == rel && (*first..=*last).contains(&l.line))
+                .map(|(_, _, _, src)| src);
+            let resolved = ctx.target_of(&rel, &l.target_text);
+            let new_target = match (moved_from, resolved) {
+                // A same-file reference that travelled with its line: it
+                // still means the source file unless its block moved too.
+                (Some(src), _) if l.target_text.trim().is_empty() => {
+                    if moved_ids.get(&(src.clone(), id.to_string())) == Some(&rel) {
+                        continue;
+                    }
+                    src.clone()
+                }
+                (_, Some(t)) => match moved_ids.get(&(t.clone(), id.to_string())) {
+                    Some(dst) => dst.clone(),
+                    None if moved_from.is_some()
+                        && t == rel
+                        && !l.target_text.trim().is_empty() =>
+                    {
+                        t
+                    }
+                    None => continue,
+                },
+                _ => continue,
+            };
+            let note = note_part(&rel, &new_target, LinkAnchor::Block(id), &ctx.notes);
+            let alias = l
+                .display
+                .as_deref()
+                .map(|d| format!("|{d}"))
+                .unwrap_or_default();
+            let bang = if l.is_embed { "!" } else { "" };
+            let text = format!("{bang}[[{note}#^{id}{alias}]]");
+            if text != l.raw_text {
+                replacements.push((l.byte_range.clone(), text));
+            }
+        }
+        replacements.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
+        let mut new = content;
+        for (range, text) in &replacements {
+            new.replace_range(range.clone(), text);
+        }
+        rewritten += replacements.len();
+        plan.edits[idx].new = new;
+    }
+    Ok(rewritten)
 }
 
 /// Plan removing `task`'s parent link (as recorded in its scanned
@@ -1279,6 +1437,161 @@ mod tests {
         let second = block_id_from_seed(p, 1, "x", 42, &taken);
         assert_ne!(first, second);
         assert!(second.len() == 6 && second.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    // ── move integration ─────────────────────────────────────────────
+
+    use crate::task::ops::{apply_move_plan, plan_indent, plan_move, MoveTarget, Placement};
+
+    #[test]
+    fn nesting_under_task_strips_parent_link_only() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor ^vo1\n- [ ] Other\n"),
+            ("j.md", "- [ ] reproduce [[proj#^vo1]] see [[Claude]] 📅 2026-10-23\n  - [ ] kid [[proj#^vo1]]\n"),
+        ]);
+        let target = MoveTarget::UnderTask {
+            path: d.path().join("proj.md"),
+            line: 2,
+            expected: None,
+            placement: Placement::Child,
+        };
+        let plan = plan_move(&[src_of(d.path(), &s, "j.md", 1)], &target, &EmojiFormat).unwrap();
+        apply_move_plan(&plan).unwrap();
+        assert_eq!(
+            read(d.path(), "proj.md"),
+            "- [ ] Vendor ^vo1\n- [ ] Other\n  - [ ] reproduce see [[Claude]] 📅 2026-10-23\n    - [ ] kid [[proj#^vo1]]\n"
+        );
+    }
+
+    #[test]
+    fn move_to_file_keeps_parent_link() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor ^vo1\n"),
+            ("j.md", "- [ ] reproduce [[proj#^vo1]]\n"),
+        ]);
+        let plan = plan_move(
+            &[src_of(d.path(), &s, "j.md", 1)],
+            &MoveTarget::Append(d.path().join("inbox.md")),
+            &EmojiFormat,
+        )
+        .unwrap();
+        apply_move_plan(&plan).unwrap();
+        assert_eq!(
+            read(d.path(), "inbox.md"),
+            "- [ ] reproduce [[proj#^vo1]]\n"
+        );
+    }
+
+    #[test]
+    fn indent_strips_parent_link() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor ^vo1\n"),
+            ("j.md", "- [ ] A\n- [ ] B [[proj#^vo1]]\n"),
+        ]);
+        let plan = plan_indent(&src_of(d.path(), &s, "j.md", 2), &EmojiFormat).unwrap();
+        apply_move_plan(&plan).unwrap();
+        assert_eq!(read(d.path(), "j.md"), "- [ ] A\n  - [ ] B\n");
+    }
+
+    fn move_retarget(
+        d: &Path,
+        s: &Scan,
+        source: (&str, usize),
+        target: MoveTarget,
+    ) -> (usize, ops::MovePlan) {
+        let mut plan =
+            plan_move(&[src_of(d, s, source.0, source.1)], &target, &EmojiFormat).unwrap();
+        let n = plan_retarget(&mut plan, &LinkCtx::new(d, s)).unwrap();
+        apply_move_plan(&plan).unwrap();
+        (n, plan)
+    }
+
+    #[test]
+    fn retarget_links_when_parent_moves_cross_file() {
+        let (d, s) = scan(&[
+            (
+                "proj.md",
+                "- [ ] Vendor ^vo1\n- [ ] stays\n- [ ] local ref [[#^vo1]]\n",
+            ),
+            (
+                "journal.md",
+                "- [ ] reproduce [[proj#^vo1]]\n- [ ] embed ![[proj#^vo1|the parent]]\n",
+            ),
+            ("archive/2026.md", "# Archive\n"),
+        ]);
+        let (n, _) = move_retarget(
+            d.path(),
+            &s,
+            ("proj.md", 1),
+            MoveTarget::Append(d.path().join("archive/2026.md")),
+        );
+        assert_eq!(n, 3);
+        assert_eq!(
+            read(d.path(), "journal.md"),
+            "- [ ] reproduce [[2026#^vo1]]\n- [ ] embed ![[2026#^vo1|the parent]]\n"
+        );
+        assert_eq!(
+            read(d.path(), "proj.md"),
+            "- [ ] stays\n- [ ] local ref [[2026#^vo1]]\n"
+        );
+        let s2 = crate::scan::scan_vault(d.path(), &[]);
+        assert_eq!(state(&s2, "journal.md", 1), resolved("archive/2026.md", 2));
+        assert_eq!(state(&s2, "proj.md", 2), resolved("archive/2026.md", 2));
+    }
+
+    #[test]
+    fn retarget_links_inside_moved_block() {
+        let (d, s) = scan(&[
+            ("a.md", "- [ ] Root ^r1\n- [ ] block [[#^r1]]\n  - [ ] inner ^i1\n  - [ ] ref inner [[#^i1]]\n  - [ ] ref b [[b#^b1]]\n"),
+            ("b.md", "- [ ] B ^b1\n"),
+        ]);
+        let target = MoveTarget::UnderTask {
+            path: d.path().join("b.md"),
+            line: 1,
+            expected: None,
+            placement: Placement::Child,
+        };
+        let (n, _) = move_retarget(d.path(), &s, ("a.md", 2), target);
+        // [[#^r1]] → explicit a; [[b#^b1]] collapses; parent link stripped;
+        // [[#^i1]] travelled with its block and stays.
+        assert_eq!(
+            read(d.path(), "b.md"),
+            "- [ ] B ^b1\n  - [ ] block\n    - [ ] inner ^i1\n    - [ ] ref inner [[#^i1]]\n    - [ ] ref b [[#^b1]]\n"
+        );
+        assert_eq!(
+            n, 1,
+            "only [[b#^b1]] needed a rewrite once the parent link was stripped"
+        );
+    }
+
+    #[test]
+    fn retarget_same_file_moves_are_noops() {
+        let (d, s) = scan(&[("a.md", "- [ ] P ^p\n- [ ] Q\n- [ ] r [[#^p]]\n")]);
+        let target = MoveTarget::UnderTask {
+            path: d.path().join("a.md"),
+            line: 2,
+            expected: None,
+            placement: Placement::Child,
+        };
+        let (n, _) = move_retarget(d.path(), &s, ("a.md", 1), target);
+        assert_eq!(n, 0);
+        assert_eq!(
+            read(d.path(), "a.md"),
+            "- [ ] Q\n  - [ ] P ^p\n- [ ] r [[#^p]]\n"
+        );
+    }
+
+    #[test]
+    fn retarget_explicit_same_file_ref_left_behind_becomes_explicit() {
+        let (d, s) = scan(&[("a.md", "- [ ] stay ^s1\n- [ ] go see [[#^s1]]\n")]);
+        let (n, _) = move_retarget(
+            d.path(),
+            &s,
+            ("a.md", 2),
+            MoveTarget::Append(d.path().join("z.md")),
+        );
+        assert_eq!(n, 1);
+        assert_eq!(read(d.path(), "z.md"), "- [ ] go see [[a#^s1]]\n");
     }
 
     /// Gated perf budget: the post-pass stays a small fraction of a scan.

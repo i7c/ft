@@ -867,7 +867,8 @@ pub fn plan_move(
         lines_to_move.sort_unstable_by_key(|(line, _)| *line);
         lines_to_move.dedup_by_key(|(line, _)| *line);
 
-        let mut ranges: Vec<(usize, usize, String, usize)> = Vec::new(); // (start, end, description, head_indent)
+        // (start, end, description, head_indent, parent-link text to strip)
+        let mut ranges: Vec<(usize, usize, String, usize, Option<String>)> = Vec::new();
         for (line, expected) in &lines_to_move {
             let idx = line.checked_sub(1).ok_or_else(|| MoveError::LineMissing {
                 path: path.clone(),
@@ -901,7 +902,13 @@ pub fn plan_move(
                 }
             })?;
             let end = block_end(&raw_lines, idx, task.indent_level);
-            ranges.push((idx, end, task.description.clone(), task.indent_level));
+            // Physically nesting a task makes its parent link redundant.
+            let strip = anchor
+                .as_ref()
+                .and(*expected)
+                .and_then(|t| t.parent_link.as_ref())
+                .map(|l| l.raw.clone());
+            ranges.push((idx, end, task.description.clone(), task.indent_level, strip));
         }
 
         // If a range fully contains another, drop the contained one — its
@@ -909,7 +916,7 @@ pub fn plan_move(
         // (start asc, len desc) order and drop later ranges whose start is
         // covered by a kept range.
         ranges.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
-        let mut kept: Vec<(usize, usize, String, usize)> = Vec::new();
+        let mut kept: Vec<(usize, usize, String, usize, Option<String>)> = Vec::new();
         for r in ranges {
             if kept.iter().any(|k| r.0 >= k.0 && r.1 <= k.1) {
                 continue;
@@ -918,7 +925,7 @@ pub fn plan_move(
         }
 
         if let (Some(a), true) = (&anchor, path == target_path) {
-            if kept.iter().any(|(s, e, _, _)| (*s..=*e).contains(&a.idx)) {
+            if kept.iter().any(|(s, e, ..)| (*s..=*e).contains(&a.idx)) {
                 return Err(MoveError::IntoOwnSubtree {
                     path: target_path.clone(),
                     line: a.idx + 1,
@@ -926,8 +933,8 @@ pub fn plan_move(
             }
             removed_before_anchor_end = kept
                 .iter()
-                .filter(|(_, e, _, _)| *e <= a.end)
-                .map(|(s, e, _, _)| e - s + 1)
+                .filter(|(_, e, ..)| *e <= a.end)
+                .map(|(s, e, ..)| e - s + 1)
                 .sum();
         }
 
@@ -935,7 +942,7 @@ pub fn plan_move(
 
         // Append moved lines (re-indented under a task anchor, otherwise
         // normalized to column 0) into `moved_lines`.
-        for (start, end, description, head_indent) in &kept {
+        for (start, end, description, head_indent, strip) in &kept {
             blocks.push(MovedBlock {
                 source: MoveSource {
                     path: path.clone(),
@@ -947,7 +954,13 @@ pub fn plan_move(
                 dest: None,
             });
             block_offsets.push(moved_lines.len());
-            let block = &raw_lines[*start..=*end];
+            let mut block = raw_lines[*start..=*end].to_vec();
+            if let Some(raw) = strip {
+                if let Some(head) = super::links::remove_link_text(&block[0], raw) {
+                    block[0] = head;
+                }
+            }
+            let block = &block[..];
             match (&anchor, src_unit) {
                 (Some(a), Some(src)) => {
                     moved_lines.extend(reindent_block(block, *head_indent, src, a.unit, &a.head_ws))
@@ -961,7 +974,7 @@ pub fn plan_move(
         let mut new_lines: Vec<String> = Vec::with_capacity(raw_lines.len());
         let mut i = 0;
         while i < raw_lines.len() {
-            if let Some((_, end, _, _)) = kept.iter().find(|(s, _, _, _)| *s == i) {
+            if let Some((_, end, ..)) = kept.iter().find(|(s, ..)| *s == i) {
                 i = *end + 1;
                 continue;
             }
