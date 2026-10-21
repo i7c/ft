@@ -43,12 +43,36 @@ pub enum ParentLinkState {
 }
 
 impl ParentLinkState {
-    pub fn as_str(&self) -> &'static str {
+    pub fn kind(&self) -> ParentLinkKind {
         match self {
-            ParentLinkState::Resolved(_) => "resolved",
-            ParentLinkState::Dangling => "dangling",
-            ParentLinkState::Ignored => "ignored",
-            ParentLinkState::Cycle => "cycle",
+            ParentLinkState::Resolved(_) => ParentLinkKind::Resolved,
+            ParentLinkState::Dangling => ParentLinkKind::Dangling,
+            ParentLinkState::Ignored => ParentLinkKind::Ignored,
+            ParentLinkState::Cycle => ParentLinkKind::Cycle,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        self.kind().as_str()
+    }
+}
+
+/// [`ParentLinkState`] without its payload — what graph nodes carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentLinkKind {
+    Resolved,
+    Dangling,
+    Ignored,
+    Cycle,
+}
+
+impl ParentLinkKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParentLinkKind::Resolved => "resolved",
+            ParentLinkKind::Dangling => "dangling",
+            ParentLinkKind::Ignored => "ignored",
+            ParentLinkKind::Cycle => "cycle",
         }
     }
 }

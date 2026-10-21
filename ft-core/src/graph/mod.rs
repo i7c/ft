@@ -214,7 +214,7 @@ pub struct TaskData {
     pub source_line: usize,
     /// Parent-link state (`resolved` / `dangling` / `ignored` / `cycle`),
     /// when the task line carries a parent link.
-    pub parent_link: Option<String>,
+    pub parent_link: Option<crate::task::links::ParentLinkKind>,
 }
 
 /// Per-edge payload.
@@ -996,10 +996,7 @@ impl Graph {
             tags: task.tags.clone(),
             source_file: task.source_file.clone(),
             source_line: task.source_line,
-            parent_link: task
-                .parent_link
-                .as_ref()
-                .map(|l| l.state.as_str().to_string()),
+            parent_link: task.parent_link.as_ref().map(|l| l.state.kind()),
         };
 
         let idx = self.g.add_node(NodeKind::Task(task_data));

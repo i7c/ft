@@ -374,9 +374,9 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
         }
         Attr::ParentLink => match graph.node(id) {
             NodeKind::Task(TaskData {
-                parent_link: Some(state),
+                parent_link: Some(kind),
                 ..
-            }) => eval_string_op(state, c.op, &c.value),
+            }) => eval_string_op(kind.as_str(), c.op, &c.value),
             _ => false,
         },
         Attr::Children => {
