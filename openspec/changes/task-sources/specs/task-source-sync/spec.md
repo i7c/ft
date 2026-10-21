@@ -106,7 +106,7 @@ Before writing remote text, the planner SHALL neutralise it:
 - Lines that would parse as tasks (`- [ ]`, `* [x]`, numbered, any status char) SHALL have their checkbox replaced by `☐` (open) or `☑` (any other status).
 - Headings SHALL be demoted so none is shallower than `###`.
 - Lines that are exactly `---` SHALL be replaced by `***`.
-- HTML comments matching the managed markers SHALL be removed.
+- HTML comments that look like managed markers SHALL be defused (renamed to `ft-source:`), so remote text can't open or close a managed section.
 
 If a note's markers are missing (the user deleted a section), the planner SHALL NOT re-add that section.
 

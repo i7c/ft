@@ -8,6 +8,8 @@ pub mod credentials;
 pub mod github;
 pub mod http;
 pub mod jira;
+pub mod note;
+pub mod sync;
 
 use std::collections::{BTreeMap, BTreeSet};
 

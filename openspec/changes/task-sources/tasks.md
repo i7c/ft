@@ -23,11 +23,11 @@
 
 ## 5. Issue notes + sync planner
 
-- [ ] 5.1 `sources/note.rs`: render a new issue note (frontmatter, heading, anchor line, rendered template body with `vars` {key,title,url,source}, managed sections); parse an existing note into an `IssueNote` view (anchor line idx, marker ranges, frontmatter values).
-- [ ] 5.2 `neutralise` (task lines → ☐/☑, heading demotion, `---` → `***`, marker stripping) + tests incl. "no phantom task after scan".
-- [ ] 5.3 `sources/sync.rs::plan_sync`: index notes by `(source,key)`; create (path collision → `<key> (<source>).md`); update owned fields keeping local ones; status 3-way rules; scope states (active/context/out-of-scope, reactivation); parent frontmatter; managed sections (respect deleted markers); duplicate-key warning; report counts.
-- [ ] 5.4 Determinism tests: same input → identical bytes; unchanged remote → no edits; key order stable.
-- [ ] 5.5 Planner scenario tests with a fake `FetchResult` for every `task-source-sync` scenario.
+- [x] 5.1 `sources/note.rs`: render a new issue note (frontmatter, heading, anchor line, rendered template body with `vars` {key,title,url,source}, managed sections); parse an existing note into an `IssueNote` view (anchor line idx, marker ranges, frontmatter values).
+- [x] 5.2 `neutralise` (task lines → ☐/☑, heading demotion, `---` → `***`, marker stripping) + tests incl. "no phantom task after scan".
+- [x] 5.3 `sources/sync.rs::plan_sync`: index notes by `(source,key)`; create (path collision → `<key> (<source>).md`); update owned fields keeping local ones; status 3-way rules; scope states (active/context/out-of-scope, reactivation); parent frontmatter; managed sections (respect deleted markers); duplicate-key warning; report counts.
+- [x] 5.4 Determinism tests: same input → identical bytes; unchanged remote → no edits; key order stable.
+- [x] 5.5 Planner scenario tests with a fake `FetchResult` for every `task-source-sync` scenario.
 
 ## 6. Edit guard + hierarchy + DSL
 
