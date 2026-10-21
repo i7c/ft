@@ -64,6 +64,20 @@ pub enum TasksCommand {
     /// Pull remote issues (Jira, GitHub) into issue notes. Sources that are
     /// offline or have no credentials on this machine are skipped.
     Sync(SyncArgs),
+    /// Turn a local subtask of a remote issue into a real remote issue
+    /// (Jira sub-task / GitHub sub-issue). Needs a connection.
+    Promote(PromoteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PromoteArgs {
+    /// The task to promote (must match exactly one task).
+    #[arg(value_name = "SELECTOR")]
+    pub selector: String,
+
+    /// Output format for the result.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
 }
 
 #[derive(Args, Debug)]
@@ -80,6 +94,16 @@ pub struct SyncArgs {
     /// Don't push local status changes this run.
     #[arg(long)]
     pub no_push: bool,
+
+    /// Resolve stored status conflicts interactively (local / remote /
+    /// skip), then exit. Works offline.
+    #[arg(long, conflicts_with_all = ["take", "dry_run"])]
+    pub resolve: bool,
+
+    /// Resolve the conflicts of the given issue keys: `--take remote
+    /// ABC-123 ABC-124`. Works offline.
+    #[arg(long, num_args = 2.., value_names = ["local|remote", "KEY"], conflicts_with = "dry_run")]
+    pub take: Vec<String>,
 
     /// Output format for the per-source summary.
     #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
@@ -239,7 +263,14 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Check(a) => run_check(a, vault_flag),
         TasksCommand::Sync(a) => {
             let vault = crate::cmd::common::discover_vault(vault_flag)?;
+            if a.resolve || !a.take.is_empty() {
+                return crate::cmd::sources::run_resolve(&vault, &a.sources, &a.take);
+            }
             crate::cmd::sources::run_sync(&vault, &a.sources, a.dry_run, a.no_push, a.format)
+        }
+        TasksCommand::Promote(a) => {
+            let vault = crate::cmd::common::discover_vault(vault_flag)?;
+            crate::cmd::sources::run_promote(&vault, &a.selector, a.format)
         }
     }
 }
@@ -745,7 +776,11 @@ fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Re
 /// Resolve a selector into exactly one task. Zero matches error; multiple
 /// matches error with the candidate list (prefixed by `label`, e.g.
 /// `--parent`) so the user can switch to a `file:line` or id selector.
-fn resolve_unique<'a>(label: &str, selector: &str, tasks: &'a [Task]) -> Result<&'a Task> {
+pub(crate) fn resolve_unique<'a>(
+    label: &str,
+    selector: &str,
+    tasks: &'a [Task],
+) -> Result<&'a Task> {
     let sel = selector::parse(selector);
     let mut matches = selector::resolve(tasks, &sel);
     if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) {

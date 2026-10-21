@@ -264,3 +264,150 @@ pub fn run_sync(
         ExitCode::SUCCESS
     })
 }
+
+/// `ft tasks sync --resolve | --take`: resolve stored conflicts locally.
+pub fn run_resolve(vault: &Vault, only: &[String], take: &[String]) -> Result<ExitCode> {
+    let scripted = match take.split_first() {
+        None => None,
+        Some((side, keys)) => {
+            let side = match side.as_str() {
+                "local" => sync::Take::Local,
+                "remote" => sync::Take::Remote,
+                other => return Err(anyhow!("--take expects `local` or `remote`, got `{other}`")),
+            };
+            Some((side, keys.to_vec()))
+        }
+    };
+    let scan = vault.scan();
+    let mut conflicts = Vec::new();
+    for f in &scan.files {
+        let Some(src) = f
+            .frontmatter
+            .as_deref()
+            .and_then(ft_core::frontmatter::ft_source_in)
+        else {
+            continue;
+        };
+        if src.conflict.is_none() || (!only.is_empty() && !only.contains(&src.name)) {
+            continue;
+        }
+        let local = scan
+            .tasks
+            .iter()
+            .find(|t| t.source_file == f.rel && t.id.as_deref() == Some(src.key.as_str()))
+            .map_or("?", |t| t.status.as_str());
+        conflicts.push((
+            f.rel.clone(),
+            src.key.clone(),
+            local,
+            src.conflict.clone().unwrap_or_default(),
+        ));
+    }
+    if let Some((_, keys)) = &scripted {
+        for k in keys {
+            if !conflicts.iter().any(|(_, key, _, _)| key == k) {
+                return Err(anyhow!("{k} has no stored conflict"));
+            }
+        }
+    }
+    if conflicts.is_empty() {
+        println!("no conflicts");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut resolved = 0;
+    for (rel, key, local, remote) in &conflicts {
+        let choice = match &scripted {
+            Some((side, keys)) if keys.contains(key) => Some(*side),
+            Some(_) => None,
+            None => {
+                let items = [
+                    format!("keep local ({local})"),
+                    format!("take remote ({remote})"),
+                    "skip".to_string(),
+                ];
+                let pick = dialoguer::Select::new()
+                    .with_prompt(format!("{key}: local={local} remote={remote}"))
+                    .items(&items)
+                    .default(2)
+                    .interact()
+                    .context("reading choice")?;
+                match pick {
+                    0 => Some(sync::Take::Local),
+                    1 => Some(sync::Take::Remote),
+                    _ => None,
+                }
+            }
+        };
+        let Some(take) = choice else { continue };
+        let path = vault.path.join(rel);
+        let content =
+            std::fs::read_to_string(&path).with_context(|| format!("reading {}", rel.display()))?;
+        let new =
+            sync::resolve_conflict(&content, take, ft_core::dates::today(), vault.task_format())
+                .ok_or_else(|| anyhow!("{key}: conflict disappeared — rescan"))?;
+        ft_core::fs::write_atomic(&path, &new)?;
+        resolved += 1;
+        let side = if take == sync::Take::Local {
+            "local (pending push)"
+        } else {
+            "remote"
+        };
+        println!("{key}: took {side}");
+    }
+    println!("resolved {resolved} of {} conflict(s)", conflicts.len());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `ft tasks promote`.
+pub fn run_promote(vault: &Vault, selector: &str, format: MoveFormat) -> Result<ExitCode> {
+    use ft_core::sources::promote;
+    let scan = vault.scan();
+    let task = super::tasks::resolve_unique("selector", selector, &scan.tasks)?;
+    let target =
+        promote::check(&scan, task, &vault.config.config.sources).map_err(|e| anyhow!(e))?;
+    let cfg = source_cfg(vault, &target.source)?;
+    let new = promote::new_issue(task);
+    let (created, push_failure) =
+        run::promote(&target.source, cfg, &target.parent, &new, task.status).map_err(
+            |f| match f {
+                run::FetchFailure::Offline(_) => {
+                    anyhow!("{}: offline — promote needs a connection", target.source)
+                }
+                other => anyhow!("{}: {}", target.source, other.message(&target.source)),
+            },
+        )?;
+    let plan = promote::plan_local(
+        &vault.path,
+        &vault.templates_dir(),
+        &scan,
+        &target.source,
+        cfg,
+        vault.task_format(),
+        ft_core::dates::today(),
+        task,
+        &created,
+    )
+    .and_then(|p| promote::apply_guarded(&p.edits).map(|()| p))
+    .map_err(|e| anyhow!("created {} but couldn't update the vault: {e}", created.key))?;
+    if let Some(reason) = &push_failure {
+        eprintln!("warning: couldn't set {}'s status: {reason}", created.key);
+    }
+    match format {
+        MoveFormat::Text => println!(
+            "Promoted to {} ({}) → {}",
+            created.key,
+            created.url,
+            plan.note.display()
+        ),
+        MoveFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "key": created.key,
+                "url": created.url,
+                "note": plan.note,
+                "moved_children": plan.moved_lines,
+            }))?
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}

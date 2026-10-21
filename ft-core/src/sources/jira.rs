@@ -317,6 +317,10 @@ impl TaskSource for JiraSource {
             &serde_json::json!({"transition": {"id": chosen.id}}),
         ) {
             Ok(_) => Ok(PushOutcome::Pushed),
+            // A 403 on a write is a per-issue permission, not bad credentials.
+            Err(SourceError::Unauthorized { status: 403 }) => {
+                Ok(PushOutcome::NotPushable("forbidden (403)".into()))
+            }
             Err(SourceError::Remote { status, excerpt })
                 if status == 400 || status == 404 || status == 409 =>
             {

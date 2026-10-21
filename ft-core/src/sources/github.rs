@@ -192,6 +192,10 @@ impl TaskSource for GithubSource {
         };
         match self.http.patch_json(&url, ACCEPT, &body) {
             Ok(_) => Ok(PushOutcome::Pushed),
+            // A 403 on a write is a per-issue permission, not bad credentials.
+            Err(SourceError::Unauthorized { status: 403 }) => {
+                Ok(PushOutcome::NotPushable("forbidden (403)".into()))
+            }
             Err(SourceError::Remote { status, excerpt })
                 if status == 404 || status == 410 || status == 422 =>
             {

@@ -27,9 +27,9 @@
 
 ## 5. CLI
 
-- [ ] 5.1 `ft tasks sync --no-push | --resolve | --take local|remote <KEY>…`; summary `· N pushed`, `push failed` lines; JSON `pushed`, `push_failures`.
-- [ ] 5.2 `ft tasks promote <SEL> [--format json]`.
-- [ ] 5.3 Integration tests against the stub (push via transition, AlreadyThere, Cancelled not pushable, 403 failure stays pending + check, `--take` offline, promote end-to-end with note + moved child + retargeted ref, promote preconditions).
+- [x] 5.1 `ft tasks sync --no-push | --resolve | --take local|remote <KEY>…`; summary `· N pushed`, `push failed` lines; JSON `pushed`, `push_failures`.
+- [x] 5.2 `ft tasks promote <SEL> [--format json]`.
+- [x] 5.3 Integration tests against the stub (push via transition, AlreadyThere, Cancelled not pushable, 403 failure stays pending + check, `--take` offline, promote end-to-end with note + moved child + retargeted ref, promote preconditions).
 
 ## 6. TUI
 

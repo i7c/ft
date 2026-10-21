@@ -23,7 +23,7 @@ pub struct PromoteTarget {
 }
 
 /// The issue-note identity of an anchor task, if `task` is one.
-fn anchor_of<'a>(scan: &'a Scan, task: &Task) -> Option<frontmatter::FtSource> {
+fn anchor_of(scan: &Scan, task: &Task) -> Option<frontmatter::FtSource> {
     let f = scan.files.iter().find(|f| f.rel == task.source_file)?;
     let fm = f.frontmatter.as_deref()?;
     let src = frontmatter::ft_source_in(fm)?;
