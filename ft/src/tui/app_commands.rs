@@ -65,7 +65,16 @@ pub static APP_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "app.git-leader",
-        description: "Enter the git-sync leader (then `s` to sync, `c` to commit)",
+        description: "Enter the git-sync leader (then `s` to sync, `c` to commit, `r` to sync remote sources)",
+        scope: CommandScope::Global,
+        group: "App",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "app.sync-sources",
+        description: "Sync remote task sources (Jira, GitHub) now",
         scope: CommandScope::Global,
         group: "App",
         args_schema: &[],

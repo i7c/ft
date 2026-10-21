@@ -14,8 +14,8 @@ expression: frame
 │  C     create note │                                    │                    │
 │  t     open today's│  s     sync (commit + pull + push) │                    │
 │  p     periodic not│  c     commit (local only, no pull/│                    │
-│  ?     show this he│  Esc   cancel                      │                    │
-│  Esc   close overla│                                    │                    │
+│  ?     show this he│  r     sync remote task sources    │                    │
+│  Esc   close overla│  Esc   cancel                      │                    │
 │                    │                                    │                    │
 │                    └────────────────────────────────────┘                    │
 │                                                                              │

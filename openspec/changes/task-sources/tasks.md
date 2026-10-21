@@ -43,11 +43,11 @@
 
 ## 8. TUI
 
-- [ ] 8.1 `BgEvent::SourcesFetched`, `JobKind::Sources` (indicator `sources`), worker spawn with owned inputs, main-thread `plan_sync` + apply + graph refresh.
-- [ ] 8.2 `Tick` scheduling (startup after first `GraphReady`, per-source interval, busy-slot retry); seed from `.ft/cache/sources.json`.
-- [ ] 8.3 `app.sync-sources` command + `g r` in the git leader; toasts per spec (silent offline/no-creds on background runs; always summarise on `g r`).
-- [ ] 8.4 Injectable source factory for tests; `TestBackend` tests: startup sync creates anchors visible in Tasks tab, `g r` offline toast, owned-field toast on `]`, pending-push summary.
-- [ ] 8.5 Regenerate `docs/keybindings.md`.
+- [x] 8.1 `BgEvent::SourcesFetched`, `JobKind::Sources` (indicator `sources`), worker (scan + fetch + plan, reads only) with owned inputs, main-thread apply of unchanged files + graph refresh.
+- [x] 8.2 `Tick` scheduling (startup after first `GraphReady`, per-source interval, busy-slot retry). No seeding from `.ft/cache/sources.json`, since the startup sync resets every schedule.
+- [x] 8.3 `app.sync-sources` command + `g r` in the git leader; toasts per spec (silent offline/no-creds on background runs; always summarise on `g r`).
+- [x] 8.4 Injectable source factory for tests; `TestBackend` tests: startup sync creates anchors visible in Tasks tab, `g r` offline toast, owned-field toast on `]`, pending-push summary.
+- [x] 8.5 Regenerate `docs/keybindings.md`.
 
 ## 9. ft.nvim
 

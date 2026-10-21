@@ -581,6 +581,7 @@ mod history;
 mod notes;
 mod search;
 mod snapshot_lifecycle;
+mod sources;
 mod synthesis;
 mod tasks;
 mod tasks_link;

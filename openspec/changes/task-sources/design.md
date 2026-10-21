@@ -55,23 +55,25 @@
 
 ## Decisions
 
-### D1. Fetch off-thread, plan and apply on the main thread
+### D1. Read off-thread, write on the main thread
 
 ```
-worker thread:  credentials → TaskSource::fetch_query/fetch_keys → FetchResult (owned data)
-main thread:    plan_sync(&vault, &scan, &FetchResult) → SyncPlan (FileEdits + report)
-                apply → write_atomic … → request_graph_refresh
+worker thread:  vault.scan() → credentials → fetch_all → plan_sync → SyncPlan (FileEdits: original + new)
+main thread:    for each edit: write only if the file still equals `original` → request_graph_refresh
 ```
+
+The worker does every read (scan, network, note contents) and plans; it
+never writes. The main thread applies only edits whose file is still
+byte-identical to what was planned. Anything edited in the TUI (or in
+Obsidian) during the sync is skipped and picked up by the next one.
 
 This keeps the TUI concurrency rule (workers own their inputs, post a
-`BgEvent`, and exit). Writes happen on the main thread, where line
-guards and the shared snapshot already live. The CLI runs the same two
+`BgEvent`, and exit). The UI never blocks on the scan. Planning against
+a fresh scan, rather than the possibly stale shared snapshot, means a
+note created moments earlier can't be duplicated. The CLI runs the same
 steps inline.
 
-`FetchResult` is pure data, so planner tests never need network. Before
-fetching, the worker needs the set of previously active and context keys
-(for out-of-scope lookups). The main thread collects them from the
-snapshot's scan and moves them into the worker.
+`FetchResult` is pure data, so planner tests never need network.
 
 ### D2. Module layout in ft-core
 
@@ -199,8 +201,9 @@ through MiniJinja, so there is no template injection.
 ### D10. TUI scheduling
 
 The App gains:
-- `source_due: HashMap<String, Instant>`, seeded from
-  `.ft/cache/sources.json`;
+- a `Schedule` (`HashMap<String, Instant>` of next due times). It
+  isn't seeded from `.ft/cache/sources.json`, because the startup sync
+  always runs and resets every source's next due time;
 - a `Tick` arm that, when the job slot is free and any source is due,
   spawns the fetch worker for the due sources.
 

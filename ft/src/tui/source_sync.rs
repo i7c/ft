@@ -1,0 +1,206 @@
+//! Background sync of remote task sources (Jira, GitHub).
+//!
+//! The worker scans the vault, fetches each due source, and plans the note
+//! edits — all reads. The main thread applies only the edits whose files
+//! are still exactly as planned, so nothing edited in the TUI meanwhile is
+//! overwritten; skipped notes are picked up by the next sync.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::NaiveDate;
+use ft_core::config::SourceCfg;
+use ft_core::sources::run::{self, FetchFailure};
+use ft_core::sources::sync::{self, SyncPlan};
+use ft_core::sources::{FetchResult, IssueRef};
+use ft_core::vault::Vault;
+
+/// Fetches one source; `run::fetch_source` in production, a fake in tests.
+pub type Fetcher =
+    Arc<dyn Fn(&str, &SourceCfg, &[IssueRef]) -> Result<FetchResult, FetchFailure> + Send + Sync>;
+
+pub fn default_fetcher() -> Fetcher {
+    Arc::new(run::fetch_source)
+}
+
+/// One source's planned sync (or why it couldn't run).
+#[derive(Debug, Clone)]
+pub struct SourceRun {
+    pub name: String,
+    pub outcome: Result<SyncPlan, FetchFailure>,
+}
+
+/// What the worker posts back.
+#[derive(Debug, Clone)]
+pub struct SourcesJobResult {
+    pub runs: Vec<SourceRun>,
+    /// Started by `g r` (always toast a summary) vs. startup/interval.
+    pub manual: bool,
+}
+
+/// Everything the worker owns.
+pub struct SourcesJob {
+    pub vault: Arc<Vault>,
+    pub sources: Vec<String>,
+    pub fetcher: Fetcher,
+    pub today: NaiveDate,
+    pub manual: bool,
+}
+
+impl SourcesJob {
+    pub fn run(self) -> SourcesJobResult {
+        let scan = self.vault.scan();
+        let templates_dir = self.vault.templates_dir();
+        let runs = self
+            .sources
+            .iter()
+            .filter_map(|name| {
+                let cfg = self.vault.config.config.sources.get(name)?;
+                let known = sync::known_issues(&scan, name);
+                let outcome = (self.fetcher)(name, cfg, &known).map(|fetched| {
+                    let ctx = sync::SyncCtx {
+                        vault_root: &self.vault.path,
+                        templates_dir: &templates_dir,
+                        scan: &scan,
+                        source: name,
+                        cfg,
+                        format: self.vault.task_format(),
+                        today: self.today,
+                    };
+                    sync::plan_sync(&ctx, &fetched)
+                });
+                Some(SourceRun {
+                    name: name.clone(),
+                    outcome,
+                })
+            })
+            .collect();
+        SourcesJobResult {
+            runs,
+            manual: self.manual,
+        }
+    }
+}
+
+/// When each source is next due. A source with no entry is due now
+/// (startup sync).
+#[derive(Default)]
+pub struct Schedule {
+    next: HashMap<String, Instant>,
+}
+
+impl Schedule {
+    /// Sources due at `now` (all of them when `manual`).
+    pub fn due(
+        &self,
+        sources: &std::collections::BTreeMap<String, SourceCfg>,
+        now: Instant,
+        manual: bool,
+    ) -> Vec<String> {
+        sources
+            .keys()
+            .filter(|name| manual || self.next.get(*name).is_none_or(|t| *t <= now))
+            .cloned()
+            .collect()
+    }
+
+    /// Record an attempt; interval `0` means "startup only".
+    pub fn attempted(&mut self, name: &str, cfg: &SourceCfg, now: Instant) {
+        let next = if cfg.interval_minutes == 0 {
+            now + Duration::from_secs(100 * 365 * 24 * 3600)
+        } else {
+            now + Duration::from_secs(cfg.interval_minutes * 60)
+        };
+        self.next.insert(name.to_string(), next);
+    }
+}
+
+/// Apply a planned sync: write each edit whose file still holds the
+/// planned original. Returns the number of edits skipped because the file
+/// changed meanwhile.
+pub fn apply_plan(plan: &SyncPlan) -> Result<usize, String> {
+    let mut skipped = 0;
+    for e in plan.edits.iter().filter(|e| e.original != e.new) {
+        let current = std::fs::read_to_string(&e.path).unwrap_or_default();
+        if current != e.original {
+            skipped += 1;
+            continue;
+        }
+        ft_core::fs::write_atomic(&e.path, &e.new).map_err(|err| err.to_string())?;
+    }
+    Ok(skipped)
+}
+
+/// The toast for a finished job, if one is warranted, and whether it is
+/// an error. Background runs stay quiet unless notes changed, a conflict
+/// appeared, or a source failed for a reason the user must act on.
+pub fn summary(
+    result: &SourcesJobResult,
+    applied: &[(String, Result<usize, String>)],
+) -> Option<(String, bool)> {
+    let mut parts = Vec::new();
+    let mut error = false;
+    let mut noteworthy = result.manual;
+    for run in &result.runs {
+        match &run.outcome {
+            Ok(plan) => {
+                let r = &plan.report;
+                let changed = r.created.len() + r.updated.len();
+                let mut s = if changed == 0 {
+                    format!("{}: no changes", run.name)
+                } else {
+                    format!(
+                        "{}: {} new · {} updated",
+                        run.name,
+                        r.created.len(),
+                        r.updated.len()
+                    )
+                };
+                if !r.pending.is_empty() {
+                    s.push_str(&format!(" · {} pending push", r.pending.len()));
+                }
+                if !r.conflicts.is_empty() {
+                    s.push_str(&format!(
+                        " · {} conflicts (see ft tasks sync)",
+                        r.conflicts.len()
+                    ));
+                    noteworthy = true;
+                }
+                match applied.iter().find(|(n, _)| n == &run.name).map(|(_, a)| a) {
+                    Some(Ok(skipped)) if *skipped > 0 => {
+                        s.push_str(&format!(
+                            " · {skipped} changed meanwhile, retried next sync"
+                        ));
+                    }
+                    Some(Err(e)) => {
+                        s = format!("{}: write failed: {e}", run.name);
+                        error = true;
+                        noteworthy = true;
+                    }
+                    _ => {}
+                }
+                if changed > 0 {
+                    noteworthy = true;
+                }
+                parts.push(s);
+            }
+            Err(f) if f.is_benign() => {
+                if result.manual {
+                    parts.push(match f {
+                        FetchFailure::Offline(_) => {
+                            format!("{}: offline — nothing synced", run.name)
+                        }
+                        other => format!("{}: {}", run.name, other.message(&run.name)),
+                    });
+                }
+            }
+            Err(f) => {
+                error = true;
+                noteworthy = true;
+                parts.push(format!("{}: {}", run.name, f.message(&run.name)));
+            }
+        }
+    }
+    (noteworthy && !parts.is_empty()).then(|| (parts.join("  |  "), error))
+}

@@ -44,6 +44,8 @@ pub enum JobKind {
     /// `ft git commit` equivalent — stage + commit only, no pull/push.
     /// Spawned by the `g c` leader chord.
     Commit,
+    /// Remote task-source sync (startup, interval, or `g r`).
+    Sources,
 }
 
 impl JobKind {
@@ -53,6 +55,7 @@ impl JobKind {
         match self {
             JobKind::Sync => "sync",
             JobKind::Commit => "commit",
+            JobKind::Sources => "sources",
         }
     }
 }

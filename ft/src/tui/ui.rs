@@ -419,6 +419,18 @@ pub fn render_git_leader(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled(
+                "  r     ",
+                Style::default()
+                    .fg(palette::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "sync remote task sources",
+                Style::default().fg(palette::WHITE),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
                 "  Esc   ",
                 Style::default()
                     .fg(palette::SECONDARY)

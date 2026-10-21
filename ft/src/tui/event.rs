@@ -39,6 +39,7 @@ pub enum BgEvent {
     SyncCompleted(SyncJobResult),
     CommitCompleted(CommitJobResult),
     GraphReady(GraphJobResult),
+    SourcesFetched(crate::tui::source_sync::SourcesJobResult),
 }
 
 /// Result of one background `scan → build` pass. The snapshot rides in

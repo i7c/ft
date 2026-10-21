@@ -11,6 +11,7 @@ mod modal_commands;
 mod notes_actions;
 mod palette;
 mod snapshot;
+mod source_sync;
 mod synth_send;
 mod tab;
 mod tabs;

@@ -3,8 +3,8 @@
 ### Requirement: Background source sync job
 
 The TUI SHALL run source sync as a background job:
-- **Fetch:** a worker thread resolves credentials and fetches all remote data for the due sources, then posts `BgEvent::SourcesFetched` and exits. The worker never writes files.
-- **Apply:** on the main thread, the App plans the sync against the vault (reading notes fresh), applies it through `write_atomic`, records the last sync time, and raises a graph refresh.
+- **Fetch and plan:** a worker thread scans the vault, resolves credentials, fetches all remote data for the due sources, and plans the note edits. It then posts `BgEvent::SourcesFetched` and exits. The worker never writes files.
+- **Apply:** on the main thread, the App writes each planned edit through `write_atomic`, but only if the file is still byte-identical to the planned original; edits made meanwhile are skipped and retried on the next sync. It then records the sync attempt and raises a graph refresh.
 - **Slot:** the job uses `JobKind::Sources` in the existing single job slot. While another job (git sync or commit) is in flight, a due source sync waits for a later tick.
 - **Indicator:** the status bar shows `⟳ sources` while the job runs.
 

@@ -135,6 +135,10 @@ pub struct App {
     /// vault mutation; consumed at the App's drain points into one
     /// [`Self::request_graph_rebuild`] call.
     graph_refresh: Cell<bool>,
+    /// When each remote task source is next due for a background sync.
+    source_schedule: crate::tui::source_sync::Schedule,
+    /// Fetches a source (network); swapped for a fake in tests.
+    source_fetcher: crate::tui::source_sync::Fetcher,
     should_quit: bool,
 }
 
@@ -210,6 +214,8 @@ impl App {
             graph_job: GraphJob::default(),
             bg_tx: None,
             graph_refresh: Cell::new(false),
+            source_schedule: Default::default(),
+            source_fetcher: crate::tui::source_sync::default_fetcher(),
             should_quit: false,
         }
     }
@@ -452,6 +458,9 @@ impl App {
             self.handle_background(bg)?;
             return Ok(());
         }
+        if matches!(ev, Event::Tick) {
+            self.spawn_source_sync(false);
+        }
 
         // Help overlay: scroll keys move the offset (clamped per
         // render in `render_help_overlay`); dismiss keys close it.
@@ -510,6 +519,9 @@ impl App {
                     (KeyCode::Char('c'), KeyModifiers::NONE) => {
                         *self.pending_request.borrow_mut() =
                             Some(AppRequest::CommitGit { message: None });
+                    }
+                    (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                        self.spawn_source_sync(true);
                     }
                     _ => {}
                 }
@@ -653,6 +665,9 @@ impl App {
             }
             "app.git-leader" => {
                 self.mode = Mode::GitLeader;
+            }
+            "app.sync-sources" => {
+                self.spawn_source_sync(true);
             }
             _ => {
                 // Unknown global command — silently ignored. The
@@ -857,7 +872,112 @@ impl App {
             BgEvent::SyncCompleted(result) => self.apply_sync_result(result),
             BgEvent::CommitCompleted(result) => self.apply_commit_result(result),
             BgEvent::GraphReady(result) => self.apply_graph_result(result),
+            BgEvent::SourcesFetched(result) => {
+                self.apply_sources_result(result);
+                Ok(())
+            }
         }
+    }
+
+    /// Start a source sync for every due source (all of them when
+    /// `manual`). Waits for the first graph snapshot (startup sync) and a
+    /// free job slot; without an event loop (tests) it runs inline.
+    fn spawn_source_sync(&mut self, manual: bool) {
+        let sources = &self.vault.config.config.sources;
+        if sources.is_empty() {
+            if manual {
+                self.push_toast("no remote sources configured", ToastStyle::Info);
+            }
+            return;
+        }
+        if self.graph_snapshot.is_none() {
+            return;
+        }
+        if self.jobs.borrow().is_some() {
+            if manual {
+                self.push_toast(
+                    "a background job is running — try again shortly",
+                    ToastStyle::Info,
+                );
+            }
+            return;
+        }
+        let now = std::time::Instant::now();
+        let due = self.source_schedule.due(sources, now, manual);
+        if due.is_empty() {
+            return;
+        }
+        for name in &due {
+            self.source_schedule.attempted(name, &sources[name], now);
+        }
+        let job = crate::tui::source_sync::SourcesJob {
+            vault: Arc::clone(&self.vault),
+            sources: due,
+            fetcher: Arc::clone(&self.source_fetcher),
+            today: self.today,
+            manual,
+        };
+        *self.jobs.borrow_mut() = Some(JobHandle::new(JobKind::Sources));
+        match self.bg_tx.clone() {
+            Some(tx) => {
+                std::thread::spawn(move || {
+                    let result = job.run();
+                    let _ = tx.send(Event::Background(BgEvent::SourcesFetched(result)));
+                });
+            }
+            None => {
+                let result = job.run();
+                self.apply_sources_result(result);
+            }
+        }
+    }
+
+    /// Write the planned notes (only where unchanged since planning), log
+    /// the attempts, refresh the graph, and toast when warranted.
+    fn apply_sources_result(&mut self, result: crate::tui::source_sync::SourcesJobResult) {
+        use crate::tui::source_sync::{apply_plan, summary};
+        if matches!(
+            self.jobs.borrow().as_ref().map(|j| j.kind),
+            Some(JobKind::Sources)
+        ) {
+            self.jobs.borrow_mut().take();
+        }
+        let mut applied = Vec::new();
+        let mut wrote = false;
+        for run in &result.runs {
+            let status = match &run.outcome {
+                Ok(plan) => {
+                    wrote |= plan.edits.iter().any(|e| e.original != e.new);
+                    applied.push((run.name.clone(), apply_plan(plan)));
+                    "ok"
+                }
+                Err(f) => f.status(),
+            };
+            ft_core::sources::run::AttemptLog::record(&self.vault.path, &run.name, status);
+        }
+        if wrote {
+            self.request_graph_rebuild();
+        }
+        if let Some((text, error)) = summary(&result, &applied) {
+            let style = if error {
+                ToastStyle::Error
+            } else {
+                ToastStyle::Success
+            };
+            self.push_toast(text, style);
+        }
+    }
+
+    /// Replace the source fetcher (tests).
+    #[cfg(test)]
+    pub fn set_source_fetcher_for_test(&mut self, fetcher: crate::tui::source_sync::Fetcher) {
+        self.source_fetcher = fetcher;
+    }
+
+    /// Deliver one tick (tests): a due source sync runs inline.
+    #[cfg(test)]
+    pub fn tick_for_test(&mut self) -> Result<()> {
+        self.handle_event(Event::Tick)
     }
 
     /// Request a rebuild of the shared graph snapshot. Single-flight:
