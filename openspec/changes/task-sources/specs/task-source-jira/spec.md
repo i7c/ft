@@ -19,7 +19,7 @@ The Jira source SHALL use the Jira Cloud REST API v3 with basic auth (`email:tok
 | `url` | `<base_url>/browse/<key>` |
 | `title` | `fields.summary` |
 | status name | `fields.status.name` |
-| `Status` | `status_map[name]` if configured; else by `fields.status.statusCategory.key`: `new` → Open, `indeterminate` → InProgress, `done` → Done, except that `done` maps to Cancelled when `fields.resolution.name` is `Won't Do`, `Won't Fix`, `Duplicate`, `Cannot Reproduce` or `Declined` |
+| `Status` | `status_map[name]` if configured; else by `fields.status.statusCategory.key`: `new` → Open, `indeterminate` → InProgress, `done` → Done, except that `done` maps to Cancelled when `fields.resolution.name` is `Won't Do`, `Won't Fix`, `Duplicate`, `Cannot Reproduce` or `Declined`, or when the status name is `Canceled`, `Cancelled`, `Abandoned`, `Won't Do`, `Won't Fix`, `Rejected` or `Declined` |
 | priority | `fields.priority.name`: `Highest`/`High`/`Medium`/`Low`/`Lowest` map one-to-one; other names map to none |
 | due | `fields.duedate` |
 | resolution date | the date part of `fields.resolutiondate` |

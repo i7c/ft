@@ -16,6 +16,17 @@ const FIELDS: &str =
     "summary,status,priority,duedate,resolution,resolutiondate,assignee,parent,updated,description,comment";
 const PAGE: usize = 100;
 
+/// `done`-category status names that mean "won't be done".
+const CANCELLED_STATUSES: &[&str] = &[
+    "Canceled",
+    "Cancelled",
+    "Abandoned",
+    "Won't Do",
+    "Won't Fix",
+    "Rejected",
+    "Declined",
+];
+
 /// Resolutions that mean "won't be done" for a `done`-category status.
 const CANCELLED_RESOLUTIONS: &[&str] = &[
     "Won't Do",
@@ -385,7 +396,9 @@ pub fn map_issue(
         match f["status"]["statusCategory"]["key"].as_str() {
             Some("done") => {
                 let resolution = f["resolution"]["name"].as_str().unwrap_or("");
-                if CANCELLED_RESOLUTIONS.contains(&resolution) {
+                if CANCELLED_RESOLUTIONS.contains(&resolution)
+                    || CANCELLED_STATUSES.contains(&status_name.as_str())
+                {
                     Status::Cancelled
                 } else {
                     Status::Done
@@ -518,6 +531,15 @@ mod tests {
         );
         assert_eq!(
             map("done", "Closed", Some("Won't Do"), &none).status,
+            Status::Cancelled
+        );
+        // Cancel-like done statuses, whatever the resolution.
+        assert_eq!(
+            map("done", "Canceled", Some("Done"), &none).status,
+            Status::Cancelled
+        );
+        assert_eq!(
+            map("done", "Abandoned", None, &none).status,
             Status::Cancelled
         );
         let custom = [("Blocked".to_string(), Status::Open)]
