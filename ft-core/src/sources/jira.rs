@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use super::http::{Http, Secret};
-use super::{adf, Comment, RemoteIssue, SourceError, TaskSource};
+use super::{adf, Comment, IssueRef, RemoteIssue, SourceError, TaskSource};
 use crate::task::{Priority, Status};
 
 /// Fields requested from the search endpoint — exactly what's mapped.
@@ -89,7 +89,8 @@ impl TaskSource for JiraSource {
         self.search(query)
     }
 
-    fn fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError> {
+    fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError> {
+        let keys: Vec<String> = refs.iter().map(|r| r.key.clone()).collect();
         let mut out = Vec::new();
         for chunk in keys.chunks(PAGE) {
             let quoted: Vec<String> = chunk
@@ -319,7 +320,9 @@ mod tests {
             &Secret::new("FAKE_TEST_token"),
             BTreeMap::new(),
         );
-        let got = src.fetch_keys(&["A-1".into(), "GONE-9".into()]).unwrap();
+        let got = src
+            .fetch_keys(&[IssueRef::key("A-1"), IssueRef::key("GONE-9")])
+            .unwrap();
         assert_eq!(got.len(), 1);
     }
 }

@@ -5,6 +5,7 @@
 
 pub mod adf;
 pub mod credentials;
+pub mod github;
 pub mod http;
 pub mod jira;
 
@@ -64,6 +65,23 @@ pub enum SourceError {
     Parse(String),
 }
 
+/// An issue to look up by key. `url` (the note's `ft.source.url`) lets
+/// backends whose keys aren't reversible (GitHub) find the issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueRef {
+    pub key: String,
+    pub url: Option<String>,
+}
+
+impl IssueRef {
+    pub fn key(key: impl Into<String>) -> Self {
+        IssueRef {
+            key: key.into(),
+            url: None,
+        }
+    }
+}
+
 /// A backend that can list issues. Implementations are blocking and spawn
 /// no threads.
 pub trait TaskSource {
@@ -71,7 +89,7 @@ pub trait TaskSource {
     fn fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError>;
     /// The issues with these keys; keys that no longer exist (or aren't
     /// visible) are simply absent from the result.
-    fn fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError>;
+    fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError>;
 }
 
 /// Everything one sync of one source fetched.
@@ -91,13 +109,13 @@ pub struct FetchResult {
 const MAX_PARENT_DEPTH: usize = 5;
 
 /// Run every query, then (optionally) the parent chains of the results,
-/// then re-check `known_keys` (issues the vault already has notes for) that
+/// then re-check `known` (issues the vault already has notes for) that
 /// neither returned.
 pub fn fetch_all(
     source: &dyn TaskSource,
     queries: &BTreeMap<String, String>,
     fetch_parents: bool,
-    known_keys: &[String],
+    known: &[IssueRef],
 ) -> Result<FetchResult, SourceError> {
     let mut active: BTreeMap<String, RemoteIssue> = BTreeMap::new();
     for query in queries.values() {
@@ -117,8 +135,17 @@ pub fn fetch_all(
             if frontier.is_empty() {
                 break;
             }
-            let keys: Vec<String> = frontier.iter().cloned().collect();
-            let fetched = source.fetch_keys(&keys)?;
+            let refs: Vec<IssueRef> = frontier
+                .iter()
+                .map(|k| {
+                    known
+                        .iter()
+                        .find(|r| &r.key == k)
+                        .cloned()
+                        .unwrap_or_else(|| IssueRef::key(k.clone()))
+                })
+                .collect();
+            let fetched = source.fetch_keys(&refs)?;
             frontier = fetched
                 .iter()
                 .filter_map(|i| i.parent.clone())
@@ -131,13 +158,13 @@ pub fn fetch_all(
         }
     }
 
-    let unseen: Vec<String> = known_keys
+    let mut unseen: Vec<IssueRef> = known
         .iter()
-        .filter(|k| !active.contains_key(*k) && !context.contains_key(*k))
+        .filter(|r| !active.contains_key(&r.key) && !context.contains_key(&r.key))
         .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
         .collect();
+    unseen.sort_by(|a, b| a.key.cmp(&b.key));
+    unseen.dedup_by(|a, b| a.key == b.key);
     let rechecked = if unseen.is_empty() {
         Vec::new()
     } else {
@@ -145,6 +172,7 @@ pub fn fetch_all(
     };
     let missing = unseen
         .into_iter()
+        .map(|r| r.key)
         .filter(|k| !rechecked.iter().any(|i| &i.key == k))
         .collect();
 
@@ -193,7 +221,8 @@ pub(crate) mod tests {
                 .cloned()
                 .collect())
         }
-        fn fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError> {
+        fn fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError> {
+            let keys: Vec<String> = refs.iter().map(|r| r.key.clone()).collect();
             self.calls
                 .borrow_mut()
                 .push(format!("keys:{}", keys.join(",")));
@@ -230,12 +259,7 @@ pub(crate) mod tests {
         ]
         .into_iter()
         .collect();
-        let known = [
-            "OLD-1".to_string(),
-            "GONE-1".to_string(),
-            "A-1".to_string(),
-            "E-1".to_string(),
-        ];
+        let known = ["OLD-1", "GONE-1", "A-1", "E-1"].map(IssueRef::key);
         let r = fetch_all(&src, &queries, true, &known).unwrap();
         let keys = |v: &[RemoteIssue]| v.iter().map(|i| i.key.clone()).collect::<Vec<_>>();
         assert_eq!(keys(&r.active), ["A-1", "A-2"]);

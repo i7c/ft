@@ -19,7 +19,7 @@
 
 ## 4. GitHub
 
-- [ ] 4.1 `sources/github.rs`: search with `Link` pagination (exclude PRs), per-key fetch (404 → absent), comments (last N), sub-issue parent; key normalisation; fixture tests.
+- [x] 4.1 `sources/github.rs`: search with `Link` pagination (exclude PRs), per-key fetch (404 → absent), comments (last N), sub-issue parent; key normalisation; fixture tests.
 
 ## 5. Issue notes + sync planner
 

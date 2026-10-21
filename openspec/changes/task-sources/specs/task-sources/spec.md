@@ -36,7 +36,7 @@ The section SHALL normally live in the vault config (`.ft/config.toml`) so every
 
 ft-core SHALL define a `TaskSource` trait with these methods:
 - `fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError>`;
-- `fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError>`, used for out-of-scope and parent lookups; a missing key is simply absent from the result.
+- `fetch_keys(&self, refs: &[IssueRef]) -> Result<Vec<RemoteIssue>, SourceError>`, used for out-of-scope and parent lookups. An `IssueRef` is a key plus the note's `ft.source.url`, which lets backends whose keys aren't reversible (GitHub) locate the issue. A missing issue is simply absent from the result.
 
 `RemoteIssue` SHALL carry:
 - `key`, `url` and `title`;
