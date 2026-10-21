@@ -703,11 +703,37 @@ pub enum MoveError {
         expected: String,
         found: String,
     },
+    #[error(
+        "target task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    TargetChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
+    #[error("can't move a task under itself or one of its subtasks ({}:{})", .path.display(), .line)]
+    IntoOwnSubtree { path: PathBuf, line: usize },
+    #[error("task at {}:{} has no previous sibling to indent under", .path.display(), .line)]
+    NoPreviousSibling { path: PathBuf, line: usize },
+    #[error("task at {}:{} is already top-level", .path.display(), .line)]
+    AlreadyTopLevel { path: PathBuf, line: usize },
     #[error("write failed: {source}")]
     Write {
         #[from]
         source: crate::error::Error,
     },
+}
+
+/// How moved blocks land relative to an [`MoveTarget::UnderTask`] target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Become the target's last children.
+    Child,
+    /// Become the target's next siblings, after its whole subtree.
+    SiblingAfter,
 }
 
 /// Where to insert moved tasks in the target file.
@@ -718,12 +744,23 @@ pub enum MoveTarget {
     /// Append to the section under the given heading; create the heading at
     /// file end if missing.
     UnderHeading(PathBuf, String),
+    /// Nest under (or right after) the task at `line` of `path`. Moved
+    /// blocks are re-indented to the new depth. `expected` guards the
+    /// target line like [`MoveSource::expected`] guards sources.
+    UnderTask {
+        path: PathBuf,
+        line: usize,
+        expected: Option<Box<Task>>,
+        placement: Placement,
+    },
 }
 
 impl MoveTarget {
     pub fn path(&self) -> &Path {
         match self {
-            MoveTarget::Append(p) | MoveTarget::UnderHeading(p, _) => p,
+            MoveTarget::Append(p)
+            | MoveTarget::UnderHeading(p, _)
+            | MoveTarget::UnderTask { path: p, .. } => p,
         }
     }
 }
@@ -764,6 +801,8 @@ pub struct MovedBlock {
     pub source: MoveSource,
     pub end_line: usize,
     pub task_description: String,
+    /// Target path + 1-indexed line of the block's head after the move.
+    pub dest: Option<(PathBuf, usize)>,
 }
 
 /// Build a [`MovePlan`] for moving `sources` to `target`. Only reads files;
@@ -790,6 +829,25 @@ pub fn plan_move(
     let target_path = target.path().to_path_buf();
     let target_original = read_or_empty_move(&target_path)?;
     let mut target_lines: Vec<String> = crate::markdown::lines::split(&target_original);
+    let anchor = match target {
+        MoveTarget::UnderTask {
+            line,
+            expected,
+            placement,
+            ..
+        } => Some(resolve_anchor(
+            &target_path,
+            &target_lines,
+            *line,
+            expected.as_deref(),
+            *placement,
+            format,
+        )?),
+        _ => None,
+    };
+    // Target-file lines removed at or before the anchor's block end; shifts
+    // the insertion point when the target file is also a source.
+    let mut removed_before_anchor_end = 0usize;
 
     // Ranges to remove from each source file plus the lines that are being
     // hoisted out (so we can splice them at the target). For source==target,
@@ -799,6 +857,7 @@ pub fn plan_move(
     let mut source_edits: BTreeMap<PathBuf, FileEditWork> = BTreeMap::new();
     let mut blocks: Vec<MovedBlock> = Vec::new();
     let mut moved_lines: Vec<String> = Vec::new();
+    let mut block_offsets: Vec<usize> = Vec::new();
 
     for (path, mut lines_to_move) in by_file {
         let original = read_or_empty_move(&path)?;
@@ -858,7 +917,24 @@ pub fn plan_move(
             kept.push(r);
         }
 
-        // Append moved lines (with normalized indent) into `moved_lines`.
+        if let (Some(a), true) = (&anchor, path == target_path) {
+            if kept.iter().any(|(s, e, _, _)| (*s..=*e).contains(&a.idx)) {
+                return Err(MoveError::IntoOwnSubtree {
+                    path: target_path.clone(),
+                    line: a.idx + 1,
+                });
+            }
+            removed_before_anchor_end = kept
+                .iter()
+                .filter(|(_, e, _, _)| *e <= a.end)
+                .map(|(s, e, _, _)| e - s + 1)
+                .sum();
+        }
+
+        let src_unit = anchor.as_ref().map(|_| detect_indent_unit(&raw_lines));
+
+        // Append moved lines (re-indented under a task anchor, otherwise
+        // normalized to column 0) into `moved_lines`.
         for (start, end, description, head_indent) in &kept {
             blocks.push(MovedBlock {
                 source: MoveSource {
@@ -868,9 +944,15 @@ pub fn plan_move(
                 },
                 end_line: end + 1,
                 task_description: description.clone(),
+                dest: None,
             });
-            for raw in &raw_lines[*start..=*end] {
-                moved_lines.push(strip_indent(raw, *head_indent));
+            block_offsets.push(moved_lines.len());
+            let block = &raw_lines[*start..=*end];
+            match (&anchor, src_unit) {
+                (Some(a), Some(src)) => {
+                    moved_lines.extend(reindent_block(block, *head_indent, src, a.unit, &a.head_ws))
+                }
+                _ => moved_lines.extend(block.iter().map(|raw| strip_indent(raw, *head_indent))),
             }
         }
 
@@ -903,7 +985,14 @@ pub fn plan_move(
         target_lines = w.new_lines;
     }
 
-    let final_target = splice_into_target(target_lines, &moved_lines, target);
+    let anchor_insert = anchor
+        .as_ref()
+        .map(|a| a.end + 1 - removed_before_anchor_end);
+    let (final_target, insert_idx) =
+        splice_into_target(target_lines, &moved_lines, target, anchor_insert);
+    for (block, offset) in blocks.iter_mut().zip(&block_offsets) {
+        block.dest = Some((target_path.clone(), insert_idx + offset + 1));
+    }
 
     // Build edits.
     let mut edits: Vec<FileEdit> = Vec::new();
@@ -922,6 +1011,267 @@ pub fn plan_move(
     });
 
     Ok(MovePlan { edits, blocks })
+}
+
+/// A validated [`MoveTarget::UnderTask`] target, resolved against the
+/// target file's original lines.
+struct TaskAnchor {
+    /// 0-indexed line of the target task.
+    idx: usize,
+    /// 0-indexed last line of the target task's block.
+    end: usize,
+    /// Leading whitespace the moved block heads take.
+    head_ws: String,
+    unit: IndentUnit,
+}
+
+fn resolve_anchor(
+    path: &Path,
+    lines: &[String],
+    line: usize,
+    expected: Option<&Task>,
+    placement: Placement,
+    format: &dyn TaskFormat,
+) -> Result<TaskAnchor, MoveError> {
+    let idx = line
+        .checked_sub(1)
+        .filter(|&i| i < lines.len())
+        .ok_or_else(|| MoveError::LineMissing {
+            path: path.to_path_buf(),
+            line,
+            file_lines: lines.len(),
+        })?;
+    let ctx = ParseContext {
+        source_file: PathBuf::new(),
+        source_line: line,
+    };
+    let task = format
+        .parse_line(&lines[idx], ctx)
+        .ok_or_else(|| MoveError::NotATask {
+            path: path.to_path_buf(),
+            line,
+        })?;
+    check_expected(format, &task, expected).map_err(|(expected, found)| {
+        MoveError::TargetChanged {
+            path: path.to_path_buf(),
+            line,
+            expected,
+            found,
+        }
+    })?;
+    let end = block_end(lines, idx, task.indent_level);
+    let unit = detect_indent_unit(lines);
+    let own_ws = leading_ws(&lines[idx]);
+    let head_ws = match placement {
+        Placement::SiblingAfter => own_ws.to_string(),
+        Placement::Child if end > idx => leading_ws(&lines[idx + 1]).to_string(),
+        Placement::Child => format!("{own_ws}{}", unit.as_str()),
+    };
+    Ok(TaskAnchor {
+        idx,
+        end,
+        head_ws,
+        unit,
+    })
+}
+
+/// Re-indent a moved block so its head sits at `new_head_ws`. Nested lines
+/// keep their depth relative to the head: verbatim when both files share an
+/// indent unit, otherwise re-expressed in `dst` units.
+fn reindent_block(
+    block: &[String],
+    head_indent: usize,
+    src: IndentUnit,
+    dst: IndentUnit,
+    new_head_ws: &str,
+) -> Vec<String> {
+    block
+        .iter()
+        .map(|line| {
+            let ws = leading_ws(line);
+            let content = &line[ws.len()..];
+            let rel = ws.get(head_indent.min(ws.len())..).unwrap_or("");
+            let rel = if src == dst {
+                rel.to_string()
+            } else {
+                let (depth, rest) = src.split_depth(rel);
+                format!("{}{rest}", dst.as_str().repeat(depth))
+            };
+            format!("{new_head_ws}{rel}{content}")
+        })
+        .collect()
+}
+
+/// One nesting level of a markdown list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndentUnit {
+    Tab,
+    Spaces(usize),
+}
+
+impl IndentUnit {
+    pub fn as_str(self) -> String {
+        match self {
+            IndentUnit::Tab => "\t".to_string(),
+            IndentUnit::Spaces(n) => " ".repeat(n),
+        }
+    }
+
+    /// Split leading whitespace into whole units of `self` plus the rest.
+    fn split_depth(self, ws: &str) -> (usize, &str) {
+        match self {
+            IndentUnit::Tab => {
+                let n = ws.bytes().take_while(|b| *b == b'\t').count();
+                (n, &ws[n..])
+            }
+            IndentUnit::Spaces(width) => {
+                let n = ws.bytes().take_while(|b| *b == b' ').count();
+                let depth = n / width.max(1);
+                (depth, &ws[depth * width.max(1)..])
+            }
+        }
+    }
+}
+
+/// Infer a file's list indent unit: a tab if the first nested list item is
+/// tab-indented, otherwise the smallest positive space step between a list
+/// item and the item it nests under. Two spaces when nothing is nested.
+pub fn detect_indent_unit(lines: &[String]) -> IndentUnit {
+    let mut stack: Vec<&str> = Vec::new();
+    let mut min_step: Option<usize> = None;
+    for line in lines {
+        let ws = leading_ws(line);
+        let rest = &line[ws.len()..];
+        if rest.is_empty() {
+            continue;
+        }
+        if !is_list_item(rest) {
+            if ws.is_empty() {
+                stack.clear();
+            }
+            continue;
+        }
+        while stack.last().is_some_and(|top| top.len() >= ws.len()) {
+            stack.pop();
+        }
+        if let Some(parent) = stack.last() {
+            let step = &ws[parent.len().min(ws.len())..];
+            if step.contains('\t') {
+                if min_step.is_none() {
+                    return IndentUnit::Tab;
+                }
+            } else {
+                let n = ws.len() - parent.len();
+                min_step = Some(min_step.map_or(n, |m| m.min(n)));
+            }
+        }
+        stack.push(ws);
+    }
+    IndentUnit::Spaces(min_step.unwrap_or(2))
+}
+
+fn is_list_item(rest: &str) -> bool {
+    if rest.starts_with("- ") || rest.starts_with("* ") || rest.starts_with("+ ") {
+        return true;
+    }
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0 && (rest[digits..].starts_with(". ") || rest[digits..].starts_with(") "))
+}
+
+/// Plan an indent: the task becomes the last child of its previous sibling
+/// (the task whose block ends right above it, at the same depth).
+pub fn plan_indent(source: &MoveSource, format: &dyn TaskFormat) -> Result<MovePlan, MoveError> {
+    let (tasks, lines, i) = locate_in_file(source, format)?;
+    let me = &tasks[i];
+    let idx = me.source_line - 1;
+    let prev = tasks[..i].iter().rev().find(|t| {
+        t.parent == me.parent
+            && t.indent_level == me.indent_level
+            && block_end(&lines, t.source_line - 1, t.indent_level) + 1 == idx
+    });
+    let Some(prev) = prev else {
+        return Err(MoveError::NoPreviousSibling {
+            path: source.path.clone(),
+            line: source.line,
+        });
+    };
+    let target = MoveTarget::UnderTask {
+        path: source.path.clone(),
+        line: prev.source_line,
+        expected: Some(Box::new(prev.clone())),
+        placement: Placement::Child,
+    };
+    plan_move(std::slice::from_ref(source), &target, format)
+}
+
+/// Plan an outdent: the task becomes its parent's next sibling, placed after
+/// the parent's whole block. Later siblings stay with the old parent.
+pub fn plan_outdent(source: &MoveSource, format: &dyn TaskFormat) -> Result<MovePlan, MoveError> {
+    let (tasks, _, i) = locate_in_file(source, format)?;
+    let Some(parent_line) = tasks[i].parent else {
+        return Err(MoveError::AlreadyTopLevel {
+            path: source.path.clone(),
+            line: source.line,
+        });
+    };
+    let parent = tasks
+        .iter()
+        .find(|t| t.source_line == parent_line)
+        .expect("resolve_hierarchy parents point at tasks in the same file");
+    let target = MoveTarget::UnderTask {
+        path: source.path.clone(),
+        line: parent_line,
+        expected: Some(Box::new(parent.clone())),
+        placement: Placement::SiblingAfter,
+    };
+    plan_move(std::slice::from_ref(source), &target, format)
+}
+
+/// Parse every task in `source.path` with hierarchy resolved, and return the
+/// index of the (guard-checked) source task.
+fn locate_in_file(
+    source: &MoveSource,
+    format: &dyn TaskFormat,
+) -> Result<(Vec<Task>, Vec<String>, usize), MoveError> {
+    let content = read_or_empty_move(&source.path)?;
+    let lines = crate::markdown::lines::split(&content);
+    let mut tasks: Vec<Task> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, l)| {
+            format.parse_line(
+                l,
+                ParseContext {
+                    source_file: source.path.clone(),
+                    source_line: idx + 1,
+                },
+            )
+        })
+        .collect();
+    super::hierarchy::resolve_hierarchy(&mut tasks);
+    if source.line == 0 || source.line > lines.len() {
+        return Err(MoveError::LineMissing {
+            path: source.path.clone(),
+            line: source.line,
+            file_lines: lines.len(),
+        });
+    }
+    let i = tasks
+        .iter()
+        .position(|t| t.source_line == source.line)
+        .ok_or_else(|| MoveError::NotATask {
+            path: source.path.clone(),
+            line: source.line,
+        })?;
+    check_expected(format, &tasks[i], source.expected.as_ref()).map_err(|(expected, found)| {
+        MoveError::LineChanged {
+            path: source.path.clone(),
+            line: source.line,
+            expected,
+            found,
+        }
+    })?;
+    Ok((tasks, lines, i))
 }
 
 /// Apply a [`MovePlan`] by writing each affected file atomically.
@@ -951,8 +1301,8 @@ fn read_or_empty_move(path: &Path) -> Result<String, MoveError> {
 /// `parent_line` (1-indexed). Returns the leading-whitespace string the child
 /// line should carry and the 1-indexed line to splice it at (the end of the
 /// parent's existing indented block). The child matches its siblings' indent
-/// verbatim — tabs included — or sits two spaces past the parent if it has no
-/// children yet.
+/// verbatim — tabs included — or sits one detected indent unit past the
+/// parent if it has no children yet.
 fn subtask_placement(content: &str, parent_line: usize) -> Result<(String, usize), CreateError> {
     use crate::markdown::lines as md_lines;
     let lines = md_lines::split(content);
@@ -971,7 +1321,11 @@ fn subtask_placement(content: &str, parent_line: usize) -> Result<(String, usize
         // Match the first child's leading whitespace exactly.
         leading_ws(&lines[idx + 1]).to_string()
     } else {
-        format!("{}  ", leading_ws(&lines[idx]))
+        format!(
+            "{}{}",
+            leading_ws(&lines[idx]),
+            detect_indent_unit(&lines).as_str()
+        )
     };
 
     // Splice after the block's last line: 0-indexed `end + 1` ⇒ `AtLine(end + 2)`.
@@ -1015,41 +1369,36 @@ fn strip_indent(line: &str, head_indent: usize) -> String {
     line[trimmed_prefix_len..].to_string()
 }
 
+/// Splice `moved_lines` into the target's lines. Returns the new content and
+/// the 0-indexed line where the first moved line landed. `anchor_insert` is
+/// the pre-resolved insertion index for [`MoveTarget::UnderTask`].
 fn splice_into_target(
     mut lines: Vec<String>,
     moved_lines: &[String],
     target: &MoveTarget,
-) -> String {
-    if moved_lines.is_empty() {
-        return crate::markdown::lines::join_with_newline(&lines);
-    }
-    match target {
-        MoveTarget::Append(_) => {
-            for ml in moved_lines {
-                lines.push(ml.clone());
-            }
-        }
+    anchor_insert: Option<usize>,
+) -> (String, usize) {
+    let insert_at = match target {
+        MoveTarget::Append(_) => lines.len(),
+        MoveTarget::UnderTask { .. } => anchor_insert.expect("UnderTask anchor resolved"),
         MoveTarget::UnderHeading(_, heading) => {
             match crate::markdown::lines::find_heading(&lines, heading) {
                 Some((heading_idx, level)) => {
-                    let insert_at = crate::markdown::lines::section_end(&lines, heading_idx, level);
-                    for (offset, ml) in moved_lines.iter().enumerate() {
-                        lines.insert(insert_at + offset, ml.clone());
-                    }
+                    crate::markdown::lines::section_end(&lines, heading_idx, level)
                 }
+                None if moved_lines.is_empty() => lines.len(),
                 None => {
                     if !lines.is_empty() && !lines.last().unwrap().is_empty() {
                         lines.push(String::new());
                     }
                     lines.push(format!("## {heading}"));
-                    for ml in moved_lines {
-                        lines.push(ml.clone());
-                    }
+                    lines.len()
                 }
             }
         }
-    }
-    crate::markdown::lines::join_with_newline(&lines)
+    };
+    lines.splice(insert_at..insert_at, moved_lines.iter().cloned());
+    (crate::markdown::lines::join_with_newline(&lines), insert_at)
 }
 
 #[cfg(test)]
@@ -2179,5 +2528,397 @@ mod tests {
         let err = retag_task(&p, 1, &EmojiFormat, Some(&expected), &list, "wait").unwrap_err();
         assert!(matches!(err, UpdateError::LineChanged { .. }), "{err:?}");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "- [ ] other task\n");
+    }
+
+    // ── reparent (UnderTask / indent / outdent) ──────────────────────
+
+    fn lines_of(s: &str) -> Vec<String> {
+        crate::markdown::lines::split(s)
+    }
+
+    #[test]
+    fn detect_indent_unit_variants() {
+        assert_eq!(
+            detect_indent_unit(&lines_of("- a\n  - b\n    - c\n")),
+            IndentUnit::Spaces(2)
+        );
+        assert_eq!(
+            detect_indent_unit(&lines_of("- a\n    - b\n")),
+            IndentUnit::Spaces(4)
+        );
+        assert_eq!(
+            detect_indent_unit(&lines_of("- a\n\t- b\n")),
+            IndentUnit::Tab
+        );
+        assert_eq!(
+            detect_indent_unit(&lines_of("- a\n- b\n")),
+            IndentUnit::Spaces(2)
+        );
+        assert_eq!(
+            detect_indent_unit(&lines_of("1. a\n   1. b\n")),
+            IndentUnit::Spaces(3)
+        );
+        // Indented prose and new top-level paragraphs don't count as nesting.
+        assert_eq!(
+            detect_indent_unit(&lines_of(
+                "- a\n      continuation\npara\n    - b\n- c\n    - d\n"
+            )),
+            IndentUnit::Spaces(4)
+        );
+    }
+
+    #[test]
+    fn subtask_into_childless_parent_follows_tab_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.md");
+        std::fs::write(&p, "- [ ] other\n\t- [ ] nested\n- [ ] parent\n").unwrap();
+        create_subtask(&p, "child", 3);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "- [ ] other\n\t- [ ] nested\n- [ ] parent\n\t- [ ] child\n"
+        );
+    }
+
+    fn under(path: &Path, line: usize, placement: Placement) -> MoveTarget {
+        MoveTarget::UnderTask {
+            path: path.to_path_buf(),
+            line,
+            expected: None,
+            placement,
+        }
+    }
+
+    fn src(path: &Path, line: usize) -> MoveSource {
+        MoveSource {
+            path: path.to_path_buf(),
+            line,
+            expected: None,
+        }
+    }
+
+    fn run_move(sources: &[MoveSource], target: &MoveTarget) -> MovePlan {
+        let plan = plan_move(sources, target, &EmojiFormat).unwrap();
+        apply_move_plan(&plan).unwrap();
+        plan
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    #[test]
+    fn under_task_same_file_source_above_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n  - [ ] a1\n- [ ] B\n");
+        let plan = run_move(&[src(&a, 2)], &under(&a, 3, Placement::Child));
+        assert_eq!(read(&a), "- [ ] A\n- [ ] B\n  - [ ] a1\n");
+        assert_eq!(plan.blocks[0].dest, Some((a.clone(), 3)));
+    }
+
+    #[test]
+    fn under_task_same_file_block_above_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] X\n  - [ ] x1\n- [ ] T\n");
+        let plan = run_move(&[src(&a, 1)], &under(&a, 3, Placement::Child));
+        assert_eq!(read(&a), "- [ ] T\n  - [ ] X\n    - [ ] x1\n");
+        assert_eq!(plan.blocks[0].dest, Some((a.clone(), 2)));
+    }
+
+    #[test]
+    fn under_task_same_file_source_below_target_with_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] T\n  - [ ] t1\n- [ ] B\n- [ ] C\n");
+        run_move(&[src(&a, 4)], &under(&a, 1, Placement::Child));
+        assert_eq!(read(&a), "- [ ] T\n  - [ ] t1\n  - [ ] C\n- [ ] B\n");
+    }
+
+    #[test]
+    fn sibling_after_skips_target_subtree() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n  - [ ] a1\n- [ ] B\n- [ ] C\n");
+        run_move(&[src(&a, 4)], &under(&a, 1, Placement::SiblingAfter));
+        assert_eq!(read(&a), "- [ ] A\n  - [ ] a1\n- [ ] C\n- [ ] B\n");
+    }
+
+    #[test]
+    fn sibling_after_nested_target_takes_its_indent() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] P\n  - [ ] p1\n- [ ] Q\n  - [ ] q1\n");
+        run_move(&[src(&a, 3)], &under(&a, 2, Placement::SiblingAfter));
+        assert_eq!(read(&a), "- [ ] P\n  - [ ] p1\n  - [ ] Q\n    - [ ] q1\n");
+    }
+
+    #[test]
+    fn under_task_cross_file_matches_existing_children_and_converts_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = write(
+            &dir,
+            "inbox.md",
+            "- [ ] keep\n- [ ] call vendor\n  - [ ] find number\n    note line\n",
+        );
+        let proj = write(
+            &dir,
+            "proj.md",
+            "- [ ] Vendor onboarding\n    - [ ] sign NDA\n- [ ] other\n",
+        );
+        let plan = run_move(&[src(&inbox, 2)], &under(&proj, 1, Placement::Child));
+        assert_eq!(read(&inbox), "- [ ] keep\n");
+        assert_eq!(
+            read(&proj),
+            "- [ ] Vendor onboarding\n    - [ ] sign NDA\n    - [ ] call vendor\n        - [ ] find number\n            note line\n- [ ] other\n"
+        );
+        assert_eq!(plan.blocks[0].dest, Some((proj.clone(), 3)));
+    }
+
+    #[test]
+    fn under_task_tabs_to_spaces_childless_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = write(&dir, "s.md", "- [ ] X\n\t- [ ] x1\n");
+        let t = write(&dir, "t.md", "- [ ] P\n- [ ] Q\n    - [ ] q1\n");
+        run_move(&[src(&s, 1)], &under(&t, 1, Placement::Child));
+        assert_eq!(read(&s), "");
+        assert_eq!(
+            read(&t),
+            "- [ ] P\n    - [ ] X\n        - [ ] x1\n- [ ] Q\n    - [ ] q1\n"
+        );
+    }
+
+    #[test]
+    fn under_task_same_unit_keeps_relative_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = write(
+            &dir,
+            "s.md",
+            "  - [ ] X\n    - [ ] x1\n      odd 2-space note\n",
+        );
+        let t = write(&dir, "t.md", "- [ ] P\n");
+        run_move(&[src(&s, 1)], &under(&t, 1, Placement::Child));
+        assert_eq!(
+            read(&t),
+            "- [ ] P\n  - [ ] X\n    - [ ] x1\n      odd 2-space note\n"
+        );
+    }
+
+    #[test]
+    fn under_task_multiple_sources_ancestor_and_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = write(&dir, "s.md", "- [ ] A\n  - [ ] a1\n- [ ] B\n");
+        let t = write(&dir, "t.md", "- [ ] P\n");
+        let plan = run_move(
+            &[src(&s, 2), src(&s, 1), src(&s, 3)],
+            &under(&t, 1, Placement::Child),
+        );
+        assert_eq!(read(&s), "");
+        assert_eq!(read(&t), "- [ ] P\n  - [ ] A\n    - [ ] a1\n  - [ ] B\n");
+        let dests: Vec<usize> = plan
+            .blocks
+            .iter()
+            .map(|b| b.dest.as_ref().unwrap().1)
+            .collect();
+        assert_eq!(dests, vec![2, 4]);
+    }
+
+    #[test]
+    fn under_own_descendant_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n  - [ ] a1\n");
+        for target_line in [1, 2] {
+            let err = plan_move(
+                &[src(&a, 1)],
+                &under(&a, target_line, Placement::Child),
+                &EmojiFormat,
+            )
+            .unwrap_err();
+            assert!(matches!(err, MoveError::IntoOwnSubtree { .. }), "{err:?}");
+        }
+        assert_eq!(read(&a), "- [ ] A\n  - [ ] a1\n");
+    }
+
+    #[test]
+    fn under_task_stale_or_non_task_target_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n# heading\n- [ ] B\n");
+        let stale = MoveTarget::UnderTask {
+            path: a.clone(),
+            line: 3,
+            expected: Some(Box::new(parsed("- [ ] something else"))),
+            placement: Placement::Child,
+        };
+        let err = plan_move(&[src(&a, 1)], &stale, &EmojiFormat).unwrap_err();
+        assert!(matches!(err, MoveError::TargetChanged { .. }), "{err:?}");
+        let err =
+            plan_move(&[src(&a, 1)], &under(&a, 2, Placement::Child), &EmojiFormat).unwrap_err();
+        assert!(matches!(err, MoveError::NotATask { .. }), "{err:?}");
+        let err =
+            plan_move(&[src(&a, 1)], &under(&a, 9, Placement::Child), &EmojiFormat).unwrap_err();
+        assert!(matches!(err, MoveError::LineMissing { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn append_and_heading_targets_report_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = write(&dir, "s.md", "- [ ] one\n- [ ] two\n");
+        let t = write(&dir, "t.md", "intro\n");
+        let plan = run_move(&[src(&s, 2)], &MoveTarget::Append(t.clone()));
+        assert_eq!(plan.blocks[0].dest, Some((t.clone(), 2)));
+        let plan = run_move(
+            &[src(&s, 1)],
+            &MoveTarget::UnderHeading(t.clone(), "Inbox".into()),
+        );
+        assert_eq!(read(&t), "intro\n- [ ] two\n\n## Inbox\n- [ ] one\n");
+        assert_eq!(plan.blocks[0].dest, Some((t.clone(), 5)));
+    }
+
+    fn indent(p: &Path, line: usize) -> Result<MovePlan, MoveError> {
+        plan_indent(&src(p, line), &EmojiFormat)
+    }
+
+    fn outdent(p: &Path, line: usize) -> Result<MovePlan, MoveError> {
+        plan_outdent(&src(p, line), &EmojiFormat)
+    }
+
+    #[test]
+    fn indent_under_previous_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n- [ ] B\n");
+        apply_move_plan(&indent(&a, 2).unwrap()).unwrap();
+        assert_eq!(read(&a), "- [ ] A\n  - [ ] B\n");
+    }
+
+    #[test]
+    fn indent_under_sibling_with_children_goes_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.md",
+            "- [ ] A\n    - [ ] a1\n- [ ] B\n    - [ ] b1\n",
+        );
+        apply_move_plan(&indent(&a, 3).unwrap()).unwrap();
+        assert_eq!(
+            read(&a),
+            "- [ ] A\n    - [ ] a1\n    - [ ] B\n        - [ ] b1\n"
+        );
+    }
+
+    #[test]
+    fn indent_without_adjacent_sibling_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.md",
+            "- [ ] P\n  - [ ] c1\n- [ ] A\n\n## H\n- [ ] B\n",
+        );
+        for line in [1, 2, 6] {
+            let err = indent(&a, line).unwrap_err();
+            assert!(
+                matches!(err, MoveError::NoPreviousSibling { .. }),
+                "line {line}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn outdent_places_after_parent_block_leaving_later_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.md",
+            "- [ ] P\n  - [ ] c1\n    - [ ] g\n  - [ ] c2\n- [ ] Q\n",
+        );
+        let plan = outdent(&a, 2).unwrap();
+        apply_move_plan(&plan).unwrap();
+        assert_eq!(
+            read(&a),
+            "- [ ] P\n  - [ ] c2\n- [ ] c1\n  - [ ] g\n- [ ] Q\n"
+        );
+        assert_eq!(plan.blocks[0].dest, Some((a.clone(), 3)));
+    }
+
+    #[test]
+    fn outdent_top_level_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n");
+        let err = outdent(&a, 1).unwrap_err();
+        assert!(matches!(err, MoveError::AlreadyTopLevel { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn indent_stale_source_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.md", "- [ ] A\n- [ ] B\n");
+        let s = MoveSource {
+            path: a.clone(),
+            line: 2,
+            expected: Some(parsed("- [ ] not B")),
+        };
+        let err = plan_indent(&s, &EmojiFormat).unwrap_err();
+        assert!(matches!(err, MoveError::LineChanged { .. }), "{err:?}");
+    }
+
+    mod reparent_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Small task forests as (depth) sequences: each line's depth is at
+        /// most one deeper than the previous line's.
+        fn forest() -> impl Strategy<Value = Vec<usize>> {
+            prop::collection::vec(0usize..3, 2..8).prop_map(|raw| {
+                let mut out = Vec::with_capacity(raw.len());
+                let mut prev = 0usize;
+                for (i, d) in raw.into_iter().enumerate() {
+                    let d = if i == 0 { 0 } else { d.min(prev + 1) };
+                    out.push(d);
+                    prev = d;
+                }
+                out
+            })
+        }
+
+        proptest! {
+            #[test]
+            fn under_task_moves_preserve_lines_and_set_parent(
+                depths in forest(),
+                s_pick in 0usize..8,
+                t_pick in 0usize..8,
+                sibling in any::<bool>(),
+            ) {
+                let content: String = depths
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| format!("{}- [ ] t{i}\n", "  ".repeat(*d)))
+                    .collect();
+                let dir = tempfile::tempdir().unwrap();
+                let p = dir.path().join("f.md");
+                std::fs::write(&p, &content).unwrap();
+                let s_line = s_pick % depths.len() + 1;
+                let t_line = t_pick % depths.len() + 1;
+                let placement = if sibling { Placement::SiblingAfter } else { Placement::Child };
+                let target = MoveTarget::UnderTask { path: p.clone(), line: t_line, expected: None, placement };
+                let s = MoveSource { path: p.clone(), line: s_line, expected: None };
+                let Ok(plan) = plan_move(&[s], &target, &EmojiFormat) else { return Ok(()); };
+                let new = &plan.edits.last().unwrap().new;
+
+                let mut before: Vec<&str> = content.lines().map(str::trim).collect();
+                let mut after: Vec<&str> = new.lines().map(str::trim).collect();
+                before.sort_unstable();
+                after.sort_unstable();
+                prop_assert_eq!(before, after);
+
+                let mut tasks: Vec<Task> = new
+                    .lines()
+                    .enumerate()
+                    .filter_map(|(i, l)| EmojiFormat.parse_line(l, ParseContext { source_file: p.clone(), source_line: i + 1 }))
+                    .collect();
+                crate::task::hierarchy::resolve_hierarchy(&mut tasks);
+                let by_desc = |d: &str| tasks.iter().find(|t| t.description == d).unwrap().clone();
+                let moved = by_desc(&format!("t{}", s_line - 1));
+                let tgt = by_desc(&format!("t{}", t_line - 1));
+                let expected_parent = match placement {
+                    Placement::Child => Some(tgt.source_line),
+                    Placement::SiblingAfter => tgt.parent,
+                };
+                prop_assert_eq!(moved.parent, expected_parent);
+            }
+        }
     }
 }

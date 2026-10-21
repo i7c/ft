@@ -1,26 +1,26 @@
 ## 1. Core: indent unit
 
-- [ ] 1.1 Add `IndentUnit { Tab, Spaces(usize) }` and `detect_indent_unit(lines: &[String]) -> IndentUnit` in `ft-core/src/task/ops.rs` (list-item lines only, stack-based parent indent, min positive delta, `Spaces(2)` fallback).
-- [ ] 1.2 Unit tests: 2-space, 4-space, tab, flat file, mixed list/non-list lines, ordered lists.
-- [ ] 1.3 Switch `subtask_placement`'s childless fallback from `"  "` to parent whitespace + detected unit; update/add `create_task` tests (tab-indented file, 4-space file).
+- [x] 1.1 Add `IndentUnit { Tab, Spaces(usize) }` and `detect_indent_unit(lines: &[String]) -> IndentUnit` in `ft-core/src/task/ops.rs` (list-item lines only, stack-based parent indent, min positive delta, `Spaces(2)` fallback).
+- [x] 1.2 Unit tests: 2-space, 4-space, tab, flat file, mixed list/non-list lines, ordered lists.
+- [x] 1.3 Switch `subtask_placement`'s childless fallback from `"  "` to parent whitespace + detected unit; update/add `create_task` tests (tab-indented file, 4-space file).
 
 ## 2. Core: `MoveTarget::UnderTask`
 
-- [ ] 2.1 Add `Placement { Child, SiblingAfter }` and `MoveTarget::UnderTask { path, line, expected, placement }`; extend `MoveTarget::path`.
-- [ ] 2.2 Add `MoveError::{IntoOwnSubtree, TargetChanged, NoPreviousSibling, AlreadyTopLevel}` with user-facing messages (vault-relative paths are the caller's job).
-- [ ] 2.3 In `plan_move`, validate the target line on the original target lines: parse via `format`, `check_expected` → `TargetChanged`, not-a-task → `NotATask`, compute target block end.
-- [ ] 2.4 Subtree guard: if the target index falls within any kept source range of the same file → `IntoOwnSubtree`.
-- [ ] 2.5 Map the insertion index through same-file removals (`e - removed_before(e)`) and splice after it.
-- [ ] 2.6 Re-indent moved blocks per design D3 (head whitespace per placement; relative whitespace verbatim when units equal, depth-converted otherwise). Leave `Append`/`UnderHeading` behaviour unchanged.
-- [ ] 2.7 Add `MovedBlock::dest: Option<(PathBuf, usize)>` and fill it for all target kinds.
-- [ ] 2.8 Table-driven tests: {source above / below / in another file} × {Child (with/without existing children), SiblingAfter} × {same unit, tab→spaces, spaces→tab}; own-subtree and self-target rejection; stale target; non-task block lines travel; multiple sources incl. ancestor+descendant.
-- [ ] 2.9 Proptest: for random small task trees and random valid `UnderTask` moves, the multiset of trimmed non-blank lines is unchanged and the result re-parses with the moved task's `parent` equal to the target (Child) or the target's parent (SiblingAfter).
+- [x] 2.1 Add `Placement { Child, SiblingAfter }` and `MoveTarget::UnderTask { path, line, expected, placement }`; extend `MoveTarget::path`.
+- [x] 2.2 Add `MoveError::{IntoOwnSubtree, TargetChanged, NoPreviousSibling, AlreadyTopLevel}` with user-facing messages (vault-relative paths are the caller's job).
+- [x] 2.3 In `plan_move`, validate the target line on the original target lines: parse via `format`, `check_expected` → `TargetChanged`, not-a-task → `NotATask`, compute target block end.
+- [x] 2.4 Subtree guard: if the target index falls within any kept source range of the same file → `IntoOwnSubtree`.
+- [x] 2.5 Map the insertion index through same-file removals (`e - removed_before(e)`) and splice after it.
+- [x] 2.6 Re-indent moved blocks per design D3 (head whitespace per placement; relative whitespace verbatim when units equal, depth-converted otherwise). Leave `Append`/`UnderHeading` behaviour unchanged.
+- [x] 2.7 Add `MovedBlock::dest: Option<(PathBuf, usize)>` and fill it for all target kinds.
+- [x] 2.8 Table-driven tests: {source above / below / in another file} × {Child (with/without existing children), SiblingAfter} × {same unit, tab→spaces, spaces→tab}; own-subtree and self-target rejection; stale target; non-task block lines travel; multiple sources incl. ancestor+descendant.
+- [x] 2.9 Proptest: for random small task trees and random valid `UnderTask` moves, the multiset of trimmed non-blank lines is unchanged and the result re-parses with the moved task's `parent` equal to the target (Child) or the target's parent (SiblingAfter).
 
 ## 3. Core: indent / outdent
 
-- [ ] 3.1 `plan_indent(source: &MoveSource, format) -> Result<MovePlan, MoveError>`: parse the file's tasks, `resolve_hierarchy`, find the previous sibling (same parent and indent) → `UnderTask{Child}`; else `NoPreviousSibling`.
-- [ ] 3.2 `plan_outdent(...)`: parent lookup → `UnderTask{parent, SiblingAfter}`; top-level → `AlreadyTopLevel`.
-- [ ] 3.3 Tests: indent under sibling with/without children, indent first child errors, outdent keeps later siblings with the old parent, outdent top-level errors, `LineChanged` on a stale source.
+- [x] 3.1 `plan_indent(source: &MoveSource, format) -> Result<MovePlan, MoveError>`: parse the file's tasks, `resolve_hierarchy`, find the previous sibling (same parent and indent) → `UnderTask{Child}`; else `NoPreviousSibling`.
+- [x] 3.2 `plan_outdent(...)`: parent lookup → `UnderTask{parent, SiblingAfter}`; top-level → `AlreadyTopLevel`.
+- [x] 3.3 Tests: indent under sibling with/without children, indent first child errors, outdent keeps later siblings with the old parent, outdent top-level errors, `LineChanged` on a stale source.
 
 ## 4. CLI
 

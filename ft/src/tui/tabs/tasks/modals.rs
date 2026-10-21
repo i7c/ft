@@ -421,7 +421,9 @@ impl crate::tui::modal::Modal for TaskMoveModal {
                             MoveTarget::UnderHeading(p, h) => {
                                 format!("moved to {}#{}", p.display(), h)
                             }
-                            MoveTarget::Append(p) => format!("moved to {}", p.display()),
+                            MoveTarget::Append(p) | MoveTarget::UnderTask { path: p, .. } => {
+                                format!("moved to {}", p.display())
+                            }
                         };
                         *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
                             text: label,
