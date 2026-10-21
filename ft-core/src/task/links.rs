@@ -105,6 +105,8 @@ pub(crate) struct ParentIndex {
     /// file idx → the anchor task (`None` when `ft.tasks.anchor` is set but
     /// no task carries that 🆔).
     anchors: HashMap<usize, Option<usize>>,
+    /// anchor task idx → the wikilink in its note's `ft.tasks.parent`.
+    fm_parents: HashMap<usize, crate::graph::parser::RawLink>,
 }
 
 impl ParentIndex {
@@ -135,6 +137,7 @@ impl ParentIndex {
 
         let mut blocks = HashMap::new();
         let mut anchors = HashMap::new();
+        let mut fm_parents = HashMap::new();
         for (fi, f) in scan.files.iter().enumerate() {
             for (id, line) in &f.block_ids {
                 let block = match task_at.get(&(fi, *line)) {
@@ -154,6 +157,18 @@ impl ParentIndex {
                     task_file[ti] == fi && scan.tasks[ti].id.as_deref() == Some(anchor.as_str())
                 });
                 anchors.insert(fi, task);
+                let fm_parent = f
+                    .frontmatter
+                    .as_deref()
+                    .and_then(crate::frontmatter::ft_tasks_parent_in)
+                    .and_then(|v| {
+                        let (links, self_refs) =
+                            crate::graph::parser::extract_links_and_self_block_refs(&v);
+                        links.into_iter().chain(self_refs).next()
+                    });
+                if let (Some(t), Some(link)) = (task, fm_parent) {
+                    fm_parents.insert(t, link);
+                }
             }
         }
         Self {
@@ -162,6 +177,7 @@ impl ParentIndex {
             task_at,
             blocks,
             anchors,
+            fm_parents,
         }
     }
 
@@ -223,34 +239,39 @@ pub fn resolve_parent_links(scan: &mut Scan) {
             .parent
             .and_then(|line| index.task_at.get(&(fi, line)).copied());
         let mut link_parent = None;
-        let link = links_by_line
+        // Line links first, then the anchor note's `ft.tasks.parent`.
+        let candidates = links_by_line
             .get(&(fi, task.source_line))
-            .and_then(|links| {
-                let mut first: Option<(String, Candidate)> = None;
-                let mut extra = Vec::new();
-                for l in links {
-                    let Some(c) = index.classify(fi, &l.target_text, l.anchor.as_deref()) else {
-                        continue;
-                    };
-                    if first.is_none() {
-                        first = Some((l.raw_text.clone(), c));
-                    } else {
-                        extra.push(l.raw_text.clone());
-                    }
+            .into_iter()
+            .flatten()
+            .copied()
+            .chain(index.fm_parents.get(&ti));
+        let link = {
+            let mut first: Option<(String, Candidate)> = None;
+            let mut extra = Vec::new();
+            for l in candidates {
+                let Some(c) = index.classify(fi, &l.target_text, l.anchor.as_deref()) else {
+                    continue;
+                };
+                if first.is_none() {
+                    first = Some((l.raw_text.clone(), c));
+                } else {
+                    extra.push(l.raw_text.clone());
                 }
-                first.map(|(raw, c)| {
-                    let state = match (task.parent, c) {
-                        (Some(_), _) => ParentLinkState::Ignored,
-                        (None, Candidate::Resolved(t)) => {
-                            link_parent = Some(t);
-                            let p = &scan.tasks[t];
-                            ParentLinkState::Resolved((p.source_file.clone(), p.source_line))
-                        }
-                        (None, Candidate::Dangling) => ParentLinkState::Dangling,
-                    };
-                    ParentLink { raw, extra, state }
-                })
-            });
+            }
+            first.map(|(raw, c)| {
+                let state = match (task.parent, c) {
+                    (Some(_), _) => ParentLinkState::Ignored,
+                    (None, Candidate::Resolved(t)) => {
+                        link_parent = Some(t);
+                        let p = &scan.tasks[t];
+                        ParentLinkState::Resolved((p.source_file.clone(), p.source_line))
+                    }
+                    (None, Candidate::Dangling) => ParentLinkState::Dangling,
+                };
+                ParentLink { raw, extra, state }
+            })
+        };
         resolved.push(link);
         parent.push(physical.or(link_parent));
     }
@@ -463,6 +484,8 @@ pub enum LinkError {
     },
     #[error("task at {}:{} has no parent link", .path.display(), .line)]
     NoParentLink { path: PathBuf, line: usize },
+    #[error("parent comes from the note's ft.tasks.parent — edit the frontmatter (or the issue in its source)")]
+    ParentFromFrontmatter { path: PathBuf, line: usize },
     #[error("write failed: {0}")]
     Write(#[from] crate::error::Error),
 }
@@ -939,7 +962,20 @@ pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPla
         format,
         false,
     )?;
-    let new_line = remove_link_text(&lines[task.line - 1], &raw).ok_or_else(no_link)?;
+    let Some(new_line) = remove_link_text(&lines[task.line - 1], &raw) else {
+        let content = crate::markdown::lines::join_with_newline(lines);
+        let from_fm = crate::frontmatter::block(&content)
+            .and_then(crate::frontmatter::ft_tasks_parent_in)
+            .is_some_and(|v| v == raw);
+        return Err(if from_fm {
+            LinkError::ParentFromFrontmatter {
+                path: task.path.clone(),
+                line: task.line,
+            }
+        } else {
+            no_link()
+        });
+    };
     let description = format
         .parse_line(&new_line, ParseContext::default())
         .map(|t| t.description)
@@ -1628,6 +1664,65 @@ mod tests {
         );
         assert_eq!(n, 1);
         assert_eq!(read(d.path(), "z.md"), "- [ ] go see [[a#^s1]]\n");
+    }
+
+    // ── frontmatter parents (anchor notes) ───────────────────────────
+
+    fn anchor_note_md(key: &str, parent: Option<&str>) -> String {
+        let p = parent
+            .map(|p| format!("    parent: \"{p}\"\n"))
+            .unwrap_or_default();
+        format!("---\nft:\n  tasks:\n    anchor: {key}\n{p}---\n- [ ] {key} title 🆔 {key}\n")
+    }
+
+    #[test]
+    fn anchor_note_frontmatter_parent() {
+        let (_d, s) = scan(&[
+            ("jira/EPIC-7.md", &anchor_note_md("EPIC-7", None)),
+            (
+                "jira/ABC-123.md",
+                &anchor_note_md("ABC-123", Some("[[EPIC-7]]")),
+            ),
+            ("jira/X-1.md", &anchor_note_md("X-1", Some("[[NOPE-1]]"))),
+        ]);
+        assert_eq!(
+            state(&s, "jira/ABC-123.md", 7),
+            resolved("jira/EPIC-7.md", 6)
+        );
+        let link = task(&s, "jira/ABC-123.md", 7).parent_link.clone().unwrap();
+        assert_eq!(link.raw, "[[EPIC-7]]");
+        // A missing parent note is an ordinary (non-candidate) link.
+        assert_eq!(state(&s, "jira/X-1.md", 7), None);
+    }
+
+    #[test]
+    fn line_link_beats_frontmatter_parent() {
+        let (_d, s) = scan(&[
+            ("jira/EPIC-7.md", &anchor_note_md("EPIC-7", None)),
+            ("p.md", "- [ ] P ^p1\n"),
+            (
+                "jira/ABC-123.md",
+                "---\nft:\n  tasks:\n    anchor: ABC-123\n    parent: \"[[EPIC-7]]\"\n---\n- [ ] t [[p#^p1]] 🆔 ABC-123\n",
+            ),
+        ]);
+        let link = task(&s, "jira/ABC-123.md", 7).parent_link.clone().unwrap();
+        assert_eq!(link.state, resolved("p.md", 1).unwrap());
+        assert_eq!(link.extra, vec!["[[EPIC-7]]".to_string()]);
+    }
+
+    #[test]
+    fn frontmatter_parent_cycle_and_unlink_refusal() {
+        let (d, s) = scan(&[
+            ("jira/A-1.md", &anchor_note_md("A-1", Some("[[B-1]]"))),
+            ("jira/B-1.md", &anchor_note_md("B-1", Some("[[A-1]]"))),
+        ]);
+        assert_eq!(state(&s, "jira/A-1.md", 7), resolved("jira/B-1.md", 7));
+        assert_eq!(state(&s, "jira/B-1.md", 7), Some(ParentLinkState::Cycle));
+        let err = plan_unlink(&src_of(d.path(), &s, "jira/A-1.md", 7), &EmojiFormat).unwrap_err();
+        assert!(
+            matches!(err, LinkError::ParentFromFrontmatter { .. }),
+            "{err:?}"
+        );
     }
 
     /// Gated perf budget: the post-pass stays a small fraction of a scan.

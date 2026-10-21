@@ -665,6 +665,8 @@ looks good
             .tasks
             .iter()
             .all(|t| !t.description.contains("run migration")));
+        let parent = crate::task::hierarchy::parent_key(tasks[0]).expect("epic parent resolves");
+        assert_eq!(parent.0, Path::new("jira/EPIC-7.md"));
     }
 
     #[test]

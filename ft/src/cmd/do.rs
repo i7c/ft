@@ -433,6 +433,7 @@ fn translate_cancel_error(e: CancelError, vault_root: &std::path::Path) -> anyho
 fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyhow::Error {
     use UpdateError::*;
     match e {
+        e @ OwnedByRemote { .. } => anyhow!("{e}"),
         Read { path, source } => {
             let rel = path.strip_prefix(vault_root).unwrap_or(&path);
             anyhow!("could not read {}: {source}", rel.display())

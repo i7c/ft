@@ -491,11 +491,41 @@ pub enum UpdateError {
         expected: String,
         found: String,
     },
+    #[error("{field} is owned by {owner} — change it in {owner}")]
+    OwnedByRemote { field: &'static str, owner: String },
     #[error("write failed: {source}")]
     Write {
         #[from]
         source: crate::error::Error,
     },
+}
+
+/// When `before` is the anchor task of an issue note (its file's
+/// `ft.tasks.anchor` names its `🆔` and `ft.source` is set) and the edit
+/// changed a remote-owned field, that field and the owning source.
+fn owned_change(content: &str, before: &Task, after: &Task) -> Option<(&'static str, String)> {
+    let fm = crate::frontmatter::block(content)?;
+    let source = crate::frontmatter::ft_source_in(fm)?;
+    let anchor = crate::frontmatter::ft_tasks_anchor_in(fm)?;
+    if before.id.as_deref() != Some(anchor.as_str()) {
+        return None;
+    }
+    let untagged = |d: &str| {
+        d.split_whitespace()
+            .filter(|w| !is_tag_word(w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let field = if untagged(&before.description) != untagged(&after.description) {
+        "title"
+    } else if before.due != after.due {
+        "due"
+    } else if before.priority != after.priority {
+        "priority"
+    } else {
+        return None;
+    };
+    Some((field, source.name))
 }
 
 /// Apply `mutate` to the task at `target_path:line`, then serialize the
@@ -553,7 +583,14 @@ where
         }
     })?;
 
+    let before = task.clone();
     mutate(&mut task);
+    if let Some((field, source)) = owned_change(&content, &before, &task) {
+        return Err(UpdateError::OwnedByRemote {
+            field,
+            owner: source,
+        });
+    }
 
     let serialized = format.serialize_line(&task);
     lines[idx] = serialized;
@@ -2933,5 +2970,50 @@ mod tests {
                 prop_assert_eq!(moved.parent, expected_parent);
             }
         }
+    }
+
+    // ── remote-owned field guard ─────────────────────────────────────
+
+    const ISSUE_NOTE: &str = "---\nft:\n  tasks:\n    anchor: ABC-123\n  source:\n    name: jira\n    key: ABC-123\n---\n- [/] [ABC-123](https://x.test/browse/ABC-123) Fix login #computer ⏫ 📅 2026-10-30 🆔 ABC-123\n- [ ] local sub 📅 2026-10-30\n";
+
+    #[test]
+    fn owned_fields_on_issue_anchor_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(&dir, "jira/ABC-123.md", ISSUE_NOTE);
+        let err = update_task_line(&p, 9, &EmojiFormat, None, |t| t.due = None).unwrap_err();
+        assert_eq!(err.to_string(), "due is owned by jira — change it in jira");
+        let err = update_task_line(&p, 9, &EmojiFormat, None, |t| {
+            t.priority = Some(Priority::Low)
+        })
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            UpdateError::OwnedByRemote {
+                field: "priority",
+                ..
+            }
+        ));
+        let err = update_task_line(&p, 9, &EmojiFormat, None, |t| {
+            t.description.push_str(" now")
+        })
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            UpdateError::OwnedByRemote { field: "title", .. }
+        ));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), ISSUE_NOTE);
+    }
+
+    #[test]
+    fn tags_status_and_local_tasks_stay_editable() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(&dir, "jira/ABC-123.md", ISSUE_NOTE);
+        let list = vec!["computer".to_string(), "wait".to_string()];
+        retag_task(&p, 9, &EmojiFormat, None, &list, "wait").unwrap();
+        update_task_line(&p, 9, &EmojiFormat, None, |t| t.status = Status::Done).unwrap();
+        update_task_line(&p, 10, &EmojiFormat, None, |t| t.due = None).unwrap();
+        let out = std::fs::read_to_string(&p).unwrap();
+        assert!(out.contains("- [x] [ABC-123](https://x.test/browse/ABC-123) Fix login #wait ⏫ 📅 2026-10-30 🆔 ABC-123"), "{out}");
+        assert!(out.contains("- [ ] local sub\n"));
     }
 }
