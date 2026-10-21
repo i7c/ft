@@ -1,0 +1,15 @@
+---
+source: ft/tests/tasks_link.rs
+expression: "serde_json::to_string_pretty(&v).unwrap()"
+---
+[
+  {
+    "description": "reproduce",
+    "line": 2,
+    "parent": {
+      "line": 1,
+      "path": "proj.md"
+    },
+    "path": "journal/2026-10-21.md"
+  }
+]

@@ -627,6 +627,73 @@ fn physically_nested(lines: &[String], line: usize, format: &dyn TaskFormat) -> 
         .is_some_and(|t| t.source_line == line && t.parent.is_some())
 }
 
+/// Validate `parent` and decide how children link to it: `None` for the
+/// anchor task of an anchor note (linked as `[[note]]`), otherwise its
+/// block id — generated and written onto the parent line in `files` when
+/// it has none.
+fn prepare_parent(
+    files: &mut Files,
+    parent: &MoveSource,
+    ctx: &LinkCtx<'_>,
+    format: &dyn TaskFormat,
+) -> Result<Option<String>, LinkError> {
+    let parent_lines = files.lines(&parent.path)?;
+    let parent_task = guarded_task(
+        &parent.path,
+        parent_lines,
+        parent.line,
+        parent.expected.as_ref(),
+        format,
+        true,
+    )?;
+    let parent_content = crate::markdown::lines::join_with_newline(parent_lines);
+    if parent_task.id.is_some()
+        && crate::frontmatter::ft_tasks_anchor(&parent_content) == parent_task.id
+    {
+        return Ok(None);
+    }
+    if let Some(id) = parent_task.block_link {
+        return Ok(Some(id));
+    }
+    let existing: HashSet<String> = parent_lines
+        .iter()
+        .filter_map(|l| crate::scan::trailing_block_id(l).map(str::to_string))
+        .collect();
+    let id = new_block_id(
+        &ctx.rel(&parent.path),
+        parent.line,
+        &parent_task.description,
+        &existing,
+    );
+    let l = &mut parent_lines[parent.line - 1];
+    *l = format!("{} ^{id}", l.trim_end());
+    Ok(Some(id))
+}
+
+/// For a task about to be created in `child_rel`: the parent-link text to
+/// put in its description, plus a plan with the parent-side edit (a new
+/// block id), if any. Apply the plan before creating the task.
+pub fn plan_parent_for_new_task(
+    child_rel: &Path,
+    parent: &MoveSource,
+    ctx: &LinkCtx<'_>,
+    format: &dyn TaskFormat,
+) -> Result<(String, LinkPlan), LinkError> {
+    let mut files = Files(BTreeMap::new());
+    let block_id = prepare_parent(&mut files, parent, ctx, format)?;
+    let anchor = match &block_id {
+        Some(id) => LinkAnchor::Block(id),
+        None => LinkAnchor::Note,
+    };
+    let text = link_text(child_rel, &ctx.rel(&parent.path), anchor, &ctx.notes);
+    let plan = LinkPlan {
+        edits: files.into_edits(),
+        children: Vec::new(),
+        parent: Some((parent.path.clone(), parent.line)),
+    };
+    Ok((text, plan))
+}
+
 /// Plan linking `children` under `parent`: give the parent a block id if it
 /// needs one (anchor tasks of anchor notes are linked as `[[note]]`
 /// instead), and append the link to each child's description, replacing
@@ -639,39 +706,7 @@ pub fn plan_link(
 ) -> Result<LinkPlan, LinkError> {
     let mut files = Files(BTreeMap::new());
     let parent_rel = ctx.rel(&parent.path);
-
-    let parent_lines = files.lines(&parent.path)?;
-    let parent_task = guarded_task(
-        &parent.path,
-        parent_lines,
-        parent.line,
-        parent.expected.as_ref(),
-        format,
-        true,
-    )?;
-    let parent_content = crate::markdown::lines::join_with_newline(parent_lines);
-    let is_anchor_task = parent_task.id.is_some()
-        && crate::frontmatter::ft_tasks_anchor(&parent_content) == parent_task.id;
-
-    let block_id = if is_anchor_task {
-        None
-    } else if let Some(id) = parent_task.block_link.clone() {
-        Some(id)
-    } else {
-        let existing: HashSet<String> = parent_lines
-            .iter()
-            .filter_map(|l| crate::scan::trailing_block_id(l).map(str::to_string))
-            .collect();
-        let id = new_block_id(
-            &parent_rel,
-            parent.line,
-            &parent_task.description,
-            &existing,
-        );
-        let l = &mut parent_lines[parent.line - 1];
-        *l = format!("{} ^{id}", l.trim_end());
-        Some(id)
-    };
+    let block_id = prepare_parent(&mut files, parent, ctx, format)?;
 
     // The parent and its effective ancestors can't become children.
     let by_key: HashMap<TaskKey, &Task> = ctx
@@ -899,7 +934,7 @@ pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPla
         .ok_or_else(no_link)?;
     let mut files = Files(BTreeMap::new());
     let lines = files.lines(&task.path)?;
-    let parsed = guarded_task(
+    guarded_task(
         &task.path,
         lines,
         task.line,
@@ -908,11 +943,15 @@ pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPla
         false,
     )?;
     let new_line = remove_link_text(&lines[task.line - 1], &raw).ok_or_else(no_link)?;
+    let description = format
+        .parse_line(&new_line, ParseContext::default())
+        .map(|t| t.description)
+        .unwrap_or_default();
     lines[task.line - 1] = new_line;
     Ok(LinkPlan {
         edits: files.into_edits(),
         children: vec![LinkedChild {
-            description: parsed.description,
+            description,
             path: task.path.clone(),
             line: task.line,
         }],

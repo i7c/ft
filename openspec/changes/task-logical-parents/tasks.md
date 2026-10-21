@@ -42,12 +42,12 @@
 
 ## 7. CLI
 
-- [ ] 7.1 `ft tasks link <SEL>... --under <SEL>` (`--dry-run`, `--format`).
-- [ ] 7.2 `ft tasks unlink <SEL>` (`--dry-run`, `--format`).
-- [ ] 7.3 `ft tasks create --link-parent <SEL>` (conflicts with `--parent`; anchor-note form for anchor tasks).
-- [ ] 7.4 `ft tasks check [--format json]`, exit 1 on issues.
-- [ ] 7.5 `ft tasks move` calls `plan_retarget`; text output mentions retargeted link count.
-- [ ] 7.6 Integration tests in `ft/tests/tasks_link.rs` (+ insta snapshots for JSON shapes) incl. `--tree` output with a linked child.
+- [x] 7.1 `ft tasks link <SEL>... --under <SEL>` (`--dry-run`, `--format`).
+- [x] 7.2 `ft tasks unlink <SEL>` (`--dry-run`, `--format`).
+- [x] 7.3 `ft tasks create --link-parent <SEL>` (conflicts with `--parent`; anchor-note form for anchor tasks).
+- [x] 7.4 `ft tasks check [--format json]`, exit 1 on issues.
+- [x] 7.5 `ft tasks move` calls `plan_retarget`; text output mentions retargeted link count.
+- [x] 7.6 Integration tests in `ft/tests/tasks_link.rs` (+ insta snapshots for JSON shapes) incl. `--tree` output with a linked child.
 
 ## 8. TUI
 

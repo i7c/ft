@@ -16,6 +16,7 @@ use ft_core::{
     selector,
     task::resolve,
     task::{
+        links,
         ops::{
             self, CancelError, CompleteError, CompleteOptions, CreateError, CreateInput,
             CreateOptions, MoveSource, MoveTarget, Placement, Position, UpdateError,
@@ -52,6 +53,14 @@ pub enum TasksCommand {
     /// Lift a task (and its subtasks) to its parent's level, after the
     /// parent's subtree.
     Outdent(IndentArgs),
+    /// Make tasks children of another task without moving them, via a
+    /// parent link (`[[note#^id]]`) in their description.
+    Link(LinkArgs),
+    /// Remove a task's parent link.
+    Unlink(UnlinkArgs),
+    /// Report broken task structure: dangling, cyclic, ignored, and extra
+    /// parent links. Exits 1 when any are found.
+    Check(CheckArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -202,6 +211,9 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Edit(edit_args) => run_edit(edit_args, vault_flag),
         TasksCommand::Indent(a) => run_indent(a, vault_flag, IndentDir::In),
         TasksCommand::Outdent(a) => run_indent(a, vault_flag, IndentDir::Out),
+        TasksCommand::Link(a) => run_link(a, vault_flag),
+        TasksCommand::Unlink(a) => run_unlink(a, vault_flag),
+        TasksCommand::Check(a) => run_check(a, vault_flag),
     }
 }
 
@@ -569,6 +581,12 @@ pub struct CreateArgs {
     /// 1-indexed line), or fuzzy substring. Must match exactly one task.
     #[arg(long, value_name = "SELECTOR", conflicts_with_all = ["file", "under_heading", "at_line", "append"])]
     pub parent: Option<String>,
+
+    /// Create the task at its usual place (today's daily note by default)
+    /// with a parent link to the task selected by SELECTOR, making it that
+    /// task's child without nesting it. Must match exactly one task.
+    #[arg(long, value_name = "SELECTOR", conflicts_with = "parent")]
+    pub link_parent: Option<String>,
 }
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -610,7 +628,22 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         dates::parse(s, today).map_err(|e| anyhow!("--{label}: {e}"))
     };
 
-    let description = args.description.join(" ");
+    let mut description = args.description.join(" ");
+    if let Some(sel) = args.link_parent.as_deref() {
+        let scan = vault.scan();
+        let parent = resolve_unique("--link-parent", sel, &scan.tasks)?;
+        let ctx = links::LinkCtx::new(&vault.path, &scan);
+        let child_rel = vault.relativize(&target);
+        let (text, plan) = links::plan_parent_for_new_task(
+            &child_rel,
+            &source_of(&vault, parent),
+            &ctx,
+            vault.task_format(),
+        )
+        .map_err(|e| relativize_link_error(e, &vault))?;
+        links::apply_link_plan(&plan)?;
+        description = format!("{description} {text}");
+    }
     let input = CreateInput {
         description,
         status: Status::Open,
@@ -1214,9 +1247,15 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         })
         .collect();
 
-    let plan = ops::plan_move(&sources, &target, vault.task_format())
+    let mut plan = ops::plan_move(&sources, &target, vault.task_format())
         .map_err(|e| relativize_move_error(e, &vault))?;
-    finish_move(&vault, &plan, args.dry_run, args.format, &target_label)
+    let retargeted = links::plan_retarget(&mut plan, &links::LinkCtx::new(&vault.path, &scan))
+        .map_err(|e| relativize_link_error(e, &vault))?;
+    let label = match retargeted {
+        0 => target_label,
+        n => format!("{target_label} (retargeted {n} link(s))"),
+    };
+    finish_move(&vault, &plan, args.dry_run, args.format, &label)
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1372,6 +1411,219 @@ fn print_diff(path: &std::path::Path, original: &str, new: &str) {
             ChangeTag::Equal => " ",
         };
         print!("{sign}{change}");
+    }
+}
+
+// ── ft tasks link / unlink / check ───────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct LinkArgs {
+    /// Tasks to link (each must match exactly one task).
+    #[arg(value_name = "SELECTOR", required = true)]
+    pub children: Vec<String>,
+
+    /// The parent task (must match exactly one task).
+    #[arg(long, value_name = "SELECTOR")]
+    pub under: String,
+
+    /// Print a unified diff of the affected files without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format for the result.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+#[derive(Args, Debug)]
+pub struct UnlinkArgs {
+    /// The task whose parent link to remove (must match exactly one task).
+    #[arg(value_name = "SELECTOR")]
+    pub selector: String,
+
+    /// Print a unified diff of the affected file without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format for the result.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+#[derive(Args, Debug)]
+pub struct CheckArgs {
+    /// Output format for the issue list.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+fn source_of(vault: &Vault, t: &Task) -> MoveSource {
+    MoveSource {
+        path: vault.path.join(&t.source_file),
+        line: t.source_line,
+        expected: Some(t.clone()),
+    }
+}
+
+fn run_link(args: LinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let scan = vault.scan();
+    let parent = resolve_unique("--under", &args.under, &scan.tasks)?;
+    let children = args
+        .children
+        .iter()
+        .map(|sel| resolve_unique("selector", sel, &scan.tasks).map(|t| source_of(&vault, t)))
+        .collect::<Result<Vec<_>>>()?;
+    let ctx = links::LinkCtx::new(&vault.path, &scan);
+    let plan = links::plan_link(
+        &children,
+        &source_of(&vault, parent),
+        &ctx,
+        vault.task_format(),
+    )
+    .map_err(|e| relativize_link_error(e, &vault))?;
+    let label = format!(
+        "Linked {} task(s) under {}:{}",
+        plan.children.len(),
+        parent.source_file.display(),
+        parent.source_line
+    );
+    finish_link(&vault, &plan, args.dry_run, args.format, &label)
+}
+
+fn run_unlink(args: UnlinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let scan = vault.scan();
+    let task = resolve_unique("selector", &args.selector, &scan.tasks)?;
+    let plan = links::plan_unlink(&source_of(&vault, task), vault.task_format())
+        .map_err(|e| relativize_link_error(e, &vault))?;
+    let label = format!(
+        "Unlinked {}:{}",
+        task.source_file.display(),
+        task.source_line
+    );
+    finish_link(&vault, &plan, args.dry_run, args.format, &label)
+}
+
+/// Shared tail of `link` / `unlink`: diff or apply, then report.
+fn finish_link(
+    vault: &Vault,
+    plan: &links::LinkPlan,
+    dry_run: bool,
+    format: MoveFormat,
+    label: &str,
+) -> Result<ExitCode> {
+    if dry_run && format == MoveFormat::Text {
+        for edit in plan.edits.iter().filter(|e| e.original != e.new) {
+            print_diff(&vault.relativize(&edit.path), &edit.original, &edit.new);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if !dry_run {
+        links::apply_link_plan(plan)?;
+    }
+    match format {
+        MoveFormat::Text => println!("{label}"),
+        MoveFormat::Json => {
+            let loc = |p: &std::path::Path, line: usize| serde_json::json!({ "path": vault.relativize(p), "line": line });
+            let rows: Vec<serde_json::Value> = plan
+                .children
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "description": c.description,
+                        "path": vault.relativize(&c.path),
+                        "line": c.line,
+                        "parent": plan.parent.as_ref().map(|(p, l)| loc(p, *l)),
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let scan = vault.scan();
+    let mut issues: Vec<(&'static str, &Task, &str)> = Vec::new();
+    for t in &scan.tasks {
+        let Some(link) = &t.parent_link else { continue };
+        if !matches!(link.state, links::ParentLinkState::Resolved(_)) {
+            issues.push((link.state.as_str(), t, &link.raw));
+        }
+        for extra in &link.extra {
+            issues.push(("extra", t, extra));
+        }
+    }
+    issues.sort_by(|a, b| {
+        (&a.1.source_file, a.1.source_line).cmp(&(&b.1.source_file, b.1.source_line))
+    });
+    match args.format {
+        MoveFormat::Text if issues.is_empty() => println!("no issues"),
+        MoveFormat::Text => {
+            for (kind, t, link) in &issues {
+                println!(
+                    "{}:{}  {kind:<8}  {link}  {}",
+                    t.source_file.display(),
+                    t.source_line,
+                    t.description
+                );
+            }
+        }
+        MoveFormat::Json => {
+            let rows: Vec<serde_json::Value> = issues
+                .iter()
+                .map(|(kind, t, link)| {
+                    serde_json::json!({
+                        "kind": kind,
+                        "path": t.source_file,
+                        "line": t.source_line,
+                        "description": t.description,
+                        "link": link,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+    }
+    Ok(if issues.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+/// Vault-relative messages for the link errors that carry paths.
+fn relativize_link_error(e: links::LinkError, vault: &Vault) -> anyhow::Error {
+    use links::LinkError as E;
+    let rel = |p: &std::path::Path| vault.relativize(p).display().to_string();
+    match e {
+        E::WouldCycle { path, line } => anyhow!(
+            "can't link a task under its own subtask ({}:{line})",
+            rel(&path)
+        ),
+        E::NoParentLink { path, line } => anyhow!("{}:{line} has no parent link", rel(&path)),
+        E::LineChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => anyhow!(
+            "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+            rel(&path)
+        ),
+        E::TargetChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => anyhow!(
+            "target task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+            rel(&path)
+        ),
+        other => other.into(),
     }
 }
 
