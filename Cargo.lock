@@ -1089,6 +1089,7 @@ name = "ft-core"
 version = "0.1.12"
 dependencies = [
  "assert_fs",
+ "base64",
  "blake3",
  "chrono",
  "chrono-english",

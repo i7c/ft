@@ -7,9 +7,9 @@
 
 ## 2. Source core
 
-- [ ] 2.1 `sources/mod.rs`: `TaskSource`, `RemoteIssue`, `Comment`, `SourceError`, `FetchResult`, `fetch_all(cfg, creds, known_keys)` (queries → union = active; parent chain ≤5 = context; known-but-missing keys → `fetch_keys` for scope).
-- [ ] 2.2 `sources/http.rs`: agent (timeouts, UA), error classification (`Offline`/`Unauthorized`/`RateLimited`/`Remote`/`Parse`), single `Retry-After` retry, `Secret` newtype; tests against a local `TcpListener` stub (200, 401, 429+Retry-After, connection refused → Offline, slow → timeout).
-- [ ] 2.3 `sources/credentials.rs`: env → `gh auth token` (github, 5s timeout) → keyring; `login`/`logout`; tests for env precedence and name normalisation (`FT_MY_JIRA_TOKEN`).
+- [x] 2.1 `sources/mod.rs`: `TaskSource`, `RemoteIssue`, `Comment`, `SourceError`, `FetchResult`, `fetch_all(cfg, creds, known_keys)` (queries → union = active; parent chain ≤5 = context; known-but-missing keys → `fetch_keys` for scope).
+- [x] 2.2 `sources/http.rs`: agent (timeouts, UA), error classification (`Offline`/`Unauthorized`/`RateLimited`/`Remote`/`Parse`), single `Retry-After` retry, `Secret` newtype; tests against a local `TcpListener` stub (200, 401, 429+Retry-After, connection refused → Offline, slow → timeout).
+- [x] 2.3 `sources/credentials.rs`: env → `gh auth token` (github, 5s timeout) → keyring; `login`/`logout`; tests for env precedence and name normalisation (`FT_MY_JIRA_TOKEN`).
 
 ## 3. Jira
 

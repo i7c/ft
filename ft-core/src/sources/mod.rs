@@ -1,0 +1,261 @@
+//! Remote task sources (Jira, GitHub). Fetching is blocking and network
+//! bound; planning the resulting note edits ([`sync`]) is pure and works on
+//! the fetched data, so the TUI can fetch off-thread and apply on the main
+//! thread. Nothing here runs during a vault scan.
+
+pub mod credentials;
+pub mod http;
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use chrono::NaiveDate;
+use thiserror::Error;
+
+use crate::task::{Priority, Status};
+
+/// One remote issue, normalised across backends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemoteIssue {
+    /// Key used as `🆔`, file stem, and `ft.source.key` (e.g. `ABC-123`).
+    pub key: String,
+    pub url: String,
+    pub title: String,
+    /// Remote status name, verbatim (e.g. `In Review`).
+    pub status_name: String,
+    /// `status_name` mapped to a local status.
+    pub status: Status,
+    pub priority: Option<Priority>,
+    pub due: Option<NaiveDate>,
+    /// Resolution / close date.
+    pub resolved: Option<NaiveDate>,
+    pub assignee: Option<String>,
+    /// Parent issue key.
+    pub parent: Option<String>,
+    /// Remote `updated` timestamp, verbatim.
+    pub updated: String,
+    /// Description as markdown (not yet neutralised).
+    pub description: String,
+    /// Comments, oldest first.
+    pub comments: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Comment {
+    pub author: String,
+    /// RFC 3339 timestamp, verbatim.
+    pub created: String,
+    /// Markdown body (not yet neutralised).
+    pub body: String,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum SourceError {
+    #[error("offline ({0})")]
+    Offline(String),
+    #[error("unauthorized ({status})")]
+    Unauthorized { status: u16 },
+    #[error("rate limited")]
+    RateLimited,
+    #[error("remote error {status}: {excerpt}")]
+    Remote { status: u16, excerpt: String },
+    #[error("unexpected response: {0}")]
+    Parse(String),
+}
+
+/// A backend that can list issues. Implementations are blocking and spawn
+/// no threads.
+pub trait TaskSource {
+    /// All issues matching a backend query (JQL, GitHub search).
+    fn fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError>;
+    /// The issues with these keys; keys that no longer exist (or aren't
+    /// visible) are simply absent from the result.
+    fn fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError>;
+}
+
+/// Everything one sync of one source fetched.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FetchResult {
+    /// Issues returned by at least one query.
+    pub active: Vec<RemoteIssue>,
+    /// Ancestors of active issues that aren't active themselves.
+    pub context: Vec<RemoteIssue>,
+    /// Previously known issues that are neither, fetched by key.
+    pub rechecked: Vec<RemoteIssue>,
+    /// Previously known keys the remote no longer returns at all.
+    pub missing: Vec<String>,
+}
+
+/// How far up a parent chain [`fetch_all`] follows.
+const MAX_PARENT_DEPTH: usize = 5;
+
+/// Run every query, then (optionally) the parent chains of the results,
+/// then re-check `known_keys` (issues the vault already has notes for) that
+/// neither returned.
+pub fn fetch_all(
+    source: &dyn TaskSource,
+    queries: &BTreeMap<String, String>,
+    fetch_parents: bool,
+    known_keys: &[String],
+) -> Result<FetchResult, SourceError> {
+    let mut active: BTreeMap<String, RemoteIssue> = BTreeMap::new();
+    for query in queries.values() {
+        for issue in source.fetch_query(query)? {
+            active.entry(issue.key.clone()).or_insert(issue);
+        }
+    }
+
+    let mut context: BTreeMap<String, RemoteIssue> = BTreeMap::new();
+    if fetch_parents {
+        let mut frontier: BTreeSet<String> = active
+            .values()
+            .filter_map(|i| i.parent.clone())
+            .filter(|k| !active.contains_key(k))
+            .collect();
+        for _ in 0..MAX_PARENT_DEPTH {
+            if frontier.is_empty() {
+                break;
+            }
+            let keys: Vec<String> = frontier.iter().cloned().collect();
+            let fetched = source.fetch_keys(&keys)?;
+            frontier = fetched
+                .iter()
+                .filter_map(|i| i.parent.clone())
+                .filter(|k| !active.contains_key(k) && !context.contains_key(k))
+                .collect();
+            for issue in fetched {
+                context.entry(issue.key.clone()).or_insert(issue);
+            }
+            frontier.retain(|k| !context.contains_key(k));
+        }
+    }
+
+    let unseen: Vec<String> = known_keys
+        .iter()
+        .filter(|k| !active.contains_key(*k) && !context.contains_key(*k))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let rechecked = if unseen.is_empty() {
+        Vec::new()
+    } else {
+        source.fetch_keys(&unseen)?
+    };
+    let missing = unseen
+        .into_iter()
+        .filter(|k| !rechecked.iter().any(|i| &i.key == k))
+        .collect();
+
+    Ok(FetchResult {
+        active: active.into_values().collect(),
+        context: context.into_values().collect(),
+        rechecked,
+        missing,
+    })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// In-memory source for planner and flow tests.
+    #[derive(Default)]
+    pub(crate) struct FakeSource {
+        pub issues: Vec<RemoteIssue>,
+        /// query string → keys it returns
+        pub queries: BTreeMap<String, Vec<String>>,
+        pub calls: RefCell<Vec<String>>,
+    }
+
+    pub(crate) fn issue(key: &str, parent: Option<&str>) -> RemoteIssue {
+        RemoteIssue {
+            key: key.into(),
+            url: format!("https://example.test/browse/{key}"),
+            title: format!("Title of {key}"),
+            status_name: "To Do".into(),
+            parent: parent.map(str::to_string),
+            updated: "2026-10-21T09:00:00.000+0000".into(),
+            ..Default::default()
+        }
+    }
+
+    impl TaskSource for FakeSource {
+        fn fetch_query(&self, query: &str) -> Result<Vec<RemoteIssue>, SourceError> {
+            self.calls.borrow_mut().push(format!("query:{query}"));
+            let keys = self.queries.get(query).cloned().unwrap_or_default();
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| keys.contains(&i.key))
+                .cloned()
+                .collect())
+        }
+        fn fetch_keys(&self, keys: &[String]) -> Result<Vec<RemoteIssue>, SourceError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("keys:{}", keys.join(",")));
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| keys.contains(&i.key))
+                .cloned()
+                .collect())
+        }
+    }
+
+    #[test]
+    fn fetch_all_classifies_active_context_rechecked_missing() {
+        let src = FakeSource {
+            issues: vec![
+                issue("A-1", Some("E-1")),
+                issue("A-2", Some("A-1")),
+                issue("E-1", Some("I-1")),
+                issue("I-1", None),
+                issue("OLD-1", None),
+            ],
+            queries: [
+                ("q1".to_string(), vec!["A-1".to_string()]),
+                ("q2".to_string(), vec!["A-1".to_string(), "A-2".to_string()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let queries = [
+            ("a".to_string(), "q1".to_string()),
+            ("b".to_string(), "q2".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let known = [
+            "OLD-1".to_string(),
+            "GONE-1".to_string(),
+            "A-1".to_string(),
+            "E-1".to_string(),
+        ];
+        let r = fetch_all(&src, &queries, true, &known).unwrap();
+        let keys = |v: &[RemoteIssue]| v.iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&r.active), ["A-1", "A-2"]);
+        assert_eq!(keys(&r.context), ["E-1", "I-1"]);
+        assert_eq!(keys(&r.rechecked), ["OLD-1"]);
+        assert_eq!(r.missing, ["GONE-1"]);
+    }
+
+    #[test]
+    fn fetch_all_without_parents_skips_context() {
+        let src = FakeSource {
+            issues: vec![issue("A-1", Some("E-1")), issue("E-1", None)],
+            queries: [("q".to_string(), vec!["A-1".to_string()])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let queries = [("mine".to_string(), "q".to_string())]
+            .into_iter()
+            .collect();
+        let r = fetch_all(&src, &queries, false, &[]).unwrap();
+        assert!(r.context.is_empty());
+        assert_eq!(src.calls.borrow().len(), 1);
+    }
+}

@@ -26,6 +26,7 @@ rmp-serde = { workspace = true }
 blake3 = { workspace = true }
 ureq = { workspace = true }
 keyring = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

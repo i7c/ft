@@ -30,6 +30,7 @@ rmp-serde = "1"
 blake3 = "1"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier", "json", "gzip"] }
 keyring = "4.2"
+base64 = "0.23"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

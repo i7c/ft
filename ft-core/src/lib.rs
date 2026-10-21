@@ -18,6 +18,7 @@ pub mod related;
 pub mod scan;
 pub mod search;
 pub mod selector;
+pub mod sources;
 pub mod synth;
 pub mod task;
 pub mod timeblock;
