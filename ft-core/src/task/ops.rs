@@ -1128,7 +1128,7 @@ fn resolve_anchor(
 /// Re-indent a moved block so its head sits at `new_head_ws`. Nested lines
 /// keep their depth relative to the head: verbatim when both files share an
 /// indent unit, otherwise re-expressed in `dst` units.
-fn reindent_block(
+pub(crate) fn reindent_block(
     block: &[String],
     head_indent: usize,
     src: IndentUnit,
@@ -1391,7 +1391,7 @@ pub(crate) fn leading_ws(line: &str) -> &str {
 /// `head_indent`. The block extends through every following line whose first
 /// non-whitespace column is greater than `head_indent`. Blank lines never
 /// belong to the block — they belong to the surrounding context.
-fn block_end(lines: &[String], start_idx: usize, head_indent: usize) -> usize {
+pub(crate) fn block_end(lines: &[String], start_idx: usize, head_indent: usize) -> usize {
     let mut end = start_idx;
     for (i, l) in lines.iter().enumerate().skip(start_idx + 1) {
         let trimmed = l.trim_start();

@@ -9,6 +9,7 @@ pub mod github;
 pub mod http;
 pub mod jira;
 pub mod note;
+pub mod promote;
 pub mod push;
 pub mod run;
 pub mod sync;

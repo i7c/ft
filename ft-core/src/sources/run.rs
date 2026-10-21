@@ -133,6 +133,38 @@ pub fn run_source(
     Ok(SourceOutcome { push, fetched })
 }
 
+/// The remote half of a promote: create the child issue, push the task's
+/// status when it isn't Open, and return the issue as now on the remote,
+/// plus a push-failure reason if the status couldn't be pushed.
+pub fn promote(
+    name: &str,
+    cfg: &SourceCfg,
+    parent: &super::IssueRef,
+    new: &super::NewIssue,
+    status: crate::task::Status,
+) -> Result<(super::RemoteIssue, Option<String>), FetchFailure> {
+    let (token, _) = credentials::resolve(name, cfg).ok_or(FetchFailure::NoCredentials)?;
+    let source = build_source(cfg, &token);
+    let created = source.create_child(parent, new)?;
+    if status == crate::task::Status::Open {
+        return Ok((created, None));
+    }
+    let r = super::IssueRef {
+        key: created.key.clone(),
+        url: Some(created.url.clone()),
+    };
+    let failure = match source.push_status(&r, status, &cfg.transitions)? {
+        super::PushOutcome::NotPushable(reason) => Some(reason),
+        _ => None,
+    };
+    let refreshed = source
+        .fetch_keys(&[r])?
+        .into_iter()
+        .next()
+        .unwrap_or(created);
+    Ok((refreshed, failure))
+}
+
 /// Machine-local sync attempt times, informational only.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttemptLog {

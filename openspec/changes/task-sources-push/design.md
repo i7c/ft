@@ -134,21 +134,25 @@ the planner.
 3. Push the initial status if it isn't Open.
 4. Fetch the new issue by key, giving a full `RemoteIssue`.
 
-**Main thread (vault), in order, each step guarded:**
-1. **Write the new note** with `plan_sync` over a `FetchResult` that has
-   the new issue as active. This is the same code path as a regular sync,
+**Main thread (vault): one guarded plan, applied all-or-nothing:**
+1. **New note:** produced by `plan_sync` over a `FetchResult` that has
+   the new issue as active. It is the same code path as a regular sync,
    so the output is byte-identical to what the next sync would produce.
-   If the promoted line has a block id, it is put on the anchor line.
-2. **Move the children:** for each direct child block of the promoted
-   line, `plan_move` it `UnderTask { new anchor, Child }`.
-   `plan_retarget` keeps references to block ids inside the children
-   valid.
-3. **Remove the promoted line:** a small `plan_remove_line(path, line,
-   expected)` reuses the guard logic and deletes exactly that line.
-4. **Retarget the block id:** references to `<old file>#^<id>` are
-   rewritten to the new note through `plan_retarget`'s rewrite pass. It
-   is generalised to accept explicit `(src_rel, id) → dst_rel` mappings,
-   in addition to deriving them from a `MovePlan`.
+   If the promoted line has a block id, it goes on the anchor line.
+2. **The block moves:** the promoted line's whole block (its subtasks
+   and any loose note lines) is re-indented under the new anchor
+   (`ops::reindent_block`), and the line plus block are removed from
+   their file. Moving the whole block avoids orphaning the loose note
+   lines that per-child `plan_move` calls would leave behind.
+3. **References follow:** the edit is exactly a move of one block from
+   the old file to the new anchor's position, so a synthetic `MovePlan`
+   (one `MovedBlock` with `dest`) goes through the existing
+   `plan_retarget`. Every `[[…#^id]]` to the line or its subtasks is
+   rewritten, including same-file refs inside the block.
+   `LinkCtx::including(new note)` gives the short `[[ABC-124#^id]]`
+   form.
+4. **Apply:** `apply_guarded` writes only if every file still holds its
+   planned original; otherwise nothing is written.
 
 The steps aren't one atomic transaction, because the remote issue
 already exists by then. If a local step fails, the command reports the

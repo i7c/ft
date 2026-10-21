@@ -19,11 +19,11 @@
 
 ## 4. Promote
 
-- [ ] 4.1 `TaskSource::issue_meta` + `create_child` (`NewIssue`); Jira: issue meta, createmeta sub-task type, `/myself` accountId, `POST /rest/api/3/issue`; GitHub: create + `sub_issues`; stub tests for both incl. epic parent and sub-task refusal.
-- [ ] 4.2 Summary cleaning (strip wikilinks, md links, hashtags, block id).
-- [ ] 4.3 Generalise `plan_retarget` to accept explicit `(src_rel, id) → dst_rel` mappings; `plan_remove_line` with guard.
-- [ ] 4.4 `sources::promote::apply_local(…)`: new note via `plan_sync` (block id carried to anchor), move children under new anchor, remove line, retarget block id; tests for the spec scenario (linked daily-note task with child + external block ref).
-- [ ] 4.5 Preconditions (parent anchor required, push enabled, credentials, online) with the exact messages.
+- [x] 4.1 `TaskSource::issue_meta` + `create_child` (`NewIssue`); Jira: issue meta, createmeta sub-task type, `/myself` accountId, `POST /rest/api/3/issue`; GitHub: create + `sub_issues`; stub tests for both incl. epic parent and sub-task refusal.
+- [x] 4.2 Summary cleaning (strip wikilinks, md links, hashtags, block id).
+- [x] 4.3 Block-id retargeting via a synthetic `MovePlan` (task block → new anchor) fed to the existing `plan_retarget`; line removal and guard live in `promote::plan_local` / `apply_guarded` (no separate `plan_remove_line` needed). `LinkCtx::including` so links to the new note use the short form.
+- [x] 4.4 `sources::promote::plan_local` + `apply_guarded`: new note via `plan_sync` (block id carried to anchor), the task's whole block (subtasks + notes) re-indented under the new anchor, lines removed, block ids retargeted; spec-scenario test. Remote half: `run::promote`.
+- [x] 4.5 Preconditions (parent anchor required, push enabled, credentials, online) with the exact messages.
 
 ## 5. CLI
 

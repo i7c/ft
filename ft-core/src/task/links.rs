@@ -510,6 +510,19 @@ impl<'a> LinkCtx<'a> {
         }
     }
 
+    /// This context, with `rel` (a note about to be created) known to the
+    /// note index so links to it get the short title form.
+    pub fn including(mut self, rel: &Path) -> Self {
+        let rels: Vec<&Path> = self
+            .files
+            .iter()
+            .map(|f| f.rel.as_path())
+            .chain(std::iter::once(rel))
+            .collect();
+        self.notes = ScanNoteIndex::new(rels);
+        self
+    }
+
     /// The vault-relative file a wikilink written in `from` points at.
     fn target_of(&self, from: &Path, target: &str) -> Option<PathBuf> {
         if target.trim().is_empty() {
