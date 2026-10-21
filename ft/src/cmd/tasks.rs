@@ -18,7 +18,7 @@ use ft_core::{
     task::{
         ops::{
             self, CancelError, CompleteError, CompleteOptions, CreateError, CreateInput,
-            CreateOptions, MoveSource, MoveTarget, Position, UpdateError,
+            CreateOptions, MoveSource, MoveTarget, Placement, Position, UpdateError,
         },
         Priority, Status, Task, TaskKey,
     },
@@ -47,6 +47,11 @@ pub enum TasksCommand {
     Cancel(CancelArgs),
     /// Edit a task's fields (due, scheduled, priority, tags, description).
     Edit(EditArgs),
+    /// Nest a task (and its subtasks) under its previous sibling.
+    Indent(IndentArgs),
+    /// Lift a task (and its subtasks) to its parent's level, after the
+    /// parent's subtree.
+    Outdent(IndentArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -195,6 +200,8 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Move(move_args) => run_move(move_args, vault_flag),
         TasksCommand::Cancel(cancel_args) => run_cancel(cancel_args, vault_flag),
         TasksCommand::Edit(edit_args) => run_edit(edit_args, vault_flag),
+        TasksCommand::Indent(a) => run_indent(a, vault_flag, IndentDir::In),
+        TasksCommand::Outdent(a) => run_indent(a, vault_flag, IndentDir::Out),
     }
 }
 
@@ -576,7 +583,7 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
             for err in &scan.errors {
                 tracing::warn!("{}", err);
             }
-            let parent = resolve_parent(sel, &scan.tasks)?;
+            let parent = resolve_unique("--parent", sel, &scan.tasks)?;
             let target = vault.path.join(&parent.source_file);
             let position = Position::Subtask {
                 parent_line: parent.source_line,
@@ -675,10 +682,10 @@ fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Re
     Ok(vault.ensure_target(today, args.file.as_deref(), now_n)?)
 }
 
-/// Resolve a `--parent` selector into exactly one task. Zero matches error;
-/// multiple matches error with the candidate list so the user can switch to
-/// a `file:line` or id selector.
-fn resolve_parent<'a>(selector: &str, tasks: &'a [Task]) -> Result<&'a Task> {
+/// Resolve a selector into exactly one task. Zero matches error; multiple
+/// matches error with the candidate list (prefixed by `label`, e.g.
+/// `--parent`) so the user can switch to a `file:line` or id selector.
+fn resolve_unique<'a>(label: &str, selector: &str, tasks: &'a [Task]) -> Result<&'a Task> {
     let sel = selector::parse(selector);
     let mut matches = selector::resolve(tasks, &sel);
     if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) {
@@ -707,7 +714,7 @@ fn resolve_parent<'a>(selector: &str, tasks: &'a [Task]) -> Result<&'a Task> {
             String::new()
         };
         return Err(anyhow!(
-            "--parent: {} candidates match — be more specific:\n{}{extra}",
+            "{label}: {} candidates match — be more specific:\n{}{extra}",
             matches.len(),
             preview.join("\n")
         ));
@@ -1060,9 +1067,29 @@ pub struct MoveArgs {
     pub query: Option<String>,
 
     /// Target: a file path relative to the vault root, optionally suffixed
-    /// with `#Heading` to land under that section.
-    #[arg(long, value_name = "FILE[#HEADING]", required = true)]
-    pub to: String,
+    /// with `#Heading` to land under that section. Mutually exclusive with
+    /// `--under`.
+    #[arg(
+        long,
+        value_name = "FILE[#HEADING]",
+        required_unless_present = "under",
+        conflicts_with = "under"
+    )]
+    pub to: Option<String>,
+
+    /// Target task: nest the moved tasks as its last children. Selector
+    /// forms as for the positional selector; must match exactly one task.
+    #[arg(long, value_name = "SELECTOR")]
+    pub under: Option<String>,
+
+    /// With `--under`: place the moved tasks right after the target task's
+    /// subtree, as its siblings, instead of as its children.
+    #[arg(long, requires = "under", conflicts_with = "to")]
+    pub sibling: bool,
+
+    /// Output format for the move result.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
 
     /// Print a unified diff of every affected file without writing anything.
     #[arg(long)]
@@ -1086,7 +1113,25 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         tracing::warn!("{}", err);
     }
 
-    let target = parse_move_target(&args.to, &vault.path);
+    let (target, target_label) = match (&args.to, &args.under) {
+        (Some(to), _) => (parse_move_target(to, &vault.path), to.clone()),
+        (None, Some(under)) => {
+            let t = resolve_unique("--under", under, &scan.tasks)?;
+            let target = MoveTarget::UnderTask {
+                path: vault.path.join(&t.source_file),
+                line: t.source_line,
+                expected: Some(Box::new(t.clone())),
+                placement: if args.sibling {
+                    Placement::SiblingAfter
+                } else {
+                    Placement::Child
+                },
+            };
+            let label = format!("{}:{}", t.source_file.display(), t.source_line);
+            (target, label)
+        }
+        (None, None) => unreachable!("clap requires --to or --under"),
+    };
 
     let chosen: Vec<&Task> = if let Some(q) = args.query.as_deref() {
         let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
@@ -1146,7 +1191,7 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         let prompt = format!(
             "Move {} task(s) to {}?\n{}{extra}",
             chosen.len(),
-            args.to,
+            target_label,
             preview.join("\n")
         );
         let confirmed = dialoguer::Confirm::new()
@@ -1169,9 +1214,26 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         })
         .collect();
 
-    let plan = ops::plan_move(&sources, &target, vault.task_format())?;
+    let plan = ops::plan_move(&sources, &target, vault.task_format())
+        .map_err(|e| relativize_move_error(e, &vault))?;
+    finish_move(&vault, &plan, args.dry_run, args.format, &target_label)
+}
 
-    if args.dry_run {
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveFormat {
+    Text,
+    Json,
+}
+
+/// Shared tail of `move` / `indent` / `outdent`: diff or apply, then report.
+fn finish_move(
+    vault: &ft_core::vault::Vault,
+    plan: &ops::MovePlan,
+    dry_run: bool,
+    format: MoveFormat,
+    target_label: &str,
+) -> Result<ExitCode> {
+    if dry_run && format == MoveFormat::Text {
         for edit in &plan.edits {
             if edit.original == edit.new {
                 continue;
@@ -1181,16 +1243,102 @@ fn run_move(args: MoveArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-
-    ops::apply_move_plan(&plan)?;
-
-    let target_rel = vault.relativize(target.path());
-    println!(
-        "Moved {} task(s) → {}",
-        plan.blocks.len(),
-        target_rel.display()
-    );
+    if !dry_run {
+        ops::apply_move_plan(plan)?;
+    }
+    match format {
+        MoveFormat::Text => println!("Moved {} task(s) → {target_label}", plan.blocks.len()),
+        MoveFormat::Json => {
+            let loc = |p: &std::path::Path, line: usize| serde_json::json!({ "path": vault.relativize(p), "line": line });
+            let rows: Vec<serde_json::Value> = plan
+                .blocks
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "description": b.task_description,
+                        "from": loc(&b.source.path, b.source.line),
+                        "to": b.dest.as_ref().map(|(p, l)| loc(p, *l)),
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+// ── ft tasks indent / outdent ────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct IndentArgs {
+    /// Selector for a single task (id, `<file>:<line>`, or fuzzy substring).
+    /// Must match exactly one task.
+    #[arg(value_name = "SELECTOR")]
+    pub selector: String,
+
+    /// Print a unified diff of the affected file without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format for the move result.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+#[derive(Clone, Copy)]
+enum IndentDir {
+    In,
+    Out,
+}
+
+fn run_indent(args: IndentArgs, vault_flag: Option<PathBuf>, dir: IndentDir) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let scan = vault.scan();
+    let task = resolve_unique("selector", &args.selector, &scan.tasks)?;
+    let source = MoveSource {
+        path: vault.path.join(&task.source_file),
+        line: task.source_line,
+        expected: Some(task.clone()),
+    };
+    let plan = match dir {
+        IndentDir::In => ops::plan_indent(&source, vault.task_format()),
+        IndentDir::Out => ops::plan_outdent(&source, vault.task_format()),
+    }
+    .map_err(|e| relativize_move_error(e, &vault))?;
+    let label = plan
+        .blocks
+        .first()
+        .and_then(|b| b.dest.as_ref())
+        .map(|(p, l)| format!("{}:{l}", vault.relativize(p).display()))
+        .unwrap_or_default();
+    finish_move(&vault, &plan, args.dry_run, args.format, &label)
+}
+
+/// Rewrite the absolute paths of the reparent-related `MoveError`s into
+/// vault-relative ones for user-facing output.
+fn relativize_move_error(e: ops::MoveError, vault: &ft_core::vault::Vault) -> anyhow::Error {
+    use ops::MoveError as E;
+    let rel = |p: &std::path::Path| vault.relativize(p).display().to_string();
+    match e {
+        E::NoPreviousSibling { path, line } => {
+            anyhow!("{}:{line} has no previous sibling to indent under", rel(&path))
+        }
+        E::AlreadyTopLevel { path, line } => anyhow!("{}:{line} is already top-level", rel(&path)),
+        E::IntoOwnSubtree { path, line } => anyhow!(
+            "can't move a task under itself or one of its subtasks ({}:{line})",
+            rel(&path)
+        ),
+        E::TargetChanged {
+            path,
+            line,
+            expected,
+            found,
+        } => anyhow!(
+            "target task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+            rel(&path)
+        ),
+        other => other.into(),
+    }
 }
 
 /// Parse `path[#heading]` into a [`MoveTarget`]. The path is resolved against

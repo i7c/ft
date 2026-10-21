@@ -24,12 +24,12 @@
 
 ## 4. CLI
 
-- [ ] 4.1 `MoveArgs`: add `--under <SEL>` (an `ArgGroup` with `--to`, required + exclusive) and `--sibling` (`requires = "under"`); add `--format text|json`.
-- [ ] 4.2 Factor the unique-task resolver used by `create --parent` into a shared helper; use it for `--under` (candidate listing on ambiguity, id→fuzzy fallback).
-- [ ] 4.3 `run_move`: build `UnderTask` with the resolved target as the `expected` guard; keep `--query`, `--dry-run` and `--yes` working; map new `MoveError`s to messages.
-- [ ] 4.4 Add `ft tasks indent <SEL>` / `ft tasks outdent <SEL>` (`--dry-run`, `--format`).
-- [ ] 4.5 JSON output: an array of `{description, from:{path,line}, to:{path,line}}`, vault-relative, from `MovedBlock::dest`.
-- [ ] 4.6 Integration tests in `ft/tests/` (assert_cmd + assert_fs): cross-file `--under`, `--sibling`, ambiguous `--under`, `--to` + `--under` conflict, indent/outdent, `--dry-run` diff, `--format json` shape (insta snapshot).
+- [x] 4.1 `MoveArgs`: add `--under <SEL>` (an `ArgGroup` with `--to`, required + exclusive) and `--sibling` (`requires = "under"`); add `--format text|json`.
+- [x] 4.2 Factor the unique-task resolver used by `create --parent` into a shared helper; use it for `--under` (candidate listing on ambiguity, id→fuzzy fallback).
+- [x] 4.3 `run_move`: build `UnderTask` with the resolved target as the `expected` guard; keep `--query`, `--dry-run` and `--yes` working; map new `MoveError`s to messages.
+- [x] 4.4 Add `ft tasks indent <SEL>` / `ft tasks outdent <SEL>` (`--dry-run`, `--format`).
+- [x] 4.5 JSON output: an array of `{description, from:{path,line}, to:{path,line}}`, vault-relative, from `MovedBlock::dest`.
+- [x] 4.6 Integration tests in `ft/tests/` (assert_cmd + assert_fs): cross-file `--under`, `--sibling`, ambiguous `--under`, `--to` + `--under` conflict, indent/outdent, `--dry-run` diff, `--format json` shape (insta snapshot).
 
 ## 5. TUI: keymap + commands
 

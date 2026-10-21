@@ -1,0 +1,17 @@
+---
+source: ft/tests/tasks_reparent.rs
+expression: "serde_json::to_string_pretty(&v).unwrap()"
+---
+[
+  {
+    "description": "call vendor",
+    "from": {
+      "line": 2,
+      "path": "inbox.md"
+    },
+    "to": {
+      "line": 3,
+      "path": "proj.md"
+    }
+  }
+]
