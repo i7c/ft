@@ -872,4 +872,48 @@ looks good
         assert!(v.read("jira/A-1.md").contains("Renamed"));
         assert!(!v.read("zz/A-1 copy.md").contains("Renamed"));
     }
+
+    fn query(scan: &Scan, dsl: &str) -> Vec<String> {
+        use crate::graph::query::{parse_with, Profile};
+        let g = crate::graph::Graph::build(scan).unwrap();
+        let q = parse_with(
+            dsl,
+            Profile::Tasks,
+            NaiveDate::from_ymd_opt(2026, 10, 21).unwrap(),
+        )
+        .unwrap();
+        let keys = crate::task::resolve::by_query(&g, &q);
+        let mut out: Vec<String> = scan
+            .tasks
+            .iter()
+            .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
+            .map(|t| t.id.clone().unwrap_or_else(|| t.description.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn remote_dsl_attributes_and_preset() {
+        let v = V::new();
+        let mut review = issue("A-2");
+        review.status_name = "Code Review".into();
+        let mut done = issue("A-3");
+        done.status = Status::Done;
+        v.sync(&active(vec![issue("A-1"), review, done]));
+        v.write("j.md", "- [ ] local sub [[A-1]]\n");
+        let scan = v.scan();
+        assert_eq!(query(&scan, "source = jira"), ["A-1", "A-2", "A-3"]);
+        assert_eq!(query(&scan, "key = \"A-2\""), ["A-2"]);
+        assert_eq!(query(&scan, "remote_status = \"Code Review\""), ["A-2"]);
+        assert_eq!(
+            query(&scan, crate::query::preset::builtin("remote").unwrap()),
+            ["A-1", "A-2"]
+        );
+        assert_eq!(query(&scan, "source is null"), ["local sub [[A-1]]"]);
+        assert_eq!(
+            query(&scan, "parent includes \"Fix login\""),
+            ["local sub [[A-1]]"]
+        );
+    }
 }

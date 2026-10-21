@@ -16,9 +16,9 @@ expression: frame
 │    v   Buy bir│  not-done                                    │               │
 │               │  orphaned                                    │               │
 │               │  overdue                                     │               │
+│               │  remote                                      │               │
 │               │  today                                       │               │
 │               │  upcoming                                    │               │
-│               │                                              │               │
 │               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                                                              │

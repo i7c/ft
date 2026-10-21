@@ -20,6 +20,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
         "not-done" => "status in {Open, InProgress}",
         "orphaned" => "status in {Open, InProgress} and parent_status in {Done, Cancelled}",
         "broken-links" => "parent_link in {dangling, cycle, ignored}",
+        "remote" => "source is not null and status in {Open, InProgress}",
         _ => return None,
     })
 }
@@ -32,6 +33,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "not-done",
         "orphaned",
         "overdue",
+        "remote",
         "today",
         "upcoming",
     ]

@@ -265,6 +265,10 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
     if matches!(c.op, Op::IsNull | Op::IsNotNull) {
         let present = match c.attr {
             Attr::Parent | Attr::ParentStatus => task_parent(graph, id).is_some(),
+            Attr::Source | Attr::Key => graph.task_remote(id).is_some(),
+            Attr::RemoteStatus => graph
+                .task_remote(id)
+                .is_some_and(|r| r.remote_status.is_some()),
             _ => node_optional_attr_present(graph.node(id), c.attr),
         };
         return match c.op {
@@ -379,6 +383,17 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
             }) => eval_string_op(kind.as_str(), c.op, &c.value),
             _ => false,
         },
+        Attr::Source | Attr::Key | Attr::RemoteStatus => {
+            let Some(r) = graph.task_remote(id) else {
+                return false;
+            };
+            let v = match c.attr {
+                Attr::Source => Some(&r.source),
+                Attr::Key => Some(&r.key),
+                _ => r.remote_status.as_ref(),
+            };
+            v.is_some_and(|v| eval_string_op(v, c.op, &c.value))
+        }
         Attr::Children => {
             let count = match graph.node(id) {
                 NodeKind::Task(_) => graph

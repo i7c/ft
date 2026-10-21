@@ -217,6 +217,12 @@ pub enum Attr {
     ParentLink,
     /// Task-specific: number of direct (physical + linked) children.
     Children,
+    /// Task-specific: the remote source owning an issue note's anchor task.
+    Source,
+    /// Task-specific: the remote issue key of an anchor task.
+    Key,
+    /// Task-specific: the remote status name of an anchor task.
+    RemoteStatus,
 }
 
 /// Value-type classification for an attribute. Drives parse-time
@@ -243,9 +249,14 @@ impl Attr {
             | Attr::Embed
             | Attr::ParentStatus
             | Attr::ParentLink => ValueType::Enum,
-            Attr::Path | Attr::Title | Attr::Description | Attr::Mentions | Attr::Parent => {
-                ValueType::Str
-            }
+            Attr::Path
+            | Attr::Title
+            | Attr::Description
+            | Attr::Mentions
+            | Attr::Parent
+            | Attr::Source
+            | Attr::Key
+            | Attr::RemoteStatus => ValueType::Str,
             Attr::Indegree | Attr::Outdegree | Attr::Children => ValueType::Int,
             Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed => {
                 ValueType::Date
@@ -267,6 +278,9 @@ impl Attr {
                 | Attr::Parent
                 | Attr::ParentStatus
                 | Attr::ParentLink
+                | Attr::Source
+                | Attr::Key
+                | Attr::RemoteStatus
         )
     }
 }

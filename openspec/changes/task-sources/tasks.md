@@ -31,9 +31,9 @@
 
 ## 6. Edit guard + hierarchy + DSL
 
-- [ ] 6.1 `UpdateError::OwnedByRemote` in `update_task_line` (description-minus-hashtags / due / priority on issue-note anchors); render in CLI (`ft tasks edit`, `ft do`) and TUI toasts (tasks tab + graph tab call sites); tests (bump due refused, retag allowed, status allowed).
-- [ ] 6.2 `resolve_parent_links` reads `ft.tasks.parent` for anchor notes (line link wins → frontmatter value as extra); `LinkError::ParentFromFrontmatter` in `plan_unlink`; tests (story→epic, cycle via frontmatter, dangling).
-- [ ] 6.3 `Graph::task_remote` side table + `Attr::{Source, Key, RemoteStatus}` (optional Str) + `remote` preset; tests; docs in `docs/graph-query-dsl.md`.
+- [x] 6.1 `UpdateError::OwnedByRemote` in `update_task_line` (description-minus-hashtags / due / priority on issue-note anchors); render in CLI (`ft tasks edit`, `ft do`) and TUI toasts (tasks tab + graph tab call sites); tests (bump due refused, retag allowed, status allowed).
+- [x] 6.2 `resolve_parent_links` reads `ft.tasks.parent` for anchor notes (line link wins → frontmatter value as extra); `LinkError::ParentFromFrontmatter` in `plan_unlink`; tests (story→epic, cycle via frontmatter, dangling).
+- [x] 6.3 `Graph::task_remote` side table + `Attr::{Source, Key, RemoteStatus}` (optional Str) + `remote` preset; tests; docs in `docs/graph-query-dsl.md`.
 
 ## 7. CLI
 

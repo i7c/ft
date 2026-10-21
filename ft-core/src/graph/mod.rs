@@ -187,6 +187,14 @@ pub struct HeadingData {
     pub text: String,
 }
 
+/// Remote identity of an issue note's anchor task (`ft.source.*`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteData {
+    pub source: String,
+    pub key: String,
+    pub remote_status: Option<String>,
+}
+
 /// Task node data — denormalized from [`crate::task::Task`] for graph queries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskData {
@@ -366,6 +374,9 @@ pub struct Graph {
     /// (source_file, source_line) → task node. Used for task deduplication
     /// and lookup. The source_file is a vault-relative PathBuf.
     task_index: HashMap<(PathBuf, usize), NoteId>,
+    /// Anchor tasks of issue notes → their remote identity. A side table
+    /// rather than a `TaskData` field to keep `NodeKind` small.
+    task_remote: HashMap<NoteId, RemoteData>,
     /// (source_file, line_start) → paragraph node. Each paragraph is
     /// uniquely identified by its owning note's path and 1-indexed first
     /// line. Populated during `Graph::build` / refreshed by
@@ -397,6 +408,7 @@ impl Graph {
             title_index: HashMap::new(),
             ghost_index: HashMap::new(),
             task_index: HashMap::new(),
+            task_remote: HashMap::new(),
             paragraph_index: HashMap::new(),
             heading_index: HashMap::new(),
         };
@@ -453,6 +465,8 @@ impl Graph {
         for task in &scan.tasks {
             graph.insert_task_node(task);
         }
+
+        graph.insert_task_remote(scan);
 
         // Create HasTask edges from notes to their top-level tasks only.
         // Subtasks are reachable via the Subtask edge chain.
@@ -561,6 +575,42 @@ impl Graph {
         self.heading_index
             .get(&(normalize_path(path), line))
             .copied()
+    }
+
+    /// Remote identity of an issue note's anchor task node.
+    pub fn task_remote(&self, id: NoteId) -> Option<&RemoteData> {
+        self.task_remote.get(&id)
+    }
+
+    /// Fill [`Self::task_remote`] from issue notes' frontmatter.
+    fn insert_task_remote(&mut self, scan: &Scan) {
+        for pf in &scan.files {
+            let Some(fm) = pf.frontmatter.as_deref() else {
+                continue;
+            };
+            let (Some(src), Some(anchor)) = (
+                crate::frontmatter::ft_source_in(fm),
+                crate::frontmatter::ft_tasks_anchor_in(fm),
+            ) else {
+                continue;
+            };
+            let task = scan
+                .tasks
+                .iter()
+                .find(|t| t.source_file == pf.rel && t.id.as_deref() == Some(anchor.as_str()));
+            if let Some(&id) =
+                task.and_then(|t| self.task_index.get(&(t.source_file.clone(), t.source_line)))
+            {
+                self.task_remote.insert(
+                    id,
+                    RemoteData {
+                        source: src.name,
+                        key: src.key,
+                        remote_status: src.status,
+                    },
+                );
+            }
+        }
     }
 
     /// The task node at `(source_file, source_line)`, if any.

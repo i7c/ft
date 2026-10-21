@@ -103,6 +103,7 @@ Attribute compatibility:
 | `status`, `priority`, `due`, `scheduled`, `created`, `start`, `completed`, `description`, `tags` | self, from, to | Task fields — see [Task attributes](#task-attributes) |
 | `mentions`  | self, from, to   | Concept-existence predicate — see [`mentions`](#mentions) |
 | `parent`, `parent_status`, `parent_link`, `children` | self, from, to | Task hierarchy — see [Hierarchy attributes](#hierarchy-attributes) |
+| `source`, `key`, `remote_status` | self, from, to | Remote issue anchors — see [Remote attributes](#remote-attributes) |
 
 `indegree` / `outdegree` are selection-time properties only — they
 cannot appear in `expand` (which is per-hop) or in neighbor filters.
@@ -190,6 +191,22 @@ status = Open and parent_status in {Done, Cancelled}   # built-in preset `orphan
 parent_link in {dangling, cycle, ignored}              # built-in preset `broken-links`
 children > 0 and status = Open
 parent is null                                         # top-level tasks
+```
+
+## Remote attributes
+
+Set only on the anchor task of an issue note synced from a remote source
+(`ft tasks sync`); null on every other task.
+
+| Attribute       | Type   | Optional | Meaning |
+|-----------------|--------|----------|---------|
+| `source`        | string | yes      | The `[sources.<name>]` that owns the issue |
+| `key`           | string | yes      | The issue key (`ABC-123`, `owner-repo-42`) |
+| `remote_status` | string | yes      | The remote status name, verbatim (`In Review`) |
+
+```text
+source is not null and status in {Open, InProgress}   # built-in preset `remote`
+source = jira and remote_status = "In Review"
 ```
 
 ## mentions
