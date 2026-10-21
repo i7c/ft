@@ -71,6 +71,20 @@ pub fn ft_tasks_section_in(fm: &str) -> Option<String> {
     scalar_value(tasks, "section")
 }
 
+/// Read `ft.tasks.anchor`: the `🆔` of the task that stands for this
+/// whole note when another task links `[[note]]` as its parent.
+pub fn ft_tasks_anchor(content: &str) -> Option<String> {
+    let fm = block(content)?;
+    ft_tasks_anchor_in(fm)
+}
+
+/// Same as [`ft_tasks_anchor`] but takes the frontmatter block directly.
+pub fn ft_tasks_anchor_in(fm: &str) -> Option<String> {
+    let ft = nested_value(fm, "ft")?;
+    let tasks = nested_value(ft, "tasks")?;
+    scalar_value(tasks, "anchor")
+}
+
 /// Read `ft.append.section` (the default append-section heading).
 ///
 /// Returns `None` when there is no frontmatter, no `ft:` map, or no
@@ -452,6 +466,19 @@ mod tests {
     }
 
     // ── ft_tasks_section ───────────────────────────────────────────
+
+    #[test]
+    fn tasks_anchor_nested_beside_section() {
+        let c = fm("ft:\n  tasks:\n    anchor: ABC-123\n    section: Tasks\n");
+        assert_eq!(ft_tasks_anchor(&c), Some("ABC-123".to_string()));
+        assert_eq!(ft_tasks_section(&c), Some("Tasks".to_string()));
+    }
+
+    #[test]
+    fn tasks_anchor_flat_key_ignored() {
+        let c = fm("ft-tasks-anchor: ABC-123\n");
+        assert_eq!(ft_tasks_anchor(&c), None);
+    }
 
     #[test]
     fn tasks_section_nested() {

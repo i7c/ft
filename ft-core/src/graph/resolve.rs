@@ -19,13 +19,75 @@
 //! ...) are filtered out at the parser level — they never reach this
 //! module.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::graph::{normalize_path, Graph, NoteId};
+use crate::graph::{normalize_path, title_of, Graph, NodeKind, NoteId};
+
+/// The note indexes link resolution needs. Implemented by [`Graph`] and by
+/// [`ScanNoteIndex`] (for resolving straight from a scan, before or
+/// without a graph build), so both resolve with identical rules.
+pub trait NoteLookup {
+    type Id: Copy;
+    fn by_path(&self, p: &Path) -> Option<Self::Id>;
+    fn by_title(&self, t: &str) -> &[Self::Id];
+    fn path_of(&self, id: Self::Id) -> Option<&Path>;
+}
+
+impl NoteLookup for Graph {
+    type Id = NoteId;
+    fn by_path(&self, p: &Path) -> Option<NoteId> {
+        self.note_by_path(p)
+    }
+    fn by_title(&self, t: &str) -> &[NoteId] {
+        self.note_by_title(t)
+    }
+    fn path_of(&self, id: NoteId) -> Option<&Path> {
+        match self.node(id) {
+            NodeKind::Note(data) => Some(&data.path),
+            _ => None,
+        }
+    }
+}
+
+/// Path and title indexes over a scan's files. Ids are indices into the
+/// slice the index was built from.
+#[derive(Debug, Default)]
+pub struct ScanNoteIndex {
+    paths: Vec<PathBuf>,
+    by_path: HashMap<PathBuf, usize>,
+    by_title: HashMap<String, Vec<usize>>,
+}
+
+impl ScanNoteIndex {
+    pub fn new<'a>(rels: impl IntoIterator<Item = &'a Path>) -> Self {
+        let mut idx = Self::default();
+        for (i, rel) in rels.into_iter().enumerate() {
+            let norm = normalize_path(rel);
+            idx.by_path.insert(norm.clone(), i);
+            idx.by_title.entry(title_of(rel)).or_default().push(i);
+            idx.paths.push(norm);
+        }
+        idx
+    }
+}
+
+impl NoteLookup for ScanNoteIndex {
+    type Id = usize;
+    fn by_path(&self, p: &Path) -> Option<usize> {
+        self.by_path.get(&normalize_path(p)).copied()
+    }
+    fn by_title(&self, t: &str) -> &[usize] {
+        self.by_title.get(t).map(Vec::as_slice).unwrap_or(&[])
+    }
+    fn path_of(&self, id: usize) -> Option<&Path> {
+        self.paths.get(id).map(PathBuf::as_path)
+    }
+}
 
 #[derive(Debug)]
-pub enum Resolution {
-    Resolved(NoteId),
+pub enum Resolution<Id = NoteId> {
+    Resolved(Id),
     /// Unresolved with the canonical key used to intern the ghost node.
     /// For wikilinks, this is the verbatim target text; for markdown
     /// links, the normalized vault-relative path string.
@@ -37,7 +99,7 @@ pub enum Resolution {
 }
 
 /// Resolve a wikilink target string.
-pub fn resolve_wiki(target: &str, graph: &Graph) -> Resolution {
+pub fn resolve_wiki<L: NoteLookup>(target: &str, graph: &L) -> Resolution<L::Id> {
     let target = target.trim();
     if target.is_empty() {
         return Resolution::NotALink;
@@ -52,7 +114,7 @@ pub fn resolve_wiki(target: &str, graph: &Graph) -> Resolution {
     }
 
     // Title form — multi candidate, shortest-path tiebreak.
-    let candidates = graph.note_by_title(target);
+    let candidates = graph.by_title(target);
     match candidates.len() {
         0 => Resolution::Unresolved(target.to_string()),
         1 => Resolution::Resolved(candidates[0]),
@@ -61,7 +123,7 @@ pub fn resolve_wiki(target: &str, graph: &Graph) -> Resolution {
 }
 
 /// Resolve a markdown-link href against the linker's directory.
-pub fn resolve_md(href: &str, from_rel: &Path, graph: &Graph) -> Resolution {
+pub fn resolve_md<L: NoteLookup>(href: &str, from_rel: &Path, graph: &L) -> Resolution<L::Id> {
     let href = href.trim();
     if href.is_empty() {
         return Resolution::NotALink;
@@ -81,14 +143,14 @@ pub fn resolve_md(href: &str, from_rel: &Path, graph: &Graph) -> Resolution {
 
 /// Try `path_index[s]` first, then `path_index[s + ".md"]`. Obsidian
 /// accepts links without the `.md` suffix (`[[Foo]]` → `Foo.md`).
-fn lookup_path_with_md_fallback(s: &str, graph: &Graph) -> Option<NoteId> {
+fn lookup_path_with_md_fallback<L: NoteLookup>(s: &str, graph: &L) -> Option<L::Id> {
     let p = PathBuf::from(s);
-    if let Some(id) = graph.note_by_path(&p) {
+    if let Some(id) = graph.by_path(&p) {
         return Some(id);
     }
     if p.extension().is_none() {
         let with_md = PathBuf::from(format!("{s}.md"));
-        if let Some(id) = graph.note_by_path(&with_md) {
+        if let Some(id) = graph.by_path(&with_md) {
             return Some(id);
         }
     }
@@ -98,7 +160,7 @@ fn lookup_path_with_md_fallback(s: &str, graph: &Graph) -> Option<NoteId> {
 /// Pick the candidate with the fewest path components; break ties
 /// alphabetically by the full vault-relative path (lexicographic on
 /// the platform-string form, which is stable enough for this purpose).
-fn pick_shortest_path(candidates: &[NoteId], graph: &Graph) -> NoteId {
+fn pick_shortest_path<L: NoteLookup>(candidates: &[L::Id], graph: &L) -> L::Id {
     debug_assert!(!candidates.is_empty());
     let mut best = candidates[0];
     let (mut best_depth, mut best_path) = depth_and_path(graph, best);
@@ -113,11 +175,12 @@ fn pick_shortest_path(candidates: &[NoteId], graph: &Graph) -> NoteId {
     best
 }
 
-fn depth_and_path(graph: &Graph, id: NoteId) -> (usize, String) {
-    use crate::graph::NodeKind;
-    if let NodeKind::Note(data) = graph.node(id) {
-        let depth = data.path.components().count();
-        (depth, data.path.to_string_lossy().into_owned())
+fn depth_and_path<L: NoteLookup>(graph: &L, id: L::Id) -> (usize, String) {
+    if let Some(path) = graph.path_of(id) {
+        (
+            path.components().count(),
+            path.to_string_lossy().into_owned(),
+        )
     } else {
         // title_index only ever contains Note nodes, but be defensive.
         (usize::MAX, String::new())
@@ -157,6 +220,33 @@ mod resolve_tests {
     use super::*;
     use crate::graph::Graph;
     use crate::vault::Vault;
+
+    #[test]
+    fn scan_index_resolves_like_graph() {
+        let rels = [
+            PathBuf::from("archive/Index.md"),
+            PathBuf::from("Index.md"),
+            PathBuf::from("a/proj.md"),
+        ];
+        let idx = ScanNoteIndex::new(rels.iter().map(PathBuf::as_path));
+        let path = |r: Resolution<usize>| match r {
+            Resolution::Resolved(i) => Some(rels[i].clone()),
+            _ => None,
+        };
+        assert_eq!(
+            path(resolve_wiki("Index", &idx)),
+            Some(PathBuf::from("Index.md"))
+        );
+        assert_eq!(
+            path(resolve_wiki("a/proj", &idx)),
+            Some(PathBuf::from("a/proj.md"))
+        );
+        assert_eq!(path(resolve_wiki("nope", &idx)), None);
+        assert_eq!(
+            path(resolve_md("../Index.md", Path::new("a/x.md"), &idx)),
+            Some(PathBuf::from("Index.md"))
+        );
+    }
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
 
