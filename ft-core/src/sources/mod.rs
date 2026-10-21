@@ -3,8 +3,10 @@
 //! the fetched data, so the TUI can fetch off-thread and apply on the main
 //! thread. Nothing here runs during a vault scan.
 
+pub mod adf;
 pub mod credentials;
 pub mod http;
+pub mod jira;
 
 use std::collections::{BTreeMap, BTreeSet};
 

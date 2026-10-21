@@ -14,8 +14,8 @@
 ## 3. Jira
 
 - [ ] 3.1 Verify the live Jira Cloud search endpoint + field set once with a real token (manual; record a sanitised response as a fixture).
-- [ ] 3.2 `sources/jira.rs`: `/rest/api/3/search/jql` with `nextPageToken`, `key in (…)` batching (100), `/myself` check; field mapping + status categories + resolution-based Cancelled + `status_map`; fixture tests.
-- [ ] 3.3 `sources/adf.rs`: ADF → markdown for the listed node/mark types; unknown nodes → text; tests per node type + a mixed real-world fixture.
+- [x] 3.2 `sources/jira.rs`: `/rest/api/3/search/jql` with `nextPageToken`, `key in (…)` batching (100), `/myself` check; field mapping + status categories + resolution-based Cancelled + `status_map`; fixture tests.
+- [x] 3.3 `sources/adf.rs`: ADF → markdown for the listed node/mark types; unknown nodes → text; tests per node type + a mixed real-world fixture.
 
 ## 4. GitHub
 
