@@ -364,6 +364,33 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         opens_modal: false,
         is_primary: false,
     },
+    CommandDef {
+        name: "tasks.link",
+        description: "Link the cut tasks under the selected task (they stay in place)",
+        scope: CommandScope::Tab("tasks"),
+        group: "Restructure",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.unlink",
+        description: "Remove the selected task's parent link",
+        scope: CommandScope::Tab("tasks"),
+        group: "Restructure",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "tasks.new-linked-subtask",
+        description: "Create a task in the default target, linked under the selected task",
+        scope: CommandScope::Tab("tasks"),
+        group: "Create / edit",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
 ];
 
 pub struct TasksTab {
@@ -495,6 +522,8 @@ impl Tab for TasksTab {
                     ("P", "paste cut tasks as siblings after selected"),
                     ("Esc", "clear cut set"),
                     ("> / <", "indent / outdent"),
+                    ("L", "link cut tasks under selected (no move)"),
+                    ("U", "unlink selected from its parent"),
                 ],
             ),
             HelpSection::new(
@@ -503,6 +532,7 @@ impl Tab for TasksTab {
                     ("c", "new task (quickline)"),
                     ("Shift+C", "new task (blank form)"),
                     ("s", "new subtask of selected"),
+                    ("S", "new task in daily note, linked under selected"),
                     ("e", "open edit popup"),
                     ("Ctrl+E", "expand quickline → form"),
                     ("Ctrl+S", "submit form"),

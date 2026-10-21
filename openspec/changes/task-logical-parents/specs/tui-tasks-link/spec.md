@@ -32,7 +32,7 @@ The cut set SHALL be kept on any error.
 
 ### Requirement: Linked-child glyph
 
-Rows whose effective parent comes from a resolved parent link SHALL use `↳ ` in place of the leaf `· ` gutter. A linked child that has children of its own SHALL keep the `▸`/`▾` affordance, followed by `↳`.
+Rows whose effective parent comes from a resolved parent link SHALL use `↳ ` in place of the leaf `· ` gutter. A linked child that has children of its own SHALL keep the `▸`/`▾` affordance, followed by `↳`. A linked row SHALL omit its parent link's raw text from the displayed description (the file is unchanged).
 
 #### Scenario: Mixed children render distinctly
 - **WHEN** `Vendor onboarding` is expanded and has one physical child and one linked child

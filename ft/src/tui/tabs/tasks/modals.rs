@@ -408,8 +408,12 @@ impl crate::tui::modal::Modal for TaskMoveModal {
                 };
                 let format = ctx.vault.task_format();
                 match ops::plan_move(&[source], &target, format) {
-                    Ok(plan) => {
-                        if let Err(e) = ops::apply_move_plan(&plan) {
+                    Ok(mut plan) => {
+                        let retargeted = super::search::retarget(ctx, &mut plan);
+                        let applied = retargeted
+                            .clone()
+                            .and_then(|_| ops::apply_move_plan(&plan).map_err(|e| e.to_string()));
+                        if let Err(e) = applied {
                             *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
                                 text: format!("move failed: {e}"),
                                 style: ToastStyle::Error,
@@ -425,6 +429,10 @@ impl crate::tui::modal::Modal for TaskMoveModal {
                                 format!("moved to {}", p.display())
                             }
                         };
+                        let label = format!(
+                            "{label}{}",
+                            super::search::retarget_note(retargeted.unwrap_or(0))
+                        );
                         *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
                             text: label,
                             style: ToastStyle::Success,

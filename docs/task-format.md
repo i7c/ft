@@ -45,6 +45,15 @@ The original marker is **not** preserved on rewrite.
 A trailing ` ^identifier` is parsed as a markdown block-link and
 preserved verbatim.
 
+### Parent links
+
+A wikilink in the description can name the task's parent in another
+file: a block reference to a task (`[[note#^id]]`, `[[#^id]]`), or a link
+to an anchor note (`[[note]]` whose frontmatter has `ft.tasks.anchor: <id>`
+matching a task's `🆔`). The first such link wins. Indentation beats a
+link. The link text stays part of the description; see
+[guide/tasks.md](guide/tasks.md#linked-parents).
+
 ## Canonical serialization order
 
 When `ft` rewrites a task, fields are emitted in this order:

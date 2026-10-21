@@ -51,13 +51,13 @@
 
 ## 8. TUI
 
-- [ ] 8.1 `CommandDef`s `tasks.link`, `tasks.unlink` (Restructure), `tasks.new-linked-subtask` (Create / edit); bind `L`, `U`, `S`; help overlay rows.
-- [ ] 8.2 `tasks.link` / `tasks.unlink` handlers with toasts per spec; expand parent after link.
-- [ ] 8.3 `S` quickline: pending `link_parent`, create + link on submit.
-- [ ] 8.4 `DisplayRow::linked` + `↳` glyph.
-- [ ] 8.5 Paste (`p`/`P`) and `M` move call `plan_retarget`; toast mentions retargeted links.
-- [ ] 8.6 `TestBackend` tests: link via `d`+`L` (snapshot with `↳`), unlink, `S` create-linked, cycle toast, physically-nested toast, paste retargets an incoming link.
-- [ ] 8.7 Regenerate `docs/keybindings.md`.
+- [x] 8.1 `CommandDef`s `tasks.link`, `tasks.unlink` (Restructure), `tasks.new-linked-subtask` (Create / edit); bind `L`, `U`, `S`; help overlay rows.
+- [x] 8.2 `tasks.link` / `tasks.unlink` handlers with toasts per spec; expand parent after link.
+- [x] 8.3 `S` quickline: pending `link_parent`, create + link on submit.
+- [x] 8.4 `DisplayRow::linked` + `↳` glyph.
+- [x] 8.5 Paste (`p`/`P`) and `M` move call `plan_retarget`; toast mentions retargeted links.
+- [x] 8.6 `TestBackend` tests: link via `d`+`L` (snapshot with `↳`), unlink, `S` create-linked, cycle toast, physically-nested toast, paste retargets an incoming link.
+- [x] 8.7 Regenerate `docs/keybindings.md`.
 
 ## 9. ft.nvim
 
@@ -67,9 +67,9 @@
 
 ## 10. Docs + build invariants
 
-- [ ] 10.1 `docs/guide/tasks.md`: "Linked parents" section (syntax, anchor notes, link/unlink/check, TUI keys); `docs/task-format.md`: parent-link rules.
-- [ ] 10.2 `cargo build --release`
-- [ ] 10.3 `cargo test --workspace`
-- [ ] 10.4 `cargo clippy --workspace --tests -- -D warnings`
-- [ ] 10.5 `cargo fmt --check`
-- [ ] 10.6 `cargo run --release -q -- commands docs --check`
+- [x] 10.1 `docs/guide/tasks.md`: "Linked parents" section (syntax, anchor notes, link/unlink/check, TUI keys); `docs/task-format.md`: parent-link rules.
+- [x] 10.2 `cargo build --release`
+- [x] 10.3 `cargo test --workspace`
+- [x] 10.4 `cargo clippy --workspace --tests -- -D warnings` (clean except the 4 pre-existing `redundant_field_names` hits, also on main)
+- [x] 10.5 `cargo fmt --check`
+- [x] 10.6 `cargo run --release -q -- commands docs --check`

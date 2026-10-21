@@ -583,6 +583,7 @@ mod search;
 mod snapshot_lifecycle;
 mod synthesis;
 mod tasks;
+mod tasks_link;
 mod tasks_reparent;
 mod timeblocks;
 

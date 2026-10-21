@@ -9,6 +9,7 @@ use ft_core::{
     query::sort::{sort_by_keys, SortKey, SortOrder},
     task::{
         aging::{age_band, AgeBand},
+        links,
         ops::{self, CompleteOptions, CreateInput, MoveError, MoveSource, MoveTarget, Placement},
         Priority, Status, Task,
     },
@@ -93,6 +94,9 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("P", "tasks.paste-sibling")
         .bind(">", "tasks.indent")
         .bind("<", "tasks.outdent")
+        .bind("L", "tasks.link")
+        .bind("U", "tasks.unlink")
+        .bind("S", "tasks.new-linked-subtask")
 });
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -162,6 +166,10 @@ pub struct SearchView {
     /// position changes. `None` for ordinary top-level creates. Set fresh by
     /// every create-open command so it can't go stale.
     subtask_parent: Option<(std::path::PathBuf, usize)>,
+    /// When a create modal was opened via `tasks.new-linked-subtask`, the
+    /// task the new entry links to as its parent. The entry lands at the
+    /// usual target (daily note by default) with a parent link appended.
+    link_parent: Option<(std::path::PathBuf, usize)>,
 
     /// Tasks marked with `d`, in marking order, awaiting a `p` / `P`
     /// paste. Re-resolved against each adopted snapshot so unrelated
@@ -191,6 +199,9 @@ struct DisplayRow {
     has_children: bool,
     /// Whether this task is currently expanded.
     expanded: bool,
+    /// Whether this row nests under its parent via a parent link rather
+    /// than indentation (drawn with `↳`).
+    linked: bool,
 }
 
 /// "New task" quickline state — a single edit buffer plus a slot for
@@ -232,6 +243,7 @@ impl SearchView {
             display: Vec::new(),
             overdue_display_count: 0,
             subtask_parent: None,
+            link_parent: None,
             cut: Vec::new(),
             reveal_anchor: false,
         }
@@ -409,6 +421,7 @@ impl SearchView {
         let upcoming_keys = keys_for(&self.matches[split..]);
 
         let mut rows: Vec<DisplayRow> = Vec::with_capacity(self.matches.len());
+        let tasks = &self.tasks;
         let push = |vrows: Vec<ft_core::task::hierarchy::VisibleRow>,
                     rows: &mut Vec<DisplayRow>| {
             for r in vrows {
@@ -417,6 +430,7 @@ impl SearchView {
                     depth: r.depth,
                     has_children: r.has_children,
                     expanded: r.expanded,
+                    linked: r.depth > 0 && tasks[r.idx].parent.is_none(),
                 });
             }
         };
@@ -965,11 +979,13 @@ impl SearchView {
             }
             "tasks.quickline" => {
                 self.subtask_parent = None;
+                self.link_parent = None;
                 self.quickline = Some(Quickline::default());
                 Ok(CommandOutcome::Handled)
             }
             "tasks.new-blank-form" => {
                 self.subtask_parent = None;
+                self.link_parent = None;
                 self.popup = Some(EditPopup::new_blank());
                 Ok(CommandOutcome::Handled)
             }
@@ -980,6 +996,7 @@ impl SearchView {
                     Some(i) => {
                         let t = &self.tasks[i];
                         self.subtask_parent = Some((t.source_file.clone(), t.source_line));
+                        self.link_parent = None;
                         self.quickline = Some(Quickline::default());
                     }
                     None => {
@@ -1042,6 +1059,30 @@ impl SearchView {
             }
             "tasks.indent" => {
                 self.shift_selected(ctx, true)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.link" => {
+                self.link_cut(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.unlink" => {
+                self.unlink_selected(ctx)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.new-linked-subtask" => {
+                match self.selected_task_idx() {
+                    Some(i) => {
+                        let t = &self.tasks[i];
+                        self.link_parent = Some((t.source_file.clone(), t.source_line));
+                        self.subtask_parent = None;
+                        self.quickline = Some(Quickline::default());
+                    }
+                    None => toast(
+                        ctx,
+                        "no task selected to link a subtask to",
+                        ToastStyle::Error,
+                    ),
+                }
                 Ok(CommandOutcome::Handled)
             }
             "tasks.outdent" => {
@@ -1211,10 +1252,20 @@ impl SearchView {
             expected: Some(Box::new(target_task.clone())),
             placement,
         };
-        let outcome = ops::plan_move(&sources, &target, ctx.vault.task_format())
-            .and_then(|plan| ops::apply_move_plan(&plan).map(|()| plan));
+        let planned = ops::plan_move(&sources, &target, ctx.vault.task_format());
+        let outcome = match planned {
+            Ok(mut plan) => retarget(ctx, &mut plan).and_then(|n| {
+                ops::apply_move_plan(&plan)
+                    .map(|()| (plan, n))
+                    .map_err(|e| e.to_string())
+            }),
+            Err(e) => {
+                self.report_move_error(ctx, &e);
+                return Ok(());
+            }
+        };
         match outcome {
-            Ok(plan) => {
+            Ok((plan, retargeted)) => {
                 self.cut.clear();
                 let verb = match placement {
                     Placement::Child => "under",
@@ -1223,18 +1274,158 @@ impl SearchView {
                 toast(
                     ctx,
                     &format!(
-                        "moved {} task(s) {verb} {}",
+                        "moved {} task(s) {verb} {}{}",
                         plan.blocks.len(),
-                        target_task.description
+                        target_task.description,
+                        retarget_note(retargeted)
                     ),
                     ToastStyle::Success,
                 );
                 self.after_restructure(ctx, &plan)
             }
             Err(e) => {
-                self.report_move_error(ctx, &e);
+                toast(ctx, &e, ToastStyle::Error);
                 Ok(())
             }
+        }
+    }
+
+    fn link_cut(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        if self.cut.is_empty() {
+            toast(
+                ctx,
+                "nothing cut — press d on a task first",
+                ToastStyle::Info,
+            );
+            return Ok(());
+        }
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a parent task first", ToastStyle::Error);
+            return Ok(());
+        };
+        let Some(snap) = ctx.snapshot.clone() else {
+            return Ok(());
+        };
+        let parent = self.tasks[i].clone();
+        let root = &ctx.vault.path;
+        let children: Vec<MoveSource> = self
+            .cut
+            .iter()
+            .map(|c| MoveSource {
+                path: root.join(&c.key.0),
+                line: c.key.1,
+                expected: Some(c.snapshot.clone()),
+            })
+            .collect();
+        let parent_src = MoveSource {
+            path: root.join(&parent.source_file),
+            line: parent.source_line,
+            expected: Some(parent.clone()),
+        };
+        let link_ctx = links::LinkCtx::new(root, &snap.scan);
+        let result = links::plan_link(&children, &parent_src, &link_ctx, ctx.vault.task_format())
+            .and_then(|plan| links::apply_link_plan(&plan).map(|()| plan));
+        match result {
+            Ok(plan) => {
+                self.cut.clear();
+                toast(
+                    ctx,
+                    &format!(
+                        "linked {} task(s) under {}",
+                        plan.children.len(),
+                        parent.description
+                    ),
+                    ToastStyle::Success,
+                );
+                let key = (parent.source_file.clone(), parent.source_line);
+                self.expanded.insert(key.clone());
+                self.refresh_after_mutation(ctx, Some(key))
+            }
+            Err(e) => {
+                self.report_link_error(ctx, &e);
+                Ok(())
+            }
+        }
+    }
+
+    fn unlink_selected(&mut self, ctx: &mut TabCtx) -> Result<()> {
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a task first", ToastStyle::Error);
+            return Ok(());
+        };
+        let t = self.tasks[i].clone();
+        if t.parent_link.is_none() {
+            toast(ctx, "task has no parent link", ToastStyle::Info);
+            return Ok(());
+        }
+        let source = MoveSource {
+            path: ctx.vault.path.join(&t.source_file),
+            line: t.source_line,
+            expected: Some(t.clone()),
+        };
+        let result = links::plan_unlink(&source, ctx.vault.task_format())
+            .and_then(|plan| links::apply_link_plan(&plan).map(|()| plan));
+        match result {
+            Ok(_) => self.refresh_after_mutation(ctx, Some((t.source_file, t.source_line))),
+            Err(e) => {
+                self.report_link_error(ctx, &e);
+                Ok(())
+            }
+        }
+    }
+
+    /// `description` with a parent link appended when the create flow was
+    /// opened with `S` (giving the parent a block id first if it needs
+    /// one). Errors are user-facing strings for the form's error slot.
+    fn linked_description(
+        &self,
+        ctx: &TabCtx,
+        target: &std::path::Path,
+        description: &str,
+    ) -> std::result::Result<String, String> {
+        let Some((file, line)) = &self.link_parent else {
+            return Ok(description.to_string());
+        };
+        let Some(snap) = ctx.snapshot.as_ref() else {
+            return Err("vault not loaded yet".into());
+        };
+        let parent = snap
+            .scan
+            .tasks
+            .iter()
+            .find(|t| &t.source_file == file && t.source_line == *line)
+            .ok_or("parent task changed on disk — reload and retry")?;
+        let root = &ctx.vault.path;
+        let source = MoveSource {
+            path: root.join(file),
+            line: *line,
+            expected: Some(parent.clone()),
+        };
+        let child_rel = target.strip_prefix(root).unwrap_or(target);
+        let link_ctx = links::LinkCtx::new(root, &snap.scan);
+        let (text, plan) =
+            links::plan_parent_for_new_task(child_rel, &source, &link_ctx, ctx.vault.task_format())
+                .map_err(|e| e.to_string())?;
+        links::apply_link_plan(&plan).map_err(|e| e.to_string())?;
+        Ok(format!("{description} {text}"))
+    }
+
+    fn report_link_error(&self, ctx: &mut TabCtx, e: &links::LinkError) {
+        let text = match e {
+            links::LinkError::WouldCycle { .. } => {
+                "can't link a task under its own subtask".to_string()
+            }
+            links::LinkError::PhysicallyNested { description, .. } => {
+                format!("{description} is nested under another task — outdent it first")
+            }
+            other => other.to_string(),
+        };
+        toast(ctx, &text, ToastStyle::Error);
+        if matches!(
+            e,
+            links::LinkError::LineChanged { .. } | links::LinkError::TargetChanged { .. }
+        ) {
+            ctx.request_graph_refresh();
         }
     }
 
@@ -1298,6 +1489,26 @@ impl SearchView {
         ) {
             ctx.request_graph_refresh();
         }
+    }
+}
+
+/// Retarget block references a cross-file move would break (see
+/// `links::plan_retarget`), against the installed snapshot's scan.
+pub(crate) fn retarget(
+    ctx: &TabCtx,
+    plan: &mut ops::MovePlan,
+) -> std::result::Result<usize, String> {
+    let Some(snap) = ctx.snapshot.as_ref() else {
+        return Ok(0);
+    };
+    links::plan_retarget(plan, &links::LinkCtx::new(&ctx.vault.path, &snap.scan))
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) fn retarget_note(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        n => format!(" · retargeted {n} link(s)"),
     }
 }
 
@@ -1699,6 +1910,13 @@ impl SearchView {
             }
         };
 
+        let description = match self.linked_description(ctx, &resolved, &description) {
+            Ok(d) => d,
+            Err(e) => {
+                self.popup.as_mut().unwrap().error = Some(e);
+                return Ok(EventOutcome::Consumed);
+            }
+        };
         let input = CreateInput {
             description,
             status: ft_core::task::Status::Open,
@@ -1731,7 +1949,7 @@ impl SearchView {
             Ok(outcome) => {
                 self.popup = None;
                 self.subtask_parent = None;
-                if let Some(key) = subtask {
+                if let Some(key) = subtask.or(self.link_parent.take()) {
                     self.expanded.insert(key);
                 }
                 let rel_target = resolved
@@ -1866,8 +2084,15 @@ impl SearchView {
             }
         };
 
+        let description = match self.linked_description(ctx, &target, &parse.description) {
+            Ok(d) => d,
+            Err(e) => {
+                self.quickline.as_mut().unwrap().error = Some(e);
+                return Ok(EventOutcome::Consumed);
+            }
+        };
         let input = CreateInput {
-            description: parse.description.clone(),
+            description,
             status: ft_core::task::Status::Open,
             priority: parse.priority,
             tags: parse.tags.clone(),
@@ -1900,7 +2125,7 @@ impl SearchView {
                 self.subtask_parent = None;
                 // Auto-expand the parent so the freshly created subtask is
                 // visible and the cursor can anchor onto it.
-                if let Some(key) = subtask {
+                if let Some(key) = subtask.or(self.link_parent.take()) {
                     self.expanded.insert(key);
                 }
                 let rel_target = target
@@ -2066,16 +2291,25 @@ fn task_line(
 
     // Tree affordance: indent per depth, then a ▾/▸ for expandable rows or a
     // blank gutter so leaf descriptions still line up under their siblings.
-    let marker = match (row.has_children, row.expanded) {
-        (true, true) => "▾ ",
-        (true, false) => "▸ ",
-        (false, _) if row.depth > 0 => "· ",
-        (false, _) => "",
+    let marker = match (row.has_children, row.expanded, row.linked) {
+        (true, true, false) => "▾ ",
+        (true, false, false) => "▸ ",
+        (true, true, true) => "▾↳ ",
+        (true, false, true) => "▸↳ ",
+        (false, _, true) => "↳ ",
+        (false, _, _) if row.depth > 0 => "· ",
+        (false, _, _) => "",
     };
     let tree_prefix = format!("{}{marker}", "  ".repeat(row.depth));
 
     // Description: truncate if too long, pad to fill the column budget.
-    let desc = format!("{tree_prefix}{}", task.description.replace('\n', " "));
+    // A linked row's `↳` already says where it hangs; drop the link text.
+    let description = match (&task.parent_link, row.linked) {
+        (Some(link), true) => links::remove_link_text(&task.description, &link.raw)
+            .unwrap_or_else(|| task.description.clone()),
+        _ => task.description.clone(),
+    };
+    let desc = format!("{tree_prefix}{}", description.replace('\n', " "));
     let desc_count = desc.chars().count();
     let desc_trimmed = if desc_count > desc_width {
         let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();

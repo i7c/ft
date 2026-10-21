@@ -394,7 +394,7 @@ fn block_id_from_seed(
 
 /// Remove `raw` (a link's text) from `line` along with one adjacent space.
 /// Returns `None` when `raw` isn't on the line.
-pub(crate) fn remove_link_text(line: &str, raw: &str) -> Option<String> {
+pub fn remove_link_text(line: &str, raw: &str) -> Option<String> {
     let at = line.find(raw)?;
     let (mut start, mut end) = (at, at + raw.len());
     if line[..start].ends_with(' ') {
@@ -463,11 +463,8 @@ pub enum LinkError {
     },
     #[error("task at {}:{} has no parent link", .path.display(), .line)]
     NoParentLink { path: PathBuf, line: usize },
-    #[error("write failed: {source}")]
-    Write {
-        #[from]
-        source: crate::error::Error,
-    },
+    #[error("write failed: {0}")]
+    Write(#[from] crate::error::Error),
 }
 
 /// Vault context for planning link edits: the vault root (paths in

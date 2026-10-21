@@ -275,6 +275,60 @@ ft tasks outdent proj.md:7    # becomes its parent's next sibling
   block, giving its old and new `path` / `line`, for editor
   integrations.
 
+## Linked parents
+
+A task can have a parent in another file without moving there. Put a
+wikilink to the parent in the task's description:
+
+```markdown
+<!-- projects/vendor.md -->
+- [ ] Vendor onboarding ^vo1
+
+<!-- journal/2026-10-21.md -->
+- [ ] reproduce on staging [[vendor#^vo1]] 📅 2026-10-23
+```
+
+Only two kinds of link make a parent. Every other link is just a link.
+
+- **A block reference to a task**: `[[note#^id]]`, or `[[#^id]]` within
+  the same file. The `^id` is Obsidian's block id at the end of the
+  parent's line.
+- **A link to an anchor note**: `[[note]]`, where the note's frontmatter
+  names the task that stands for it, and that task carries the matching
+  `🆔`:
+
+  ```markdown
+  ---
+  ft:
+    tasks:
+      anchor: ABC-123
+  ---
+  - [ ] Fix login 🆔 ABC-123
+  ```
+
+The first such link on the line is the parent; any later ones are
+reported by `ft tasks check`. If a task is also indented under another
+task, the indentation wins. Linked children appear under their parent
+everywhere: `ft tasks list --tree`, the TUI tree (marked `↳`), the graph,
+and the query attributes `parent`, `parent_status`, `parent_link` and
+`children`.
+
+```sh
+ft tasks link journal/2026-10-21.md:3 --under "Vendor onboarding"   # adds ^id to the parent if needed
+ft tasks unlink journal/2026-10-21.md:3
+ft tasks create "write regression test" --link-parent ABC-123        # lands in today's note
+ft tasks check                                                       # dangling / cycle / ignored / extra; exit 1 on issues
+ft tasks list orphaned                                               # open tasks under a done or cancelled parent
+```
+
+ft keeps links consistent as you restructure:
+
+- Nesting a task physically (`--under`, indent, TUI paste) removes its
+  now-redundant parent link.
+- Moving a task that carries a block id to another file rewrites every
+  `[[…#^id]]` that pointed at it. `--dry-run` shows those edits, and the
+  move's output counts them.
+
 ## The Tasks tab in the TUI
 
 `ft tui` opens a tabbed interface; press `2` to jump to the Tasks tab
@@ -302,6 +356,9 @@ Common chords inside the Tasks tab (priority moved from `p` / `P` to
 | `p` / `P` | move the marked tasks under / after the selected task |
 | `Esc`     | clear the marked tasks                           |
 | `>` / `<` | indent / outdent the selected task              |
+| `L`       | link the marked tasks under the selected task (no move) |
+| `U`       | remove the selected task's parent link           |
+| `S`       | new task in today's note, linked under the selected task |
 | `e`       | open the edit popup for the focused task        |
 | `c`       | quickline new-task entry                        |
 | `C`       | new-task form (multi-field popup)               |

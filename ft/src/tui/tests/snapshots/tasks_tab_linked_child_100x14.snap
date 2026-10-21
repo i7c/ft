@@ -1,0 +1,18 @@
+---
+source: ft/src/tui/tests/tasks_link.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│(status in {Open, InProgress} and due < +1w) or (completed = today)                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ── upcoming (4) ──                                                                               │
+│        ▸ call vendor                                               📅  tomorrow                   │
+│▶       ▾ Vendor onboarding                                         📅  in 3d                      │
+│          ↳ keep                                                    📅  in 2d                      │
+│        Other                                                       📅  in 4d                      │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                 linked 1 task(s) under Vendor        mode: normal
