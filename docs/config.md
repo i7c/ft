@@ -408,6 +408,49 @@ Enabled tabs append after Search (order: Tasks, Timeblocks, when
 enabled); tab digits and `Tab`-cycling follow the built list. The headless CLI
 (`ft tasks`, `ft timeblocks`) is unaffected by these toggles.
 
+## `[sources.*]`
+
+Remote task sources: Jira Cloud or GitHub issues synced into one issue
+note per issue (see [guide/tasks.md](guide/tasks.md#remote-sources)).
+Put sources in the **vault** config (`.ft/config.toml`), so every machine
+that syncs the vault shares them. Machines without credentials just skip
+syncing.
+
+```toml
+[sources.jira]
+kind = "jira"
+base_url = "https://example.atlassian.net"
+email = "me@example.test"
+
+[sources.jira.queries]          # optional; default: assigned to me, not done
+mine = "assignee = currentUser() AND statusCategory != Done"
+team = "project = TEAM AND sprint in openSprints()"
+
+[sources.jira.status_map]       # optional overrides of the category mapping
+"Blocked" = "Open"
+
+[sources.gh]
+kind = "github"                 # token from `gh auth token` or the keychain
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | required | `jira` or `github` |
+| `base_url` | jira: required; github: `https://api.github.com` | Must be `https://` (plain `http://` only for localhost) |
+| `email` | jira: required | Atlassian account email (basic-auth user) |
+| `queries` | assigned to me, open | Named JQL / GitHub search queries; their union is "in scope" |
+| `folder` | the source name | Folder for new issue notes |
+| `template` | none | Template for the user part of new issue notes; `vars.key`, `vars.title`, `vars.url`, `vars.source` are available |
+| `interval_minutes` | `10` | TUI background sync interval; `0` = only at startup and on `g r` |
+| `fetch_parents` | `true` | Also fetch parents / epics (as `state: context` notes) |
+| `comments` | `5` | Most recent comments kept in the note; `0` drops the section |
+| `description` | `true` | Keep the managed Description section |
+| `status_map` | `{}` | Remote status name → `Open` / `InProgress` / `Done` / `Cancelled` |
+
+Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then
+`gh auth token` (GitHub sources only), then the OS keychain entry stored
+by `ft sources login <name>`.
+
 ## `[drift]`
 
 Settings for `ft notes drift`. Vaults that link attachments
@@ -480,6 +523,7 @@ These influence `ft` at runtime but are not config keys:
 | `XDG_CONFIG_HOME`      | Where to look for the user config (defaults to `~/.config`).                                  |
 | `FT_OBSIDIAN_DRY_RUN`  | When set to `1`, the `--obsidian` flag prints the `obsidian://` URL instead of opening it.    |
 | `FT_PERF_TESTS`        | When set to `1`, the perf-tagged unit tests run; otherwise they're skipped.                   |
+| `FT_<NAME>_TOKEN`      | API token for the `[sources.<name>]` source (name upper-cased, `-` → `_`); overrides the keychain. |
 
 ### Obsidian integration
 

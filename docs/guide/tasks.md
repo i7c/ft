@@ -329,6 +329,76 @@ ft keeps links consistent as you restructure:
   `[[…#^id]]` that pointed at it. `--dry-run` shows those edits, and the
   move's output counts them.
 
+## Remote sources
+
+ft can pull the Jira tickets (or GitHub issues) assigned to you into the
+vault, one note per issue. The note is a normal markdown note, so you add
+local subtasks to a ticket like to any other task. They work offline,
+show in Obsidian, and are tracked by git.
+
+```sh
+# once per machine that should sync (others simply skip)
+ft sources login jira          # paste an Atlassian API token; verified, stored in the keychain
+ft tasks sync                  # also runs in the TUI at startup and every 10 min; `g r` syncs now
+ft tasks list remote --tree    # your open tickets, epics above them, your subtasks below
+```
+
+Configure sources in `.ft/config.toml` (see
+[config.md](../config.md#sources)). Each issue becomes a note like
+`jira/ABC-123.md`:
+
+```markdown
+---
+ft:
+  tasks:
+    anchor: ABC-123
+    parent: "[[EPIC-7]]"
+  source:
+    name: jira
+    key: ABC-123
+    status: In Review
+    state: active
+    …
+---
+# ABC-123 Fix login
+
+- [/] [ABC-123](https://…/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123
+  - [ ] reproduce on staging        ← your subtasks: nest them here…
+
+(Description and Comments sections, kept up to date by sync)
+```
+
+…or link to the ticket from anywhere, e.g. from today's note:
+`- [ ] write regression test [[ABC-123]]`, or
+`ft tasks create "…" --link-parent ABC-123` (TUI: `S` on the ticket).
+
+What sync does:
+
+- **Remote-owned fields:** Jira owns the title, due date, priority and
+  status. Changing title, due or priority in ft is refused (`due is owned
+  by jira — change it in jira`). Your `#tags`, `⏳`/`🛫` dates, other
+  notes, and subtasks are never touched.
+- **Local status changes are kept:** if you tick a ticket locally, sync
+  leaves it and reports it as *pending push* (pushing back to Jira is a
+  later feature). If the status changed on both sides, sync keeps yours
+  and reports a conflict.
+- **Tickets that leave your queries:** if closed remotely, they're marked
+  done locally. If still open but no longer yours, they're cancelled
+  locally and the note is marked `state: out-of-scope`. Notes are never
+  deleted.
+- **Parents and epics** are synced as `state: context` notes, so the tree
+  shows epic → story → your subtasks.
+- **Checklists in descriptions** are shown as `☐` / `☑`. They never become
+  tasks in your vault.
+- **Offline and multi-machine:** without network or credentials, sync is
+  skipped silently and everything else works. All sync state lives in
+  the notes, and every machine produces the same bytes, so git sync
+  doesn't conflict.
+
+`ft tasks sync --dry-run` shows the diff, `--format json` gives a
+per-source summary, and `ft sources list` shows where each source's
+credentials come from.
+
 ## The Tasks tab in the TUI
 
 `ft tui` opens a tabbed interface; press `2` to jump to the Tasks tab

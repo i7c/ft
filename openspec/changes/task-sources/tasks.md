@@ -1,6 +1,6 @@
 ## 1. Foundations
 
-- [x] 1.1 Add `ureq` (rustls, json) and `keyring` to workspace deps / ft-core; confirm `cargo build --release` on macOS and that the binary-size delta is noted in the PR.
+- [x] 1.1 Add `ureq` (rustls + platform verifier, json) and `keyring` to workspace deps / ft-core; `cargo build --release` on macOS. Binary size delta: 12.4 MiB → 15.2 MiB (+2.9 MB).
 - [x] 1.2 `Config::sources: HashMap<String, SourceCfg>` with defaults and validation (`kind`, `base_url` https rule, jira requires `email`, `status_map` values); config tests incl. unknown-key rejection.
 - [x] 1.3 `frontmatter::upsert_ft_keys` (key-level set/remove under `ft.<sub>`, YAML quoting, creates fence/`ft:` map, preserves other lines); tests incl. round-trip through the readers. `upsert_synth_frontmatter` left as is (its keep-targets-when-absent contract differs; no benefit in rewiring).
 - [x] 1.4 Readers for `ft.source.*` (`name`, `key`, `url`, `status`, `assignee`, `state`, `updated`, `synced.status`) and `ft.tasks.parent`.
@@ -56,9 +56,9 @@
 
 ## 10. Docs + build invariants
 
-- [ ] 10.1 `docs/guide/tasks.md` "Remote sources" section (config, login, note format, owned fields, pending/conflict, out-of-scope, offline/multi-machine behaviour); `docs/config.md` `[sources.*]` table + `FT_<NAME>_TOKEN`.
-- [ ] 10.2 `cargo build --release`
-- [ ] 10.3 `cargo test --workspace`
-- [ ] 10.4 `cargo clippy --workspace --tests -- -D warnings`
-- [ ] 10.5 `cargo fmt --check`
-- [ ] 10.6 `cargo run --release -q -- commands docs --check`
+- [x] 10.1 `docs/guide/tasks.md` "Remote sources" section (config, login, note format, owned fields, pending/conflict, out-of-scope, offline/multi-machine behaviour); `docs/config.md` `[sources.*]` table + `FT_<NAME>_TOKEN`.
+- [x] 10.2 `cargo build --release`
+- [x] 10.3 `cargo test --workspace`
+- [x] 10.4 `cargo clippy --workspace --tests -- -D warnings` (clean except the 4 pre-existing `redundant_field_names` hits, also on main)
+- [x] 10.5 `cargo fmt --check`
+- [x] 10.6 `cargo run --release -q -- commands docs --check`
