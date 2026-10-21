@@ -37,9 +37,9 @@
 
 ## 7. CLI
 
-- [ ] 7.1 `ft tasks sync [--source]… [--dry-run] [--format]` with per-source status lines/JSON and exit codes; writes `.ft/cache/sources.json` attempt times.
-- [ ] 7.2 `ft sources login|logout|list` (`cmd/sources.rs`; dialoguer password prompt; verify before store).
-- [ ] 7.3 Integration tests with a stub HTTP server (`base_url = "http://localhost:<port>"`): create, update, pending, out-of-scope, offline skip (exit 0), unauthorized (exit 1), dry-run diff, JSON shape snapshot, `ft tasks list remote --tree`.
+- [x] 7.1 `ft tasks sync [--source]… [--dry-run] [--format]` with per-source status lines/JSON and exit codes; writes `.ft/cache/sources.json` attempt times.
+- [x] 7.2 `ft sources login|logout|list` (`cmd/sources.rs`; dialoguer password prompt; verify before store).
+- [x] 7.3 Integration tests with a stub HTTP server (`base_url = "http://localhost:<port>"`): create, update, pending, out-of-scope, offline skip (exit 0), unauthorized (exit 1), dry-run diff, JSON shape snapshot, `ft tasks list remote --tree`.
 
 ## 8. TUI
 

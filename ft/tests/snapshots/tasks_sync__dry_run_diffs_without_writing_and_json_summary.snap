@@ -1,0 +1,16 @@
+---
+source: ft/tests/tasks_sync.rs
+expression: "serde_json::to_string_pretty(&v).unwrap()"
+---
+[
+  {
+    "conflicts": 0,
+    "created": 2,
+    "message": "",
+    "out_of_scope": 0,
+    "pending": 0,
+    "source": "jira",
+    "status": "ok",
+    "updated": 0
+  }
+]

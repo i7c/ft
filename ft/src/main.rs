@@ -50,6 +50,8 @@ enum Commands {
     Graph(cmd::graph::GraphArgs),
     /// Git operations: sync (commit + pull + push), commit (commit only)
     Git(cmd::git::GitArgs),
+    /// Remote task sources (Jira, GitHub): login, logout, list
+    Sources(cmd::sources::SourcesArgs),
     /// Launch the interactive terminal UI
     Tui(cmd::tui::TuiArgs),
     /// Generate shell completion script
@@ -99,6 +101,7 @@ fn main() -> ExitCode {
         Commands::Notes(args) => cmd::notes::run(args, vault),
         Commands::Graph(args) => cmd::graph::run(args, vault),
         Commands::Git(args) => cmd::git::run(args, vault),
+        Commands::Sources(args) => cmd::sources::run(args, vault),
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),

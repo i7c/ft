@@ -61,6 +61,24 @@ pub enum TasksCommand {
     /// Report broken task structure: dangling, cyclic, ignored, and extra
     /// parent links. Exits 1 when any are found.
     Check(CheckArgs),
+    /// Pull remote issues (Jira, GitHub) into issue notes. Sources that are
+    /// offline or have no credentials on this machine are skipped.
+    Sync(SyncArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    /// Only these sources (repeatable); all configured sources by default.
+    #[arg(long = "source", value_name = "NAME")]
+    pub sources: Vec<String>,
+
+    /// Print a unified diff of every note that would change; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format for the per-source summary.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -214,6 +232,10 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Link(a) => run_link(a, vault_flag),
         TasksCommand::Unlink(a) => run_unlink(a, vault_flag),
         TasksCommand::Check(a) => run_check(a, vault_flag),
+        TasksCommand::Sync(a) => {
+            let vault = crate::cmd::common::discover_vault(vault_flag)?;
+            crate::cmd::sources::run_sync(&vault, &a.sources, a.dry_run, a.format)
+        }
     }
 }
 
@@ -1399,7 +1421,7 @@ fn parse_move_target(spec: &str, vault_root: &std::path::Path) -> MoveTarget {
     }
 }
 
-fn print_diff(path: &std::path::Path, original: &str, new: &str) {
+pub(crate) fn print_diff(path: &std::path::Path, original: &str, new: &str) {
     use similar::{ChangeTag, TextDiff};
     println!("--- {} (before)", path.display());
     println!("+++ {} (after)", path.display());
