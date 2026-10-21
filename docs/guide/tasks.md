@@ -248,6 +248,33 @@ Behavior worth knowing:
   descending byte order so earlier rewrites don't invalidate later
   offsets.
 
+## Reparenting: moving tasks under other tasks
+
+`--under` makes the moved tasks the last children of another task, in
+the same file or a different one. `--sibling` puts them right after
+that task's subtree, at its level. The target selector takes the same
+forms as the positional one, but has to match exactly one task.
+
+```sh
+ft tasks move inbox.md:4 --under "vendor onboarding"
+ft tasks move inbox.md:4 --under proj.md:12 --sibling
+
+# One level in / out
+ft tasks indent proj.md:7     # becomes the last child of the task above it
+ft tasks outdent proj.md:7    # becomes its parent's next sibling
+```
+
+- Moved blocks are re-indented to fit their new place. Nested lines
+  keep their relative depth, converted between tabs and spaces when the
+  two files indent differently.
+- Indent only works under the task directly above, at the same level.
+  Outdent puts the task after its parent's whole subtree, so the tasks
+  below it stay where they are.
+- Moving a task under itself or one of its own subtasks is refused.
+- `--format json` prints one `{description, from, to}` object per moved
+  block, giving its old and new `path` / `line`, for editor
+  integrations.
+
 ## The Tasks tab in the TUI
 
 `ft tui` opens a tabbed interface; press `2` to jump to the Tasks tab
@@ -255,7 +282,8 @@ Behavior worth knowing:
 views (`Today`, `Overdue`, `Upcoming`, `Done today`, each of your
 presets), plus a main pane with the current view's tasks.
 
-Common chords inside the Tasks tab:
+Common chords inside the Tasks tab (priority moved from `p` / `P` to
+`+` / `-` when cut-and-paste took `p` / `P`):
 
 | Key       | Action                                          |
 |-----------|-------------------------------------------------|
@@ -268,7 +296,12 @@ Common chords inside the Tasks tab:
 | `t`       | set due to today                                |
 | `]` / `[` | bump due ±1 day                                 |
 | `}` / `{` | bump scheduled ±1 day                           |
-| `p` / `P` | cycle priority forward / backward               |
+| `+` / `-` | cycle priority up / down                         |
+| `M`       | move the selected task to another file / heading |
+| `d`       | mark / unmark the selected task for moving (cut) |
+| `p` / `P` | move the marked tasks under / after the selected task |
+| `Esc`     | clear the marked tasks                           |
+| `>` / `<` | indent / outdent the selected task              |
 | `e`       | open the edit popup for the focused task        |
 | `c`       | quickline new-task entry                        |
 | `C`       | new-task form (multi-field popup)               |

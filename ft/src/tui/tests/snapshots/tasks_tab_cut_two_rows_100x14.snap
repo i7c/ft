@@ -1,0 +1,18 @@
+---
+source: ft/src/tui/tests/tasks_reparent.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│(status in {Open, InProgress} and due < +1w) or (completed = today)                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks · 2 cut — p child · P sibling · Esc clear ─────────────────────────────────────────────────┐
+│ ── upcoming (4) ──                                                                               │
+│✂       ▸ call vendor                                               📅  tomorrow                   │
+│▶✂      keep                                                        📅  in 2d                      │
+│        Vendor onboarding                                           📅  in 3d                      │
+│        Other                                                       📅  in 4d                      │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                       refreshed [HH:MM:SS]             mode: normal

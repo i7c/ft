@@ -154,7 +154,7 @@ drifting apart — is in
 ## Also on board: tasks and time
 
 On top of the note-flow core, `ft` adds exactly two things — **task
-management** (list, filter, create, complete, and move tasks in the
+management** (list, filter, create, complete, move and reparent tasks in the
 Tasks-plugin emoji format) and **time management** (Day-Planner
 timeblocks and time-spent reports) — and nothing else. They live in
 the same vault, the same daily notes, and the same TUI, so triaging

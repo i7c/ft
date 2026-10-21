@@ -9,7 +9,7 @@ use ft_core::{
     query::sort::{sort_by_keys, SortKey, SortOrder},
     task::{
         aging::{age_band, AgeBand},
-        ops::{self, CompleteOptions, CreateInput},
+        ops::{self, CompleteOptions, CreateInput, MoveError, MoveSource, MoveTarget, Placement},
         Priority, Status, Task,
     },
 };
@@ -73,8 +73,8 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("[", "tasks.due-prev-day")
         .bind("}", "tasks.scheduled-next-day")
         .bind("{", "tasks.scheduled-prev-day")
-        .bind("p", "tasks.priority-next")
-        .bind("P", "tasks.priority-prev")
+        .bind("+", "tasks.priority-next")
+        .bind("-", "tasks.priority-prev")
         .bind("x", "tasks.complete")
         .bind("X", "tasks.cancel")
         .bind("t", "tasks.due-today")
@@ -86,6 +86,13 @@ pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("s", "tasks.new-subtask")
         // Move
         .bind("M", "tasks.move")
+        // Restructure: cut set + paste, indent / outdent.
+        .bind("d", "tasks.cut-toggle")
+        .bind("Esc", "tasks.cut-clear")
+        .bind("p", "tasks.paste-child")
+        .bind("P", "tasks.paste-sibling")
+        .bind(">", "tasks.indent")
+        .bind("<", "tasks.outdent")
 });
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -155,6 +162,22 @@ pub struct SearchView {
     /// position changes. `None` for ordinary top-level creates. Set fresh by
     /// every create-open command so it can't go stale.
     subtask_parent: Option<(std::path::PathBuf, usize)>,
+
+    /// Tasks marked with `d`, in marking order, awaiting a `p` / `P`
+    /// paste. Re-resolved against each adopted snapshot so unrelated
+    /// line shifts don't drop them.
+    cut: Vec<CutEntry>,
+    /// Expand the ancestors of `pending_anchors` on the next adoption so
+    /// a task just nested under a collapsed parent stays visible.
+    reveal_anchor: bool,
+}
+
+/// A task in the cut set: its key at marking time (kept current across
+/// snapshots) plus the scanned task, used as the move's line guard.
+#[derive(Debug, Clone)]
+struct CutEntry {
+    key: (std::path::PathBuf, usize),
+    snapshot: Task,
 }
 
 /// One rendered list row: the task plus the tree-state needed to draw it.
@@ -209,6 +232,8 @@ impl SearchView {
             display: Vec::new(),
             overdue_display_count: 0,
             subtask_parent: None,
+            cut: Vec::new(),
+            reveal_anchor: false,
         }
     }
 
@@ -233,7 +258,11 @@ impl SearchView {
             return Ok(());
         }
         self.reload(ctx)?;
+        self.reresolve_cut(ctx);
         let anchors = std::mem::take(&mut self.pending_anchors);
+        if std::mem::take(&mut self.reveal_anchor) {
+            self.reveal(&anchors);
+        }
         for a in &anchors {
             if self.select_display_row(a) {
                 return Ok(());
@@ -685,9 +714,17 @@ impl SearchView {
 
         let lines = self.build_lines(today, desc_width);
         let scroll = self.scroll;
+        let title = if self.cut.is_empty() {
+            " tasks ".to_string()
+        } else {
+            format!(
+                " tasks · {} cut — p child · P sibling · Esc clear ",
+                self.cut.len()
+            )
+        };
         let list = Paragraph::new(lines)
             .scroll((scroll, 0))
-            .block(Block::default().borders(Borders::ALL).title(" tasks "));
+            .block(Block::default().borders(Borders::ALL).title(title));
         frame.render_widget(list, area);
     }
 
@@ -706,6 +743,7 @@ impl SearchView {
                     &self.tasks[row.task_idx],
                     today,
                     i == self.selected,
+                    self.is_cut(row.task_idx),
                     desc_width,
                     row,
                 ));
@@ -719,6 +757,7 @@ impl SearchView {
                     &self.tasks[row.task_idx],
                     today,
                     sel,
+                    self.is_cut(row.task_idx),
                     desc_width,
                     row,
                 ));
@@ -982,6 +1021,33 @@ impl SearchView {
                 }
                 Ok(CommandOutcome::Handled)
             }
+            "tasks.cut-toggle" => {
+                self.toggle_cut(ctx);
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.cut-clear" => {
+                if self.cut.is_empty() {
+                    return Ok(CommandOutcome::NotHandled);
+                }
+                self.cut.clear();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.paste-child" => {
+                self.paste_cut(ctx, Placement::Child)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.paste-sibling" => {
+                self.paste_cut(ctx, Placement::SiblingAfter)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.indent" => {
+                self.shift_selected(ctx, true)?;
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.outdent" => {
+                self.shift_selected(ctx, false)?;
+                Ok(CommandOutcome::Handled)
+            }
             _ => Ok(CommandOutcome::NotHandled),
         }
     }
@@ -1031,6 +1097,212 @@ impl SearchView {
     }
 }
 
+// --- restructure: cut set, paste, indent / outdent -------------------------
+
+impl SearchView {
+    fn is_cut(&self, task_idx: usize) -> bool {
+        let t = &self.tasks[task_idx];
+        self.cut
+            .iter()
+            .any(|c| c.key.0 == t.source_file && c.key.1 == t.source_line)
+    }
+
+    fn toggle_cut(&mut self, ctx: &mut TabCtx) {
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a task first", ToastStyle::Error);
+            return;
+        };
+        let t = &self.tasks[i];
+        let key = (t.source_file.clone(), t.source_line);
+        if let Some(pos) = self.cut.iter().position(|c| c.key == key) {
+            self.cut.remove(pos);
+        } else {
+            self.cut.push(CutEntry {
+                key,
+                snapshot: t.clone(),
+            });
+        }
+    }
+
+    /// Point each cut entry at its task in the freshly adopted scan: same
+    /// file, same wire content, nearest line. Entries with no match changed
+    /// on disk and are dropped.
+    fn reresolve_cut(&mut self, ctx: &TabCtx) {
+        if self.cut.is_empty() {
+            return;
+        }
+        let format = ctx.vault.task_format();
+        let tasks = &self.tasks;
+        let before = self.cut.len();
+        self.cut.retain_mut(|c| {
+            let want = format.serialize_line(&c.snapshot);
+            let found = tasks
+                .iter()
+                .filter(|t| t.source_file == c.key.0 && format.serialize_line(t) == want)
+                .min_by_key(|t| t.source_line.abs_diff(c.key.1));
+            match found {
+                Some(t) => {
+                    c.key.1 = t.source_line;
+                    c.snapshot = t.clone();
+                    true
+                }
+                None => false,
+            }
+        });
+        let dropped = before - self.cut.len();
+        if dropped > 0 {
+            toast(
+                ctx,
+                &format!("{dropped} cut task(s) changed on disk — dropped"),
+                ToastStyle::Error,
+            );
+        }
+    }
+
+    /// Expand every ancestor of each anchor so the anchored row is visible.
+    fn reveal(&mut self, anchors: &[(std::path::PathBuf, usize)]) {
+        for (file, line) in anchors {
+            let mut line = *line;
+            while let Some(parent) = self
+                .tasks
+                .iter()
+                .find(|t| &t.source_file == file && t.source_line == line)
+                .and_then(|t| t.parent)
+            {
+                self.expanded.insert((file.clone(), parent));
+                line = parent;
+            }
+        }
+        self.rebuild_display();
+    }
+
+    fn paste_cut(&mut self, ctx: &mut TabCtx, placement: Placement) -> Result<()> {
+        if self.cut.is_empty() {
+            toast(
+                ctx,
+                "nothing cut — press d on a task first",
+                ToastStyle::Info,
+            );
+            return Ok(());
+        }
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a target task first", ToastStyle::Error);
+            return Ok(());
+        };
+        let target_task = self.tasks[i].clone();
+        let root = &ctx.vault.path;
+        let sources: Vec<MoveSource> = self
+            .cut
+            .iter()
+            .map(|c| MoveSource {
+                path: root.join(&c.key.0),
+                line: c.key.1,
+                expected: Some(c.snapshot.clone()),
+            })
+            .collect();
+        let target = MoveTarget::UnderTask {
+            path: root.join(&target_task.source_file),
+            line: target_task.source_line,
+            expected: Some(Box::new(target_task.clone())),
+            placement,
+        };
+        let outcome = ops::plan_move(&sources, &target, ctx.vault.task_format())
+            .and_then(|plan| ops::apply_move_plan(&plan).map(|()| plan));
+        match outcome {
+            Ok(plan) => {
+                self.cut.clear();
+                let verb = match placement {
+                    Placement::Child => "under",
+                    Placement::SiblingAfter => "after",
+                };
+                toast(
+                    ctx,
+                    &format!(
+                        "moved {} task(s) {verb} {}",
+                        plan.blocks.len(),
+                        target_task.description
+                    ),
+                    ToastStyle::Success,
+                );
+                self.after_restructure(ctx, &plan)
+            }
+            Err(e) => {
+                self.report_move_error(ctx, &e);
+                Ok(())
+            }
+        }
+    }
+
+    fn shift_selected(&mut self, ctx: &mut TabCtx, indent: bool) -> Result<()> {
+        let Some(i) = self.selected_task_idx() else {
+            toast(ctx, "select a task first", ToastStyle::Error);
+            return Ok(());
+        };
+        let t = &self.tasks[i];
+        let source = MoveSource {
+            path: ctx.vault.path.join(&t.source_file),
+            line: t.source_line,
+            expected: Some(t.clone()),
+        };
+        let format = ctx.vault.task_format();
+        let planned = if indent {
+            ops::plan_indent(&source, format)
+        } else {
+            ops::plan_outdent(&source, format)
+        };
+        match planned.and_then(|plan| ops::apply_move_plan(&plan).map(|()| plan)) {
+            Ok(plan) => self.after_restructure(ctx, &plan),
+            Err(e) => {
+                self.report_move_error(ctx, &e);
+                Ok(())
+            }
+        }
+    }
+
+    /// Anchor the cursor on the first moved block's new location (revealing
+    /// it under its possibly collapsed parent) and request a rebuild.
+    fn after_restructure(&mut self, ctx: &mut TabCtx, plan: &ops::MovePlan) -> Result<()> {
+        let anchor = plan
+            .blocks
+            .first()
+            .and_then(|b| b.dest.as_ref())
+            .and_then(|(p, l)| Some((p.strip_prefix(&ctx.vault.path).ok()?.to_path_buf(), *l)));
+        self.reveal_anchor = true;
+        self.refresh_after_mutation(ctx, anchor)
+    }
+
+    fn report_move_error(&self, ctx: &mut TabCtx, e: &MoveError) {
+        let (text, style) = match e {
+            MoveError::IntoOwnSubtree { .. } => (
+                "can't move a task under itself".to_string(),
+                ToastStyle::Error,
+            ),
+            MoveError::NoPreviousSibling { .. } => (
+                "no previous sibling to indent under".to_string(),
+                ToastStyle::Info,
+            ),
+            MoveError::AlreadyTopLevel { .. } => {
+                ("already top-level".to_string(), ToastStyle::Info)
+            }
+            other => (other.to_string(), ToastStyle::Error),
+        };
+        toast(ctx, &text, style);
+        if matches!(
+            e,
+            MoveError::LineChanged { .. } | MoveError::TargetChanged { .. }
+        ) {
+            ctx.request_graph_refresh();
+        }
+    }
+}
+
+fn toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
+    *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+        text: text.to_string(),
+        style,
+    });
+}
+
 /// Which date column a `]`/`[`/`}`/`{` keypress targets.
 #[derive(Debug, Clone, Copy)]
 enum Field {
@@ -1038,8 +1310,8 @@ enum Field {
     Scheduled,
 }
 
-/// Priority cycle order per plan: `p` walks None → Low → Medium → High → None;
-/// `P` walks the other way. Highest/Lowest aren't on the cycle — they're
+/// Priority cycle order: `+` walks None → Low → Medium → High → None;
+/// `-` walks the other way. Highest/Lowest aren't on the cycle — they're
 /// rarely used and the future edit popup will set them explicitly.
 const PRIORITY_CYCLE: &[Option<Priority>] = &[
     None,
@@ -1752,6 +2024,7 @@ fn task_line(
     task: &Task,
     today: NaiveDate,
     selected: bool,
+    cut: bool,
     desc_width: usize,
     row: &DisplayRow,
 ) -> Line<'static> {
@@ -1773,7 +2046,12 @@ fn task_line(
 
     let scheduled_str = task.scheduled.map(|d| relative_date(d, today));
 
-    let cursor = if selected { "▶ " } else { "  " };
+    let cursor = match (selected, cut) {
+        (true, true) => "▶✂",
+        (true, false) => "▶ ",
+        (false, true) => "✂ ",
+        (false, false) => "  ",
+    };
     let pri_text = if pri_label.is_empty() {
         "    ".to_string()
     } else {

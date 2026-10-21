@@ -83,6 +83,17 @@ impl KeyChord {
 /// Modifier names are case-insensitive (`Ctrl` / `ctrl` / `CONTROL`
 /// all work). The last `+`-separated token is the key name.
 pub fn chord_from_str(s: &str) -> Option<KeyChord> {
+    // `+` is the modifier separator, so a bare plus key is spelled `+`
+    // on its own (or `Plus`, which also works after modifiers).
+    if s == "+" {
+        return Some(
+            KeyChord {
+                code: KeyCode::Char('+'),
+                mods: KeyModifiers::NONE,
+            }
+            .normalized(),
+        );
+    }
     let mut mods = KeyModifiers::NONE;
     let parts: Vec<&str> = s.split('+').collect();
     if parts.is_empty() || parts.iter().any(|p| p.is_empty()) {
@@ -99,6 +110,7 @@ pub fn chord_from_str(s: &str) -> Option<KeyChord> {
     }
     let code = match *last {
         "Space" | "space" => KeyCode::Char(' '),
+        "Plus" | "plus" => KeyCode::Char('+'),
         "Esc" | "Escape" | "esc" => KeyCode::Esc,
         "Enter" | "Return" | "enter" => KeyCode::Enter,
         "Tab" | "tab" => KeyCode::Tab,
@@ -144,6 +156,7 @@ pub fn chord_to_str(chord: &KeyChord) -> String {
     }
     let key = match chord.code {
         KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char('+') if !out.is_empty() => "Plus".to_string(),
         KeyCode::Char(c) => c.to_string(),
         KeyCode::Esc => "Esc".to_string(),
         KeyCode::Enter => "Enter".to_string(),
@@ -462,6 +475,19 @@ impl KeyMap {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plus_key_parses_and_round_trips() {
+        let bare = chord_from_str("+").unwrap();
+        assert_eq!(bare.code, KeyCode::Char('+'));
+        assert_eq!(chord_to_str(&bare), "+");
+        assert_eq!(chord_from_str("Plus"), Some(bare));
+        let ctrl = chord_from_str("Ctrl+Plus").unwrap();
+        assert_eq!(ctrl.code, KeyCode::Char('+'));
+        assert_eq!(chord_to_str(&ctrl), "Ctrl+Plus");
+        assert_eq!(chord_from_str(&chord_to_str(&ctrl)), Some(ctrl));
+        assert_eq!(chord_from_str("Ctrl++"), None);
+    }
+
     use super::*;
 
     fn round_trip(s: &str) -> String {
@@ -505,7 +531,6 @@ mod tests {
     #[test]
     fn chord_invalid_inputs() {
         assert!(chord_from_str("").is_none());
-        assert!(chord_from_str("+").is_none());
         assert!(chord_from_str("Ctrl+").is_none());
         assert!(chord_from_str("Frobnicate+a").is_none());
         assert!(chord_from_str("F0").is_none()); // F0 is invalid (range 1..=24).

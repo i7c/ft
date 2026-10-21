@@ -33,18 +33,18 @@
 
 ## 5. TUI: keymap + commands
 
-- [ ] 5.1 Add `CommandDef`s `tasks.cut-toggle`, `tasks.cut-clear`, `tasks.paste-child`, `tasks.paste-sibling`, `tasks.indent`, `tasks.outdent` (group "Restructure") to `TASKS_COMMANDS`.
-- [ ] 5.2 `SEARCH_KEYMAP`: bind `d`, `Esc`, `p`, `P`, `>`, `<`; move `tasks.priority-next`/`-prev` to `+`/`-`.
-- [ ] 5.3 Add the "Restructure" section to `help_sections()`.
+- [x] 5.1 Add `CommandDef`s `tasks.cut-toggle`, `tasks.cut-clear`, `tasks.paste-child`, `tasks.paste-sibling`, `tasks.indent`, `tasks.outdent` (group "Restructure") to `TASKS_COMMANDS`.
+- [x] 5.2 `SEARCH_KEYMAP`: bind `d`, `Esc`, `p`, `P`, `>`, `<`; move `tasks.priority-next`/`-prev` to `+`/`-`.
+- [x] 5.3 Add the "Restructure" section to `help_sections()`.
 
 ## 6. TUI: cut set + paste + indent/outdent
 
-- [ ] 6.1 Add `cut: Vec<CutEntry { key: TaskKey, snapshot: Task }>` to `SearchView`; `tasks.cut-toggle` / `tasks.cut-clear` dispatch arms (`Esc` is consumed only when the set is non-empty).
-- [ ] 6.2 Render a cut marker in the row gutter and a status hint `N cut — p child · P sibling · Esc clear`.
-- [ ] 6.3 `tasks.paste-child` / `tasks.paste-sibling`: empty-set toast; build sources in cut order + guarded `UnderTask` target from the cursor; plan → apply → clear set → `request_graph_refresh` → pending anchor at `blocks[0].dest` → toast. On error: toast, keep the set, refresh on `LineChanged`/`TargetChanged`.
-- [ ] 6.4 `tasks.indent` / `tasks.outdent` dispatch arms via `plan_indent` / `plan_outdent`, pending anchor on the moved task, info toasts for `NoPreviousSibling` / `AlreadyTopLevel`.
-- [ ] 6.5 Re-resolve the cut set on graph generation change (same file, equal serialized line, nearest line); drop the rest with a toast.
-- [ ] 6.6 `TestBackend` tests under `ft/src/tui/tests/`: cut marker snapshot (2 rows), paste-child across files (files + cursor), paste-sibling, paste into own subtree toast, cut survives an unrelated line-inserting mutation, `>` / `<` results, `+` raises priority, `p` with an empty set toasts.
+- [x] 6.1 Add `cut: Vec<CutEntry { key: TaskKey, snapshot: Task }>` to `SearchView`; `tasks.cut-toggle` / `tasks.cut-clear` dispatch arms (`Esc` is consumed only when the set is non-empty).
+- [x] 6.2 Render a cut marker in the row gutter and a status hint `N cut — p child · P sibling · Esc clear`.
+- [x] 6.3 `tasks.paste-child` / `tasks.paste-sibling`: empty-set toast; build sources in cut order + guarded `UnderTask` target from the cursor; plan → apply → clear set → `request_graph_refresh` → pending anchor at `blocks[0].dest` → toast. On error: toast, keep the set, refresh on `LineChanged`/`TargetChanged`.
+- [x] 6.4 `tasks.indent` / `tasks.outdent` dispatch arms via `plan_indent` / `plan_outdent`, pending anchor on the moved task, info toasts for `NoPreviousSibling` / `AlreadyTopLevel`.
+- [x] 6.5 Re-resolve the cut set on graph generation change (same file, equal serialized line, nearest line); drop the rest with a toast.
+- [x] 6.6 `TestBackend` tests under `ft/src/tui/tests/`: cut marker snapshot (2 rows), paste-child across files (files + cursor), paste-sibling, paste into own subtree toast, cut survives an unrelated line-inserting mutation, `>` / `<` results, `+` raises priority, `p` with an empty set toasts.
 
 ## 7. ft.nvim
 
@@ -54,10 +54,10 @@
 
 ## 8. Docs + build invariants
 
-- [ ] 8.1 README tasks section: reparent, indent/outdent, and the BREAKING note on priority chords (`+`/`-`).
-- [ ] 8.2 `cargo run --release -q -- commands docs > docs/keybindings.md`
-- [ ] 8.3 `cargo build --release`
-- [ ] 8.4 `cargo test --workspace`
-- [ ] 8.5 `cargo clippy --workspace --tests -- -D warnings`
-- [ ] 8.6 `cargo fmt --check`
-- [ ] 8.7 `cargo run --release -q -- commands docs --check`
+- [x] 8.1 README tasks section: reparent, indent/outdent, and the BREAKING note on priority chords (`+`/`-`).
+- [x] 8.2 `cargo run --release -q -- commands docs > docs/keybindings.md`
+- [x] 8.3 `cargo build --release`
+- [x] 8.4 `cargo test --workspace`
+- [x] 8.5 `cargo clippy --workspace --tests -- -D warnings` (clean except 4 pre-existing `redundant_field_names` hits on thiserror `#[from] source` fields from the rust 1.99 clippy, also present on main)
+- [x] 8.6 `cargo fmt --check`
+- [x] 8.7 `cargo run --release -q -- commands docs --check`

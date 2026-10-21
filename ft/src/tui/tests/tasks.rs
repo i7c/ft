@@ -229,16 +229,16 @@ fn quick_key_brace_close_nudges_scheduled_forward() -> Result<()> {
 }
 
 #[test]
-fn quick_key_p_cycles_priority_forward() -> Result<()> {
+fn quick_key_plus_cycles_priority_forward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(5)?;
     // Selection: "Pay rent" already has priority High (⏫). Cycle: high → none.
-    app.dispatch(key('p'))?;
+    app.dispatch(key('+'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
     assert!(
         !body.contains("Pay rent ⏫"),
-        "p should clear priority on a high-pri task: \n{body}"
+        "+ should clear priority on a high-pri task: \n{body}"
     );
     assert!(
         body.contains("Pay rent 📅"),
@@ -248,7 +248,7 @@ fn quick_key_p_cycles_priority_forward() -> Result<()> {
 }
 
 #[test]
-fn quick_key_capital_p_cycles_priority_backward() -> Result<()> {
+fn quick_key_minus_cycles_priority_backward() -> Result<()> {
     let (dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     app.switch_to(5)?;
@@ -256,14 +256,11 @@ fn quick_key_capital_p_cycles_priority_backward() -> Result<()> {
     for _ in 0..2 {
         app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
     }
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Char('P'),
-        KeyModifiers::SHIFT,
-    )))?;
+    app.dispatch(key('-'))?;
     let body = std::fs::read_to_string(populated_tasks_path(&dir)).unwrap();
     assert!(
         body.contains("Reply to Sara ⏫"),
-        "P (reverse) on no-pri task should land on High: \n{body}"
+        "- (reverse) on no-pri task should land on High: \n{body}"
     );
     Ok(())
 }
