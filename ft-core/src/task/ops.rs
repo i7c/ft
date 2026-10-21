@@ -266,7 +266,7 @@ fn splice(content: &str, line: &str, pos: &Position) -> Result<(String, usize), 
 /// line)` from a scan, and the file may have changed since (another `ft`
 /// mutation, Obsidian, a git pull). Without the guard, a shifted file makes
 /// line-addressed mutations silently hit whatever task now occupies the line.
-fn check_expected(
+pub(crate) fn check_expected(
     format: &dyn TaskFormat,
     found: &Task,
     expected: Option<&Task>,
@@ -1333,7 +1333,7 @@ fn subtask_placement(content: &str, parent_line: usize) -> Result<(String, usize
 }
 
 /// Leading whitespace (spaces/tabs) prefix of `line`.
-fn leading_ws(line: &str) -> &str {
+pub(crate) fn leading_ws(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
 }
 

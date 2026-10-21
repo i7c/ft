@@ -3,11 +3,17 @@
 //! note (`[[note]]` whose frontmatter names its anchor task via
 //! `ft.tasks.anchor`). Resolved once per scan into [`Task::parent_link`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
+use super::format::{ParseContext, TaskFormat};
+use super::ops::{self, FileEdit, MoveSource};
 use super::{Task, TaskKey};
+use crate::fs::write_atomic;
+use crate::graph::resolve::NoteLookup;
 use crate::graph::resolve::{resolve_wiki, Resolution, ScanNoteIndex};
 use crate::graph::LinkForm;
 use crate::scan::Scan;
@@ -273,6 +279,463 @@ fn break_cycles(tasks: &mut [Task], parent: &[Option<usize>]) {
             color[i] = 2;
         }
     }
+}
+
+// ── writing links ───────────────────────────────────────────────────────────
+
+/// What a generated parent link points at.
+#[derive(Debug, Clone, Copy)]
+pub enum LinkAnchor<'a> {
+    /// A task's block id: `[[note#^id]]`.
+    Block(&'a str),
+    /// An anchor note as a whole: `[[note]]`.
+    Note,
+}
+
+/// The wikilink text for a parent link from a task in `from_rel` to a target
+/// in `to_rel` (both vault-relative): `[[#^id]]` within one file, otherwise
+/// the note's title when it is unique in the vault, else its path without
+/// `.md`.
+pub fn link_text<L: NoteLookup>(
+    from_rel: &Path,
+    to_rel: &Path,
+    anchor: LinkAnchor<'_>,
+    notes: &L,
+) -> String {
+    let same_file = from_rel == to_rel;
+    let note = if same_file && matches!(anchor, LinkAnchor::Block(_)) {
+        String::new()
+    } else {
+        let title = crate::graph::title_of(to_rel);
+        if notes.by_title(&title).len() == 1 {
+            title
+        } else {
+            to_rel
+                .with_extension("")
+                .to_string_lossy()
+                .replace('\\', "/")
+        }
+    };
+    match anchor {
+        LinkAnchor::Block(id) => format!("[[{note}#^{id}]]"),
+        LinkAnchor::Note => format!("[[{note}]]"),
+    }
+}
+
+/// A fresh 6-character base-36 block id, unique among `existing`.
+pub(crate) fn new_block_id(
+    path: &Path,
+    line: usize,
+    description: &str,
+    existing: &HashSet<String>,
+) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    block_id_from_seed(path, line, description, nanos, existing)
+}
+
+fn block_id_from_seed(
+    path: &Path,
+    line: usize,
+    description: &str,
+    nanos: u128,
+    existing: &HashSet<String>,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    (0u64..)
+        .map(|counter| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (path, line, description, nanos, counter).hash(&mut h);
+            let mut n = h.finish();
+            (0..6)
+                .map(|_| {
+                    let d = (n % 36) as u32;
+                    n /= 36;
+                    char::from_digit(d, 36).expect("base-36 digit")
+                })
+                .collect::<String>()
+        })
+        .find(|id| !existing.contains(id))
+        .expect("an unused id exists")
+}
+
+/// Remove `raw` (a link's text) from `line` along with one adjacent space.
+/// Returns `None` when `raw` isn't on the line.
+pub(crate) fn remove_link_text(line: &str, raw: &str) -> Option<String> {
+    let at = line.find(raw)?;
+    let (mut start, mut end) = (at, at + raw.len());
+    if line[..start].ends_with(' ') {
+        start -= 1;
+    } else if line[end..].starts_with(' ') {
+        end += 1;
+    }
+    Some(format!("{}{}", &line[..start], &line[end..]))
+}
+
+/// Insert ` {text}` right after the task's description on `line` (before
+/// any emoji fields and block id), leaving every other byte untouched.
+fn append_to_description(line: &str, text: &str, format: &dyn TaskFormat) -> Option<String> {
+    let task = format.parse_line(line, ParseContext::default())?;
+    let ws = ops::leading_ws(line).len();
+    let start = ws + line[ws..].find("] ")? + 2;
+    let rest = &line[start..];
+    if !rest.starts_with(&task.description) {
+        return None;
+    }
+    let at = start + task.description.len();
+    Some(format!("{} {text}{}", &line[..at], &line[at..]))
+}
+
+#[derive(Debug, Error)]
+pub enum LinkError {
+    #[error("could not read {}: {source}", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("line {line} not found in {}", .path.display())]
+    LineMissing { path: PathBuf, line: usize },
+    #[error("line {line} in {} is not a task", .path.display())]
+    NotATask { path: PathBuf, line: usize },
+    #[error(
+        "task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    LineChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
+    #[error(
+        "target task at {}:{} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
+        .path.display(),
+        .line
+    )]
+    TargetChanged {
+        path: PathBuf,
+        line: usize,
+        expected: String,
+        found: String,
+    },
+    #[error("can't link a task under its own subtask ({}:{})", .path.display(), .line)]
+    WouldCycle { path: PathBuf, line: usize },
+    #[error("{description} is nested under another task — outdent it first")]
+    PhysicallyNested {
+        path: PathBuf,
+        line: usize,
+        description: String,
+    },
+    #[error("task at {}:{} has no parent link", .path.display(), .line)]
+    NoParentLink { path: PathBuf, line: usize },
+    #[error("write failed: {source}")]
+    Write {
+        #[from]
+        source: crate::error::Error,
+    },
+}
+
+/// Vault context for planning link edits: the vault root (paths in
+/// [`MoveSource`]s are absolute), a note index for link text, and the
+/// scanned tasks for ancestor walks.
+pub struct LinkCtx<'a> {
+    pub root: PathBuf,
+    pub notes: ScanNoteIndex,
+    pub tasks: &'a [Task],
+}
+
+impl<'a> LinkCtx<'a> {
+    pub fn new(root: &Path, scan: &'a Scan) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            notes: ScanNoteIndex::new(scan.files.iter().map(|f| f.rel.as_path())),
+            tasks: &scan.tasks,
+        }
+    }
+
+    fn rel(&self, abs: &Path) -> PathBuf {
+        abs.strip_prefix(&self.root).unwrap_or(abs).to_path_buf()
+    }
+}
+
+/// A child whose line a [`LinkPlan`] rewrites.
+#[derive(Debug, Clone)]
+pub struct LinkedChild {
+    pub description: String,
+    /// Absolute path and 1-indexed line (lines don't shift).
+    pub path: PathBuf,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LinkPlan {
+    pub edits: Vec<FileEdit>,
+    pub children: Vec<LinkedChild>,
+    /// Absolute path + line of the parent (`None` for unlink plans).
+    pub parent: Option<(PathBuf, usize)>,
+}
+
+/// Write every changed file in `plan` atomically.
+pub fn apply_link_plan(plan: &LinkPlan) -> Result<(), LinkError> {
+    for edit in &plan.edits {
+        if edit.original != edit.new {
+            write_atomic(&edit.path, &edit.new)?;
+        }
+    }
+    Ok(())
+}
+
+/// File contents being edited by a plan, read once per file.
+struct Files(BTreeMap<PathBuf, (String, Vec<String>)>);
+
+impl Files {
+    fn lines(&mut self, path: &Path) -> Result<&mut Vec<String>, LinkError> {
+        if !self.0.contains_key(path) {
+            let content =
+                crate::markdown::lines::read_or_empty(path).map_err(|source| LinkError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            let lines = crate::markdown::lines::split(&content);
+            self.0.insert(path.to_path_buf(), (content, lines));
+        }
+        Ok(&mut self.0.get_mut(path).expect("just inserted").1)
+    }
+
+    fn into_edits(self) -> Vec<FileEdit> {
+        self.0
+            .into_iter()
+            .map(|(path, (original, lines))| FileEdit {
+                path,
+                original,
+                new: crate::markdown::lines::join_with_newline(&lines),
+            })
+            .collect()
+    }
+}
+
+/// Parse the task at `line` of `lines`, checking it against `expected`.
+fn guarded_task(
+    path: &Path,
+    lines: &[String],
+    line: usize,
+    expected: Option<&Task>,
+    format: &dyn TaskFormat,
+    is_target: bool,
+) -> Result<Task, LinkError> {
+    let raw = line
+        .checked_sub(1)
+        .and_then(|i| lines.get(i))
+        .ok_or_else(|| LinkError::LineMissing {
+            path: path.to_path_buf(),
+            line,
+        })?;
+    let task = format
+        .parse_line(raw, ParseContext::default())
+        .ok_or_else(|| LinkError::NotATask {
+            path: path.to_path_buf(),
+            line,
+        })?;
+    ops::check_expected(format, &task, expected).map_err(|(expected, found)| {
+        let path = path.to_path_buf();
+        if is_target {
+            LinkError::TargetChanged {
+                path,
+                line,
+                expected,
+                found,
+            }
+        } else {
+            LinkError::LineChanged {
+                path,
+                line,
+                expected,
+                found,
+            }
+        }
+    })?;
+    Ok(task)
+}
+
+/// Whether the task at `line` is indented under another task in `lines`.
+fn physically_nested(lines: &[String], line: usize, format: &dyn TaskFormat) -> bool {
+    let mut tasks: Vec<Task> = lines
+        .iter()
+        .take(line)
+        .enumerate()
+        .filter_map(|(i, l)| {
+            format.parse_line(
+                l,
+                ParseContext {
+                    source_file: PathBuf::new(),
+                    source_line: i + 1,
+                },
+            )
+        })
+        .collect();
+    super::hierarchy::resolve_hierarchy(&mut tasks);
+    tasks
+        .last()
+        .is_some_and(|t| t.source_line == line && t.parent.is_some())
+}
+
+/// Plan linking `children` under `parent`: give the parent a block id if it
+/// needs one (anchor tasks of anchor notes are linked as `[[note]]`
+/// instead), and append the link to each child's description, replacing
+/// its previous parent link. Lines never move.
+pub fn plan_link(
+    children: &[MoveSource],
+    parent: &MoveSource,
+    ctx: &LinkCtx<'_>,
+    format: &dyn TaskFormat,
+) -> Result<LinkPlan, LinkError> {
+    let mut files = Files(BTreeMap::new());
+    let parent_rel = ctx.rel(&parent.path);
+
+    let parent_lines = files.lines(&parent.path)?;
+    let parent_task = guarded_task(
+        &parent.path,
+        parent_lines,
+        parent.line,
+        parent.expected.as_ref(),
+        format,
+        true,
+    )?;
+    let parent_content = crate::markdown::lines::join_with_newline(parent_lines);
+    let is_anchor_task = parent_task.id.is_some()
+        && crate::frontmatter::ft_tasks_anchor(&parent_content) == parent_task.id;
+
+    let block_id = if is_anchor_task {
+        None
+    } else if let Some(id) = parent_task.block_link.clone() {
+        Some(id)
+    } else {
+        let existing: HashSet<String> = parent_lines
+            .iter()
+            .filter_map(|l| crate::scan::trailing_block_id(l).map(str::to_string))
+            .collect();
+        let id = new_block_id(
+            &parent_rel,
+            parent.line,
+            &parent_task.description,
+            &existing,
+        );
+        let l = &mut parent_lines[parent.line - 1];
+        *l = format!("{} ^{id}", l.trim_end());
+        Some(id)
+    };
+
+    // The parent and its effective ancestors can't become children.
+    let by_key: HashMap<TaskKey, &Task> = ctx
+        .tasks
+        .iter()
+        .map(|t| ((t.source_file.clone(), t.source_line), t))
+        .collect();
+    let mut forbidden: HashSet<TaskKey> = HashSet::new();
+    let mut cur = Some((parent_rel.clone(), parent.line));
+    while let Some(k) = cur {
+        if !forbidden.insert(k.clone()) {
+            break;
+        }
+        cur = by_key.get(&k).and_then(|t| super::hierarchy::parent_key(t));
+    }
+
+    let mut linked = Vec::new();
+    for child in children {
+        let child_rel = ctx.rel(&child.path);
+        if forbidden.contains(&(child_rel.clone(), child.line)) {
+            return Err(LinkError::WouldCycle {
+                path: child.path.clone(),
+                line: child.line,
+            });
+        }
+        let lines = files.lines(&child.path)?;
+        let task = guarded_task(
+            &child.path,
+            lines,
+            child.line,
+            child.expected.as_ref(),
+            format,
+            false,
+        )?;
+        if physically_nested(lines, child.line, format) {
+            return Err(LinkError::PhysicallyNested {
+                path: child.path.clone(),
+                line: child.line,
+                description: task.description,
+            });
+        }
+        let anchor = match &block_id {
+            Some(id) => LinkAnchor::Block(id),
+            None => LinkAnchor::Note,
+        };
+        let text = link_text(&child_rel, &parent_rel, anchor, &ctx.notes);
+        let mut line = lines[child.line - 1].clone();
+        if let Some(raw) = child
+            .expected
+            .as_ref()
+            .and_then(|t| t.parent_link.as_ref())
+            .map(|l| l.raw.as_str())
+        {
+            line = remove_link_text(&line, raw).unwrap_or(line);
+        }
+        let new_line =
+            append_to_description(&line, &text, format).ok_or_else(|| LinkError::NotATask {
+                path: child.path.clone(),
+                line: child.line,
+            })?;
+        lines[child.line - 1] = new_line;
+        linked.push(LinkedChild {
+            description: task.description,
+            path: child.path.clone(),
+            line: child.line,
+        });
+    }
+
+    Ok(LinkPlan {
+        edits: files.into_edits(),
+        children: linked,
+        parent: Some((parent.path.clone(), parent.line)),
+    })
+}
+
+/// Plan removing `task`'s parent link (as recorded in its scanned
+/// `expected` task). The parent's block id stays.
+pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPlan, LinkError> {
+    let no_link = || LinkError::NoParentLink {
+        path: task.path.clone(),
+        line: task.line,
+    };
+    let raw = task
+        .expected
+        .as_ref()
+        .and_then(|t| t.parent_link.as_ref())
+        .map(|l| l.raw.clone())
+        .ok_or_else(no_link)?;
+    let mut files = Files(BTreeMap::new());
+    let lines = files.lines(&task.path)?;
+    let parsed = guarded_task(
+        &task.path,
+        lines,
+        task.line,
+        task.expected.as_ref(),
+        format,
+        false,
+    )?;
+    let new_line = remove_link_text(&lines[task.line - 1], &raw).ok_or_else(no_link)?;
+    lines[task.line - 1] = new_line;
+    Ok(LinkPlan {
+        edits: files.into_edits(),
+        children: vec![LinkedChild {
+            description: parsed.description,
+            path: task.path.clone(),
+            line: task.line,
+        }],
+        parent: None,
+    })
 }
 
 #[cfg(test)]
@@ -615,6 +1078,183 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
         let src = "node where kind = Task; expand where edge.children > 0;";
         assert!(parse_with(src, Profile::Default, today).is_err());
+    }
+
+    // ── plan_link / plan_unlink ──────────────────────────────────────
+
+    use crate::task::emoji::EmojiFormat;
+
+    fn src_of(dir: &Path, s: &Scan, rel: &str, line: usize) -> MoveSource {
+        MoveSource {
+            path: dir.join(rel),
+            line,
+            expected: Some(task(s, rel, line).clone()),
+        }
+    }
+
+    fn read(dir: &Path, rel: &str) -> String {
+        std::fs::read_to_string(dir.join(rel)).unwrap()
+    }
+
+    fn link(
+        dir: &Path,
+        s: &Scan,
+        children: &[(&str, usize)],
+        parent: (&str, usize),
+    ) -> Result<LinkPlan, LinkError> {
+        let ctx = LinkCtx::new(dir, s);
+        let kids: Vec<MoveSource> = children
+            .iter()
+            .map(|(r, l)| src_of(dir, s, r, *l))
+            .collect();
+        let plan = plan_link(
+            &kids,
+            &src_of(dir, s, parent.0, parent.1),
+            &ctx,
+            &EmojiFormat,
+        )?;
+        apply_link_plan(&plan)?;
+        Ok(plan)
+    }
+
+    fn block_of(line: &str) -> String {
+        crate::scan::trailing_block_id(line).unwrap().to_string()
+    }
+
+    #[test]
+    fn link_journal_task_under_project_task() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor onboarding\n"),
+            (
+                "journal/2026-10-21.md",
+                "# Day\n\n- [ ] reproduce 📅 2026-10-23\n",
+            ),
+        ]);
+        let plan = link(
+            d.path(),
+            &s,
+            &[("journal/2026-10-21.md", 3)],
+            ("proj.md", 1),
+        )
+        .unwrap();
+        let proj = read(d.path(), "proj.md");
+        let id = block_of(proj.lines().next().unwrap());
+        assert_eq!(id.len(), 6);
+        assert_eq!(
+            read(d.path(), "journal/2026-10-21.md"),
+            format!("# Day\n\n- [ ] reproduce [[proj#^{id}]] 📅 2026-10-23\n")
+        );
+        assert_eq!(plan.children.len(), 1);
+        // A rescan resolves the new link.
+        let s2 = crate::scan::scan_vault(d.path(), &[]);
+        assert_eq!(
+            state(&s2, "journal/2026-10-21.md", 3),
+            resolved("proj.md", 1)
+        );
+    }
+
+    #[test]
+    fn link_reuses_existing_block_id_and_same_file_form() {
+        let (d, s) = scan(&[("a.md", "- [ ] A ^a1\n- [ ] B\n- [ ] C\n")]);
+        link(d.path(), &s, &[("a.md", 2), ("a.md", 3)], ("a.md", 1)).unwrap();
+        assert_eq!(
+            read(d.path(), "a.md"),
+            "- [ ] A ^a1\n- [ ] B [[#^a1]]\n- [ ] C [[#^a1]]\n"
+        );
+    }
+
+    #[test]
+    fn relink_replaces_old_link() {
+        let (d, s) = scan(&[
+            ("old.md", "- [ ] Old ^o1\n"),
+            ("new.md", "- [ ] New ^n1\n"),
+            ("j.md", "- [ ] kid [[old#^o1]] see [[Claude]] ⏫\n"),
+        ]);
+        link(d.path(), &s, &[("j.md", 1)], ("new.md", 1)).unwrap();
+        assert_eq!(
+            read(d.path(), "j.md"),
+            "- [ ] kid see [[Claude]] [[new#^n1]] ⏫\n"
+        );
+    }
+
+    #[test]
+    fn ambiguous_title_uses_path_form() {
+        let (d, s) = scan(&[
+            ("a/proj.md", "- [ ] A ^x\n"),
+            ("b/proj.md", "- [ ] B ^y\n"),
+            ("j.md", "- [ ] kid\n"),
+        ]);
+        link(d.path(), &s, &[("j.md", 1)], ("b/proj.md", 1)).unwrap();
+        assert_eq!(read(d.path(), "j.md"), "- [ ] kid [[b/proj#^y]]\n");
+    }
+
+    #[test]
+    fn anchor_task_gets_note_link_and_no_block_id() {
+        let anchor = "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n- [ ] Fix login 🆔 ABC-123\n";
+        let (d, s) = scan(&[("jira/ABC-123.md", anchor), ("j.md", "- [ ] write test\n")]);
+        link(d.path(), &s, &[("j.md", 1)], ("jira/ABC-123.md", 6)).unwrap();
+        assert_eq!(read(d.path(), "jira/ABC-123.md"), anchor);
+        assert_eq!(read(d.path(), "j.md"), "- [ ] write test [[ABC-123]]\n");
+    }
+
+    #[test]
+    fn link_refuses_cycles_and_nested_children() {
+        let (d, s) = scan(&[
+            ("p.md", "- [ ] P ^p1\n"),
+            ("c.md", "- [ ] C [[p#^p1]] ^c1\n- [ ] Q\n  - [ ] nested\n"),
+        ]);
+        let err = link(d.path(), &s, &[("p.md", 1)], ("c.md", 1)).unwrap_err();
+        assert!(matches!(err, LinkError::WouldCycle { .. }), "{err:?}");
+        let err = link(d.path(), &s, &[("p.md", 1)], ("p.md", 1)).unwrap_err();
+        assert!(matches!(err, LinkError::WouldCycle { .. }), "{err:?}");
+        let err = link(d.path(), &s, &[("c.md", 3)], ("p.md", 1)).unwrap_err();
+        assert!(matches!(err, LinkError::PhysicallyNested { .. }), "{err:?}");
+        assert_eq!(
+            read(d.path(), "c.md"),
+            "- [ ] C [[p#^p1]] ^c1\n- [ ] Q\n  - [ ] nested\n"
+        );
+    }
+
+    #[test]
+    fn link_guards_stale_lines() {
+        let (d, s) = scan(&[("p.md", "- [ ] P\n"), ("j.md", "- [ ] kid\n")]);
+        std::fs::write(d.path().join("p.md"), "- [ ] P edited\n").unwrap();
+        let err = link(d.path(), &s, &[("j.md", 1)], ("p.md", 1)).unwrap_err();
+        assert!(matches!(err, LinkError::TargetChanged { .. }), "{err:?}");
+        std::fs::write(d.path().join("p.md"), "- [ ] P\n").unwrap();
+        std::fs::write(d.path().join("j.md"), "- [ ] kid edited\n").unwrap();
+        let err = link(d.path(), &s, &[("j.md", 1)], ("p.md", 1)).unwrap_err();
+        assert!(matches!(err, LinkError::LineChanged { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn unlink_removes_link_and_keeps_block_id() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] P ^vo1\n"),
+            (
+                "j.md",
+                "- [ ] reproduce [[proj#^vo1]] 📅 2026-10-23\n- [ ] plain\n",
+            ),
+        ]);
+        let plan = plan_unlink(&src_of(d.path(), &s, "j.md", 1), &EmojiFormat).unwrap();
+        apply_link_plan(&plan).unwrap();
+        assert_eq!(
+            read(d.path(), "j.md"),
+            "- [ ] reproduce 📅 2026-10-23\n- [ ] plain\n"
+        );
+        assert_eq!(read(d.path(), "proj.md"), "- [ ] P ^vo1\n");
+        let err = plan_unlink(&src_of(d.path(), &s, "j.md", 2), &EmojiFormat).unwrap_err();
+        assert!(matches!(err, LinkError::NoParentLink { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn block_ids_avoid_collisions() {
+        let p = Path::new("p.md");
+        let first = block_id_from_seed(p, 1, "x", 42, &HashSet::new());
+        let taken: HashSet<String> = [first.clone()].into_iter().collect();
+        let second = block_id_from_seed(p, 1, "x", 42, &taken);
+        assert_ne!(first, second);
+        assert!(second.len() == 6 && second.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     /// Gated perf budget: the post-pass stays a small fraction of a scan.

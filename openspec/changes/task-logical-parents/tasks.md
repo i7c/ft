@@ -28,11 +28,11 @@
 
 ## 5. Link / unlink planners
 
-- [ ] 5.1 `link_text(from_rel, to_rel, anchor, &NoteLookup)` (same-file, unique title, path fallback, anchor-note form).
-- [ ] 5.2 Block id generator with test seam; uniqueness against file `^id`s.
-- [ ] 5.3 `plan_link` (+ `apply_link_plan`): ensure block id, replace/append child link, `WouldCycle`, `PhysicallyNested`, `LineChanged`/`TargetChanged`, same-file batching.
-- [ ] 5.4 `plan_unlink`: remove `raw` + one space; `NoParentLink`.
-- [ ] 5.5 Tests for each scenario in `task-link-cli` spec.
+- [x] 5.1 `link_text(from_rel, to_rel, anchor, &NoteLookup)` (same-file, unique title, path fallback, anchor-note form).
+- [x] 5.2 Block id generator with test seam; uniqueness against file `^id`s.
+- [x] 5.3 `plan_link` (+ `apply_link_plan`): ensure block id, replace/append child link, `WouldCycle`, `PhysicallyNested`, `LineChanged`/`TargetChanged`, same-file batching.
+- [x] 5.4 `plan_unlink`: remove `raw` + one space; `NoParentLink`.
+- [x] 5.5 Tests for each scenario in `task-link-cli` spec.
 
 ## 6. Move integration
 

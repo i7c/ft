@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::Task;
 
+#[derive(Debug, Clone, Default)]
 pub struct ParseContext {
     pub source_file: PathBuf,
     pub source_line: usize,
