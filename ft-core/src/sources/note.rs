@@ -254,6 +254,7 @@ pub fn source_entries<'a>(
     issue: &'a RemoteIssue,
     state: &'a str,
     synced: Status,
+    conflict: Option<Status>,
 ) -> Vec<(&'static str, Option<FmValue>)> {
     vec![
         ("name", Some(FmValue::scalar(source))),
@@ -270,6 +271,7 @@ pub fn source_entries<'a>(
                 FmValue::scalar(synced.as_str()),
             )])),
         ),
+        ("conflict", conflict.map(|s| FmValue::scalar(s.as_str()))),
     ]
 }
 

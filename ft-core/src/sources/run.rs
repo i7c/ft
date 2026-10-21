@@ -120,6 +120,10 @@ pub fn fetch_source(
 pub struct AttemptLog {
     #[serde(default)]
     pub sources: BTreeMap<String, Attempt>,
+    /// source → issue key → last push failure reason (machine-local:
+    /// reasons can differ per machine).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub push_failures: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,9 +159,40 @@ impl AttemptLog {
         if status == "ok" {
             entry.last_ok = Some(now);
         }
-        if let Ok(json) = serde_json::to_string_pretty(&log) {
+        log.save(vault_root);
+    }
+
+    fn save(&self, vault_root: &Path) {
+        if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = crate::fs::write_atomic(&log_path(vault_root), &json);
         }
+    }
+
+    /// Replace `source`'s push failures with `failures` and save. Returns
+    /// the keys whose reason is new or changed (worth telling the user).
+    pub fn record_push_failures(
+        vault_root: &Path,
+        source: &str,
+        failures: &[(String, String)],
+        cleared: &[String],
+    ) -> Vec<String> {
+        let mut log = Self::load(vault_root);
+        let entry = log.push_failures.entry(source.to_string()).or_default();
+        let mut fresh = Vec::new();
+        for key in cleared {
+            entry.remove(key);
+        }
+        for (key, reason) in failures {
+            if entry.get(key) != Some(reason) {
+                fresh.push(key.clone());
+            }
+            entry.insert(key.clone(), reason.clone());
+        }
+        if entry.is_empty() {
+            log.push_failures.remove(source);
+        }
+        log.save(vault_root);
+        fresh
     }
 }
 

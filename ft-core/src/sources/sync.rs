@@ -287,8 +287,8 @@ fn update_note(
     };
     let remote = target_status(issue, state);
     let local_status = local.as_ref().map(|(_, t)| t.status);
-    let (status, synced) = match decide(local_status, base, remote) {
-        StatusDecision::Write(s) => (s, s),
+    let (status, synced, conflict) = match decide(local_status, base, remote) {
+        StatusDecision::Write(s) => (s, s, None),
         StatusDecision::Keep { pending, conflict } => {
             let l = local_status.unwrap_or(remote);
             if pending {
@@ -297,7 +297,7 @@ fn update_note(
             if let Some(r) = conflict {
                 report.conflicts.push((issue.key.clone(), l, r));
             }
-            (l, base.unwrap_or(l))
+            (l, base.unwrap_or(l), conflict)
         }
     };
     let new_anchor = note::anchor_line(
@@ -328,7 +328,7 @@ fn update_note(
             content = c;
         }
     }
-    let content = write_frontmatter(&content, ctx.source, issue, state, synced, parent);
+    let content = write_frontmatter(&content, ctx.source, issue, state, synced, conflict, parent);
     if state == STATE_OUT_OF_SCOPE && !was_out {
         report.out_of_scope.push(issue.key.clone());
     }
@@ -411,6 +411,7 @@ fn write_frontmatter(
     issue: &RemoteIssue,
     state: &str,
     synced: Status,
+    conflict: Option<Status>,
     parent: Option<&str>,
 ) -> String {
     let content = frontmatter::upsert_ft_keys(
@@ -424,7 +425,7 @@ fn write_frontmatter(
     frontmatter::upsert_ft_keys(
         &content,
         "source",
-        &note::source_entries(source, issue, state, synced),
+        &note::source_entries(source, issue, state, synced, conflict),
     )
 }
 
@@ -467,7 +468,7 @@ fn new_note(
     FileEdit {
         path: ctx.vault_root.join(rel),
         original: String::new(),
-        new: write_frontmatter(&content, ctx.source, issue, state, status, parent),
+        new: write_frontmatter(&content, ctx.source, issue, state, status, None, parent),
     }
 }
 
@@ -520,6 +521,45 @@ fn render_template(
         }
         _ => (None, out),
     }
+}
+
+/// Which side wins when resolving a stored conflict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Take {
+    Local,
+    Remote,
+}
+
+/// Resolve the conflict stored in an issue note's frontmatter. Take remote
+/// writes the remote status (dating `✅` / `❌` with `today`); take local
+/// re-bases `synced.status` on the remote status so the local status
+/// becomes a pending push. `None` when the note has no stored conflict.
+pub fn resolve_conflict(
+    content: &str,
+    take: Take,
+    today: NaiveDate,
+    format: &dyn TaskFormat,
+) -> Option<String> {
+    let fm = frontmatter::ft_source_in(frontmatter::block(content)?)?;
+    let remote = note::parse_status(fm.conflict.as_deref()?)?;
+    let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
+    if take == Take::Remote {
+        let i = find_anchor(content, &fm.key, format)?;
+        let mut t = note::parse(&lines[i], format)?;
+        let ws = lines[i][..lines[i].len() - lines[i].trim_start().len()].to_string();
+        if t.status != remote {
+            t.status = remote;
+            t.done = (remote == Status::Done).then_some(today);
+            t.cancelled = (remote == Status::Cancelled).then_some(today);
+        }
+        t.indent_level = 0;
+        lines[i] = format!("{ws}{}", format.serialize_line(&t));
+    }
+    Some(frontmatter::upsert_ft_keys(
+        &lines.join("\n"),
+        "source",
+        &[("synced", Some(synced_entry(remote))), ("conflict", None)],
+    ))
 }
 
 #[cfg(test)]
@@ -915,5 +955,49 @@ looks good
             query(&scan, "parent includes \"Fix login\""),
             ["local sub [[A-1]]"]
         );
+    }
+
+    #[test]
+    fn conflict_is_stored_cleared_and_resolvable() {
+        let v = V::new();
+        v.sync(&active(vec![issue("ABC-123")]));
+        let ticked = v
+            .read("jira/ABC-123.md")
+            .replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+        v.write("jira/ABC-123.md", &ticked);
+        let mut cancelled = issue("ABC-123");
+        cancelled.status = Status::Cancelled;
+        v.sync(&active(vec![cancelled.clone()]));
+        let n = v.read("jira/ABC-123.md");
+        assert!(n.contains("    conflict: Cancelled\n"), "{n}");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 22).unwrap();
+
+        // Take local: synced re-based on remote, conflict gone → pending.
+        let local = resolve_conflict(&n, Take::Local, today, &EmojiFormat).unwrap();
+        assert!(local.contains("      status: Cancelled\n") && !local.contains("conflict:"));
+        assert!(local.contains("- [x] [ABC-123]"));
+        v.write("jira/ABC-123.md", &local);
+        let r = v.sync(&active(vec![cancelled.clone()]));
+        assert_eq!(r.pending, ["ABC-123"]);
+        assert!(r.conflicts.is_empty());
+
+        // Take remote on a fresh conflict.
+        let remote = resolve_conflict(&n, Take::Remote, today, &EmojiFormat).unwrap();
+        assert!(
+            remote.contains("- [-] [ABC-123]") && remote.contains("❌ 2026-10-22"),
+            "{remote}"
+        );
+        assert!(remote.contains("      status: Cancelled\n") && !remote.contains("conflict:"));
+        assert_eq!(
+            resolve_conflict(&remote, Take::Remote, today, &EmojiFormat),
+            None
+        );
+
+        // Remote agreeing with local clears a stored conflict.
+        v.write("jira/ABC-123.md", &n);
+        let mut done = issue("ABC-123");
+        done.status = Status::Done;
+        v.sync(&active(vec![done]));
+        assert!(!v.read("jira/ABC-123.md").contains("conflict:"));
     }
 }

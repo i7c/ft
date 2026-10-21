@@ -584,6 +584,8 @@ pub struct FtSource {
     pub state: Option<String>,
     pub updated: Option<String>,
     pub synced_status: Option<String>,
+    /// Remote status recorded when both sides changed (a conflict).
+    pub conflict: Option<String>,
 }
 
 /// Read `ft.source` (requires `name` and `key`).
@@ -599,6 +601,7 @@ pub fn ft_source_in(fm: &str) -> Option<FtSource> {
         assignee: get("assignee"),
         state: get("state"),
         updated: get("updated"),
+        conflict: get("conflict"),
         synced_status: nested_value(src, "synced")
             .and_then(|s| inline_scalar(s, "status"))
             .and_then(|v| parse_scalar(&v)),

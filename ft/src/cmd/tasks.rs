@@ -1569,14 +1569,42 @@ fn finish_link(
 fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let scan = vault.scan();
-    let mut issues: Vec<(&'static str, &Task, &str)> = Vec::new();
+    let mut issues: Vec<(&'static str, &Task, String)> = Vec::new();
     for t in &scan.tasks {
         let Some(link) = &t.parent_link else { continue };
         if !matches!(link.state, links::ParentLinkState::Resolved(_)) {
-            issues.push((link.state.as_str(), t, &link.raw));
+            issues.push((link.state.as_str(), t, link.raw.clone()));
         }
         for extra in &link.extra {
-            issues.push(("extra", t, extra));
+            issues.push(("extra", t, extra.clone()));
+        }
+    }
+    // Issue notes: stored status conflicts and (machine-local) push failures.
+    let failures = ft_core::sources::run::AttemptLog::load(&vault.path).push_failures;
+    for f in &scan.files {
+        let Some(src) = f
+            .frontmatter
+            .as_deref()
+            .and_then(ft_core::frontmatter::ft_source_in)
+        else {
+            continue;
+        };
+        let Some(anchor) = scan
+            .tasks
+            .iter()
+            .find(|t| t.source_file == f.rel && t.id.as_deref() == Some(src.key.as_str()))
+        else {
+            continue;
+        };
+        if let Some(remote) = &src.conflict {
+            issues.push((
+                "conflict",
+                anchor,
+                format!("local={} remote={remote}", anchor.status.as_str()),
+            ));
+        }
+        if let Some(reason) = failures.get(&src.name).and_then(|m| m.get(&src.key)) {
+            issues.push(("push-failed", anchor, reason.clone()));
         }
     }
     issues.sort_by(|a, b| {

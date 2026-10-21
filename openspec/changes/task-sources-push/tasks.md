@@ -5,9 +5,9 @@
 
 ## 2. Conflicts stored in notes
 
-- [ ] 2.1 `plan_sync` writes / updates / clears `ft.source.conflict`; conflicted notes are not pending; reader `FtSource::conflict`.
-- [ ] 2.2 `sources::resolve_conflict(content, Take, today, format)` pure planner (take remote / take local) + tests.
-- [ ] 2.3 `ft tasks check` kinds `conflict` and `push-failed` (from cache) + tests.
+- [x] 2.1 `plan_sync` writes / updates / clears `ft.source.conflict`; conflicted notes are not pending; reader `FtSource::conflict`.
+- [x] 2.2 `sources::resolve_conflict(content, Take, today, format)` pure planner (take remote / take local) + tests.
+- [x] 2.3 `ft tasks check` kinds `conflict` and `push-failed` (from cache) + tests.
 
 ## 3. Push
 
