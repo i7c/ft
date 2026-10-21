@@ -1161,16 +1161,21 @@ impl SearchView {
 
     /// Expand every ancestor of each anchor so the anchored row is visible.
     fn reveal(&mut self, anchors: &[(std::path::PathBuf, usize)]) {
-        for (file, line) in anchors {
-            let mut line = *line;
-            while let Some(parent) = self
-                .tasks
-                .iter()
-                .find(|t| &t.source_file == file && t.source_line == line)
-                .and_then(|t| t.parent)
-            {
-                self.expanded.insert((file.clone(), parent));
-                line = parent;
+        for anchor in anchors {
+            let mut key = anchor.clone();
+            // Bounded walk: parent links are cycle-free after the scan, but
+            // never trust that enough to loop forever in the UI.
+            for _ in 0..self.tasks.len() {
+                let Some(parent) = self
+                    .tasks
+                    .iter()
+                    .find(|t| t.source_file == key.0 && t.source_line == key.1)
+                    .and_then(ft_core::task::hierarchy::parent_key)
+                else {
+                    break;
+                };
+                self.expanded.insert(parent.clone());
+                key = parent;
             }
         }
         self.rebuild_display();

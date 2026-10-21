@@ -15,9 +15,9 @@
 
 ## 3. Effective hierarchy
 
-- [ ] 3.1 `hierarchy::parent_key`; switch `parent_idx` / `children_map` to it with physical-then-linked child ordering.
-- [ ] 3.2 `Graph::insert_subtask_edges` uses `parent_key` (cross-file edges); update its doc comment.
-- [ ] 3.3 Tests: `expand_forest` / `expand_forest_visible` nest linked children and dedupe roots; graph has cross-file `Subtask` edge and none for dangling/ignored/cycle.
+- [x] 3.1 `hierarchy::parent_key`; switch `parent_idx` / `children_map` to it with physical-then-linked child ordering.
+- [x] 3.2 `Graph::insert_subtask_edges` uses `parent_key` (cross-file edges); update its doc comment.
+- [x] 3.3 Tests: `expand_forest` / `expand_forest_visible` nest linked children and dedupe roots; graph has cross-file `Subtask` edge and none for dangling/ignored/cycle.
 
 ## 4. DSL + presets
 

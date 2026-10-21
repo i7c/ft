@@ -465,6 +465,82 @@ mod tests {
         assert_eq!(state(&s, "j.md", 1), resolved("p.md", 1));
     }
 
+    fn key(rel: &str, line: usize) -> TaskKey {
+        (PathBuf::from(rel), line)
+    }
+
+    #[test]
+    fn forest_nests_linked_children_physical_first() {
+        use crate::task::hierarchy::{expand_forest, expand_forest_visible};
+        let (_d, s) = scan(&[
+            (
+                "j.md",
+                "- [ ] linked child [[proj#^p1]]
+- [ ] unrelated
+",
+            ),
+            (
+                "proj.md",
+                "- [ ] Parent ^p1
+  - [ ] physical child
+",
+            ),
+        ]);
+        let rows = expand_forest(&s.tasks, &[key("proj.md", 1), key("j.md", 1)]);
+        let shape: Vec<(String, usize)> = rows
+            .iter()
+            .map(|r| (s.tasks[r.idx].description.clone(), r.depth))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("Parent".to_string(), 0),
+                ("physical child".to_string(), 1),
+                ("linked child [[proj#^p1]]".to_string(), 1),
+            ]
+        );
+        // Child unmatched by the query still shows under its parent; the
+        // linked child is not a second root when matched alone with it.
+        let expanded = [key("proj.md", 1)].into_iter().collect();
+        let vis = expand_forest_visible(&s.tasks, &[key("proj.md", 1)], &expanded);
+        assert_eq!(vis.len(), 3);
+        assert!(vis[0].has_children && vis[0].expanded);
+    }
+
+    #[test]
+    fn graph_has_cross_file_subtask_edges_only_for_resolved_links() {
+        use crate::graph::{EdgeKind, Graph};
+        let (_d, s) = scan(&[
+            (
+                "proj.md",
+                "- [ ] Parent ^p1
+",
+            ),
+            (
+                "j.md",
+                "- [ ] linked [[proj#^p1]]
+- [ ] dangling [[proj#^nope]]
+- [ ] nest
+  - [ ] ignored [[proj#^p1]]
+",
+            ),
+        ]);
+        let g = Graph::build(&s).unwrap();
+        let parent = g.task_by_loc(Path::new("proj.md"), 1).unwrap();
+        let kids: Vec<_> = g
+            .outgoing(parent)
+            .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(kids, vec![g.task_by_loc(Path::new("j.md"), 1).unwrap()]);
+        // The linked child still hangs off its own note.
+        let note = g.note_by_path(Path::new("j.md")).unwrap();
+        assert!(g
+            .outgoing(note)
+            .any(|(id, e)| matches!(e, EdgeKind::HasTask)
+                && Some(id) == g.task_by_loc(Path::new("j.md"), 1)));
+    }
+
     /// Gated perf budget: the post-pass stays a small fraction of a scan.
     /// Run with `FT_PERF_TESTS=1 cargo test --release …` — unoptimized
     /// builds skew the serial pass against the parallel scan.

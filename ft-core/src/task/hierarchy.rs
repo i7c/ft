@@ -209,15 +209,13 @@ fn key_index(all: &[Task]) -> HashMap<TaskKey, usize> {
         .collect()
 }
 
-/// Index of the direct parent task of `all[idx]`, if it has one.
+/// Index of the effective parent task of `all[idx]`, if it has one.
 fn parent_idx(all: &[Task], index: &HashMap<TaskKey, usize>, idx: usize) -> Option<usize> {
-    let t = &all[idx];
-    let pline = t.parent?;
-    index.get(&(t.source_file.clone(), pline)).copied()
+    index.get(&parent_key(&all[idx])?).copied()
 }
 
-/// Map each parent task index to its direct subtasks' indices, in source
-/// order. Indices point into `all`. Useful for lazy, one-level-at-a-time
+/// Map each parent task index to its direct subtasks' indices (physical
+/// children in source order, then linked children). Indices point into `all`. Useful for lazy, one-level-at-a-time
 /// expansion (e.g. the TUI tree). Built from `parent` pointers, so hierarchy
 /// must already be resolved.
 pub fn child_index_map(all: &[Task]) -> HashMap<usize, Vec<usize>> {
@@ -228,17 +226,22 @@ pub fn child_index_map(all: &[Task]) -> HashMap<usize, Vec<usize>> {
 /// order. Built from `parent` pointers, so hierarchy must already be resolved.
 fn children_map(all: &[Task], index: &HashMap<TaskKey, usize>) -> HashMap<usize, Vec<usize>> {
     let mut map: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, t) in all.iter().enumerate() {
-        if let Some(pline) = t.parent {
-            if let Some(&p) = index.get(&(t.source_file.clone(), pline)) {
-                map.entry(p).or_default().push(i);
-            }
+    for i in 0..all.len() {
+        if let Some(p) = parent_idx(all, index, i) {
+            map.entry(p).or_default().push(i);
         }
     }
-    // Don't trust scan order: sort each sibling list by source line so the
-    // forest reads top-to-bottom regardless of how the scan was assembled.
+    // Don't trust scan order: physical children first in source order, then
+    // linked children (from other files or not nested) by `(path, line)`.
     for kids in map.values_mut() {
-        kids.sort_by_key(|&i| all[i].source_line);
+        kids.sort_by(|&a, &b| {
+            let (ta, tb) = (&all[a], &all[b]);
+            (ta.parent.is_none(), &ta.source_file, ta.source_line).cmp(&(
+                tb.parent.is_none(),
+                &tb.source_file,
+                tb.source_line,
+            ))
+        });
     }
     map
 }
