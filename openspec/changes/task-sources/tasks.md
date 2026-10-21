@@ -13,7 +13,7 @@
 
 ## 3. Jira
 
-- [ ] 3.1 Verify the live Jira Cloud search endpoint + field set once with a real token (manual; record a sanitised response as a fixture).
+- [x] 3.1 Verified live against example.atlassian.net on 2026-10-21 (`/rest/api/3/search/jql`, token pagination, field set): 18 issues → 17 active + 1 context note, statuses/priorities/due/parents mapped, idempotent re-sync, no phantom tasks, no raw ADF. No real response recorded as a fixture (company data); the documented-shape fixtures matched.
 - [x] 3.2 `sources/jira.rs`: `/rest/api/3/search/jql` with `nextPageToken`, `key in (…)` batching (100), `/myself` check; field mapping + status categories + resolution-based Cancelled + `status_map`; fixture tests.
 - [x] 3.3 `sources/adf.rs`: ADF → markdown for the listed node/mark types; unknown nodes → text; tests per node type + a mixed real-world fixture.
 
