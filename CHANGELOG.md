@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.1.13
+
+### Added
+
+- feat(tasks): reparent tasks — `ft tasks move --under [--sibling]`, `ft tasks indent|outdent`, `--format json`; TUI cut/paste (`d`, `p`/`P`) and `>`/`<` (priority cycling moved to `+`/`-`)
+- feat(tasks): cross-file parents via wikilinks (`[[note#^id]]`, anchor notes with `ft.tasks.anchor`); `ft tasks link|unlink|check`, `create --link-parent`; TUI `L`/`U`/`S`; query attributes `parent`, `parent_status`, `parent_link`, `children`; presets `orphaned`, `broken-links`
+- feat(sources): Jira Cloud and GitHub issues synced into issue notes — `[sources.*]` config, `ft sources login|logout|list`, `ft tasks sync`, TUI background sync and `g r`; query attributes `source`, `key`, `remote_status`; preset `remote`
+- feat(sources): push local status changes on every sync (Jira transitions, GitHub close/reopen), stored conflicts with `ft tasks sync --resolve|--take` and a TUI modal, and `ft tasks promote` (TUI `I`)
+
+### Fixed
+
+- fix(periodic): anchor note resolution to the period start
+- fix(tasks): moves keep block references valid across files
+
 ## 0.1.12
 
 ### Added
