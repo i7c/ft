@@ -61,9 +61,15 @@ enum Candidate {
 }
 
 /// Vault-wide lookups for classifying parent-link candidates, built from a
-/// scan without touching the filesystem.
+/// scan without touching the filesystem. Everything is keyed by file index
+/// (into `scan.files`) and task index (into `scan.tasks`) — hashing paths
+/// per task would dominate the pass.
 pub(crate) struct ParentIndex {
     pub(crate) notes: ScanNoteIndex,
+    /// Per task: index of its file in `scan.files` (`usize::MAX` if none).
+    task_file: Vec<usize>,
+    /// (file idx, line) → task idx.
+    task_at: HashMap<(usize, usize), usize>,
     /// (file idx, block id) → what it marks. First occurrence wins.
     blocks: HashMap<(usize, String), Block>,
     /// file idx → the anchor task (`None` when `ft.tasks.anchor` is set but
@@ -74,19 +80,27 @@ pub(crate) struct ParentIndex {
 impl ParentIndex {
     pub(crate) fn build(scan: &Scan) -> Self {
         let notes = ScanNoteIndex::new(scan.files.iter().map(|f| f.rel.as_path()));
-        let file_of: HashMap<&std::path::Path, usize> = scan
+        let file_of: HashMap<&std::ffi::OsStr, usize> = scan
             .files
             .iter()
             .enumerate()
-            .map(|(i, f)| (f.rel.as_path(), i))
+            .map(|(i, f)| (f.rel.as_os_str(), i))
+            .collect();
+        let task_file: Vec<usize> = scan
+            .tasks
+            .iter()
+            .map(|t| {
+                file_of
+                    .get(t.source_file.as_os_str())
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            })
             .collect();
         let task_at: HashMap<(usize, usize), usize> = scan
             .tasks
             .iter()
             .enumerate()
-            .filter_map(|(ti, t)| {
-                Some(((*file_of.get(t.source_file.as_path())?, t.source_line), ti))
-            })
+            .map(|(ti, t)| ((task_file[ti], t.source_line), ti))
             .collect();
 
         let mut blocks = HashMap::new();
@@ -106,14 +120,16 @@ impl ParentIndex {
                 .as_deref()
                 .and_then(crate::frontmatter::ft_tasks_anchor_in)
             {
-                let task = scan.tasks.iter().position(|t| {
-                    t.source_file == f.rel && t.id.as_deref() == Some(anchor.as_str())
+                let task = (0..scan.tasks.len()).find(|&ti| {
+                    task_file[ti] == fi && scan.tasks[ti].id.as_deref() == Some(anchor.as_str())
                 });
                 anchors.insert(fi, task);
             }
         }
         Self {
             notes,
+            task_file,
+            task_at,
             blocks,
             anchors,
         }
@@ -154,85 +170,85 @@ impl ParentIndex {
 /// [`crate::scan::scan_vault`]; linear in tasks plus task-line links, no I/O.
 pub fn resolve_parent_links(scan: &mut Scan) {
     let index = ParentIndex::build(scan);
-    let mut links_by_line: HashMap<
-        (&std::path::Path, usize),
-        Vec<(usize, &crate::graph::parser::RawLink)>,
-    > = HashMap::new();
+    let mut links_by_line: HashMap<(usize, usize), Vec<&crate::graph::parser::RawLink>> =
+        HashMap::new();
     for (fi, f) in scan.files.iter().enumerate() {
         for l in f.links.iter().chain(&f.self_block_refs) {
             if l.form == LinkForm::WikiLink {
-                links_by_line
-                    .entry((f.rel.as_path(), l.line))
-                    .or_default()
-                    .push((fi, l));
+                links_by_line.entry((fi, l.line)).or_default().push(l);
             }
         }
+    }
+    for list in links_by_line.values_mut() {
+        list.sort_by_key(|l| l.byte_range.start);
     }
 
-    let mut resolved: Vec<Option<ParentLink>> = Vec::with_capacity(scan.tasks.len());
-    for list in links_by_line.values_mut() {
-        list.sort_by_key(|(_, l)| l.byte_range.start);
-    }
-    for task in &scan.tasks {
-        let Some(links) = links_by_line.get(&(task.source_file.as_path(), task.source_line)) else {
-            resolved.push(None);
-            continue;
-        };
-        let mut first: Option<(String, Candidate)> = None;
-        let mut extra = Vec::new();
-        for (fi, l) in links {
-            let Some(c) = index.classify(*fi, &l.target_text, l.anchor.as_deref()) else {
-                continue;
-            };
-            if first.is_none() {
-                first = Some((l.raw_text.clone(), c));
-            } else {
-                extra.push(l.raw_text.clone());
-            }
-        }
-        resolved.push(first.map(|(raw, c)| {
-            let state = match (task.parent, c) {
-                (Some(_), _) => ParentLinkState::Ignored,
-                (None, Candidate::Resolved(t)) => {
-                    let p = &scan.tasks[t];
-                    ParentLinkState::Resolved((p.source_file.clone(), p.source_line))
+    let n = scan.tasks.len();
+    let mut resolved: Vec<Option<ParentLink>> = Vec::with_capacity(n);
+    // Effective parent per task, by index: physical first, then the link.
+    let mut parent: Vec<Option<usize>> = Vec::with_capacity(n);
+    for (ti, task) in scan.tasks.iter().enumerate() {
+        let fi = index.task_file[ti];
+        let physical = task
+            .parent
+            .and_then(|line| index.task_at.get(&(fi, line)).copied());
+        let mut link_parent = None;
+        let link = links_by_line
+            .get(&(fi, task.source_line))
+            .and_then(|links| {
+                let mut first: Option<(String, Candidate)> = None;
+                let mut extra = Vec::new();
+                for l in links {
+                    let Some(c) = index.classify(fi, &l.target_text, l.anchor.as_deref()) else {
+                        continue;
+                    };
+                    if first.is_none() {
+                        first = Some((l.raw_text.clone(), c));
+                    } else {
+                        extra.push(l.raw_text.clone());
+                    }
                 }
-                (None, Candidate::Dangling) => ParentLinkState::Dangling,
-            };
-            ParentLink { raw, extra, state }
-        }));
+                first.map(|(raw, c)| {
+                    let state = match (task.parent, c) {
+                        (Some(_), _) => ParentLinkState::Ignored,
+                        (None, Candidate::Resolved(t)) => {
+                            link_parent = Some(t);
+                            let p = &scan.tasks[t];
+                            ParentLinkState::Resolved((p.source_file.clone(), p.source_line))
+                        }
+                        (None, Candidate::Dangling) => ParentLinkState::Dangling,
+                    };
+                    ParentLink { raw, extra, state }
+                })
+            });
+        resolved.push(link);
+        parent.push(physical.or(link_parent));
     }
     for (task, link) in scan.tasks.iter_mut().zip(resolved) {
         task.parent_link = link;
     }
-    break_cycles(&mut scan.tasks);
+    break_cycles(&mut scan.tasks, &parent);
 }
 
 /// Mark one link per effective-parent cycle as [`ParentLinkState::Cycle`]:
-/// the link-parented member with the greatest key.
-fn break_cycles(tasks: &mut [Task]) {
-    let index: HashMap<TaskKey, usize> = tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| ((t.source_file.clone(), t.source_line), i))
-        .collect();
-    let parent_of = |tasks: &[Task], i: usize| -> Option<usize> {
-        super::hierarchy::parent_key(&tasks[i]).and_then(|k| index.get(&k).copied())
-    };
+/// the link-parented member with the greatest key. `parent` holds each
+/// task's effective parent index.
+fn break_cycles(tasks: &mut [Task], parent: &[Option<usize>]) {
     // 0 = unvisited, 1 = on the current walk, 2 = done.
     let mut color = vec![0u8; tasks.len()];
+    let mut path = Vec::new();
     for start in 0..tasks.len() {
         if color[start] != 0 {
             continue;
         }
-        let mut path = Vec::new();
+        path.clear();
         let mut cur = Some(start);
         while let Some(i) = cur {
             match color[i] {
                 0 => {
                     color[i] = 1;
                     path.push(i);
-                    cur = parent_of(tasks, i);
+                    cur = parent[i];
                 }
                 1 => {
                     let pos = path.iter().position(|&p| p == i).expect("on current walk");
@@ -253,7 +269,7 @@ fn break_cycles(tasks: &mut [Task]) {
                 _ => break,
             }
         }
-        for i in path {
+        for &i in &path {
             color[i] = 2;
         }
     }
@@ -450,9 +466,11 @@ mod tests {
     }
 
     /// Gated perf budget: the post-pass stays a small fraction of a scan.
+    /// Run with `FT_PERF_TESTS=1 cargo test --release …` — unoptimized
+    /// builds skew the serial pass against the parallel scan.
     #[test]
     fn post_pass_is_cheap_relative_to_scan() {
-        if std::env::var("FT_PERF_TESTS").as_deref() != Ok("1") {
+        if std::env::var("FT_PERF_TESTS").as_deref() != Ok("1") || cfg!(debug_assertions) {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -469,6 +487,7 @@ mod tests {
         let start = std::time::Instant::now();
         resolve_parent_links(&mut s);
         let pass_time = start.elapsed();
+        eprintln!("post-pass {pass_time:?} vs scan {scan_time:?}");
         assert!(
             pass_time * 10 < scan_time,
             "post-pass {pass_time:?} vs scan {scan_time:?}"
