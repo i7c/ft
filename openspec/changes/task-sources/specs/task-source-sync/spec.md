@@ -122,7 +122,7 @@ For the same remote data and the same note, the planner SHALL produce byte-ident
 - comments are ordered by `(created, author)`;
 - an unchanged issue produces no edit.
 
-Frontmatter edits SHALL be made through a general `frontmatter::upsert_ft_block` that rewrites only the `ft.tasks` and `ft.source` sub-blocks and preserves every other line of the frontmatter.
+Frontmatter edits SHALL be made through a general `frontmatter::upsert_ft_keys` that sets or removes individual keys under `ft.tasks` and `ft.source` and preserves every other line of the frontmatter.
 
 #### Scenario: Two machines sync the same issue
 - **WHEN** machine A and machine B each run `ft tasks sync` against the same remote state from the same commit

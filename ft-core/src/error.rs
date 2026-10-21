@@ -12,6 +12,9 @@ pub enum Error {
         source: Box<figment::Error>,
     },
 
+    #[error("config error in {path}: {message}")]
+    ConfigInvalid { path: String, message: String },
+
     #[error("I/O error at {}: {source}", .path.display())]
     Io {
         path: PathBuf,

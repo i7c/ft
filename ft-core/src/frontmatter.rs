@@ -429,6 +429,214 @@ fn line_byte_start(text: &str, line_idx: usize) -> usize {
     }
 }
 
+// ── writing ft.* keys ────────────────────────────────────────────────
+
+/// A value written under an `ft.<sub>` key: a scalar or a nested map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FmValue {
+    Scalar(String),
+    Map(Vec<(String, FmValue)>),
+}
+
+impl FmValue {
+    pub fn scalar(v: impl Into<String>) -> Self {
+        FmValue::Scalar(v.into())
+    }
+}
+
+/// Set (`Some`) or remove (`None`) keys of the `ft.<sub>` map in `content`'s
+/// frontmatter, leaving every other line untouched. Creates the frontmatter
+/// fence, the `ft:` map, and the `<sub>:` map as needed; new keys are
+/// appended after existing ones in `updates` order. Scalars are quoted only
+/// when YAML needs it.
+pub fn upsert_ft_keys(content: &str, sub: &str, updates: &[(&str, Option<FmValue>)]) -> String {
+    let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
+    if lines.first().map(String::as_str) != Some("---") || fence_close(&lines).is_none() {
+        let mut fresh = vec!["---".to_string(), "---".to_string()];
+        if !(lines.len() == 1 && lines[0].is_empty()) {
+            fresh.append(&mut lines);
+        } else {
+            fresh.push(String::new());
+        }
+        lines = fresh;
+    }
+    let mut end = fence_close(&lines).expect("fence ensured above");
+
+    let ft = match (1..end).find(|&i| lines[i] == "ft:" || lines[i].starts_with("ft: ")) {
+        Some(i) => i,
+        None => {
+            lines.insert(end, "ft:".to_string());
+            end += 1;
+            end - 1
+        }
+    };
+    let ft_child = child_indent(&lines, ft, end).unwrap_or(2);
+    let sub_line = format!("{}{sub}:", " ".repeat(ft_child));
+    let sub_idx = match (ft + 1..block_end(&lines, ft, 0, end)).find(|&i| lines[i] == sub_line) {
+        Some(i) => i,
+        None => {
+            let at = block_end(&lines, ft, 0, end);
+            lines.insert(at, sub_line);
+            end += 1;
+            at
+        }
+    };
+    let key_indent = child_indent(&lines, sub_idx, end).unwrap_or(ft_child + 2);
+
+    for (key, value) in updates {
+        let sub_end = block_end(&lines, sub_idx, ft_child, end);
+        let prefix = format!("{}{key}:", " ".repeat(key_indent));
+        let existing = (sub_idx + 1..sub_end)
+            .find(|&i| lines[i] == prefix || lines[i].starts_with(&format!("{prefix} ")));
+        let rendered = value
+            .as_ref()
+            .map(|v| render_entry(key, v, key_indent))
+            .unwrap_or_default();
+        let (at, remove) = match existing {
+            Some(i) => (i, block_end(&lines, i, key_indent, end) - i),
+            None => (sub_end, 0),
+        };
+        let added = rendered.len();
+        lines.splice(at..at + remove, rendered);
+        end = end + added - remove;
+    }
+    lines.join("\n")
+}
+
+/// Index of the closing `---` fence (the first after line 0).
+fn fence_close(lines: &[String]) -> Option<usize> {
+    lines.iter().skip(1).position(|l| l == "---").map(|p| p + 1)
+}
+
+/// Indent of the first child line of the map opened at `idx`, if any.
+fn child_indent(lines: &[String], idx: usize, end: usize) -> Option<usize> {
+    let own = leading_ws(&lines[idx]).len();
+    lines[idx + 1..end]
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| leading_ws(l).len())
+        .filter(|&n| n > own)
+}
+
+/// One past the last line belonging to the entry at `idx` (indented `indent`):
+/// following lines indented deeper (blank lines inside count).
+fn block_end(lines: &[String], idx: usize, indent: usize, end: usize) -> usize {
+    let mut j = idx + 1;
+    let mut last = idx + 1;
+    while j < end {
+        let l = &lines[j];
+        if l.trim().is_empty() {
+            j += 1;
+            continue;
+        }
+        if leading_ws(l).len() <= indent {
+            break;
+        }
+        j += 1;
+        last = j;
+    }
+    last
+}
+
+fn render_entry(key: &str, value: &FmValue, indent: usize) -> Vec<String> {
+    let pad = " ".repeat(indent);
+    match value {
+        FmValue::Scalar(v) => vec![format!("{pad}{key}: {}", yaml_scalar(v))],
+        FmValue::Map(entries) => {
+            let mut out = vec![format!("{pad}{key}:")];
+            for (k, v) in entries {
+                out.extend(render_entry(k, v, indent + 2));
+            }
+            out
+        }
+    }
+}
+
+/// `v` as a YAML scalar, double-quoted when a plain scalar would be read
+/// differently (empty, leading indicator, `: ` / ` #`, booleans/null).
+fn yaml_scalar(v: &str) -> String {
+    let needs_quotes = v.is_empty()
+        || v != v.trim()
+        || v.starts_with(|c: char| "[]{},&*!|>'\"%@`#-?:".contains(c))
+        || v.contains(": ")
+        || v.contains(" #")
+        || v.contains('"')
+        || v.ends_with(':')
+        || matches!(
+            v.to_ascii_lowercase().as_str(),
+            "true" | "false" | "yes" | "no" | "null" | "~" | "on" | "off"
+        );
+    if needs_quotes {
+        format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        v.to_string()
+    }
+}
+
+/// The `ft.source` block of an issue note.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FtSource {
+    pub name: String,
+    pub key: String,
+    pub url: Option<String>,
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+    pub state: Option<String>,
+    pub updated: Option<String>,
+    pub synced_status: Option<String>,
+}
+
+/// Read `ft.source` (requires `name` and `key`).
+pub fn ft_source_in(fm: &str) -> Option<FtSource> {
+    let ft = nested_value(fm, "ft")?;
+    let src = nested_value(ft, "source")?;
+    let get = |k: &str| inline_scalar(src, k).and_then(|v| parse_scalar(&v));
+    Some(FtSource {
+        name: get("name")?,
+        key: get("key")?,
+        url: get("url"),
+        status: get("status"),
+        assignee: get("assignee"),
+        state: get("state"),
+        updated: get("updated"),
+        synced_status: nested_value(src, "synced")
+            .and_then(|s| inline_scalar(s, "status"))
+            .and_then(|v| parse_scalar(&v)),
+    })
+}
+
+/// Read `ft.tasks.parent` (a wikilink string such as `[[EPIC-7]]`).
+pub fn ft_tasks_parent_in(fm: &str) -> Option<String> {
+    let ft = nested_value(fm, "ft")?;
+    let tasks = nested_value(ft, "tasks")?;
+    inline_scalar(tasks, "parent").and_then(|v| parse_scalar(&v))
+}
+
+/// Parse a raw inline YAML scalar: double-quoted (with `\\` / `\"`
+/// escapes), single-quoted (`''` escape), or plain. Empty values are `None`.
+fn parse_scalar(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let v = if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        let mut out = String::new();
+        let mut chars = raw[1..raw.len() - 1].chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    } else if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+        raw[1..raw.len() - 1].replace("''", "'")
+    } else {
+        raw.to_string()
+    };
+    (!v.is_empty()).then_some(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,5 +903,93 @@ mod tests {
     fn end_line_empty_block() {
         let c = "---\n---\n# Body\n";
         assert_eq!(frontmatter_end_line(c), Some(2));
+    }
+
+    // ── upsert_ft_keys ─────────────────────────────────────────────
+
+    fn src(v: &str) -> Option<FmValue> {
+        Some(FmValue::scalar(v))
+    }
+
+    #[test]
+    fn upsert_creates_fence_and_maps() {
+        let out = upsert_ft_keys("# Note\n", "tasks", &[("anchor", src("ABC-123"))]);
+        assert_eq!(
+            out,
+            "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n# Note\n"
+        );
+        assert_eq!(ft_tasks_anchor(&out), Some("ABC-123".into()));
+        let empty = upsert_ft_keys("", "tasks", &[("anchor", src("X-1"))]);
+        assert_eq!(empty, "---\nft:\n  tasks:\n    anchor: X-1\n---\n");
+    }
+
+    #[test]
+    fn upsert_preserves_siblings_and_updates_in_place() {
+        let c = "---\ntags: [a]\nft:\n  tasks:\n    section: Tasks\n    anchor: OLD\n  append:\n    section: Log\naliases: x\n---\nbody\n";
+        let out = upsert_ft_keys(
+            c,
+            "tasks",
+            &[("anchor", src("ABC-123")), ("parent", src("[[EPIC-7]]"))],
+        );
+        assert_eq!(
+            out,
+            "---\ntags: [a]\nft:\n  tasks:\n    section: Tasks\n    anchor: ABC-123\n    parent: \"[[EPIC-7]]\"\n  append:\n    section: Log\naliases: x\n---\nbody\n"
+        );
+        assert_eq!(
+            ft_tasks_parent_in(block(&out).unwrap()),
+            Some("[[EPIC-7]]".into())
+        );
+        assert_eq!(ft_tasks_section(&out), Some("Tasks".into()));
+        let removed = upsert_ft_keys(&out, "tasks", &[("parent", None)]);
+        assert!(!removed.contains("parent:"));
+    }
+
+    #[test]
+    fn upsert_nested_map_and_new_sub_block() {
+        let c = "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n";
+        let synced = FmValue::Map(vec![("status".into(), FmValue::scalar("InProgress"))]);
+        let out = upsert_ft_keys(
+            c,
+            "source",
+            &[
+                ("name", src("jira")),
+                ("key", src("ABC-123")),
+                ("status", src("In Review")),
+                ("updated", src("2026-10-21T09:12:44.000+0000")),
+                ("synced", Some(synced.clone())),
+            ],
+        );
+        assert_eq!(
+            out,
+            "---\nft:\n  tasks:\n    anchor: ABC-123\n  source:\n    name: jira\n    key: ABC-123\n    status: In Review\n    updated: 2026-10-21T09:12:44.000+0000\n    synced:\n      status: InProgress\n---\n"
+        );
+        let s = ft_source_in(block(&out).unwrap()).unwrap();
+        assert_eq!(s.synced_status.as_deref(), Some("InProgress"));
+        assert_eq!(s.status.as_deref(), Some("In Review"));
+        // Re-upserting the same values is a no-op.
+        let again = upsert_ft_keys(&out, "source", &[("synced", Some(synced))]);
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn yaml_quoting_round_trips() {
+        for v in [
+            "@mention",
+            "a: b",
+            "x #y",
+            "true",
+            "",
+            "say \"hi\"",
+            "- dash",
+            "plain text",
+        ] {
+            let out = upsert_ft_keys("", "source", &[("name", src("n")), ("key", src(v))]);
+            let s = ft_source_in(block(&out).unwrap());
+            if v.is_empty() {
+                assert!(s.is_none(), "empty key is treated as absent");
+            } else {
+                assert_eq!(s.unwrap().key, v, "{out}");
+            }
+        }
     }
 }

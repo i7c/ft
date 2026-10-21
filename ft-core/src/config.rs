@@ -51,6 +51,10 @@ pub struct Config {
     /// Quick-capture presets, keyed by preset name. See [`CapturePreset`].
     #[serde(default)]
     pub capture_presets: HashMap<String, CapturePreset>,
+    /// Remote task sources (Jira, GitHub), keyed by source name. See
+    /// [`SourceCfg`].
+    #[serde(default)]
+    pub sources: std::collections::BTreeMap<String, SourceCfg>,
     /// User-defined key binding overrides. When `None`, defaults apply.
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
@@ -158,6 +162,109 @@ pub struct CapturePreset {
     /// vault root when absent.
     #[serde(default)]
     pub folder: Option<String>,
+}
+
+/// Backend of a remote task source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    Jira,
+    Github,
+}
+
+/// A remote task source (`[sources.<name>]`). Lives in the vault config so
+/// every machine syncing the vault shares it; machines without credentials
+/// simply skip it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceCfg {
+    pub kind: SourceKind,
+    /// API base URL. Required for Jira (`https://<site>.atlassian.net`);
+    /// optional for GitHub (defaults to `https://api.github.com`).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Atlassian account email (Jira basic-auth user).
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Named JQL / GitHub search queries. Empty means the kind's default
+    /// "assigned to me, open" query; see [`SourceCfg::effective_queries`].
+    #[serde(default)]
+    pub queries: std::collections::BTreeMap<String, String>,
+    /// Vault-relative folder for new issue notes. Defaults to the source name.
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// Template (under `[notes].templates_dir`) for the user part of new
+    /// issue notes.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// TUI background sync interval; `0` disables interval sync.
+    #[serde(default = "default_source_interval")]
+    pub interval_minutes: u64,
+    /// Also fetch each in-scope issue's parent chain.
+    #[serde(default = "default_true")]
+    pub fetch_parents: bool,
+    /// Most recent comments kept in the note; `0` disables the section.
+    #[serde(default = "default_source_comments")]
+    pub comments: usize,
+    /// Keep the managed `Description` section.
+    #[serde(default = "default_true")]
+    pub description: bool,
+    /// Remote status name → local status (`Open`, `InProgress`, `Done`,
+    /// `Cancelled`), overriding the default mapping.
+    #[serde(default)]
+    pub status_map: std::collections::BTreeMap<String, crate::task::Status>,
+}
+
+fn default_source_interval() -> u64 {
+    10
+}
+
+fn default_source_comments() -> usize {
+    5
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl SourceCfg {
+    /// The configured queries, or the kind's default when none are set.
+    pub fn effective_queries(&self) -> std::collections::BTreeMap<String, String> {
+        if !self.queries.is_empty() {
+            return self.queries.clone();
+        }
+        let q = match self.kind {
+            SourceKind::Jira => "assignee = currentUser() AND statusCategory != Done",
+            SourceKind::Github => "is:issue is:open assignee:@me",
+        };
+        [("mine".to_string(), q.to_string())].into_iter().collect()
+    }
+
+    /// Folder for new issue notes.
+    pub fn folder_or<'a>(&'a self, name: &'a str) -> &'a str {
+        self.folder.as_deref().unwrap_or(name)
+    }
+
+    /// Check the cross-field rules serde can't express.
+    pub fn validate(&self, name: &str) -> std::result::Result<(), String> {
+        if let Some(url) = &self.base_url {
+            let local = url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1");
+            if !url.starts_with("https://") && !local {
+                return Err(format!(
+                    "sources.{name}.base_url must use https:// (got `{url}`)"
+                ));
+            }
+        }
+        if self.kind == SourceKind::Jira {
+            if self.base_url.is_none() {
+                return Err(format!("sources.{name}: jira sources need `base_url`"));
+            }
+            if self.email.is_none() {
+                return Err(format!("sources.{name}: jira sources need `email`"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Action for a quick-capture preset.
@@ -442,6 +549,13 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
     // config files. For keymap the spec requires vault-replaces-user whole:
     // determine which source (if any) defines [keymap] and use it exclusively.
     config.keymap = effective_keymap(user_config, vault_config);
+
+    for (name, src) in &config.sources {
+        src.validate(name).map_err(|message| Error::ConfigInvalid {
+            path: vault_config.display().to_string(),
+            message,
+        })?;
+    }
 
     Ok(LayeredConfig {
         config,
@@ -1369,5 +1483,75 @@ unknown_key = "oops"
         .unwrap();
         let result = load(user.path(), &tmp.path().join("no-vault.toml"));
         assert!(result.is_err(), "unknown synth key should be rejected");
+    }
+
+    // ── sources ─────────────────────────────────────────────────────
+
+    fn load_vault_toml(body: &str) -> Result<LayeredConfig> {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault.write_str(body).unwrap();
+        load(&tmp.path().join("no-user.toml"), vault.path())
+    }
+
+    #[test]
+    fn minimal_jira_source_gets_defaults() {
+        let lc = load_vault_toml(
+            "[sources.jira]\nkind = \"jira\"\nbase_url = \"https://example.atlassian.net\"\nemail = \"me@example.test\"\n",
+        )
+        .unwrap();
+        let src = &lc.config.sources["jira"];
+        assert_eq!(src.kind, SourceKind::Jira);
+        assert_eq!(src.folder_or("jira"), "jira");
+        assert_eq!(src.interval_minutes, 10);
+        assert_eq!(src.comments, 5);
+        assert!(src.fetch_parents && src.description);
+        assert_eq!(
+            src.effective_queries()["mine"],
+            "assignee = currentUser() AND statusCategory != Done"
+        );
+    }
+
+    #[test]
+    fn github_source_and_status_map() {
+        let lc = load_vault_toml(
+            "[sources.gh]\nkind = \"github\"\nfolder = \"issues\"\n[sources.gh.queries]\nwork = \"is:open org:acme\"\n[sources.gh.status_map]\n\"closed:duplicate\" = \"Cancelled\"\n",
+        )
+        .unwrap();
+        let src = &lc.config.sources["gh"];
+        assert_eq!(src.effective_queries().len(), 1);
+        assert_eq!(src.folder_or("gh"), "issues");
+        assert_eq!(
+            src.status_map["closed:duplicate"],
+            crate::task::Status::Cancelled
+        );
+    }
+
+    #[test]
+    fn source_unknown_key_and_bad_values_rejected() {
+        assert!(load_vault_toml("[sources.jira]\nkind = \"jira\"\nintervall = 5\n").is_err());
+        assert!(load_vault_toml("[sources.x]\nkind = \"gitlab\"\n").is_err());
+        assert!(load_vault_toml(
+            "[sources.gh]\nkind = \"github\"\n[sources.gh.status_map]\nopen = \"Later\"\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn source_cross_field_validation() {
+        let err = load_vault_toml("[sources.j]\nkind = \"jira\"\nemail = \"fake-user@example.test\"\nbase_url = \"http://jira.example.com\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("https://"), "{err}");
+        let err = load_vault_toml(
+            "[sources.j]\nkind = \"jira\"\nbase_url = \"https://x.atlassian.net\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("need `email`"), "{err}");
+        assert!(load_vault_toml(
+            "[sources.j]\nkind = \"jira\"\nemail = \"fake-user@example.test\"\nbase_url = \"http://localhost:8080\"\n"
+        )
+        .is_ok());
     }
 }

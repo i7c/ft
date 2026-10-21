@@ -122,9 +122,8 @@ lexicographically first one and reports a duplicate warning.
 
 ### D5. Editing notes surgically
 
-- **Frontmatter.** `frontmatter::upsert_ft_block(content, &[("tasks",
-  entries), ("source", entries)])` generalises
-  `upsert_synth_frontmatter`:
+- **Frontmatter.** `frontmatter::upsert_ft_keys(content, sub, updates)`
+  generalises the idea behind `upsert_synth_frontmatter`, setting or removing individual keys:
   - it rewrites only the named `ft.<sub>` blocks, with keys in a fixed
     order;
   - it creates the `---` fence or the `ft:` map if missing;
@@ -132,8 +131,8 @@ lexicographically first one and reports a duplicate warning.
   - values are quoted when YAML needs it (`[[…]]`, a leading `@`,
     `: `, `#`).
 
-  `upsert_synth_frontmatter` is re-implemented on top of it, which keeps
-  its tests green.
+  `upsert_synth_frontmatter` stays as it is: its keep-targets-when-absent
+  contract differs, and rewiring it gains nothing.
 - **Anchor line.** It is located by `🆔 == key`, parsed with the vault
   format, and its owned fields are replaced (D6). The result is
   serialized with the line's original leading whitespace. Missing anchor

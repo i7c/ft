@@ -1,9 +1,9 @@
 ## 1. Foundations
 
-- [ ] 1.1 Add `ureq` (rustls, json) and `keyring` to workspace deps / ft-core; confirm `cargo build --release` on macOS and that the binary-size delta is noted in the PR.
-- [ ] 1.2 `Config::sources: HashMap<String, SourceCfg>` with defaults and validation (`kind`, `base_url` https rule, jira requires `email`, `status_map` values); config tests incl. unknown-key rejection.
-- [ ] 1.3 `frontmatter::upsert_ft_block` (fixed key order, YAML quoting, creates fence/`ft:` map, preserves other lines); re-implement `upsert_synth_frontmatter` on it; tests incl. round-trip through `ft_tasks_anchor_in` and existing synth tests.
-- [ ] 1.4 Readers for `ft.source.*` (`name`, `key`, `url`, `status`, `assignee`, `state`, `updated`, `synced.status`) and `ft.tasks.parent`.
+- [x] 1.1 Add `ureq` (rustls, json) and `keyring` to workspace deps / ft-core; confirm `cargo build --release` on macOS and that the binary-size delta is noted in the PR.
+- [x] 1.2 `Config::sources: HashMap<String, SourceCfg>` with defaults and validation (`kind`, `base_url` https rule, jira requires `email`, `status_map` values); config tests incl. unknown-key rejection.
+- [x] 1.3 `frontmatter::upsert_ft_keys` (key-level set/remove under `ft.<sub>`, YAML quoting, creates fence/`ft:` map, preserves other lines); tests incl. round-trip through the readers. `upsert_synth_frontmatter` left as is (its keep-targets-when-absent contract differs; no benefit in rewiring).
+- [x] 1.4 Readers for `ft.source.*` (`name`, `key`, `url`, `status`, `assignee`, `state`, `updated`, `synced.status`) and `ft.tasks.parent`.
 
 ## 2. Source core
 
