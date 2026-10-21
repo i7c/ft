@@ -3,6 +3,7 @@
 //! predicates they share.
 
 use super::*;
+use crate::graph::TaskData;
 
 impl GraphQuery {
     pub fn select(&self, graph: &Graph) -> Vec<NoteId> {
@@ -262,7 +263,10 @@ fn reorder_ghost_roots(graph: &Graph, roots: &mut [NoteId]) {
 pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> bool {
     // `is null` / `is not null` short-circuit before string extraction.
     if matches!(c.op, Op::IsNull | Op::IsNotNull) {
-        let present = node_optional_attr_present(graph.node(id), c.attr);
+        let present = match c.attr {
+            Attr::Parent | Attr::ParentStatus => task_parent(graph, id).is_some(),
+            _ => node_optional_attr_present(graph.node(id), c.attr),
+        };
         return match c.op {
             Op::IsNull => !present,
             Op::IsNotNull => present,
@@ -358,9 +362,47 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
             let count = graph.outgoing(id).count() as i64;
             eval_int_op(count, c.op, &c.value)
         }
+        Attr::Parent | Attr::ParentStatus => {
+            let Some(parent) = task_parent(graph, id) else {
+                return false;
+            };
+            let v = match c.attr {
+                Attr::Parent => &parent.description,
+                _ => &parent.status,
+            };
+            eval_string_op(v, c.op, &c.value)
+        }
+        Attr::ParentLink => match graph.node(id) {
+            NodeKind::Task(TaskData {
+                parent_link: Some(state),
+                ..
+            }) => eval_string_op(state, c.op, &c.value),
+            _ => false,
+        },
+        Attr::Children => {
+            let count = match graph.node(id) {
+                NodeKind::Task(_) => graph
+                    .outgoing(id)
+                    .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
+                    .count() as i64,
+                _ => 0,
+            };
+            eval_int_op(count, c.op, &c.value)
+        }
         // Form / Embed are edge-only — never reached on a node.
         Attr::Form | Attr::Embed => false,
     }
+}
+
+/// The effective parent of task node `id`: the source of its incoming
+/// `Subtask` edge (indentation or resolved parent link).
+fn task_parent(graph: &Graph, id: NoteId) -> Option<&TaskData> {
+    graph
+        .incoming(id)
+        .find_map(|(src, e)| match (e, graph.node(src)) {
+            (EdgeKind::Subtask, NodeKind::Task(t)) => Some(t),
+            _ => None,
+        })
 }
 
 fn node_optional_attr_present(node: &NodeKind, attr: Attr) -> bool {
@@ -374,6 +416,7 @@ fn node_optional_attr_present(node: &NodeKind, attr: Attr) -> bool {
         Attr::Created => task.created.is_some(),
         Attr::Start => task.start.is_some(),
         Attr::Completed => task.completed.is_some(),
+        Attr::ParentLink => task.parent_link.is_some(),
         _ => false,
     }
 }

@@ -2060,9 +2060,10 @@ fn ctrl_p_selecting_preset_replaces_query_and_stays_in_normal_mode() -> Result<(
     assert_eq!(app.active_modal_name(), Some("task-preset-picker"));
 
     // Move the cursor to land on the `overdue` built-in (presets are
-    // listed user-first then built-ins alphabetically: done-today,
-    // not-done, overdue, ...). Two Down presses from the top reach it.
-    for _ in 0..2 {
+    // listed user-first then built-ins alphabetically: broken-links,
+    // done-today, not-done, orphaned, overdue, ...). Four Down presses
+    // from the top reach it.
+    for _ in 0..4 {
         app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
     }
     // Enter commits: the modal posts AppRequest::Tasks(ApplyPreset),

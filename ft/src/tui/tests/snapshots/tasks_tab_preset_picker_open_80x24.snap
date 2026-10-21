@@ -11,13 +11,13 @@ expression: frame
 │▶   !!  Pay ren│type to search…                               │               │
 │    !   Renew p└──────────────────────────────────────────────┘               │
 │ ── upcoming (3┌ recent · type to search ─────────────────────┐               │
-│        Reply t│▶ done-today                                  │               │
-│    !!  Submit │  not-done                                    │  tomorrow     │
-│    v   Buy bir│  overdue                                     │               │
+│        Reply t│▶ broken-links                                │               │
+│    !!  Submit │  done-today                                  │  tomorrow     │
+│    v   Buy bir│  not-done                                    │               │
+│               │  orphaned                                    │               │
+│               │  overdue                                     │               │
 │               │  today                                       │               │
 │               │  upcoming                                    │               │
-│               │                                              │               │
-│               │                                              │               │
 │               │                                              │               │
 │               │                                              │               │
 │               └──────────────────────────────────────────────┘               │

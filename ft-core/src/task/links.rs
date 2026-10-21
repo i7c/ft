@@ -541,6 +541,82 @@ mod tests {
                 && Some(id) == g.task_by_loc(Path::new("j.md"), 1)));
     }
 
+    fn query(s: &Scan, dsl: &str) -> Vec<String> {
+        use crate::graph::query::{parse_with, Profile};
+        let g = crate::graph::Graph::build(s).unwrap();
+        let q = parse_with(
+            dsl,
+            Profile::Tasks,
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap(),
+        )
+        .unwrap_or_else(|e| panic!("{dsl}: {e}"));
+        let keys = crate::task::resolve::by_query(&g, &q);
+        let mut out: Vec<String> = s
+            .tasks
+            .iter()
+            .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
+            .map(|t| t.description.split(" [[").next().unwrap().to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn hierarchy_dsl_attributes() {
+        let (_d, s) = scan(&[
+            (
+                "proj.md",
+                "- [x] Done parent ^dp
+- [ ] Open parent ^op
+  - [ ] physical kid
+",
+            ),
+            (
+                "j.md",
+                "- [ ] orphan [[proj#^dp]]
+- [ ] linked [[proj#^op]]
+- [ ] broken [[proj#^zz]]
+- [ ] top
+",
+            ),
+        ]);
+        assert_eq!(
+            query(&s, "status = Open and parent_status in {Done, Cancelled}"),
+            ["orphan"]
+        );
+        assert_eq!(
+            query(&s, crate::query::preset::builtin("orphaned").unwrap()),
+            ["orphan"]
+        );
+        assert_eq!(query(&s, "children > 0"), ["Done parent", "Open parent"]);
+        assert_eq!(query(&s, "children = 2"), ["Open parent"]);
+        assert_eq!(
+            query(&s, "parent includes \"Open\""),
+            ["linked", "physical kid"]
+        );
+        assert_eq!(query(&s, "parent_link = dangling"), ["broken"]);
+        assert_eq!(
+            query(&s, crate::query::preset::builtin("broken-links").unwrap()),
+            ["broken"]
+        );
+        assert_eq!(
+            query(&s, "parent is null and status = Open"),
+            ["Open parent", "broken", "top"]
+        );
+        assert_eq!(
+            query(&s, "parent_link is null and status = Open"),
+            ["Open parent", "physical kid", "top"]
+        );
+    }
+
+    #[test]
+    fn hierarchy_attrs_rejected_on_edges() {
+        use crate::graph::query::{parse_with, Profile};
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        let src = "node where kind = Task; expand where edge.children > 0;";
+        assert!(parse_with(src, Profile::Default, today).is_err());
+    }
+
     /// Gated perf budget: the post-pass stays a small fraction of a scan.
     /// Run with `FT_PERF_TESTS=1 cargo test --release …` — unoptimized
     /// builds skew the serial pass against the parallel scan.

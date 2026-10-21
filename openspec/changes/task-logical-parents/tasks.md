@@ -21,10 +21,10 @@
 
 ## 4. DSL + presets
 
-- [ ] 4.1 `TaskData` fields for parent description/status, link state, child count, filled at build.
-- [ ] 4.2 `Attr::{Parent, ParentStatus, ParentLink, Children}` in lexer/parser/eval with type validation (optional except `children`); reject on edges.
-- [ ] 4.3 Built-in presets `orphaned`, `broken-links` + round-trip parse tests.
-- [ ] 4.4 Docs: `docs/graph-query-dsl.md` / `docs/query-dsl.md` attribute tables.
+- [x] 4.1 `TaskData` fields for parent description/status, link state, child count, filled at build.
+- [x] 4.2 `Attr::{Parent, ParentStatus, ParentLink, Children}` in lexer/parser/eval with type validation (optional except `children`); reject on edges.
+- [x] 4.3 Built-in presets `orphaned`, `broken-links` + round-trip parse tests.
+- [x] 4.4 Docs: `docs/graph-query-dsl.md` / `docs/query-dsl.md` attribute tables.
 
 ## 5. Link / unlink planners
 

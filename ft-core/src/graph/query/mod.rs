@@ -207,6 +207,16 @@ pub enum Attr {
     /// walks its owning paragraph's `ParagraphLink` edges (via the
     /// `OwnsTask` edge).
     Mentions,
+    /// Task-specific: the effective parent task's description (physical
+    /// parent or resolved parent link). Optional.
+    Parent,
+    /// Task-specific: the effective parent task's status. Optional.
+    ParentStatus,
+    /// Task-specific: state of the task's parent link (`resolved`,
+    /// `dangling`, `ignored`, `cycle`). Optional (null without a link).
+    ParentLink,
+    /// Task-specific: number of direct (physical + linked) children.
+    Children,
 }
 
 /// Value-type classification for an attribute. Drives parse-time
@@ -226,11 +236,17 @@ impl Attr {
     /// validation.
     pub fn value_type(self) -> ValueType {
         match self {
-            Attr::Kind | Attr::Form | Attr::Status | Attr::Priority | Attr::Embed => {
-                ValueType::Enum
+            Attr::Kind
+            | Attr::Form
+            | Attr::Status
+            | Attr::Priority
+            | Attr::Embed
+            | Attr::ParentStatus
+            | Attr::ParentLink => ValueType::Enum,
+            Attr::Path | Attr::Title | Attr::Description | Attr::Mentions | Attr::Parent => {
+                ValueType::Str
             }
-            Attr::Path | Attr::Title | Attr::Description | Attr::Mentions => ValueType::Str,
-            Attr::Indegree | Attr::Outdegree => ValueType::Int,
+            Attr::Indegree | Attr::Outdegree | Attr::Children => ValueType::Int,
             Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed => {
                 ValueType::Date
             }
@@ -243,7 +259,14 @@ impl Attr {
     pub fn is_optional(self) -> bool {
         matches!(
             self,
-            Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed
+            Attr::Due
+                | Attr::Scheduled
+                | Attr::Created
+                | Attr::Start
+                | Attr::Completed
+                | Attr::Parent
+                | Attr::ParentStatus
+                | Attr::ParentLink
         )
     }
 }

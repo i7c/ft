@@ -18,13 +18,23 @@ pub fn builtin(name: &str) -> Option<&'static str> {
         "upcoming" => "(status in {Open, InProgress}) and due > today",
         "done-today" => "status = Done and completed = today",
         "not-done" => "status in {Open, InProgress}",
+        "orphaned" => "status in {Open, InProgress} and parent_status in {Done, Cancelled}",
+        "broken-links" => "parent_link in {dangling, cycle, ignored}",
         _ => return None,
     })
 }
 
 /// Names of all built-in presets, sorted, for help text and shell completions.
 pub fn builtin_names() -> &'static [&'static str] {
-    &["done-today", "not-done", "overdue", "today", "upcoming"]
+    &[
+        "broken-links",
+        "done-today",
+        "not-done",
+        "orphaned",
+        "overdue",
+        "today",
+        "upcoming",
+    ]
 }
 
 #[cfg(test)]

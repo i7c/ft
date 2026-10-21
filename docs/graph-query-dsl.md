@@ -102,6 +102,7 @@ Attribute compatibility:
 | `outdegree` | self only        | Count of outgoing edges (integer)          |
 | `status`, `priority`, `due`, `scheduled`, `created`, `start`, `completed`, `description`, `tags` | self, from, to | Task fields — see [Task attributes](#task-attributes) |
 | `mentions`  | self, from, to   | Concept-existence predicate — see [`mentions`](#mentions) |
+| `parent`, `parent_status`, `parent_link`, `children` | self, from, to | Task hierarchy — see [Hierarchy attributes](#hierarchy-attributes) |
 
 `indegree` / `outdegree` are selection-time properties only — they
 cannot appear in `expand` (which is per-hop) or in neighbor filters.
@@ -169,6 +170,27 @@ bare (e.g. `priority = High`); under `Profile::Default` qualify with
 
 The `status` and `priority` string spellings are a stable contract
 and are NOT the Rust `Debug` of the underlying enum variants.
+
+## Hierarchy attributes
+
+A task's *effective parent* is its indentation parent, or (when it isn't
+indented under one) the task its parent link points at: a block reference
+`[[note#^id]]` or a link to an anchor note. See
+[docs/guide/tasks.md](guide/tasks.md#linked-parents).
+
+| Attribute       | Type   | Optional | Meaning |
+|-----------------|--------|----------|---------|
+| `parent`        | string | yes      | The effective parent's description |
+| `parent_status` | enum   | yes      | The effective parent's status (`Open`, `InProgress`, `Done`, `Cancelled`) |
+| `parent_link`   | enum   | yes      | The parent link's state: `resolved`, `dangling`, `ignored` (the task is indented under another, which wins), `cycle`. Null without a parent link |
+| `children`      | int    | no       | Number of direct children (indented and linked) |
+
+```text
+status = Open and parent_status in {Done, Cancelled}   # built-in preset `orphaned`
+parent_link in {dangling, cycle, ignored}              # built-in preset `broken-links`
+children > 0 and status = Open
+parent is null                                         # top-level tasks
+```
 
 ## mentions
 

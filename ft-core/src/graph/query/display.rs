@@ -165,6 +165,10 @@ pub(crate) fn attr_name(a: Attr) -> &'static str {
         Attr::Description => "description",
         Attr::Tags => "tags",
         Attr::Mentions => "mentions",
+        Attr::Parent => "parent",
+        Attr::ParentStatus => "parent_status",
+        Attr::ParentLink => "parent_link",
+        Attr::Children => "children",
     }
 }
 

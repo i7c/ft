@@ -654,6 +654,10 @@ fn parse_attr(s: &str, position: usize) -> Result<Attr, DslError> {
         "description" => Ok(Attr::Description),
         "tags" => Ok(Attr::Tags),
         "mentions" => Ok(Attr::Mentions),
+        "parent" => Ok(Attr::Parent),
+        "parent_status" => Ok(Attr::ParentStatus),
+        "parent_link" => Ok(Attr::ParentLink),
+        "children" => Ok(Attr::Children),
         _ => Err(DslError::UnknownAttribute {
             attr: s.to_string(),
             position,
@@ -714,7 +718,11 @@ fn validate_attr_subject(
             | Attr::Completed
             | Attr::Description
             | Attr::Tags
-            | Attr::Mentions,
+            | Attr::Mentions
+            | Attr::Parent
+            | Attr::ParentStatus
+            | Attr::ParentLink
+            | Attr::Children,
             Subject::Edge,
         ) => Err(DslError::ScopeError {
             entity: "edge".into(),
@@ -731,7 +739,11 @@ fn validate_attr_subject(
             | Attr::Completed
             | Attr::Description
             | Attr::Tags
-            | Attr::Mentions,
+            | Attr::Mentions
+            | Attr::Parent
+            | Attr::ParentStatus
+            | Attr::ParentLink
+            | Attr::Children,
             _,
         ) => Ok(()),
     }
