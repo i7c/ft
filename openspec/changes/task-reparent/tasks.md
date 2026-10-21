@@ -48,9 +48,9 @@
 
 ## 7. ft.nvim
 
-- [ ] 7.1 [ft.nvim] Move-under command: pick a target task, run `ft tasks move <file>:<line> --under <file>:<line> [--sibling] --format json`, reload the affected buffers, jump to `to`.
-- [ ] 7.2 [ft.nvim] Indent / outdent commands on the cursor task line via `ft tasks indent|outdent … --format json`.
-- [ ] 7.3 [ft.nvim] Document the new CLI surface in ft.nvim's `ARCHITECTURE.md` protocol contract.
+- [x] 7.1 [ft.nvim] Move-under command: pick a target task, run `ft tasks move <file>:<line> --under <file>:<line> [--sibling] --format json`, reload the affected buffers, jump to `to`. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 7.2 [ft.nvim] Indent / outdent commands on the cursor task line via `ft tasks indent|outdent … --format json`. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 7.3 [ft.nvim] Document the new CLI surface in ft.nvim's `ARCHITECTURE.md` protocol contract. (ft.nvim a6cea68, docs bfc31ce)
 
 ## 8. Docs + build invariants
 

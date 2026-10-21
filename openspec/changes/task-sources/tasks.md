@@ -51,8 +51,8 @@
 
 ## 9. ft.nvim
 
-- [ ] 9.1 [ft.nvim] `:FtSync` → `ft tasks sync --format json`, summary via `vim.notify`, reload affected buffers.
-- [ ] 9.2 [ft.nvim] Document the `sync` JSON contract in `ARCHITECTURE.md`.
+- [x] 9.1 [ft.nvim] `:FtSync` → `ft tasks sync --format json`, summary via `vim.notify`, reload affected buffers. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 9.2 [ft.nvim] Document the `sync` JSON contract in `ARCHITECTURE.md`. (ft.nvim a6cea68, docs bfc31ce)
 
 ## 10. Docs + build invariants
 

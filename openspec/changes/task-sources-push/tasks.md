@@ -41,8 +41,8 @@
 
 ## 7. ft.nvim
 
-- [ ] 7.1 [ft.nvim] `:FtPromote` → `ft tasks promote <file>:<line> --format json`, open the new note.
-- [ ] 7.2 [ft.nvim] Document `promote` / sync `pushed` fields in `ARCHITECTURE.md`.
+- [x] 7.1 [ft.nvim] `:FtPromote` → `ft tasks promote <file>:<line> --format json`, open the new note. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 7.2 [ft.nvim] Document `promote` / sync `pushed` fields in `ARCHITECTURE.md`. (ft.nvim a6cea68, docs bfc31ce)
 
 ## 8. Docs + build invariants
 

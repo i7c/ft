@@ -61,9 +61,9 @@
 
 ## 9. ft.nvim
 
-- [ ] 9.1 [ft.nvim] Link command (pick parent task → `ft tasks link <file>:<line> --under <file>:<line> --format json`) and unlink on cursor line.
-- [ ] 9.2 [ft.nvim] `ft tasks check --format json` → quickfix list.
-- [ ] 9.3 [ft.nvim] Document the new CLI surface in `ARCHITECTURE.md`.
+- [x] 9.1 [ft.nvim] Link command (pick parent task → `ft tasks link <file>:<line> --under <file>:<line> --format json`) and unlink on cursor line. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 9.2 [ft.nvim] `ft tasks check --format json` → quickfix list. (ft.nvim a6cea68, docs bfc31ce)
+- [x] 9.3 [ft.nvim] Document the new CLI surface in `ARCHITECTURE.md`. (ft.nvim a6cea68, docs bfc31ce)
 
 ## 10. Docs + build invariants
 
