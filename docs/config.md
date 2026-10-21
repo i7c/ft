@@ -446,6 +446,8 @@ kind = "github"                 # token from `gh auth token` or the keychain
 | `comments` | `5` | Most recent comments kept in the note; `0` drops the section |
 | `description` | `true` | Keep the managed Description section |
 | `status_map` | `{}` | Remote status name → `Open` / `InProgress` / `Done` / `Cancelled` |
+| `push` | `true` | Push local status changes on every sync, and allow `ft tasks promote`. `false` makes the source read-only |
+| `transitions` | `{}` | Jira only: local status → workflow transition name, overriding the automatic choice. `Cancelled` is only pushed when set here (e.g. `Cancelled = "Won't Do"`) |
 
 Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then
 `gh auth token` (GitHub sources only), then the OS keychain entry stored

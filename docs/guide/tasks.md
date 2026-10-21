@@ -378,10 +378,26 @@ What sync does:
   status. Changing title, due or priority in ft is refused (`due is owned
   by jira — change it in jira`). Your `#tags`, `⏳`/`🛫` dates, other
   notes, and subtasks are never touched.
-- **Local status changes are kept:** if you tick a ticket locally, sync
-  leaves it and reports it as *pending push* (pushing back to Jira is a
-  later feature). If the status changed on both sides, sync keeps yours
-  and reports a conflict.
+- **Local status changes are pushed:** tick, start, cancel or reopen a
+  ticket locally, and the next sync (including the TUI's background
+  syncs) moves it in Jira.
+  - **Jira:** ft picks the workflow transition into the matching status
+    category. You can name a different one per status in `transitions`.
+    A cancel is only pushed through a configured `transitions.Cancelled`.
+  - **GitHub:** done and cancelled close the issue (completed / not
+    planned); open and in progress reopen it.
+  - **Failed pushes** (no matching transition, no permission) stay
+    pending and are retried. They show in the sync output and in `ft
+    tasks check`, and the TUI toasts each new failure once.
+  - **Opting out:** `ft tasks sync --no-push` skips pushing for one run;
+    `push = false` makes a source read-only.
+- **Conflicts:** if the status changed on both sides, sync keeps yours
+  and stores the conflict in the note (`ft.source.conflict`). A
+  conflicted ticket is never pushed. Resolve it with `ft tasks sync
+  --resolve` (interactive), `--take local|remote KEY…`, or the TUI modal
+  that opens after a sync (`l` local, `r` remote, `s` skip, `Enter`).
+  Resolving only edits your notes and works offline. Taking *local*
+  turns your status into an ordinary pending push.
 - **Tickets that leave your queries:** if closed remotely, they're marked
   done locally. If still open but no longer yours, they're cancelled
   locally and the note is marked `state: out-of-scope`. Notes are never
@@ -395,9 +411,30 @@ What sync does:
   the notes, and every machine produces the same bytes, so git sync
   doesn't conflict.
 
-`ft tasks sync --dry-run` shows the diff, `--format json` gives a
-per-source summary, and `ft sources list` shows where each source's
-credentials come from.
+`ft tasks sync --dry-run` shows the diff (and pushes nothing),
+`--format json` gives a per-source summary, and `ft sources list` shows
+where each source's credentials come from.
+
+### Promoting a subtask to a real ticket
+
+When a local subtask of a ticket turns out to need its own ticket:
+
+```sh
+ft tasks promote "write regression test"     # TUI: `I` on the task
+# Promoted to ABC-124 (https://…/browse/ABC-124) → jira/ABC-124.md
+```
+
+- **What's created:** a Jira **sub-task** of the parent ticket (or a
+  **Task** when the parent is an epic), assigned to you. On GitHub it's
+  a sub-issue in the parent's repository.
+- **Fields:** the summary is the task text without links and tags; due
+  date and priority carry over. A task already in progress is moved to
+  In Progress right away.
+- **The vault is rearranged to match:** the task becomes the new
+  ticket's note. Its subtasks and notes move under the new anchor, the
+  original lines disappear, and links to the task's block id follow it.
+- **Conditions:** promote needs a connection (nothing is queued), and
+  the task's direct parent must be a ticket.
 
 ## The Tasks tab in the TUI
 
@@ -429,6 +466,7 @@ Common chords inside the Tasks tab (priority moved from `p` / `P` to
 | `L`       | link the marked tasks under the selected task (no move) |
 | `U`       | remove the selected task's parent link           |
 | `S`       | new task in today's note, linked under the selected task |
+| `I`       | promote the selected task to a remote issue (needs a connection) |
 | `e`       | open the edit popup for the focused task        |
 | `c`       | quickline new-task entry                        |
 | `C`       | new-task form (multi-field popup)               |

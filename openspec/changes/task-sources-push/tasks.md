@@ -46,9 +46,9 @@
 
 ## 8. Docs + build invariants
 
-- [ ] 8.1 `docs/guide/tasks.md`: pushing, conflicts, promote; `docs/config.md`: `push`, `transitions`.
-- [ ] 8.2 `cargo build --release`
-- [ ] 8.3 `cargo test --workspace`
-- [ ] 8.4 `cargo clippy --workspace --tests -- -D warnings`
-- [ ] 8.5 `cargo fmt --check`
-- [ ] 8.6 `cargo run --release -q -- commands docs --check`
+- [x] 8.1 `docs/guide/tasks.md`: pushing, conflicts, promote; `docs/config.md`: `push`, `transitions`.
+- [x] 8.2 `cargo build --release`
+- [x] 8.3 `cargo test --workspace`
+- [x] 8.4 `cargo clippy --workspace --tests -- -D warnings` (clean except the 4 pre-existing `redundant_field_names` hits, also on main)
+- [x] 8.5 `cargo fmt --check`
+- [x] 8.6 `cargo run --release -q -- commands docs --check`
