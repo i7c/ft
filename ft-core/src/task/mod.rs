@@ -14,7 +14,9 @@ pub mod resolve;
 
 pub use hierarchy::TaskKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum Status {
     #[default]
     Open,

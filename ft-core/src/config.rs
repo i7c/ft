@@ -213,6 +213,14 @@ pub struct SourceCfg {
     /// `Cancelled`), overriding the default mapping.
     #[serde(default)]
     pub status_map: std::collections::BTreeMap<String, crate::task::Status>,
+    /// Push local status changes (and allow promote). `false` makes the
+    /// source read-only.
+    #[serde(default = "default_true")]
+    pub push: bool,
+    /// Jira only: local status → transition name, overriding the
+    /// category-based choice. `Cancelled` is only pushed when set here.
+    #[serde(default)]
+    pub transitions: std::collections::BTreeMap<crate::task::Status, String>,
 }
 
 fn default_source_interval() -> u64 {
@@ -254,6 +262,9 @@ impl SourceCfg {
                     "sources.{name}.base_url must use https:// (got `{url}`)"
                 ));
             }
+        }
+        if self.kind == SourceKind::Github && !self.transitions.is_empty() {
+            return Err(format!("sources.{name}.transitions is only valid for jira"));
         }
         if self.kind == SourceKind::Jira {
             if self.base_url.is_none() {
@@ -1553,5 +1564,24 @@ unknown_key = "oops"
             "[sources.j]\nkind = \"jira\"\nemail = \"fake-user@example.test\"\nbase_url = \"http://localhost:8080\"\n"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn push_and_transitions() {
+        let lc = load_vault_toml(
+            "[sources.jira]\nkind = \"jira\"\nemail = \"fake-user@example.test\"\nbase_url = \"https://x.atlassian.net\"\npush = false\n[sources.jira.transitions]\nCancelled = \"Won't Do\"\nDone = \"Ship it\"\n",
+        )
+        .unwrap();
+        let src = &lc.config.sources["jira"];
+        assert!(!src.push);
+        assert_eq!(src.transitions[&crate::task::Status::Cancelled], "Won't Do");
+        let gh = load_vault_toml(
+            "[sources.gh]\nkind = \"github\"\n[sources.gh.transitions]\nDone = \"x\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(gh.contains("only valid for jira"), "{gh}");
+        let lc = load_vault_toml("[sources.gh]\nkind = \"github\"\n").unwrap();
+        assert!(lc.config.sources["gh"].push);
     }
 }

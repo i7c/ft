@@ -1,7 +1,7 @@
 ## 1. Config + HTTP
 
-- [ ] 1.1 `SourceCfg::{push (default true), transitions: BTreeMap<Status, String>}`; validation (transitions only for jira); config tests.
-- [ ] 1.2 `Http::post_json` / `patch_json` (same timeouts, classification, secret handling); stub-server tests asserting method, path, body.
+- [x] 1.1 `SourceCfg::{push (default true), transitions: BTreeMap<Status, String>}`; validation (transitions only for jira); config tests.
+- [x] 1.2 `Http::post_json` / `patch_json` (same timeouts, classification, secret handling); stub-server tests asserting method, path, body.
 
 ## 2. Conflicts stored in notes
 
