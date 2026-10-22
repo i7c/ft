@@ -904,7 +904,7 @@ pub fn plan_move(
         lines_to_move.sort_unstable_by_key(|(line, _)| *line);
         lines_to_move.dedup_by_key(|(line, _)| *line);
 
-        // (start, end, description, head_indent, parent-link text to strip)
+        // (start, end, description, head_indent, parent id to strip)
         let mut ranges: Vec<(usize, usize, String, usize, Option<String>)> = Vec::new();
         for (line, expected) in &lines_to_move {
             let idx = line.checked_sub(1).ok_or_else(|| MoveError::LineMissing {
@@ -939,12 +939,9 @@ pub fn plan_move(
                 }
             })?;
             let end = block_end(&raw_lines, idx, task.indent_level);
-            // Physically nesting a task makes its parent link redundant.
-            let strip = anchor
-                .as_ref()
-                .and(*expected)
-                .and_then(|t| t.parent_link.as_ref())
-                .map(|l| l.raw.clone());
+            // Physically nesting a task under a parent it references makes
+            // that reference redundant.
+            let strip = anchor.as_ref().and_then(|a| a.parent_id.clone());
             ranges.push((idx, end, task.description.clone(), task.indent_level, strip));
         }
 
@@ -992,8 +989,8 @@ pub fn plan_move(
             });
             block_offsets.push(moved_lines.len());
             let mut block = raw_lines[*start..=*end].to_vec();
-            if let Some(raw) = strip {
-                if let Some(head) = super::links::remove_link_text(&block[0], raw) {
+            if let Some(id) = strip {
+                if let Some(head) = super::links::remove_parent_id(&block[0], id, format) {
                     block[0] = head;
                 }
             }
@@ -1073,6 +1070,9 @@ struct TaskAnchor {
     /// Leading whitespace the moved block heads take.
     head_ws: String,
     unit: IndentUnit,
+    /// `🆔` of the task moved blocks get nested under (the target for
+    /// `Child`, the target's own parent for `SiblingAfter`).
+    parent_id: Option<String>,
 }
 
 fn resolve_anchor(
@@ -1117,11 +1117,21 @@ fn resolve_anchor(
         Placement::Child if end > idx => leading_ws(&lines[idx + 1]).to_string(),
         Placement::Child => format!("{own_ws}{}", unit.as_str()),
     };
+    let parent_id = match placement {
+        Placement::Child => task.id,
+        Placement::SiblingAfter => lines[..idx]
+            .iter()
+            .rev()
+            .filter_map(|l| format.parse_line(l, ParseContext::default()))
+            .find(|t| t.indent_level < task.indent_level)
+            .and_then(|t| t.id),
+    };
     Ok(TaskAnchor {
         idx,
         end,
         head_ws,
         unit,
+        parent_id,
     })
 }
 

@@ -220,9 +220,8 @@ pub struct TaskData {
     pub source_file: PathBuf,
     /// 1-indexed line number within the source file.
     pub source_line: usize,
-    /// Parent-link state (`resolved` / `dangling` / `ignored` / `cycle`),
-    /// when the task line carries a parent link.
-    pub parent_link: Option<crate::task::links::ParentLinkKind>,
+    /// States present among the task's parent references.
+    pub parent_refs: crate::task::links::RefKinds,
 }
 
 /// Per-edge payload.
@@ -377,6 +376,8 @@ pub struct Graph {
     /// Anchor tasks of issue notes → their remote identity. A side table
     /// rather than a `TaskData` field to keep `NodeKind` small.
     task_remote: HashMap<NoteId, RemoteData>,
+    /// Task nodes → their `🆔`. A side table for the same reason.
+    task_ids: HashMap<NoteId, String>,
     /// (source_file, line_start) → paragraph node. Each paragraph is
     /// uniquely identified by its owning note's path and 1-indexed first
     /// line. Populated during `Graph::build` / refreshed by
@@ -409,6 +410,7 @@ impl Graph {
             ghost_index: HashMap::new(),
             task_index: HashMap::new(),
             task_remote: HashMap::new(),
+            task_ids: HashMap::new(),
             paragraph_index: HashMap::new(),
             heading_index: HashMap::new(),
         };
@@ -580,6 +582,11 @@ impl Graph {
     /// Remote identity of an issue note's anchor task node.
     pub fn task_remote(&self, id: NoteId) -> Option<&RemoteData> {
         self.task_remote.get(&id)
+    }
+
+    /// The `🆔` of task node `id`, if it carries one.
+    pub fn task_id(&self, id: NoteId) -> Option<&str> {
+        self.task_ids.get(&id).map(String::as_str)
     }
 
     /// Fill [`Self::task_remote`] from issue notes' frontmatter.
@@ -1046,12 +1053,15 @@ impl Graph {
             tags: task.tags.clone(),
             source_file: task.source_file.clone(),
             source_line: task.source_line,
-            parent_link: task.parent_link.as_ref().map(|l| l.state.kind()),
+            parent_refs: task.parent_refs.iter().map(|r| r.state.kind()).collect(),
         };
 
         let idx = self.g.add_node(NodeKind::Task(task_data));
         let id = NoteId(idx);
         self.task_index.insert(key, id);
+        if let Some(tid) = &task.id {
+            self.task_ids.insert(id, tid.clone());
+        }
         id
     }
 
@@ -1082,15 +1092,12 @@ impl Graph {
         }
     }
 
-    /// Create Subtask edges from each task's effective parent
-    /// ([`crate::task::hierarchy::parent_key`]: the indentation parent, or
-    /// the task a resolved parent link points at — possibly in another
-    /// file) to the task.
+    /// Create one Subtask edge from each of a task's effective parents
+    /// ([`crate::task::hierarchy::parent_keys`]: the indentation parent and
+    /// every task a resolved parent reference points at — possibly in other
+    /// files) to the task.
     fn insert_subtask_edges(&mut self, tasks: &[Task]) {
         for task in tasks {
-            let Some(parent_key) = crate::task::hierarchy::parent_key(task) else {
-                continue;
-            };
             let child = match self
                 .task_index
                 .get(&(task.source_file.clone(), task.source_line))
@@ -1098,8 +1105,10 @@ impl Graph {
                 Some(&id) => id,
                 None => continue,
             };
-            if let Some(&parent) = self.task_index.get(&parent_key) {
-                self.g.add_edge(parent.0, child.0, EdgeKind::Subtask);
+            for parent_key in crate::task::hierarchy::parent_keys(task) {
+                if let Some(&parent) = self.task_index.get(&parent_key) {
+                    self.g.add_edge(parent.0, child.0, EdgeKind::Subtask);
+                }
             }
         }
     }

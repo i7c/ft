@@ -207,16 +207,24 @@ pub enum Attr {
     /// walks its owning paragraph's `ParagraphLink` edges (via the
     /// `OwnsTask` edge).
     Mentions,
-    /// Task-specific: the effective parent task's description (physical
-    /// parent or resolved parent link). Optional.
+    /// Task-specific: the effective parents' descriptions (physical parent
+    /// and resolved references). Matches when any parent matches; null
+    /// without parents.
     Parent,
-    /// Task-specific: the effective parent task's status. Optional.
+    /// Task-specific: the effective parents' statuses, any-semantics.
     ParentStatus,
-    /// Task-specific: state of the task's parent link (`resolved`,
-    /// `dangling`, `ignored`, `cycle`). Optional (null without a link).
-    ParentLink,
+    /// Task-specific: states of the task's parent references (`resolved`,
+    /// `dangling`, `ambiguous`, `cycle`), any-semantics. Null without
+    /// references.
+    ParentRef,
+    /// Task-specific: number of distinct effective parents.
+    Parents,
+    /// Task-specific: number of effective parents still Open/InProgress.
+    OpenParents,
     /// Task-specific: number of direct (physical + linked) children.
     Children,
+    /// Task-specific: the task's `🆔`. Optional.
+    Id,
     /// Task-specific: the remote source owning an issue note's anchor task.
     Source,
     /// Task-specific: the remote issue key of an anchor task.
@@ -248,16 +256,21 @@ impl Attr {
             | Attr::Priority
             | Attr::Embed
             | Attr::ParentStatus
-            | Attr::ParentLink => ValueType::Enum,
+            | Attr::ParentRef => ValueType::Enum,
             Attr::Path
             | Attr::Title
             | Attr::Description
             | Attr::Mentions
             | Attr::Parent
+            | Attr::Id
             | Attr::Source
             | Attr::Key
             | Attr::RemoteStatus => ValueType::Str,
-            Attr::Indegree | Attr::Outdegree | Attr::Children => ValueType::Int,
+            Attr::Indegree
+            | Attr::Outdegree
+            | Attr::Children
+            | Attr::Parents
+            | Attr::OpenParents => ValueType::Int,
             Attr::Due | Attr::Scheduled | Attr::Created | Attr::Start | Attr::Completed => {
                 ValueType::Date
             }
@@ -277,7 +290,8 @@ impl Attr {
                 | Attr::Completed
                 | Attr::Parent
                 | Attr::ParentStatus
-                | Attr::ParentLink
+                | Attr::ParentRef
+                | Attr::Id
                 | Attr::Source
                 | Attr::Key
                 | Attr::RemoteStatus

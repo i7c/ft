@@ -7,7 +7,7 @@
 //! depends on remote data and the note itself — two machines syncing the
 //! same remote state produce identical bytes.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -16,10 +16,8 @@ use super::note::{self, COMMENTS, DESCRIPTION};
 use super::{FetchResult, IssueRef, RemoteIssue};
 use crate::config::SourceCfg;
 use crate::frontmatter::{self, FmValue, FtSource};
-use crate::graph::resolve::ScanNoteIndex;
 use crate::scan::Scan;
 use crate::task::format::TaskFormat;
-use crate::task::links::{link_text, LinkAnchor};
 use crate::task::ops::FileEdit;
 use crate::task::Status;
 
@@ -211,23 +209,14 @@ pub fn plan_sync(ctx: &SyncCtx<'_>, fetched: &FetchResult) -> SyncPlan {
         }
         paths.insert(issue.key.clone(), rel);
     }
-    let notes = ScanNoteIndex::new(
-        ctx.scan
-            .files
-            .iter()
-            .map(|f| f.rel.as_path())
-            .chain(paths.values().map(PathBuf::as_path))
-            .collect::<BTreeSet<_>>(),
-    );
-
     let mut edits = Vec::new();
     for (issue, state) in &all {
         let rel = &paths[&issue.key];
         let parent = issue
             .parent
             .as_ref()
-            .and_then(|p| paths.get(p))
-            .map(|prel| link_text(rel, prel, LinkAnchor::Note, &notes));
+            .filter(|p| paths.contains_key(*p))
+            .cloned();
         let edit = match known.get(&issue.key) {
             Some(k) => update_note(ctx, k, issue, state, parent.as_deref(), &mut report),
             None => {
@@ -652,7 +641,7 @@ mod tests {
 ft:
   tasks:
     anchor: ABC-123
-    parent: \"[[EPIC-7]]\"
+    parent: EPIC-7
   source:
     name: jira
     key: ABC-123
@@ -712,8 +701,9 @@ looks good
             .tasks
             .iter()
             .all(|t| !t.description.contains("run migration")));
-        let parent = crate::task::hierarchy::parent_key(tasks[0]).expect("epic parent resolves");
-        assert_eq!(parent.0, Path::new("jira/EPIC-7.md"));
+        let parents = crate::task::hierarchy::parent_keys(tasks[0]);
+        assert_eq!(parents.len(), 1, "epic parent resolves");
+        assert_eq!(parents[0].0, Path::new("jira/EPIC-7.md"));
     }
 
     #[test]
@@ -948,7 +938,7 @@ looks good
         let mut done = issue("A-3");
         done.status = Status::Done;
         v.sync(&active(vec![issue("A-1"), review, done]));
-        v.write("j.md", "- [ ] local sub [[A-1]]\n");
+        v.write("j.md", "- [ ] local sub ⤴ A-1\n");
         let scan = v.scan();
         assert_eq!(query(&scan, "source = jira"), ["A-1", "A-2", "A-3"]);
         assert_eq!(query(&scan, "key = \"A-2\""), ["A-2"]);
@@ -957,11 +947,8 @@ looks good
             query(&scan, crate::query::preset::builtin("remote").unwrap()),
             ["A-1", "A-2"]
         );
-        assert_eq!(query(&scan, "source is null"), ["local sub [[A-1]]"]);
-        assert_eq!(
-            query(&scan, "parent includes \"Fix login\""),
-            ["local sub [[A-1]]"]
-        );
+        assert_eq!(query(&scan, "source is null"), ["local sub"]);
+        assert_eq!(query(&scan, "parent includes \"Fix login\""), ["local sub"]);
     }
 
     #[test]

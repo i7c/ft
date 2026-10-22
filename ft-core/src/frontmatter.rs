@@ -608,7 +608,7 @@ pub fn ft_source_in(fm: &str) -> Option<FtSource> {
     })
 }
 
-/// Read `ft.tasks.parent` (a wikilink string such as `[[EPIC-7]]`).
+/// Read `ft.tasks.parent` (the parent issue's `🆔`, e.g. `EPIC-7`).
 pub fn ft_tasks_parent_in(fm: &str) -> Option<String> {
     let ft = nested_value(fm, "ft")?;
     let tasks = nested_value(ft, "tasks")?;

@@ -1,7 +1,7 @@
-//! Logical (cross-file) task parents expressed as wikilinks: a block
-//! reference to a task (`[[note#^id]]`, `[[#^id]]`) or a link to an anchor
-//! note (`[[note]]` whose frontmatter names its anchor task via
-//! `ft.tasks.anchor`). Resolved once per scan into [`Task::parent_link`].
+//! Logical (cross-file) task parents: a task names any number of parents
+//! by their `🆔` in a `⤴ id,id` field ([`Task::parent_ids`]), resolved once
+//! per scan through a vault-wide id index into [`Task::parent_refs`].
+//! Also home to block-reference hygiene on moves ([`plan_retarget`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -18,350 +18,318 @@ use crate::graph::resolve::{resolve_wiki, Resolution, ScanNoteIndex};
 use crate::graph::LinkForm;
 use crate::scan::Scan;
 
-/// A task's parent link: the first qualifying wikilink on its line.
+/// One logical parent reference of a task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ParentLink {
-    /// The link's raw text, e.g. `[[proj#^vo1]]`.
-    pub raw: String,
-    /// Raw texts of later qualifying links on the same line (ignored).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extra: Vec<String>,
-    pub state: ParentLinkState,
+pub struct ParentRef {
+    /// The referenced `🆔`.
+    pub id: String,
+    pub origin: RefOrigin,
+    pub state: RefState,
+}
+
+/// Where a reference was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefOrigin {
+    /// The task line's `⤴` field.
+    Line,
+    /// The anchor note's `ft.tasks.parent` (sync-owned).
+    Frontmatter,
+}
+
+impl RefOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefOrigin::Line => "line",
+            RefOrigin::Frontmatter => "frontmatter",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ParentLinkState {
-    /// Points at this task; it is the effective parent.
+pub enum RefState {
+    /// Exactly one task carries the id; it is an effective parent.
     Resolved(TaskKey),
-    /// The link names a parent that doesn't exist (missing note, missing
-    /// block id, anchor note without its anchor task).
+    /// No task carries the id.
     Dangling,
-    /// The task is physically nested; indentation wins over the link.
-    Ignored,
-    /// Following the link would make the task its own ancestor.
+    /// More than one task carries the id.
+    Ambiguous,
+    /// Following the reference would make the task its own ancestor.
     Cycle,
 }
 
-impl ParentLinkState {
-    pub fn kind(&self) -> ParentLinkKind {
+impl RefState {
+    pub fn kind(&self) -> RefStateKind {
         match self {
-            ParentLinkState::Resolved(_) => ParentLinkKind::Resolved,
-            ParentLinkState::Dangling => ParentLinkKind::Dangling,
-            ParentLinkState::Ignored => ParentLinkKind::Ignored,
-            ParentLinkState::Cycle => ParentLinkKind::Cycle,
+            RefState::Resolved(_) => RefStateKind::Resolved,
+            RefState::Dangling => RefStateKind::Dangling,
+            RefState::Ambiguous => RefStateKind::Ambiguous,
+            RefState::Cycle => RefStateKind::Cycle,
         }
     }
 
     pub fn as_str(&self) -> &'static str {
         self.kind().as_str()
     }
+
+    pub fn resolved(&self) -> Option<&TaskKey> {
+        match self {
+            RefState::Resolved(k) => Some(k),
+            _ => None,
+        }
+    }
 }
 
-/// [`ParentLinkState`] without its payload — what graph nodes carry.
+/// [`RefState`] without its payload — what graph nodes carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParentLinkKind {
+pub enum RefStateKind {
     Resolved,
     Dangling,
-    Ignored,
+    Ambiguous,
     Cycle,
 }
 
-impl ParentLinkKind {
+impl RefStateKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            ParentLinkKind::Resolved => "resolved",
-            ParentLinkKind::Dangling => "dangling",
-            ParentLinkKind::Ignored => "ignored",
-            ParentLinkKind::Cycle => "cycle",
+            RefStateKind::Resolved => "resolved",
+            RefStateKind::Dangling => "dangling",
+            RefStateKind::Ambiguous => "ambiguous",
+            RefStateKind::Cycle => "cycle",
         }
     }
 }
 
-/// What a block id in a note marks.
+/// The set of [`RefStateKind`]s among a task's references, in one byte —
+/// what graph nodes carry (`NodeKind` stays within the size lint).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RefKinds(u8);
+
+impl RefKinds {
+    const ALL: [RefStateKind; 4] = [
+        RefStateKind::Resolved,
+        RefStateKind::Dangling,
+        RefStateKind::Ambiguous,
+        RefStateKind::Cycle,
+    ];
+
+    pub fn insert(&mut self, k: RefStateKind) {
+        self.0 |= 1 << k as u8;
+    }
+
+    pub fn contains(self, k: RefStateKind) -> bool {
+        self.0 & (1 << k as u8) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = RefStateKind> {
+        Self::ALL.into_iter().filter(move |&k| self.contains(k))
+    }
+}
+
+impl FromIterator<RefStateKind> for RefKinds {
+    fn from_iter<I: IntoIterator<Item = RefStateKind>>(iter: I) -> Self {
+        let mut set = RefKinds::default();
+        for k in iter {
+            set.insert(k);
+        }
+        set
+    }
+}
+
+/// What a `🆔` names across the vault.
 #[derive(Clone, Copy)]
-enum Block {
-    Task(usize),
-    Other,
+enum IdHit {
+    One(usize),
+    Many,
 }
 
-/// How one link on a task line classifies.
-enum Candidate {
-    Resolved(usize),
-    Dangling,
+fn id_index(tasks: &[Task]) -> HashMap<&str, IdHit> {
+    let mut ids: HashMap<&str, IdHit> = HashMap::new();
+    for (ti, t) in tasks.iter().enumerate() {
+        if let Some(id) = t.id.as_deref() {
+            ids.entry(id)
+                .and_modify(|h| *h = IdHit::Many)
+                .or_insert(IdHit::One(ti));
+        }
+    }
+    ids
 }
 
-/// Vault-wide lookups for classifying parent-link candidates, built from a
-/// scan without touching the filesystem. Everything is keyed by file index
-/// (into `scan.files`) and task index (into `scan.tasks`) — hashing paths
-/// per task would dominate the pass.
-pub(crate) struct ParentIndex {
-    pub(crate) notes: ScanNoteIndex,
-    /// Per task: index of its file in `scan.files` (`usize::MAX` if none).
-    task_file: Vec<usize>,
-    /// (file idx, line) → task idx.
-    task_at: HashMap<(usize, usize), usize>,
-    /// (file idx, block id) → what it marks. First occurrence wins.
-    blocks: HashMap<(usize, String), Block>,
-    /// file idx → the anchor task (`None` when `ft.tasks.anchor` is set but
-    /// no task carries that 🆔).
-    anchors: HashMap<usize, Option<usize>>,
-    /// anchor task idx → the wikilink in its note's `ft.tasks.parent`.
-    fm_parents: HashMap<usize, crate::graph::parser::RawLink>,
-}
-
-impl ParentIndex {
-    pub(crate) fn build(scan: &Scan) -> Self {
-        let notes = ScanNoteIndex::new(scan.files.iter().map(|f| f.rel.as_path()));
-        let file_of: HashMap<&std::ffi::OsStr, usize> = scan
-            .files
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (f.rel.as_os_str(), i))
-            .collect();
-        let task_file: Vec<usize> = scan
-            .tasks
-            .iter()
-            .map(|t| {
-                file_of
-                    .get(t.source_file.as_os_str())
-                    .copied()
-                    .unwrap_or(usize::MAX)
-            })
-            .collect();
-        let task_at: HashMap<(usize, usize), usize> = scan
-            .tasks
-            .iter()
-            .enumerate()
-            .map(|(ti, t)| ((task_file[ti], t.source_line), ti))
-            .collect();
-
-        let mut blocks = HashMap::new();
-        let mut anchors = HashMap::new();
-        let mut fm_parents = HashMap::new();
-        for (fi, f) in scan.files.iter().enumerate() {
-            for (id, line) in &f.block_ids {
-                let block = match task_at.get(&(fi, *line)) {
-                    Some(&ti) if scan.tasks[ti].block_link.as_deref() == Some(id) => {
-                        Block::Task(ti)
-                    }
-                    _ => Block::Other,
-                };
-                blocks.entry((fi, id.clone())).or_insert(block);
-            }
-            if let Some(anchor) = f
-                .frontmatter
-                .as_deref()
-                .and_then(crate::frontmatter::ft_tasks_anchor_in)
-            {
-                let task = (0..scan.tasks.len()).find(|&ti| {
-                    task_file[ti] == fi && scan.tasks[ti].id.as_deref() == Some(anchor.as_str())
-                });
-                anchors.insert(fi, task);
-                let fm_parent = f
-                    .frontmatter
-                    .as_deref()
-                    .and_then(crate::frontmatter::ft_tasks_parent_in)
-                    .and_then(|v| {
-                        let (links, self_refs) =
-                            crate::graph::parser::extract_links_and_self_block_refs(&v);
-                        links.into_iter().chain(self_refs).next()
-                    });
-                if let (Some(t), Some(link)) = (task, fm_parent) {
-                    fm_parents.insert(t, link);
-                }
-            }
-        }
-        Self {
-            notes,
-            task_file,
-            task_at,
-            blocks,
-            anchors,
-            fm_parents,
-        }
-    }
-
-    /// Classify a wikilink written in file `from` (index into the scan's
-    /// files). `None` means it is an ordinary link, not a parent candidate.
-    fn classify(&self, from: usize, target: &str, anchor: Option<&str>) -> Option<Candidate> {
-        let file = if target.trim().is_empty() {
-            Some(from)
-        } else {
-            match resolve_wiki(target, &self.notes) {
-                Resolution::Resolved(i) => Some(i),
-                _ => None,
-            }
-        };
-        match anchor {
-            Some(a) => {
-                let id = a.strip_prefix('^')?;
-                let Some(file) = file else {
-                    return Some(Candidate::Dangling);
-                };
-                match self.blocks.get(&(file, id.to_string())) {
-                    Some(Block::Task(t)) => Some(Candidate::Resolved(*t)),
-                    Some(Block::Other) => None,
-                    None => Some(Candidate::Dangling),
-                }
-            }
-            None => match self.anchors.get(&file?)? {
-                Some(t) => Some(Candidate::Resolved(*t)),
-                None => Some(Candidate::Dangling),
-            },
-        }
-    }
-}
-
-/// Resolve every task's parent link in place. Runs once at the end of
-/// [`crate::scan::scan_vault`]; linear in tasks plus task-line links, no I/O.
-pub fn resolve_parent_links(scan: &mut Scan) {
-    let index = ParentIndex::build(scan);
-    let mut links_by_line: HashMap<(usize, usize), Vec<&crate::graph::parser::RawLink>> =
-        HashMap::new();
-    for (fi, f) in scan.files.iter().enumerate() {
-        for l in f.links.iter().chain(&f.self_block_refs) {
-            if l.form == LinkForm::WikiLink {
-                links_by_line.entry((fi, l.line)).or_default().push(l);
-            }
-        }
-    }
-    for list in links_by_line.values_mut() {
-        list.sort_by_key(|l| l.byte_range.start);
-    }
-
+/// Resolve every task's parent references in place. Runs once at the end
+/// of [`crate::scan::scan_vault`]; linear in tasks plus references, no I/O.
+pub fn resolve_parent_refs(scan: &mut Scan) {
     let n = scan.tasks.len();
-    let mut resolved: Vec<Option<ParentLink>> = Vec::with_capacity(n);
-    // Effective parent per task, by index: physical first, then the link.
-    let mut parent: Vec<Option<usize>> = Vec::with_capacity(n);
-    for (ti, task) in scan.tasks.iter().enumerate() {
-        let fi = index.task_file[ti];
-        let physical = task
-            .parent
-            .and_then(|line| index.task_at.get(&(fi, line)).copied());
-        let mut link_parent = None;
-        // Line links first, then the anchor note's `ft.tasks.parent`.
-        let candidates = links_by_line
-            .get(&(fi, task.source_line))
-            .into_iter()
-            .flatten()
-            .copied()
-            .chain(index.fm_parents.get(&ti));
-        let link = {
-            let mut first: Option<(String, Candidate)> = None;
-            let mut extra = Vec::new();
-            for l in candidates {
-                let Some(c) = index.classify(fi, &l.target_text, l.anchor.as_deref()) else {
-                    continue;
-                };
-                if first.is_none() {
-                    first = Some((l.raw_text.clone(), c));
-                } else {
-                    extra.push(l.raw_text.clone());
-                }
-            }
-            first.map(|(raw, c)| {
-                let state = match (task.parent, c) {
-                    (Some(_), _) => ParentLinkState::Ignored,
-                    (None, Candidate::Resolved(t)) => {
-                        link_parent = Some(t);
-                        let p = &scan.tasks[t];
-                        ParentLinkState::Resolved((p.source_file.clone(), p.source_line))
-                    }
-                    (None, Candidate::Dangling) => ParentLinkState::Dangling,
-                };
-                ParentLink { raw, extra, state }
-            })
+    // Everything is keyed by file index and task index — hashing paths per
+    // task would dominate the pass.
+    let file_of: HashMap<&std::ffi::OsStr, usize> = scan
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.rel.as_os_str(), i))
+        .collect();
+    let task_file: Vec<usize> = scan
+        .tasks
+        .iter()
+        .map(|t| {
+            file_of
+                .get(t.source_file.as_os_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        })
+        .collect();
+    let task_at: HashMap<(usize, usize), usize> = (0..n)
+        .map(|ti| ((task_file[ti], scan.tasks[ti].source_line), ti))
+        .collect();
+    let ids = id_index(&scan.tasks);
+
+    // Anchor task idx → its note's `ft.tasks.parent` id.
+    let mut fm_parent: HashMap<usize, String> = HashMap::new();
+    for (fi, f) in scan.files.iter().enumerate() {
+        let Some(fm) = f.frontmatter.as_deref() else {
+            continue;
         };
-        resolved.push(link);
-        parent.push(physical.or(link_parent));
+        let (Some(anchor), Some(parent)) = (
+            crate::frontmatter::ft_tasks_anchor_in(fm),
+            crate::frontmatter::ft_tasks_parent_in(fm),
+        ) else {
+            continue;
+        };
+        if let Some(&IdHit::One(ti)) = ids.get(anchor.as_str()) {
+            if task_file[ti] == fi {
+                fm_parent.insert(ti, parent);
+            }
+        }
     }
-    for (task, link) in scan.tasks.iter_mut().zip(resolved) {
-        task.parent_link = link;
+
+    let key = |ti: usize| -> TaskKey {
+        let t = &scan.tasks[ti];
+        (t.source_file.clone(), t.source_line)
+    };
+    let mut refs: Vec<Vec<ParentRef>> = Vec::with_capacity(n);
+    // Effective parents per task, by index: physical first, then references.
+    let mut parents: Vec<Vec<usize>> = Vec::with_capacity(n);
+    // Per task: whether its first parent is the physical one.
+    let mut physical: Vec<Option<usize>> = Vec::with_capacity(n);
+    for (ti, task) in scan.tasks.iter().enumerate() {
+        let phys = task
+            .parent
+            .and_then(|line| task_at.get(&(task_file[ti], line)).copied());
+        let mut out: Vec<ParentRef> = Vec::new();
+        let mut ps: Vec<usize> = phys.into_iter().collect();
+        let line_ids = task.parent_ids.iter().map(|id| (id, RefOrigin::Line));
+        let fm_id = fm_parent.get(&ti).map(|id| (id, RefOrigin::Frontmatter));
+        for (id, origin) in line_ids.chain(fm_id) {
+            if out.iter().any(|r| &r.id == id) {
+                continue;
+            }
+            let state = match ids.get(id.as_str()) {
+                Some(IdHit::One(p)) if *p == ti => RefState::Cycle,
+                Some(IdHit::One(p)) => {
+                    if !ps.contains(p) {
+                        ps.push(*p);
+                    }
+                    RefState::Resolved(key(*p))
+                }
+                Some(IdHit::Many) => RefState::Ambiguous,
+                None => RefState::Dangling,
+            };
+            out.push(ParentRef {
+                id: id.clone(),
+                origin,
+                state,
+            });
+        }
+        refs.push(out);
+        parents.push(ps);
+        physical.push(phys);
     }
-    break_cycles(&mut scan.tasks, &parent);
+    break_cycles(&scan.tasks, &mut refs, &mut parents, &physical);
+    for (task, r) in scan.tasks.iter_mut().zip(refs) {
+        task.parent_refs = r;
+    }
 }
 
-/// Mark one link per effective-parent cycle as [`ParentLinkState::Cycle`]:
-/// the link-parented member with the greatest key. `parent` holds each
-/// task's effective parent index.
-fn break_cycles(tasks: &mut [Task], parent: &[Option<usize>]) {
-    // 0 = unvisited, 1 = on the current walk, 2 = done.
-    let mut color = vec![0u8; tasks.len()];
-    let mut path = Vec::new();
-    for start in 0..tasks.len() {
+/// Mark references as [`RefState::Cycle`] until the effective-parent graph
+/// is acyclic: per cycle found, the logical edge held by the member with the
+/// greatest key. Physical edges alone can't cycle, so one always exists.
+fn break_cycles(
+    tasks: &[Task],
+    refs: &mut [Vec<ParentRef>],
+    parents: &mut [Vec<usize>],
+    physical: &[Option<usize>],
+) {
+    while let Some(cycle) = find_cycle(parents) {
+        // `cycle[i]`'s parent on the cycle is `cycle[i + 1]` (wrapping).
+        let (m, p) = (0..cycle.len())
+            .map(|i| (cycle[i], cycle[(i + 1) % cycle.len()]))
+            .filter(|&(m, p)| physical[m] != Some(p))
+            .max_by(|&(a, _), &(b, _)| {
+                (&tasks[a].source_file, tasks[a].source_line)
+                    .cmp(&(&tasks[b].source_file, tasks[b].source_line))
+            })
+            .expect("a cycle contains at least one logical edge");
+        parents[m].retain(|&x| x != p);
+        let pk = (tasks[p].source_file.clone(), tasks[p].source_line);
+        for r in &mut refs[m] {
+            if r.state.resolved() == Some(&pk) {
+                r.state = RefState::Cycle;
+            }
+        }
+    }
+}
+
+/// One cycle in the child → parents graph, as a path whose last element's
+/// parent is the first; `None` when acyclic. Iterative three-colour DFS.
+fn find_cycle(parents: &[Vec<usize>]) -> Option<Vec<usize>> {
+    // 0 = unvisited, 1 = on the stack, 2 = done.
+    let mut color = vec![0u8; parents.len()];
+    for start in 0..parents.len() {
         if color[start] != 0 {
             continue;
         }
-        path.clear();
-        let mut cur = Some(start);
-        while let Some(i) = cur {
-            match color[i] {
-                0 => {
-                    color[i] = 1;
-                    path.push(i);
-                    cur = parent[i];
-                }
-                1 => {
-                    let pos = path.iter().position(|&p| p == i).expect("on current walk");
-                    let breaker = path[pos..]
-                        .iter()
-                        .copied()
-                        .filter(|&m| tasks[m].parent.is_none())
-                        .max_by(|&a, &b| {
-                            (&tasks[a].source_file, tasks[a].source_line)
-                                .cmp(&(&tasks[b].source_file, tasks[b].source_line))
-                        })
-                        .expect("a cycle contains at least one link edge");
-                    if let Some(link) = tasks[breaker].parent_link.as_mut() {
-                        link.state = ParentLinkState::Cycle;
+        // (node, next parent position to explore)
+        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
+        color[start] = 1;
+        while let Some(top) = stack.last_mut() {
+            let node = top.0;
+            if let Some(&p) = parents[node].get(top.1) {
+                top.1 += 1;
+                match color[p] {
+                    0 => {
+                        color[p] = 1;
+                        stack.push((p, 0));
                     }
-                    break;
+                    1 => {
+                        let from = stack.iter().position(|&(x, _)| x == p).expect("on stack");
+                        return Some(stack[from..].iter().map(|&(x, _)| x).collect());
+                    }
+                    _ => {}
                 }
-                _ => break,
+            } else {
+                color[node] = 2;
+                stack.pop();
             }
         }
-        for &i in &path {
-            color[i] = 2;
-        }
     }
+    None
 }
 
-// ── writing links ───────────────────────────────────────────────────────────
+// ── writing references ──────────────────────────────────────────────────────
 
-/// What a generated parent link points at.
-#[derive(Debug, Clone, Copy)]
-pub enum LinkAnchor<'a> {
-    /// A task's block id: `[[note#^id]]`.
-    Block(&'a str),
-    /// An anchor note as a whole: `[[note]]`.
-    Note,
+/// The wikilink text for a block reference from a note in `from_rel` to
+/// block `id` in `to_rel` (both vault-relative): `[[#^id]]` within one
+/// file, otherwise the note's title when it is unique in the vault, else
+/// its path without `.md`.
+pub fn link_text<L: NoteLookup>(from_rel: &Path, to_rel: &Path, id: &str, notes: &L) -> String {
+    format!("[[{}#^{id}]]", note_part(from_rel, to_rel, notes))
 }
 
-/// The wikilink text for a parent link from a task in `from_rel` to a target
-/// in `to_rel` (both vault-relative): `[[#^id]]` within one file, otherwise
-/// the note's title when it is unique in the vault, else its path without
-/// `.md`.
-pub fn link_text<L: NoteLookup>(
-    from_rel: &Path,
-    to_rel: &Path,
-    anchor: LinkAnchor<'_>,
-    notes: &L,
-) -> String {
-    let note = note_part(from_rel, to_rel, anchor, notes);
-    match anchor {
-        LinkAnchor::Block(id) => format!("[[{note}#^{id}]]"),
-        LinkAnchor::Note => format!("[[{note}]]"),
-    }
-}
-
-/// The target part of a wikilink (before `#`) per [`link_text`]'s rules.
-fn note_part<L: NoteLookup>(
-    from_rel: &Path,
-    to_rel: &Path,
-    anchor: LinkAnchor<'_>,
-    notes: &L,
-) -> String {
-    if from_rel == to_rel && matches!(anchor, LinkAnchor::Block(_)) {
+/// The target part of a block reference (before `#`) per [`link_text`].
+fn note_part<L: NoteLookup>(from_rel: &Path, to_rel: &Path, notes: &L) -> String {
+    if from_rel == to_rel {
         return String::new();
     }
     let title = crate::graph::title_of(to_rel);
@@ -375,25 +343,20 @@ fn note_part<L: NoteLookup>(
     }
 }
 
-/// A fresh 6-character base-36 block id, unique among `existing`.
-pub(crate) fn new_block_id(
-    path: &Path,
-    line: usize,
-    description: &str,
-    existing: &HashSet<String>,
-) -> String {
+/// A fresh 6-character base-36 task id, absent from `taken`.
+pub fn new_task_id(path: &Path, line: usize, description: &str, taken: &HashSet<String>) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    block_id_from_seed(path, line, description, nanos, existing)
+    id_from_seed(path, line, description, nanos, taken)
 }
 
-fn block_id_from_seed(
+fn id_from_seed(
     path: &Path,
     line: usize,
     description: &str,
     nanos: u128,
-    existing: &HashSet<String>,
+    taken: &HashSet<String>,
 ) -> String {
     use std::hash::{Hash, Hasher};
     (0u64..)
@@ -409,35 +372,34 @@ fn block_id_from_seed(
                 })
                 .collect::<String>()
         })
-        .find(|id| !existing.contains(id))
+        .find(|id| !taken.contains(id))
         .expect("an unused id exists")
 }
 
-/// Remove `raw` (a link's text) from `line` along with one adjacent space.
-/// Returns `None` when `raw` isn't on the line.
-pub fn remove_link_text(line: &str, raw: &str) -> Option<String> {
-    let at = line.find(raw)?;
-    let (mut start, mut end) = (at, at + raw.len());
-    if line[..start].ends_with(' ') {
-        start -= 1;
-    } else if line[end..].starts_with(' ') {
-        end += 1;
-    }
-    Some(format!("{}{}", &line[..start], &line[end..]))
+/// `line` with its task rewritten by `edit` through the format, keeping the
+/// line's own leading whitespace (tabs stay tabs). `None` if not a task.
+pub fn rewrite_task_line(
+    line: &str,
+    format: &dyn TaskFormat,
+    edit: impl FnOnce(&mut Task),
+) -> Option<String> {
+    let mut task = format.parse_line(line, ParseContext::default())?;
+    edit(&mut task);
+    task.indent_level = 0;
+    Some(format!(
+        "{}{}",
+        ops::leading_ws(line),
+        format.serialize_line(&task)
+    ))
 }
 
-/// Insert ` {text}` right after the task's description on `line` (before
-/// any emoji fields and block id), leaving every other byte untouched.
-fn append_to_description(line: &str, text: &str, format: &dyn TaskFormat) -> Option<String> {
+/// `line` without `id` in its `⤴` field; `None` when the id isn't listed.
+pub fn remove_parent_id(line: &str, id: &str, format: &dyn TaskFormat) -> Option<String> {
     let task = format.parse_line(line, ParseContext::default())?;
-    let ws = ops::leading_ws(line).len();
-    let start = ws + line[ws..].find("] ")? + 2;
-    let rest = &line[start..];
-    if !rest.starts_with(&task.description) {
+    if !task.parent_ids.iter().any(|p| p == id) {
         return None;
     }
-    let at = start + task.description.len();
-    Some(format!("{} {text}{}", &line[..at], &line[at..]))
+    rewrite_task_line(line, format, |t| t.parent_ids.retain(|p| p != id))
 }
 
 #[derive(Debug, Error)]
@@ -476,23 +438,31 @@ pub enum LinkError {
     },
     #[error("can't link a task under its own subtask ({}:{})", .path.display(), .line)]
     WouldCycle { path: PathBuf, line: usize },
-    #[error("{description} is nested under another task — outdent it first")]
-    PhysicallyNested {
+    #[error("{description} is already nested under it")]
+    AlreadyPhysicalParent {
         path: PathBuf,
         line: usize,
         description: String,
     },
     #[error("task at {}:{} has no parent link", .path.display(), .line)]
     NoParentLink { path: PathBuf, line: usize },
-    #[error("parent comes from the note's ft.tasks.parent — edit the frontmatter (or the issue in its source)")]
+    #[error("task at {}:{} has several parents — choose one (or all)", .path.display(), .line)]
+    NeedsChoice {
+        path: PathBuf,
+        line: usize,
+        refs: Vec<ParentRef>,
+    },
+    #[error("task at {}:{} is not linked to that parent", .path.display(), .line)]
+    NotLinkedTo { path: PathBuf, line: usize },
+    #[error("parent comes from the note's ft.tasks.parent — edit the issue in its source")]
     ParentFromFrontmatter { path: PathBuf, line: usize },
     #[error("write failed: {0}")]
     Write(#[from] crate::error::Error),
 }
 
 /// Vault context for planning link edits: the vault root (paths in
-/// [`MoveSource`]s are absolute), a note index for link text, and the
-/// scanned tasks for ancestor walks.
+/// [`MoveSource`]s are absolute), a note index for block-reference text,
+/// and the scanned tasks for ancestor walks and id uniqueness.
 pub struct LinkCtx<'a> {
     pub root: PathBuf,
     pub notes: ScanNoteIndex,
@@ -537,15 +507,22 @@ impl<'a> LinkCtx<'a> {
     fn rel(&self, abs: &Path) -> PathBuf {
         abs.strip_prefix(&self.root).unwrap_or(abs).to_path_buf()
     }
+
+    /// Every `🆔` in the vault — new ids must avoid these.
+    pub fn taken_ids(&self) -> HashSet<String> {
+        self.tasks.iter().filter_map(|t| t.id.clone()).collect()
+    }
 }
 
-/// A child whose line a [`LinkPlan`] rewrites.
+/// A child whose line a [`LinkPlan`] rewrites (or, `unchanged`, would have).
 #[derive(Debug, Clone)]
 pub struct LinkedChild {
     pub description: String,
     /// Absolute path and 1-indexed line (lines don't shift).
     pub path: PathBuf,
     pub line: usize,
+    /// Already linked to the parent; nothing written for it.
+    pub unchanged: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -570,6 +547,10 @@ pub fn apply_link_plan(plan: &LinkPlan) -> Result<(), LinkError> {
 struct Files(BTreeMap<PathBuf, (String, Vec<String>)>);
 
 impl Files {
+    fn new() -> Self {
+        Files(BTreeMap::new())
+    }
+
     fn lines(&mut self, path: &Path) -> Result<&mut Vec<String>, LinkError> {
         if !self.0.contains_key(path) {
             let content =
@@ -638,8 +619,8 @@ fn guarded_task(
     Ok(task)
 }
 
-/// Whether the task at `line` is indented under another task in `lines`.
-fn physically_nested(lines: &[String], line: usize, format: &dyn TaskFormat) -> bool {
+/// The 1-indexed line of the task's physical parent in `lines`, if nested.
+fn physical_parent_line(lines: &[String], line: usize, format: &dyn TaskFormat) -> Option<usize> {
     let mut tasks: Vec<Task> = lines
         .iter()
         .take(line)
@@ -657,89 +638,88 @@ fn physically_nested(lines: &[String], line: usize, format: &dyn TaskFormat) -> 
     super::hierarchy::resolve_hierarchy(&mut tasks);
     tasks
         .last()
-        .is_some_and(|t| t.source_line == line && t.parent.is_some())
+        .filter(|t| t.source_line == line)
+        .and_then(|t| t.parent)
 }
 
-/// Validate `parent` and decide how children link to it: `None` for the
-/// anchor task of an anchor note (linked as `[[note]]`), otherwise its
-/// block id — generated and written onto the parent line in `files` when
-/// it has none.
+/// Validate `parent` and return its `🆔`, generating one (unique against
+/// `taken`, which gains it) and writing it onto the parent line in `files`
+/// when it has none.
 fn prepare_parent(
     files: &mut Files,
     parent: &MoveSource,
     ctx: &LinkCtx<'_>,
     format: &dyn TaskFormat,
-) -> Result<Option<String>, LinkError> {
-    let parent_lines = files.lines(&parent.path)?;
-    let parent_task = guarded_task(
+    taken: &mut HashSet<String>,
+) -> Result<String, LinkError> {
+    let lines = files.lines(&parent.path)?;
+    let task = guarded_task(
         &parent.path,
-        parent_lines,
+        lines,
         parent.line,
         parent.expected.as_ref(),
         format,
         true,
     )?;
-    let parent_content = crate::markdown::lines::join_with_newline(parent_lines);
-    if parent_task.id.is_some()
-        && crate::frontmatter::ft_tasks_anchor(&parent_content) == parent_task.id
-    {
-        return Ok(None);
+    if let Some(id) = task.id {
+        return Ok(id);
     }
-    if let Some(id) = parent_task.block_link {
-        return Ok(Some(id));
-    }
-    let existing: HashSet<String> = parent_lines
-        .iter()
-        .filter_map(|l| crate::scan::trailing_block_id(l).map(str::to_string))
-        .collect();
-    let id = new_block_id(
+    let id = new_task_id(
         &ctx.rel(&parent.path),
         parent.line,
-        &parent_task.description,
-        &existing,
+        &task.description,
+        taken,
     );
-    let l = &mut parent_lines[parent.line - 1];
-    *l = format!("{} ^{id}", l.trim_end());
-    Ok(Some(id))
+    taken.insert(id.clone());
+    let l = &mut lines[parent.line - 1];
+    *l = rewrite_task_line(l, format, |t| t.id = Some(id.clone())).ok_or_else(|| {
+        LinkError::NotATask {
+            path: parent.path.clone(),
+            line: parent.line,
+        }
+    })?;
+    Ok(id)
 }
 
-/// For a task about to be created in `child_rel`: the parent-link text to
-/// put in its description, plus a plan with the parent-side edit (a new
-/// block id), if any. Apply the plan before creating the task.
-pub fn plan_parent_for_new_task(
-    child_rel: &Path,
-    parent: &MoveSource,
+/// For a task about to be created: the `🆔`s of `parents` (in order) to put
+/// in its `⤴` field, plus a plan with the parent-side edits (new ids), if
+/// any. Apply the plan before creating the task.
+pub fn plan_parents_for_new_task(
+    parents: &[MoveSource],
     ctx: &LinkCtx<'_>,
     format: &dyn TaskFormat,
-) -> Result<(String, LinkPlan), LinkError> {
-    let mut files = Files(BTreeMap::new());
-    let block_id = prepare_parent(&mut files, parent, ctx, format)?;
-    let anchor = match &block_id {
-        Some(id) => LinkAnchor::Block(id),
-        None => LinkAnchor::Note,
-    };
-    let text = link_text(child_rel, &ctx.rel(&parent.path), anchor, &ctx.notes);
+) -> Result<(Vec<String>, LinkPlan), LinkError> {
+    let mut files = Files::new();
+    let mut taken = ctx.taken_ids();
+    let mut ids = Vec::new();
+    for parent in parents {
+        let id = prepare_parent(&mut files, parent, ctx, format, &mut taken)?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
     let plan = LinkPlan {
         edits: files.into_edits(),
         children: Vec::new(),
-        parent: Some((parent.path.clone(), parent.line)),
+        parent: parents.first().map(|p| (p.path.clone(), p.line)),
     };
-    Ok((text, plan))
+    Ok((ids, plan))
 }
 
-/// Plan linking `children` under `parent`: give the parent a block id if it
-/// needs one (anchor tasks of anchor notes are linked as `[[note]]`
-/// instead), and append the link to each child's description, replacing
-/// its previous parent link. Lines never move.
+/// Plan linking `children` under `parent`: give the parent a `🆔` if it has
+/// none, and add it to each child's `⤴` field, keeping the child's other
+/// parents. Children already listing it are reported `unchanged`. Lines
+/// never move.
 pub fn plan_link(
     children: &[MoveSource],
     parent: &MoveSource,
     ctx: &LinkCtx<'_>,
     format: &dyn TaskFormat,
 ) -> Result<LinkPlan, LinkError> {
-    let mut files = Files(BTreeMap::new());
+    let mut files = Files::new();
     let parent_rel = ctx.rel(&parent.path);
-    let block_id = prepare_parent(&mut files, parent, ctx, format)?;
+    let mut taken = ctx.taken_ids();
+    let parent_id = prepare_parent(&mut files, parent, ctx, format, &mut taken)?;
 
     // The parent and its effective ancestors can't become children.
     let by_key: HashMap<TaskKey, &Task> = ctx
@@ -748,12 +728,13 @@ pub fn plan_link(
         .map(|t| ((t.source_file.clone(), t.source_line), t))
         .collect();
     let mut forbidden: HashSet<TaskKey> = HashSet::new();
-    let mut cur = Some((parent_rel.clone(), parent.line));
-    while let Some(k) = cur {
-        if !forbidden.insert(k.clone()) {
-            break;
+    let mut todo = vec![(parent_rel.clone(), parent.line)];
+    while let Some(k) = todo.pop() {
+        if forbidden.insert(k.clone()) {
+            if let Some(t) = by_key.get(&k) {
+                todo.extend(super::hierarchy::parent_keys(t));
+            }
         }
-        cur = by_key.get(&k).and_then(|t| super::hierarchy::parent_key(t));
     }
 
     let mut linked = Vec::new();
@@ -774,37 +755,29 @@ pub fn plan_link(
             format,
             false,
         )?;
-        if physically_nested(lines, child.line, format) {
-            return Err(LinkError::PhysicallyNested {
+        if child.path == parent.path
+            && physical_parent_line(lines, child.line, format) == Some(parent.line)
+        {
+            return Err(LinkError::AlreadyPhysicalParent {
                 path: child.path.clone(),
                 line: child.line,
                 description: task.description,
             });
         }
-        let anchor = match &block_id {
-            Some(id) => LinkAnchor::Block(id),
-            None => LinkAnchor::Note,
-        };
-        let text = link_text(&child_rel, &parent_rel, anchor, &ctx.notes);
-        let mut line = lines[child.line - 1].clone();
-        if let Some(raw) = child
-            .expected
-            .as_ref()
-            .and_then(|t| t.parent_link.as_ref())
-            .map(|l| l.raw.as_str())
-        {
-            line = remove_link_text(&line, raw).unwrap_or(line);
+        let unchanged = task.parent_ids.contains(&parent_id);
+        if !unchanged {
+            let l = &mut lines[child.line - 1];
+            *l = rewrite_task_line(l, format, |t| t.parent_ids.push(parent_id.clone()))
+                .ok_or_else(|| LinkError::NotATask {
+                    path: child.path.clone(),
+                    line: child.line,
+                })?;
         }
-        let new_line =
-            append_to_description(&line, &text, format).ok_or_else(|| LinkError::NotATask {
-                path: child.path.clone(),
-                line: child.line,
-            })?;
-        lines[child.line - 1] = new_line;
         linked.push(LinkedChild {
             description: task.description,
             path: child.path.clone(),
             line: child.line,
+            unchanged,
         });
     }
 
@@ -929,7 +902,7 @@ pub fn plan_retarget(plan: &mut ops::MovePlan, ctx: &LinkCtx<'_>) -> Result<usiz
                 },
                 _ => continue,
             };
-            let note = note_part(&rel, &new_target, LinkAnchor::Block(id), &ctx.notes);
+            let note = note_part(&rel, &new_target, &ctx.notes);
             let alias = l
                 .display
                 .as_deref()
@@ -952,22 +925,31 @@ pub fn plan_retarget(plan: &mut ops::MovePlan, ctx: &LinkCtx<'_>) -> Result<usiz
     Ok(rewritten)
 }
 
-/// Plan removing `task`'s parent link (as recorded in its scanned
-/// `expected` task). The parent's block id stays.
-pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPlan, LinkError> {
-    let no_link = || LinkError::NoParentLink {
-        path: task.path.clone(),
-        line: task.line,
-    };
-    let raw = task
-        .expected
-        .as_ref()
-        .and_then(|t| t.parent_link.as_ref())
-        .map(|l| l.raw.clone())
-        .ok_or_else(no_link)?;
-    let mut files = Files(BTreeMap::new());
+/// Which of a task's line references [`plan_unlink`] removes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unlink {
+    /// The single line reference; fails with `NeedsChoice` when there are
+    /// several.
+    Only,
+    /// Every line reference resolving to this task.
+    Parent(TaskKey),
+    /// The reference to this id (also for unresolved ones).
+    Id(String),
+    /// Every line reference.
+    All,
+}
+
+/// Plan removing parent references from `task`'s `⤴` field, as selected by
+/// `which` against its scanned `expected` task. The parents' `🆔`s stay.
+pub fn plan_unlink(
+    task: &MoveSource,
+    which: &Unlink,
+    format: &dyn TaskFormat,
+) -> Result<LinkPlan, LinkError> {
+    let (path, line) = (task.path.clone(), task.line);
+    let mut files = Files::new();
     let lines = files.lines(&task.path)?;
-    guarded_task(
+    let current = guarded_task(
         &task.path,
         lines,
         task.line,
@@ -975,39 +957,178 @@ pub fn plan_unlink(task: &MoveSource, format: &dyn TaskFormat) -> Result<LinkPla
         format,
         false,
     )?;
-    let Some(new_line) = remove_link_text(&lines[task.line - 1], &raw) else {
-        let content = crate::markdown::lines::join_with_newline(lines);
-        let from_fm = crate::frontmatter::block(&content)
-            .and_then(crate::frontmatter::ft_tasks_parent_in)
-            .is_some_and(|v| v == raw);
-        return Err(if from_fm {
-            LinkError::ParentFromFrontmatter {
-                path: task.path.clone(),
-                line: task.line,
-            }
-        } else {
-            no_link()
-        });
+    let refs: &[ParentRef] = task
+        .expected
+        .as_ref()
+        .map_or(&[], |t| t.parent_refs.as_slice());
+    let fm_has = |pred: &dyn Fn(&ParentRef) -> bool| {
+        refs.iter()
+            .any(|r| r.origin == RefOrigin::Frontmatter && pred(r))
     };
-    let description = format
-        .parse_line(&new_line, ParseContext::default())
-        .map(|t| t.description)
-        .unwrap_or_default();
-    lines[task.line - 1] = new_line;
+    let mut line_ids: Vec<&String> = Vec::new();
+    for id in &current.parent_ids {
+        if !line_ids.contains(&id) {
+            line_ids.push(id);
+        }
+    }
+
+    let remove: Vec<String> = match which {
+        Unlink::Only | Unlink::All if line_ids.is_empty() => {
+            return Err(if fm_has(&|_| true) {
+                LinkError::ParentFromFrontmatter { path, line }
+            } else {
+                LinkError::NoParentLink { path, line }
+            });
+        }
+        Unlink::Only if line_ids.len() > 1 => {
+            let refs = line_ids
+                .iter()
+                .map(|id| {
+                    refs.iter()
+                        .find(|r| &&r.id == id && r.origin == RefOrigin::Line)
+                        .cloned()
+                        .unwrap_or_else(|| ParentRef {
+                            id: (*id).clone(),
+                            origin: RefOrigin::Line,
+                            state: RefState::Dangling,
+                        })
+                })
+                .collect();
+            return Err(LinkError::NeedsChoice { path, line, refs });
+        }
+        Unlink::Only | Unlink::All => line_ids.into_iter().cloned().collect(),
+        Unlink::Parent(key) => {
+            let ids: Vec<String> = refs
+                .iter()
+                .filter(|r| r.origin == RefOrigin::Line && r.state.resolved() == Some(key))
+                .map(|r| r.id.clone())
+                .filter(|id| line_ids.contains(&id))
+                .collect();
+            if ids.is_empty() {
+                return Err(if fm_has(&|r| r.state.resolved() == Some(key)) {
+                    LinkError::ParentFromFrontmatter { path, line }
+                } else {
+                    LinkError::NotLinkedTo { path, line }
+                });
+            }
+            ids
+        }
+        Unlink::Id(id) => {
+            if !line_ids.contains(&id) {
+                return Err(if fm_has(&|r| &r.id == id) {
+                    LinkError::ParentFromFrontmatter { path, line }
+                } else {
+                    LinkError::NotLinkedTo { path, line }
+                });
+            }
+            vec![id.clone()]
+        }
+    };
+
+    let l = &mut lines[task.line - 1];
+    *l = rewrite_task_line(l, format, |t| t.parent_ids.retain(|p| !remove.contains(p)))
+        .ok_or_else(|| LinkError::NotATask {
+            path: path.clone(),
+            line,
+        })?;
     Ok(LinkPlan {
         edits: files.into_edits(),
         children: vec![LinkedChild {
-            description,
-            path: task.path.clone(),
-            line: task.line,
+            description: current.description,
+            path,
+            line,
+            unchanged: false,
         }],
         parent: None,
     })
 }
 
+/// A structural problem found by [`check`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueKind {
+    Dangling,
+    Ambiguous,
+    Cycle,
+    /// A line reference naming the physical parent, or an id listed twice.
+    Redundant,
+    /// A task carrying a `🆔` already used by an earlier task.
+    DuplicateId,
+}
+
+impl IssueKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueKind::Dangling => "dangling",
+            IssueKind::Ambiguous => "ambiguous",
+            IssueKind::Cycle => "cycle",
+            IssueKind::Redundant => "redundant",
+            IssueKind::DuplicateId => "duplicate-id",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Issue {
+    pub kind: IssueKind,
+    /// Index into the scanned tasks.
+    pub task: usize,
+    /// The id involved.
+    pub id: String,
+}
+
+/// Every parent-reference problem in a resolved scan, in `(path, line)`
+/// order of the task concerned.
+pub fn check(tasks: &[Task]) -> Vec<Issue> {
+    let mut order: Vec<usize> = (0..tasks.len()).collect();
+    order.sort_by(|&a, &b| {
+        (&tasks[a].source_file, tasks[a].source_line)
+            .cmp(&(&tasks[b].source_file, tasks[b].source_line))
+    });
+    let mut issues = Vec::new();
+    let mut seen_ids: HashSet<&str> = HashSet::new();
+    for ti in order {
+        let t = &tasks[ti];
+        let issue = |kind, id: &str| Issue {
+            kind,
+            task: ti,
+            id: id.to_string(),
+        };
+        if let Some(id) = t.id.as_deref() {
+            if !seen_ids.insert(id) {
+                issues.push(issue(IssueKind::DuplicateId, id));
+            }
+        }
+        let physical = t.parent.map(|line| (t.source_file.clone(), line));
+        for r in &t.parent_refs {
+            let kind = match &r.state {
+                RefState::Dangling => Some(IssueKind::Dangling),
+                RefState::Ambiguous => Some(IssueKind::Ambiguous),
+                RefState::Cycle => Some(IssueKind::Cycle),
+                RefState::Resolved(k)
+                    if r.origin == RefOrigin::Line && physical.as_ref() == Some(k) =>
+                {
+                    Some(IssueKind::Redundant)
+                }
+                RefState::Resolved(_) => None,
+            };
+            if let Some(kind) = kind {
+                issues.push(issue(kind, &r.id));
+            }
+        }
+        let mut listed: HashSet<&str> = HashSet::new();
+        for id in &t.parent_ids {
+            if !listed.insert(id) {
+                issues.push(issue(IssueKind::Redundant, id));
+            }
+        }
+    }
+    issues
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::emoji::EmojiFormat;
     use std::path::{Path, PathBuf};
 
     fn scan(files: &[(&str, &str)]) -> (tempfile::TempDir, Scan) {
@@ -1028,247 +1149,252 @@ mod tests {
             .unwrap_or_else(|| panic!("no task at {rel}:{line}"))
     }
 
-    fn state(s: &Scan, rel: &str, line: usize) -> Option<ParentLinkState> {
+    fn states(s: &Scan, rel: &str, line: usize) -> Vec<RefState> {
         task(s, rel, line)
-            .parent_link
-            .as_ref()
-            .map(|l| l.state.clone())
+            .parent_refs
+            .iter()
+            .map(|r| r.state.clone())
+            .collect()
     }
 
-    fn resolved(rel: &str, line: usize) -> Option<ParentLinkState> {
-        Some(ParentLinkState::Resolved((PathBuf::from(rel), line)))
-    }
-
-    #[test]
-    fn block_reference_across_files() {
-        let (_d, s) = scan(&[
-            ("proj.md", "- [ ] Vendor onboarding ^vo1\n"),
-            (
-                "journal/2026-10-21.md",
-                "# Day\n- [ ] reproduce on staging [[proj#^vo1]]\n",
-            ),
-        ]);
-        assert_eq!(
-            state(&s, "journal/2026-10-21.md", 2),
-            resolved("proj.md", 1)
-        );
-        let link = task(&s, "journal/2026-10-21.md", 2)
-            .parent_link
-            .clone()
-            .unwrap();
-        assert_eq!(link.raw, "[[proj#^vo1]]");
-    }
-
-    #[test]
-    fn same_file_block_reference_and_embed() {
-        let (_d, s) = scan(&[(
-            "a.md",
-            "- [ ] A ^a1\n\ntext\n\n- [ ] B [[#^a1]]\n- [ ] C ![[a#^a1]]\n",
-        )]);
-        assert_eq!(state(&s, "a.md", 5), resolved("a.md", 1));
-        assert_eq!(state(&s, "a.md", 6), resolved("a.md", 1));
-    }
-
-    #[test]
-    fn anchor_note() {
-        let (_d, s) = scan(&[
-            (
-                "jira/ABC-123.md",
-                "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n- [ ] Fix login 🆔 ABC-123\n",
-            ),
-            (
-                "j.md",
-                "- [ ] write test [[ABC-123]]\n- [ ] alias [[ABC-123|the bug]]\n",
-            ),
-        ]);
-        assert_eq!(state(&s, "j.md", 1), resolved("jira/ABC-123.md", 6));
-        assert_eq!(state(&s, "j.md", 2), resolved("jira/ABC-123.md", 6));
-    }
-
-    #[test]
-    fn non_candidates() {
-        let (_d, s) = scan(&[
-            ("Claude.md", "some note\n"),
-            ("notes.md", "a paragraph ^p1\n## Head\n"),
-            (
-                "j.md",
-                "- [ ] plain [[Claude]]\n- [ ] para [[notes#^p1]]\n- [ ] heading [[notes#Head]]\n- [ ] ghost [[Nope]]\n- [ ] md [x](notes.md)\n",
-            ),
-        ]);
-        for line in 1..=5 {
-            assert_eq!(state(&s, "j.md", line), None, "line {line}");
-        }
-    }
-
-    #[test]
-    fn dangling_variants() {
-        let (_d, s) = scan(&[
-            ("proj.md", "- [ ] P ^p1\n"),
-            ("anchor.md", "---\nft:\n  tasks:\n    anchor: X-1\n---\n- [ ] no id here\n"),
-            (
-                "j.md",
-                "- [ ] missing id [[proj#^gone]]\n- [ ] missing note [[ghost#^p1]]\n- [ ] anchor without task [[anchor]]\n",
-            ),
-        ]);
-        for line in 1..=3 {
-            assert_eq!(
-                state(&s, "j.md", line),
-                Some(ParentLinkState::Dangling),
-                "line {line}"
-            );
-        }
-    }
-
-    #[test]
-    fn first_candidate_wins_rest_are_extra() {
-        let (_d, s) = scan(&[
-            ("a.md", "- [ ] A ^x\n"),
-            ("b.md", "- [ ] B ^y\n"),
-            ("j.md", "- [ ] two [[Claude]] [[a#^x]] and [[b#^y]]\n"),
-        ]);
-        let link = task(&s, "j.md", 1).parent_link.clone().unwrap();
-        assert_eq!(link.state, resolved("a.md", 1).unwrap());
-        assert_eq!(link.extra, vec!["[[b#^y]]".to_string()]);
-    }
-
-    #[test]
-    fn physically_nested_link_is_ignored() {
-        let (_d, s) = scan(&[
-            ("proj.md", "- [ ] P ^p1\n"),
-            ("j.md", "- [ ] parent\n  - [ ] child [[proj#^p1]]\n"),
-        ]);
-        assert_eq!(state(&s, "j.md", 2), Some(ParentLinkState::Ignored));
-        let child = task(&s, "j.md", 2);
-        assert_eq!(
-            super::super::hierarchy::parent_key(child),
-            Some((PathBuf::from("j.md"), 1))
-        );
-    }
-
-    #[test]
-    fn two_cycle_breaks_at_greatest_key() {
-        let (_d, s) = scan(&[
-            ("a.md", "- [ ] A [[b#^b1]] ^a1\n"),
-            ("b.md", "- [ ] B [[a#^a1]] ^b1\n"),
-        ]);
-        assert_eq!(state(&s, "a.md", 1), resolved("b.md", 1));
-        assert_eq!(state(&s, "b.md", 1), Some(ParentLinkState::Cycle));
-    }
-
-    #[test]
-    fn cycle_through_physical_edge_breaks_on_a_link() {
-        // c.md:2 is physically under c.md:1 and links nothing; c.md:1 links
-        // a.md:1, which links back to c.md:2 → cycle a → c2 → c1 → a.
-        let (_d, s) = scan(&[
-            ("a.md", "- [ ] A [[c#^c2]] ^a1\n"),
-            ("c.md", "- [ ] C1 [[a#^a1]]\n  - [ ] C2 ^c2\n"),
-        ]);
-        // Greatest link-parented key among {a.md:1, c.md:1} is c.md:1.
-        assert_eq!(state(&s, "c.md", 1), Some(ParentLinkState::Cycle));
-        assert_eq!(state(&s, "a.md", 1), resolved("c.md", 2));
-    }
-
-    #[test]
-    fn self_link_is_a_cycle() {
-        let (_d, s) = scan(&[("a.md", "- [ ] A [[#^a1]] ^a1\n")]);
-        assert_eq!(state(&s, "a.md", 1), Some(ParentLinkState::Cycle));
-    }
-
-    #[test]
-    fn three_cycle_leaves_two_links_resolved() {
-        let (_d, s) = scan(&[
-            ("a.md", "- [ ] A [[b#^b1]] ^a1\n"),
-            ("b.md", "- [ ] B [[c#^c1]] ^b1\n"),
-            ("c.md", "- [ ] C [[a#^a1]] ^c1\n"),
-        ]);
-        assert_eq!(state(&s, "a.md", 1), resolved("b.md", 1));
-        assert_eq!(state(&s, "b.md", 1), resolved("c.md", 1));
-        assert_eq!(state(&s, "c.md", 1), Some(ParentLinkState::Cycle));
-    }
-
-    #[test]
-    fn duplicate_block_id_first_occurrence_wins() {
-        let (_d, s) = scan(&[
-            ("p.md", "- [ ] first ^d\n- [ ] second ^d\n"),
-            ("j.md", "- [ ] x [[p#^d]]\n"),
-        ]);
-        assert_eq!(state(&s, "j.md", 1), resolved("p.md", 1));
+    fn resolved(rel: &str, line: usize) -> RefState {
+        RefState::Resolved((PathBuf::from(rel), line))
     }
 
     fn key(rel: &str, line: usize) -> TaskKey {
         (PathBuf::from(rel), line)
     }
 
+    // ── resolution ───────────────────────────────────────────────────
+
     #[test]
-    fn forest_nests_linked_children_physical_first() {
-        use crate::task::hierarchy::{expand_forest, expand_forest_visible};
+    fn local_and_remote_parents_in_one_field() {
         let (_d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor onboarding 🆔 k3x9qa\n"),
             (
-                "j.md",
-                "- [ ] linked child [[proj#^p1]]
-- [ ] unrelated
-",
+                "jira/ABC-123.md",
+                "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n- [ ] Fix login 🆔 ABC-123\n",
             ),
-            (
-                "proj.md",
-                "- [ ] Parent ^p1
-  - [ ] physical child
-",
-            ),
+            ("j.md", "# Day\n- [ ] reproduce ⤴ k3x9qa,ABC-123\n"),
         ]);
-        let rows = expand_forest(&s.tasks, &[key("proj.md", 1), key("j.md", 1)]);
-        let shape: Vec<(String, usize)> = rows
-            .iter()
-            .map(|r| (s.tasks[r.idx].description.clone(), r.depth))
-            .collect();
         assert_eq!(
-            shape,
-            vec![
-                ("Parent".to_string(), 0),
-                ("physical child".to_string(), 1),
-                ("linked child [[proj#^p1]]".to_string(), 1),
-            ]
+            states(&s, "j.md", 2),
+            [resolved("proj.md", 1), resolved("jira/ABC-123.md", 6)]
         );
-        // Child unmatched by the query still shows under its parent; the
-        // linked child is not a second root when matched alone with it.
-        let expanded = [key("proj.md", 1)].into_iter().collect();
-        let vis = expand_forest_visible(&s.tasks, &[key("proj.md", 1)], &expanded);
-        assert_eq!(vis.len(), 3);
-        assert!(vis[0].has_children && vis[0].expanded);
+        let t = task(&s, "j.md", 2);
+        assert!(t.parent_refs.iter().all(|r| r.origin == RefOrigin::Line));
+        assert_eq!(
+            crate::task::hierarchy::parent_keys(t),
+            [key("proj.md", 1), key("jira/ABC-123.md", 6)]
+        );
     }
 
     #[test]
-    fn graph_has_cross_file_subtask_edges_only_for_resolved_links() {
-        use crate::graph::{EdgeKind, Graph};
+    fn wikilinks_are_ordinary_links() {
         let (_d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor ^vo1 \n"),
+            ("j.md", "- [ ] t [[proj#^vo1]] [[proj]]\n"),
+        ]);
+        assert!(task(&s, "j.md", 1).parent_refs.is_empty());
+    }
+
+    #[test]
+    fn dangling_ambiguous_and_duplicate_ids_collapse() {
+        let (_d, s) = scan(&[
+            ("a.md", "- [ ] A 🆔 dup\n- [ ] B 🆔 dup\n"),
+            ("j.md", "- [ ] t ⤴ dup,gone,gone\n"),
+        ]);
+        assert_eq!(
+            states(&s, "j.md", 1),
+            [RefState::Ambiguous, RefState::Dangling]
+        );
+        assert!(crate::task::hierarchy::parent_keys(task(&s, "j.md", 1)).is_empty());
+    }
+
+    #[test]
+    fn physical_and_logical_parents_combine() {
+        let (_d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor 🆔 k3x9qa\n"),
+            (
+                "g.md",
+                "- [ ] Ship Q4 🆔 p2m7rd\n  - [ ] kid ⤴ k3x9qa,p2m7rd\n",
+            ),
+        ]);
+        let t = task(&s, "g.md", 2);
+        assert_eq!(
+            crate::task::hierarchy::parent_keys(t),
+            [key("g.md", 1), key("proj.md", 1)]
+        );
+        // Naming the physical parent again stays resolved but is redundant.
+        let issues = check(&s.tasks);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, IssueKind::Redundant);
+        assert_eq!(issues[0].id, "p2m7rd");
+    }
+
+    #[test]
+    fn two_cycle_breaks_at_greatest_key() {
+        let (_d, s) = scan(&[
+            ("a.md", "- [ ] A 🆔 aaaaaa ⤴ bbbbbb\n"),
+            ("b.md", "- [ ] B 🆔 bbbbbb ⤴ aaaaaa\n"),
+        ]);
+        assert_eq!(states(&s, "a.md", 1), [resolved("b.md", 1)]);
+        assert_eq!(states(&s, "b.md", 1), [RefState::Cycle]);
+    }
+
+    #[test]
+    fn cycle_through_physical_edge_breaks_on_a_reference() {
+        // p.md:2 is physically under p.md:1, which references p.md:2.
+        let (_d, s) = scan(&[("p.md", "- [ ] P ⤴ cccccc\n  - [ ] C 🆔 cccccc\n")]);
+        assert_eq!(states(&s, "p.md", 1), [RefState::Cycle]);
+    }
+
+    #[test]
+    fn self_reference_and_three_cycle() {
+        let (_d, s) = scan(&[
+            ("s.md", "- [ ] S 🆔 ssssss ⤴ ssssss\n"),
+            ("a.md", "- [ ] A 🆔 a1 ⤴ c1\n"),
+            ("b.md", "- [ ] B 🆔 b1 ⤴ a1\n"),
+            ("c.md", "- [ ] C 🆔 c1 ⤴ b1\n"),
+        ]);
+        assert_eq!(states(&s, "s.md", 1), [RefState::Cycle]);
+        assert_eq!(states(&s, "a.md", 1), [resolved("c.md", 1)]);
+        assert_eq!(states(&s, "b.md", 1), [resolved("a.md", 1)]);
+        assert_eq!(states(&s, "c.md", 1), [RefState::Cycle]);
+    }
+
+    #[test]
+    fn two_cycles_through_one_task_are_both_broken() {
+        let (_d, s) = scan(&[
+            ("a.md", "- [ ] A 🆔 a1 ⤴ b1,c1\n"),
+            ("b.md", "- [ ] B 🆔 b1 ⤴ a1\n"),
+            ("c.md", "- [ ] C 🆔 c1 ⤴ a1\n"),
+        ]);
+        assert_eq!(
+            states(&s, "a.md", 1),
+            [resolved("b.md", 1), resolved("c.md", 1)]
+        );
+        assert_eq!(states(&s, "b.md", 1), [RefState::Cycle]);
+        assert_eq!(states(&s, "c.md", 1), [RefState::Cycle]);
+    }
+
+    #[test]
+    fn deleted_parent_dangles() {
+        let (d, _) = scan(&[
+            ("proj.md", "- [ ] Vendor 🆔 k3x9qa\n"),
+            ("j.md", "- [ ] t ⤴ k3x9qa\n"),
+        ]);
+        std::fs::write(d.path().join("proj.md"), "").unwrap();
+        let s = crate::scan::scan_vault(d.path(), &[]);
+        assert_eq!(states(&s, "j.md", 1), [RefState::Dangling]);
+    }
+
+    // ── DAG forest + graph ───────────────────────────────────────────
+
+    fn shape(s: &Scan, rows: &[crate::task::hierarchy::ForestRow]) -> Vec<(String, usize)> {
+        rows.iter()
+            .map(|r| (s.tasks[r.idx].description.clone(), r.depth))
+            .collect()
+    }
+
+    fn two_parents() -> (tempfile::TempDir, Scan) {
+        scan(&[
             (
                 "proj.md",
-                "- [ ] Parent ^p1
-",
+                "- [ ] Vendor 🆔 k3x9qa\n  - [ ] physical child\n",
             ),
+            ("goals.md", "- [ ] Ship Q4 🆔 p2m7rd\n"),
             (
                 "j.md",
-                "- [ ] linked [[proj#^p1]]
-- [ ] dangling [[proj#^nope]]
-- [ ] nest
-  - [ ] ignored [[proj#^p1]]
-",
+                "- [ ] journal task ⤴ k3x9qa,p2m7rd\n  - [ ] grandkid\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn forest_repeats_a_task_under_every_parent() {
+        use crate::task::hierarchy::expand_forest;
+        let (_d, s) = two_parents();
+        let matched = [key("proj.md", 1), key("goals.md", 1), key("j.md", 1)];
+        let rows = expand_forest(&s.tasks, &matched);
+        let sh = |n: &str, d| (n.to_string(), d);
+        assert_eq!(
+            shape(&s, &rows),
+            [
+                sh("Vendor", 0),
+                sh("physical child", 1),
+                sh("journal task", 1),
+                sh("grandkid", 2),
+                sh("Ship Q4", 0),
+                sh("journal task", 1),
+                sh("grandkid", 2),
+            ]
+        );
+        let jt: Vec<_> = rows
+            .iter()
+            .filter(|r| s.tasks[r.idx].description == "journal task")
+            .map(|r| r.via.map(|v| s.tasks[v].description.clone()))
+            .collect();
+        assert_eq!(jt, [Some("Vendor".into()), Some("Ship Q4".into())]);
+    }
+
+    #[test]
+    fn forest_with_one_parent_in_view() {
+        use crate::task::hierarchy::expand_forest;
+        let (_d, s) = two_parents();
+        let rows = expand_forest(&s.tasks, &[key("j.md", 1), key("proj.md", 1)]);
+        let names: Vec<_> = shape(&s, &rows).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(
+            names,
+            ["Vendor", "physical child", "journal task", "grandkid"]
+        );
+        // Matched alone, it is a root.
+        let rows = expand_forest(&s.tasks, &[key("j.md", 1)]);
+        assert_eq!(rows[0].via, None);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn visible_forest_expands_every_occurrence() {
+        use crate::task::hierarchy::expand_forest_visible;
+        let (_d, s) = two_parents();
+        let expanded = [key("proj.md", 1), key("goals.md", 1)]
+            .into_iter()
+            .collect();
+        let rows = expand_forest_visible(
+            &s.tasks,
+            &[key("proj.md", 1), key("goals.md", 1)],
+            &expanded,
+        );
+        let jt: Vec<_> = rows
+            .iter()
+            .filter(|r| s.tasks[r.idx].description == "journal task")
+            .collect();
+        assert_eq!(jt.len(), 2);
+        assert!(jt.iter().all(|r| r.has_children && !r.expanded));
+    }
+
+    #[test]
+    fn graph_has_one_subtask_edge_per_parent() {
+        use crate::graph::{EdgeKind, Graph};
+        let (_d, s) = scan(&[
+            ("proj.md", "- [ ] Vendor 🆔 k3x9qa\n"),
+            (
+                "goals.md",
+                "- [ ] Ship Q4 🆔 p2m7rd\n  - [ ] kid ⤴ p2m7rd,k3x9qa,nope\n",
             ),
         ]);
         let g = Graph::build(&s).unwrap();
-        let parent = g.task_by_loc(Path::new("proj.md"), 1).unwrap();
-        let kids: Vec<_> = g
-            .outgoing(parent)
+        let kid = g.task_by_loc(Path::new("goals.md"), 2).unwrap();
+        let parents: Vec<_> = g
+            .incoming(kid)
             .filter(|(_, e)| matches!(e, EdgeKind::Subtask))
             .map(|(id, _)| id)
             .collect();
-        assert_eq!(kids, vec![g.task_by_loc(Path::new("j.md"), 1).unwrap()]);
-        // The linked child still hangs off its own note.
-        let note = g.note_by_path(Path::new("j.md")).unwrap();
-        assert!(g
-            .outgoing(note)
-            .any(|(id, e)| matches!(e, EdgeKind::HasTask)
-                && Some(id) == g.task_by_loc(Path::new("j.md"), 1)));
+        assert_eq!(parents.len(), 2);
+        for (rel, line) in [("proj.md", 1), ("goals.md", 1)] {
+            assert!(parents.contains(&g.task_by_loc(Path::new(rel), line).unwrap()));
+        }
     }
 
     fn query(s: &Scan, dsl: &str) -> Vec<String> {
@@ -1285,7 +1411,7 @@ mod tests {
             .tasks
             .iter()
             .filter(|t| keys.contains(&(t.source_file.clone(), t.source_line)))
-            .map(|t| t.description.split(" [[").next().unwrap().to_string())
+            .map(|t| t.description.clone())
             .collect();
         out.sort();
         out
@@ -1296,45 +1422,32 @@ mod tests {
         let (_d, s) = scan(&[
             (
                 "proj.md",
-                "- [x] Done parent ^dp
-- [ ] Open parent ^op
-  - [ ] physical kid
-",
+                "- [x] Done parent 🆔 dp\n- [ ] Open parent 🆔 op\n  - [ ] physical kid\n",
             ),
             (
                 "j.md",
-                "- [ ] orphan [[proj#^dp]]
-- [ ] linked [[proj#^op]]
-- [ ] broken [[proj#^zz]]
-- [ ] top
-",
+                "- [ ] orphan ⤴ dp\n- [ ] half ⤴ dp,op\n- [ ] broken ⤴ zz\n- [ ] top\n",
             ),
         ]);
-        assert_eq!(
-            query(&s, "status = Open and parent_status in {Done, Cancelled}"),
-            ["orphan"]
-        );
-        assert_eq!(
-            query(&s, crate::query::preset::builtin("orphaned").unwrap()),
-            ["orphan"]
-        );
-        assert_eq!(query(&s, "children > 0"), ["Done parent", "Open parent"]);
-        assert_eq!(query(&s, "children = 2"), ["Open parent"]);
+        let preset = |n| crate::query::preset::builtin(n).unwrap();
+        assert_eq!(query(&s, preset("orphaned")), ["orphan"]);
+        assert_eq!(query(&s, "parent_status = Done"), ["half", "orphan"]);
         assert_eq!(
             query(&s, "parent includes \"Open\""),
-            ["linked", "physical kid"]
+            ["half", "physical kid"]
         );
-        assert_eq!(query(&s, "parent_link = dangling"), ["broken"]);
-        assert_eq!(
-            query(&s, crate::query::preset::builtin("broken-links").unwrap()),
-            ["broken"]
-        );
+        assert_eq!(query(&s, "parents = 2"), ["half"]);
+        assert_eq!(query(&s, "open_parents = 1"), ["half", "physical kid"]);
+        assert_eq!(query(&s, "children = 2"), ["Done parent", "Open parent"]);
+        assert_eq!(query(&s, "id = op"), ["Open parent"]);
+        assert_eq!(query(&s, "parent_ref = dangling"), ["broken"]);
+        assert_eq!(query(&s, preset("broken-links")), ["broken"]);
         assert_eq!(
             query(&s, "parent is null and status = Open"),
             ["Open parent", "broken", "top"]
         );
         assert_eq!(
-            query(&s, "parent_link is null and status = Open"),
+            query(&s, "parent_ref is null and status = Open"),
             ["Open parent", "physical kid", "top"]
         );
     }
@@ -1343,13 +1456,14 @@ mod tests {
     fn hierarchy_attrs_rejected_on_edges() {
         use crate::graph::query::{parse_with, Profile};
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
-        let src = "node where kind = Task; expand where edge.children > 0;";
-        assert!(parse_with(src, Profile::Default, today).is_err());
+        for a in ["children", "parents", "parent_ref", "id"] {
+            let src = format!("node where kind = Task; expand where edge.{a} > 0;");
+            assert!(parse_with(&src, Profile::Default, today).is_err(), "{a}");
+        }
+        assert!(parse_with("parent_link = resolved", Profile::Tasks, today).is_err());
     }
 
     // ── plan_link / plan_unlink ──────────────────────────────────────
-
-    use crate::task::emoji::EmojiFormat;
 
     fn src_of(dir: &Path, s: &Scan, rel: &str, line: usize) -> MoveSource {
         MoveSource {
@@ -1384,8 +1498,15 @@ mod tests {
         Ok(plan)
     }
 
-    fn block_of(line: &str) -> String {
-        crate::scan::trailing_block_id(line).unwrap().to_string()
+    fn id_of(line: &str) -> String {
+        line.split("🆔 ")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     #[test]
@@ -1394,134 +1515,179 @@ mod tests {
             ("proj.md", "- [ ] Vendor onboarding\n"),
             (
                 "journal/2026-10-21.md",
-                "# Day\n\n- [ ] reproduce 📅 2026-10-23\n",
+                "# Day\n\t- [ ] reproduce 📅 2026-10-23\n",
             ),
         ]);
         let plan = link(
             d.path(),
             &s,
-            &[("journal/2026-10-21.md", 3)],
+            &[("journal/2026-10-21.md", 2)],
             ("proj.md", 1),
         )
         .unwrap();
+        assert_eq!(plan.children.len(), 1);
+        assert!(!plan.children[0].unchanged);
         let proj = read(d.path(), "proj.md");
-        let id = block_of(proj.lines().next().unwrap());
+        let id = id_of(&proj);
         assert_eq!(id.len(), 6);
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
+        assert_eq!(proj, format!("- [ ] Vendor onboarding 🆔 {id}\n"));
         assert_eq!(
             read(d.path(), "journal/2026-10-21.md"),
-            format!("# Day\n\n- [ ] reproduce [[proj#^{id}]] 📅 2026-10-23\n")
-        );
-        assert_eq!(plan.children.len(), 1);
-        // A rescan resolves the new link.
-        let s2 = crate::scan::scan_vault(d.path(), &[]);
-        assert_eq!(
-            state(&s2, "journal/2026-10-21.md", 3),
-            resolved("proj.md", 1)
+            format!("# Day\n\t- [ ] reproduce ⤴ {id} 📅 2026-10-23\n")
         );
     }
 
     #[test]
-    fn link_reuses_existing_block_id_and_same_file_form() {
-        let (d, s) = scan(&[("a.md", "- [ ] A ^a1\n- [ ] B\n- [ ] C\n")]);
-        link(d.path(), &s, &[("a.md", 2), ("a.md", 3)], ("a.md", 1)).unwrap();
-        assert_eq!(
-            read(d.path(), "a.md"),
-            "- [ ] A ^a1\n- [ ] B [[#^a1]]\n- [ ] C [[#^a1]]\n"
-        );
-    }
-
-    #[test]
-    fn relink_replaces_old_link() {
+    fn link_adds_a_second_parent_and_is_idempotent() {
         let (d, s) = scan(&[
-            ("old.md", "- [ ] Old ^o1\n"),
-            ("new.md", "- [ ] New ^n1\n"),
-            ("j.md", "- [ ] kid [[old#^o1]] see [[Claude]] ⏫\n"),
+            ("proj.md", "- [ ] Vendor 🆔 k3x9qa\n- [ ] Fix 🆔 ABC-123\n"),
+            ("j.md", "- [ ] t ⤴ k3x9qa\n"),
         ]);
-        link(d.path(), &s, &[("j.md", 1)], ("new.md", 1)).unwrap();
-        assert_eq!(
-            read(d.path(), "j.md"),
-            "- [ ] kid see [[Claude]] [[new#^n1]] ⏫\n"
-        );
+        link(d.path(), &s, &[("j.md", 1)], ("proj.md", 2)).unwrap();
+        assert_eq!(read(d.path(), "j.md"), "- [ ] t ⤴ k3x9qa,ABC-123\n");
+        let s = crate::scan::scan_vault(d.path(), &[]);
+        let plan = link(d.path(), &s, &[("j.md", 1)], ("proj.md", 1)).unwrap();
+        assert!(plan.children[0].unchanged);
+        assert!(plan.edits.iter().all(|e| e.original == e.new));
     }
 
     #[test]
-    fn ambiguous_title_uses_path_form() {
+    fn link_refuses_cycles_and_redundant_physical_parent() {
         let (d, s) = scan(&[
-            ("a/proj.md", "- [ ] A ^x\n"),
-            ("b/proj.md", "- [ ] B ^y\n"),
-            ("j.md", "- [ ] kid\n"),
+            ("a.md", "- [ ] A 🆔 a1\n  - [ ] A kid\n"),
+            ("b.md", "- [ ] B ⤴ a1\n"),
         ]);
-        link(d.path(), &s, &[("j.md", 1)], ("b/proj.md", 1)).unwrap();
-        assert_eq!(read(d.path(), "j.md"), "- [ ] kid [[b/proj#^y]]\n");
-    }
-
-    #[test]
-    fn anchor_task_gets_note_link_and_no_block_id() {
-        let anchor = "---\nft:\n  tasks:\n    anchor: ABC-123\n---\n- [ ] Fix login 🆔 ABC-123\n";
-        let (d, s) = scan(&[("jira/ABC-123.md", anchor), ("j.md", "- [ ] write test\n")]);
-        link(d.path(), &s, &[("j.md", 1)], ("jira/ABC-123.md", 6)).unwrap();
-        assert_eq!(read(d.path(), "jira/ABC-123.md"), anchor);
-        assert_eq!(read(d.path(), "j.md"), "- [ ] write test [[ABC-123]]\n");
-    }
-
-    #[test]
-    fn link_refuses_cycles_and_nested_children() {
-        let (d, s) = scan(&[
-            ("p.md", "- [ ] P ^p1\n"),
-            ("c.md", "- [ ] C [[p#^p1]] ^c1\n- [ ] Q\n  - [ ] nested\n"),
-        ]);
-        let err = link(d.path(), &s, &[("p.md", 1)], ("c.md", 1)).unwrap_err();
+        let err = link(d.path(), &s, &[("a.md", 1)], ("b.md", 1)).unwrap_err();
         assert!(matches!(err, LinkError::WouldCycle { .. }), "{err:?}");
-        let err = link(d.path(), &s, &[("p.md", 1)], ("p.md", 1)).unwrap_err();
+        let err = link(d.path(), &s, &[("a.md", 1)], ("a.md", 2)).unwrap_err();
         assert!(matches!(err, LinkError::WouldCycle { .. }), "{err:?}");
-        let err = link(d.path(), &s, &[("c.md", 3)], ("p.md", 1)).unwrap_err();
-        assert!(matches!(err, LinkError::PhysicallyNested { .. }), "{err:?}");
-        assert_eq!(
-            read(d.path(), "c.md"),
-            "- [ ] C [[p#^p1]] ^c1\n- [ ] Q\n  - [ ] nested\n"
+        let err = link(d.path(), &s, &[("a.md", 2)], ("a.md", 1)).unwrap_err();
+        assert!(
+            matches!(err, LinkError::AlreadyPhysicalParent { .. }),
+            "{err:?}"
         );
+        // A nested task can still gain a logical parent elsewhere.
+        link(d.path(), &s, &[("a.md", 2)], ("b.md", 1)).unwrap();
+        assert!(read(d.path(), "a.md").contains("  - [ ] A kid ⤴ "));
     }
 
     #[test]
     fn link_guards_stale_lines() {
-        let (d, s) = scan(&[("p.md", "- [ ] P\n"), ("j.md", "- [ ] kid\n")]);
-        std::fs::write(d.path().join("p.md"), "- [ ] P edited\n").unwrap();
-        let err = link(d.path(), &s, &[("j.md", 1)], ("p.md", 1)).unwrap_err();
-        assert!(matches!(err, LinkError::TargetChanged { .. }), "{err:?}");
-        std::fs::write(d.path().join("p.md"), "- [ ] P\n").unwrap();
-        std::fs::write(d.path().join("j.md"), "- [ ] kid edited\n").unwrap();
-        let err = link(d.path(), &s, &[("j.md", 1)], ("p.md", 1)).unwrap_err();
+        let (d, s) = scan(&[("p.md", "- [ ] P\n"), ("c.md", "- [ ] C\n")]);
+        std::fs::write(d.path().join("c.md"), "- [ ] changed\n").unwrap();
+        let err = link(d.path(), &s, &[("c.md", 1)], ("p.md", 1)).unwrap_err();
         assert!(matches!(err, LinkError::LineChanged { .. }), "{err:?}");
     }
 
     #[test]
-    fn unlink_removes_link_and_keeps_block_id() {
-        let (d, s) = scan(&[
-            ("proj.md", "- [ ] P ^vo1\n"),
-            (
-                "j.md",
-                "- [ ] reproduce [[proj#^vo1]] 📅 2026-10-23\n- [ ] plain\n",
-            ),
-        ]);
-        let plan = plan_unlink(&src_of(d.path(), &s, "j.md", 1), &EmojiFormat).unwrap();
-        apply_link_plan(&plan).unwrap();
-        assert_eq!(
-            read(d.path(), "j.md"),
-            "- [ ] reproduce 📅 2026-10-23\n- [ ] plain\n"
-        );
-        assert_eq!(read(d.path(), "proj.md"), "- [ ] P ^vo1\n");
-        let err = plan_unlink(&src_of(d.path(), &s, "j.md", 2), &EmojiFormat).unwrap_err();
-        assert!(matches!(err, LinkError::NoParentLink { .. }), "{err:?}");
+    fn ids_avoid_vault_wide_collisions() {
+        let mut taken = HashSet::new();
+        let first = id_from_seed(Path::new("a.md"), 1, "x", 7, &taken);
+        taken.insert(first.clone());
+        let second = id_from_seed(Path::new("a.md"), 1, "x", 7, &taken);
+        assert_ne!(first, second);
+        assert_eq!(second.len(), 6);
     }
 
     #[test]
-    fn block_ids_avoid_collisions() {
-        let p = Path::new("p.md");
-        let first = block_id_from_seed(p, 1, "x", 42, &HashSet::new());
-        let taken: HashSet<String> = [first.clone()].into_iter().collect();
-        let second = block_id_from_seed(p, 1, "x", 42, &taken);
-        assert_ne!(first, second);
-        assert!(second.len() == 6 && second.chars().all(|c| c.is_ascii_alphanumeric()));
+    fn parents_for_new_task_reuse_and_assign_ids() {
+        let (d, s) = scan(&[("p.md", "- [ ] Ticket 🆔 ABC-123\n- [ ] Goal\n")]);
+        let ctx = LinkCtx::new(d.path(), &s);
+        let (ids, plan) = plan_parents_for_new_task(
+            &[
+                src_of(d.path(), &s, "p.md", 1),
+                src_of(d.path(), &s, "p.md", 2),
+            ],
+            &ctx,
+            &EmojiFormat,
+        )
+        .unwrap();
+        apply_link_plan(&plan).unwrap();
+        assert_eq!(ids[0], "ABC-123");
+        assert_eq!(
+            read(d.path(), "p.md"),
+            format!("- [ ] Ticket 🆔 ABC-123\n- [ ] Goal 🆔 {}\n", ids[1])
+        );
+    }
+
+    fn unlink(d: &Path, s: &Scan, rel: &str, line: usize, which: Unlink) -> Result<(), LinkError> {
+        let plan = plan_unlink(&src_of(d, s, rel, line), &which, &EmojiFormat)?;
+        apply_link_plan(&plan)
+    }
+
+    #[test]
+    fn unlink_variants() {
+        let (d, s) = scan(&[
+            ("p.md", "- [ ] V 🆔 k3x9qa\n- [ ] F 🆔 ABC-123\n"),
+            ("j.md", "- [ ] two ⤴ k3x9qa,ABC-123 📅 2026-10-23\n- [ ] one ⤴ k3x9qa\n- [ ] none\n- [ ] gone ⤴ zz,k3x9qa\n"),
+        ]);
+        match unlink(d.path(), &s, "j.md", 1, Unlink::Only).unwrap_err() {
+            LinkError::NeedsChoice { refs, .. } => {
+                assert_eq!(refs.len(), 2);
+                assert_eq!(refs[1].state, resolved("p.md", 2));
+            }
+            e => panic!("{e:?}"),
+        }
+        unlink(d.path(), &s, "j.md", 1, Unlink::Parent(key("p.md", 2))).unwrap();
+        unlink(d.path(), &s, "j.md", 2, Unlink::Only).unwrap();
+        let err = unlink(d.path(), &s, "j.md", 3, Unlink::Only).unwrap_err();
+        assert!(matches!(err, LinkError::NoParentLink { .. }), "{err:?}");
+        let err = unlink(d.path(), &s, "j.md", 4, Unlink::Parent(key("p.md", 2))).unwrap_err();
+        assert!(matches!(err, LinkError::NotLinkedTo { .. }), "{err:?}");
+        unlink(d.path(), &s, "j.md", 4, Unlink::Id("zz".into())).unwrap();
+        assert_eq!(
+            read(d.path(), "j.md"),
+            "- [ ] two ⤴ k3x9qa 📅 2026-10-23\n- [ ] one\n- [ ] none\n- [ ] gone ⤴ k3x9qa\n"
+        );
+        let s = crate::scan::scan_vault(d.path(), &[]);
+        unlink(d.path(), &s, "j.md", 4, Unlink::All).unwrap();
+        assert!(read(d.path(), "j.md").ends_with("- [ ] gone\n"));
+        assert_eq!(
+            read(d.path(), "p.md"),
+            "- [ ] V 🆔 k3x9qa\n- [ ] F 🆔 ABC-123\n"
+        );
+    }
+
+    #[test]
+    fn check_reports_every_kind() {
+        let (_d, s) = scan(&[
+            (
+                "a.md",
+                "- [ ] A 🆔 k3x9qa\n- [ ] P 🆔 pp\n  - [ ] red ⤴ pp\n",
+            ),
+            (
+                "b.md",
+                "- [ ] copy 🆔 k3x9qa\n- [ ] amb ⤴ k3x9qa\n- [ ] dang ⤴ nope,nope\n",
+            ),
+            ("c.md", "- [ ] S 🆔 ss ⤴ ss\n"),
+        ]);
+        let got: Vec<(&str, String, usize, String)> = check(&s.tasks)
+            .into_iter()
+            .map(|i| {
+                let t = &s.tasks[i.task];
+                (
+                    i.kind.as_str(),
+                    t.source_file.display().to_string(),
+                    t.source_line,
+                    i.id,
+                )
+            })
+            .collect();
+        let row = |k, f: &str, l, id: &str| (k, f.to_string(), l, id.to_string());
+        assert_eq!(
+            got,
+            [
+                row("redundant", "a.md", 3, "pp"),
+                row("duplicate-id", "b.md", 1, "k3x9qa"),
+                row("ambiguous", "b.md", 2, "k3x9qa"),
+                row("dangling", "b.md", 3, "nope"),
+                row("redundant", "b.md", 3, "nope"),
+                row("cycle", "c.md", 1, "ss"),
+            ]
+        );
     }
 
     // ── move integration ─────────────────────────────────────────────
@@ -1529,14 +1695,37 @@ mod tests {
     use crate::task::ops::{apply_move_plan, plan_indent, plan_move, MoveTarget, Placement};
 
     #[test]
-    fn nesting_under_task_strips_parent_link_only() {
+    fn nesting_strips_only_the_new_parents_id() {
         let (d, s) = scan(&[
-            ("proj.md", "- [ ] Vendor ^vo1\n- [ ] Other\n"),
-            ("j.md", "- [ ] reproduce [[proj#^vo1]] see [[Claude]] 📅 2026-10-23\n  - [ ] kid [[proj#^vo1]]\n"),
+            ("proj.md", "- [ ] Vendor 🆔 k3x9qa\n- [ ] Other\n"),
+            (
+                "j.md",
+                "- [ ] reproduce ⤴ k3x9qa,ABC-123 📅 2026-10-23\n  - [ ] kid ⤴ k3x9qa\n",
+            ),
+        ]);
+        let under = |line| MoveTarget::UnderTask {
+            path: d.path().join("proj.md"),
+            line,
+            expected: None,
+            placement: Placement::Child,
+        };
+        let plan = plan_move(&[src_of(d.path(), &s, "j.md", 1)], &under(1), &EmojiFormat).unwrap();
+        apply_move_plan(&plan).unwrap();
+        assert_eq!(
+            read(d.path(), "proj.md"),
+            "- [ ] Vendor 🆔 k3x9qa\n  - [ ] reproduce ⤴ ABC-123 📅 2026-10-23\n    - [ ] kid ⤴ k3x9qa\n- [ ] Other\n"
+        );
+    }
+
+    #[test]
+    fn nesting_under_unrelated_task_keeps_references() {
+        let (d, s) = scan(&[
+            ("proj.md", "- [ ] Other\n"),
+            ("j.md", "- [ ] reproduce ⤴ k3x9qa\n"),
         ]);
         let target = MoveTarget::UnderTask {
             path: d.path().join("proj.md"),
-            line: 2,
+            line: 1,
             expected: None,
             placement: Placement::Child,
         };
@@ -1544,16 +1733,13 @@ mod tests {
         apply_move_plan(&plan).unwrap();
         assert_eq!(
             read(d.path(), "proj.md"),
-            "- [ ] Vendor ^vo1\n- [ ] Other\n  - [ ] reproduce see [[Claude]] 📅 2026-10-23\n    - [ ] kid [[proj#^vo1]]\n"
+            "- [ ] Other\n  - [ ] reproduce ⤴ k3x9qa\n"
         );
     }
 
     #[test]
-    fn move_to_file_keeps_parent_link() {
-        let (d, s) = scan(&[
-            ("proj.md", "- [ ] Vendor ^vo1\n"),
-            ("j.md", "- [ ] reproduce [[proj#^vo1]]\n"),
-        ]);
+    fn move_to_file_keeps_references() {
+        let (d, s) = scan(&[("j.md", "- [ ] reproduce ⤴ k3x9qa\n")]);
         let plan = plan_move(
             &[src_of(d.path(), &s, "j.md", 1)],
             &MoveTarget::Append(d.path().join("inbox.md")),
@@ -1561,21 +1747,15 @@ mod tests {
         )
         .unwrap();
         apply_move_plan(&plan).unwrap();
-        assert_eq!(
-            read(d.path(), "inbox.md"),
-            "- [ ] reproduce [[proj#^vo1]]\n"
-        );
+        assert_eq!(read(d.path(), "inbox.md"), "- [ ] reproduce ⤴ k3x9qa\n");
     }
 
     #[test]
-    fn indent_strips_parent_link() {
-        let (d, s) = scan(&[
-            ("proj.md", "- [ ] Vendor ^vo1\n"),
-            ("j.md", "- [ ] A\n- [ ] B [[proj#^vo1]]\n"),
-        ]);
+    fn indent_strips_the_new_parents_id() {
+        let (d, s) = scan(&[("j.md", "- [ ] A 🆔 a1\n- [ ] B ⤴ a1,zz\n")]);
         let plan = plan_indent(&src_of(d.path(), &s, "j.md", 2), &EmojiFormat).unwrap();
         apply_move_plan(&plan).unwrap();
-        assert_eq!(read(d.path(), "j.md"), "- [ ] A\n  - [ ] B\n");
+        assert_eq!(read(d.path(), "j.md"), "- [ ] A 🆔 a1\n  - [ ] B ⤴ zz\n");
     }
 
     fn move_retarget(
@@ -1619,9 +1799,6 @@ mod tests {
             read(d.path(), "proj.md"),
             "- [ ] stays\n- [ ] local ref [[2026#^vo1]]\n"
         );
-        let s2 = crate::scan::scan_vault(d.path(), &[]);
-        assert_eq!(state(&s2, "journal.md", 1), resolved("archive/2026.md", 2));
-        assert_eq!(state(&s2, "proj.md", 2), resolved("archive/2026.md", 2));
     }
 
     #[test]
@@ -1637,16 +1814,13 @@ mod tests {
             placement: Placement::Child,
         };
         let (n, _) = move_retarget(d.path(), &s, ("a.md", 2), target);
-        // [[#^r1]] → explicit a; [[b#^b1]] collapses; parent link stripped;
-        // [[#^i1]] travelled with its block and stays.
+        // [[#^r1]] → explicit a; [[b#^b1]] collapses; [[#^i1]] travelled
+        // with its block and stays.
         assert_eq!(
             read(d.path(), "b.md"),
-            "- [ ] B ^b1\n  - [ ] block\n    - [ ] inner ^i1\n    - [ ] ref inner [[#^i1]]\n    - [ ] ref b [[#^b1]]\n"
+            "- [ ] B ^b1\n  - [ ] block [[a#^r1]]\n    - [ ] inner ^i1\n    - [ ] ref inner [[#^i1]]\n    - [ ] ref b [[#^b1]]\n"
         );
-        assert_eq!(
-            n, 1,
-            "only [[b#^b1]] needed a rewrite once the parent link was stripped"
-        );
+        assert_eq!(n, 2);
     }
 
     #[test]
@@ -1683,55 +1857,57 @@ mod tests {
 
     fn anchor_note_md(key: &str, parent: Option<&str>) -> String {
         let p = parent
-            .map(|p| format!("    parent: \"{p}\"\n"))
+            .map(|p| format!("    parent: {p}\n"))
             .unwrap_or_default();
         format!("---\nft:\n  tasks:\n    anchor: {key}\n{p}---\n- [ ] {key} title 🆔 {key}\n")
     }
 
     #[test]
-    fn anchor_note_frontmatter_parent() {
+    fn anchor_note_frontmatter_parent_adds_to_line_refs() {
         let (_d, s) = scan(&[
             ("jira/EPIC-7.md", &anchor_note_md("EPIC-7", None)),
+            ("goals.md", "- [ ] Q4 🆔 p2m7rd\n"),
             (
                 "jira/ABC-123.md",
-                &anchor_note_md("ABC-123", Some("[[EPIC-7]]")),
+                "---\nft:\n  tasks:\n    anchor: ABC-123\n    parent: EPIC-7\n---\n- [ ] t ⤴ p2m7rd 🆔 ABC-123\n",
             ),
-            ("jira/X-1.md", &anchor_note_md("X-1", Some("[[NOPE-1]]"))),
+            ("jira/X-1.md", &anchor_note_md("X-1", Some("\"[[EPIC-7]]\""))),
         ]);
+        let refs = &task(&s, "jira/ABC-123.md", 7).parent_refs;
+        assert_eq!(refs.len(), 2);
         assert_eq!(
-            state(&s, "jira/ABC-123.md", 7),
-            resolved("jira/EPIC-7.md", 6)
+            (refs[0].origin, refs[0].state.clone()),
+            (RefOrigin::Line, resolved("goals.md", 1))
         );
-        let link = task(&s, "jira/ABC-123.md", 7).parent_link.clone().unwrap();
-        assert_eq!(link.raw, "[[EPIC-7]]");
-        // A missing parent note is an ordinary (non-candidate) link.
-        assert_eq!(state(&s, "jira/X-1.md", 7), None);
-    }
-
-    #[test]
-    fn line_link_beats_frontmatter_parent() {
-        let (_d, s) = scan(&[
-            ("jira/EPIC-7.md", &anchor_note_md("EPIC-7", None)),
-            ("p.md", "- [ ] P ^p1\n"),
-            (
-                "jira/ABC-123.md",
-                "---\nft:\n  tasks:\n    anchor: ABC-123\n    parent: \"[[EPIC-7]]\"\n---\n- [ ] t [[p#^p1]] 🆔 ABC-123\n",
-            ),
-        ]);
-        let link = task(&s, "jira/ABC-123.md", 7).parent_link.clone().unwrap();
-        assert_eq!(link.state, resolved("p.md", 1).unwrap());
-        assert_eq!(link.extra, vec!["[[EPIC-7]]".to_string()]);
+        assert_eq!(
+            (refs[1].origin, refs[1].state.clone()),
+            (RefOrigin::Frontmatter, resolved("jira/EPIC-7.md", 6))
+        );
+        // An old wikilink value is just an unknown id.
+        assert_eq!(states(&s, "jira/X-1.md", 7), [RefState::Dangling]);
     }
 
     #[test]
     fn frontmatter_parent_cycle_and_unlink_refusal() {
         let (d, s) = scan(&[
-            ("jira/A-1.md", &anchor_note_md("A-1", Some("[[B-1]]"))),
-            ("jira/B-1.md", &anchor_note_md("B-1", Some("[[A-1]]"))),
+            ("jira/A-1.md", &anchor_note_md("A-1", Some("B-1"))),
+            ("jira/B-1.md", &anchor_note_md("B-1", Some("A-1"))),
         ]);
-        assert_eq!(state(&s, "jira/A-1.md", 7), resolved("jira/B-1.md", 7));
-        assert_eq!(state(&s, "jira/B-1.md", 7), Some(ParentLinkState::Cycle));
-        let err = plan_unlink(&src_of(d.path(), &s, "jira/A-1.md", 7), &EmojiFormat).unwrap_err();
+        assert_eq!(states(&s, "jira/A-1.md", 7), [resolved("jira/B-1.md", 7)]);
+        assert_eq!(states(&s, "jira/B-1.md", 7), [RefState::Cycle]);
+        let err = unlink(d.path(), &s, "jira/A-1.md", 7, Unlink::Only).unwrap_err();
+        assert!(
+            matches!(err, LinkError::ParentFromFrontmatter { .. }),
+            "{err:?}"
+        );
+        let err = unlink(
+            d.path(),
+            &s,
+            "jira/A-1.md",
+            7,
+            Unlink::Parent(key("jira/B-1.md", 7)),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, LinkError::ParentFromFrontmatter { .. }),
             "{err:?}"
@@ -1748,9 +1924,9 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         for i in 0..2000usize {
-            let parent = (i + 1) % 2000;
+            let (p, q) = ((i + 1) % 2000, (i + 7) % 2000);
             let body = format!(
-                "# Note {i}\n\nSome prose [[note-{parent}]].\n\n- [ ] task a{i} ^a{i}\n  - [ ] sub\n- [ ] linked [[note-{parent}#^a{parent}]]\n- [ ] plain [[note-{parent}]]\n"
+                "# Note {i}\n\nSome prose [[note-{p}]].\n\n- [ ] task a{i} 🆔 a{i}\n  - [ ] sub\n- [ ] linked ⤴ a{p},a{q}\n- [ ] plain [[note-{p}]]\n"
             );
             std::fs::write(dir.path().join(format!("note-{i}.md")), body).unwrap();
         }
@@ -1758,7 +1934,7 @@ mod tests {
         let mut s = crate::scan::scan_vault(dir.path(), &[]);
         let scan_time = start.elapsed();
         let start = std::time::Instant::now();
-        resolve_parent_links(&mut s);
+        resolve_parent_refs(&mut s);
         let pass_time = start.elapsed();
         eprintln!("post-pass {pass_time:?} vs scan {scan_time:?}");
         assert!(
@@ -1769,9 +1945,7 @@ mod tests {
             .tasks
             .iter()
             .filter(|t| t.description.starts_with("linked"))
-            .all(|t| matches!(
-                t.parent_link.as_ref().map(|l| &l.state),
-                Some(ParentLinkState::Resolved(_))
-            )));
+            .all(|t| t.parent_refs.len() == 2
+                && t.parent_refs.iter().all(|r| r.state.resolved().is_some())));
     }
 }

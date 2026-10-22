@@ -656,8 +656,11 @@ fn parse_attr(s: &str, position: usize) -> Result<Attr, DslError> {
         "mentions" => Ok(Attr::Mentions),
         "parent" => Ok(Attr::Parent),
         "parent_status" => Ok(Attr::ParentStatus),
-        "parent_link" => Ok(Attr::ParentLink),
+        "parent_ref" => Ok(Attr::ParentRef),
+        "parents" => Ok(Attr::Parents),
+        "open_parents" => Ok(Attr::OpenParents),
         "children" => Ok(Attr::Children),
+        "id" => Ok(Attr::Id),
         "source" => Ok(Attr::Source),
         "key" => Ok(Attr::Key),
         "remote_status" => Ok(Attr::RemoteStatus),
@@ -724,8 +727,11 @@ fn validate_attr_subject(
             | Attr::Mentions
             | Attr::Parent
             | Attr::ParentStatus
-            | Attr::ParentLink
+            | Attr::ParentRef
+            | Attr::Parents
+            | Attr::OpenParents
             | Attr::Children
+            | Attr::Id
             | Attr::Source
             | Attr::Key
             | Attr::RemoteStatus,
@@ -748,8 +754,11 @@ fn validate_attr_subject(
             | Attr::Mentions
             | Attr::Parent
             | Attr::ParentStatus
-            | Attr::ParentLink
+            | Attr::ParentRef
+            | Attr::Parents
+            | Attr::OpenParents
             | Attr::Children
+            | Attr::Id
             | Attr::Source
             | Attr::Key
             | Attr::RemoteStatus,

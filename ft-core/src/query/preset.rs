@@ -18,8 +18,8 @@ pub fn builtin(name: &str) -> Option<&'static str> {
         "upcoming" => "(status in {Open, InProgress}) and due > today",
         "done-today" => "status = Done and completed = today",
         "not-done" => "status in {Open, InProgress}",
-        "orphaned" => "status in {Open, InProgress} and parent_status in {Done, Cancelled}",
-        "broken-links" => "parent_link in {dangling, cycle, ignored}",
+        "orphaned" => "status in {Open, InProgress} and parents > 0 and open_parents = 0",
+        "broken-links" => "parent_ref in {dangling, ambiguous, cycle}",
         "remote" => "source is not null and status in {Open, InProgress}",
         _ => return None,
     })

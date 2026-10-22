@@ -264,8 +264,9 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
     // `is null` / `is not null` short-circuit before string extraction.
     if matches!(c.op, Op::IsNull | Op::IsNotNull) {
         let present = match c.attr {
-            Attr::Parent | Attr::ParentStatus => task_parent(graph, id).is_some(),
+            Attr::Parent | Attr::ParentStatus => task_parents(graph, id).next().is_some(),
             Attr::Source | Attr::Key => graph.task_remote(id).is_some(),
+            Attr::Id => graph.task_id(id).is_some(),
             Attr::RemoteStatus => graph
                 .task_remote(id)
                 .is_some_and(|r| r.remote_status.is_some()),
@@ -366,23 +367,33 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
             let count = graph.outgoing(id).count() as i64;
             eval_int_op(count, c.op, &c.value)
         }
-        Attr::Parent | Attr::ParentStatus => {
-            let Some(parent) = task_parent(graph, id) else {
-                return false;
-            };
+        // Existential over the parents, so `!=` / `not in` too: true when
+        // any parent satisfies the comparison.
+        Attr::Parent | Attr::ParentStatus => task_parents(graph, id).any(|parent| {
             let v = match c.attr {
                 Attr::Parent => &parent.description,
                 _ => &parent.status,
             };
             eval_string_op(v, c.op, &c.value)
-        }
-        Attr::ParentLink => match graph.node(id) {
-            NodeKind::Task(TaskData {
-                parent_link: Some(kind),
-                ..
-            }) => eval_string_op(kind.as_str(), c.op, &c.value),
+        }),
+        Attr::ParentRef => match graph.node(id) {
+            NodeKind::Task(t) => t
+                .parent_refs
+                .iter()
+                .any(|k| eval_string_op(k.as_str(), c.op, &c.value)),
             _ => false,
         },
+        Attr::Id => graph
+            .task_id(id)
+            .is_some_and(|v| eval_string_op(v, c.op, &c.value)),
+        Attr::Parents | Attr::OpenParents => {
+            let count = task_parents(graph, id)
+                .filter(|p| {
+                    c.attr == Attr::Parents || matches!(p.status.as_str(), "Open" | "InProgress")
+                })
+                .count() as i64;
+            eval_int_op(count, c.op, &c.value)
+        }
         Attr::Source | Attr::Key | Attr::RemoteStatus => {
             let Some(r) = graph.task_remote(id) else {
                 return false;
@@ -409,12 +420,12 @@ pub(crate) fn eval_cond_on_node(graph: &Graph, id: NoteId, c: &Condition) -> boo
     }
 }
 
-/// The effective parent of task node `id`: the source of its incoming
-/// `Subtask` edge (indentation or resolved parent link).
-fn task_parent(graph: &Graph, id: NoteId) -> Option<&TaskData> {
+/// The effective parents of task node `id`: the sources of its incoming
+/// `Subtask` edges (indentation and resolved parent references).
+fn task_parents(graph: &Graph, id: NoteId) -> impl Iterator<Item = &TaskData> {
     graph
         .incoming(id)
-        .find_map(|(src, e)| match (e, graph.node(src)) {
+        .filter_map(|(src, e)| match (e, graph.node(src)) {
             (EdgeKind::Subtask, NodeKind::Task(t)) => Some(t),
             _ => None,
         })
@@ -431,7 +442,7 @@ fn node_optional_attr_present(node: &NodeKind, attr: Attr) -> bool {
         Attr::Created => task.created.is_some(),
         Attr::Start => task.start.is_some(),
         Attr::Completed => task.completed.is_some(),
-        Attr::ParentLink => task.parent_link.is_some(),
+        Attr::ParentRef => !task.parent_refs.is_empty(),
         _ => false,
     }
 }

@@ -137,7 +137,7 @@ fn parse_line(line: &str, ctx: ParseContext) -> Option<Task> {
         source_line: ctx.source_line,
         indent_level,
         parent: None,
-        parent_link: None,
+        parent_refs: vec![],
     })
 }
 
@@ -400,7 +400,11 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
 
         // Parents: ⤴ <comma-separated IDs>, optional U+FE0F after the arrow.
         if let Some(after) = rest.strip_prefix(PARENTS) {
-            let vs = if after.starts_with(VS16) { VS16.len_utf8() } else { 0 };
+            let vs = if after.starts_with(VS16) {
+                VS16.len_utf8()
+            } else {
+                0
+            };
             let (spaces, value) = take_leading_spaces(&after[vs..]);
             if spaces >= 1 {
                 let end = next_field_boundary(value);
@@ -1105,7 +1109,7 @@ mod tests {
                 source_line: 1,
                 indent_level: 0,
                 parent: None,
-                parent_link: None,
+                parent_refs: vec![],
             };
 
             let line = EmojiFormat.serialize_line(&task);
@@ -1160,7 +1164,7 @@ mod tests {
                 source_line: 1,
                 indent_level: 0,
                 parent: None,
-                parent_link: None,
+                parent_refs: vec![],
             };
 
             let line1 = EmojiFormat.serialize_line(&task);

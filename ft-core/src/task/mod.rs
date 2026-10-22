@@ -102,13 +102,13 @@ pub struct Task {
     /// Leading-whitespace byte count (used for hierarchy detection).
     pub indent_level: usize,
     /// `source_line` of the nearest ancestor task with smaller `indent_level`
-    /// (the physical parent, same file). See [`hierarchy::parent_key`] for
-    /// the effective parent, which also follows [`Task::parent_link`].
+    /// (the physical parent, same file). See [`hierarchy::parent_keys`] for
+    /// the effective parents, which also follow [`Task::parent_refs`].
     pub parent: Option<usize>,
-    /// The parent named by a wikilink on this task's line, resolved by the
-    /// scan's post-pass ([`links::resolve_parent_links`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_link: Option<links::ParentLink>,
+    /// [`Task::parent_ids`] (plus an anchor note's `ft.tasks.parent`),
+    /// resolved by the scan's post-pass ([`links::resolve_parent_refs`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parent_refs: Vec<links::ParentRef>,
 }
 
 #[cfg(test)]

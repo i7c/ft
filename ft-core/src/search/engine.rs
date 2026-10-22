@@ -618,7 +618,6 @@ mod tests {
                 frontmatter: None,
                 mtime: std::time::UNIX_EPOCH,
                 line_count: 20,
-                block_ids: Vec::new(),
             });
         }
         let scan = crate::scan::Scan {

@@ -7,26 +7,39 @@ use super::Task;
 /// line. The same key the graph uses for its task nodes.
 pub type TaskKey = (PathBuf, usize);
 
-/// The effective parent of `task`: its physical (indentation) parent when
-/// it has one, otherwise the task its resolved parent link points at.
-pub fn parent_key(task: &Task) -> Option<TaskKey> {
-    if let Some(line) = task.parent {
-        return Some((task.source_file.clone(), line));
+/// The effective parents of `task`: its physical (indentation) parent
+/// first, when it has one, then every task its resolved parent references
+/// point at, in order, without duplicates.
+pub fn parent_keys(task: &Task) -> Vec<TaskKey> {
+    let mut keys: Vec<TaskKey> = task
+        .parent
+        .map(|line| (task.source_file.clone(), line))
+        .into_iter()
+        .collect();
+    for r in &task.parent_refs {
+        if let Some(k) = r.state.resolved() {
+            if !keys.contains(k) {
+                keys.push(k.clone());
+            }
+        }
     }
-    match &task.parent_link.as_ref()?.state {
-        super::links::ParentLinkState::Resolved(key) => Some(key.clone()),
-        _ => None,
-    }
+    keys
 }
 
+/// Forest expansion stops after this many rows: a task shows under every
+/// parent, so subtrees repeat, and a pathological DAG could blow up.
+pub const MAX_FOREST_ROWS: usize = 50_000;
+
 /// A node in a depth-annotated task forest: an index into the caller's task
-/// slice, the node's depth (0 = root), and whether it has any subtasks in the
-/// underlying vault (for a collapse/expand affordance).
+/// slice, the node's depth (0 = root), whether it has any subtasks in the
+/// underlying vault (for a collapse/expand affordance), and the parent this
+/// occurrence hangs under (`None` for roots).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ForestRow {
     pub idx: usize,
     pub depth: usize,
     pub has_children: bool,
+    pub via: Option<usize>,
 }
 
 /// Expand an ordered set of matched tasks into a depth-annotated forest:
@@ -35,60 +48,51 @@ pub struct ForestRow {
 /// immediately followed by its subtree.
 ///
 /// `all` is the full task slice (one scan); `matched` lists the keys to root
-/// the forest on, already in the caller's desired root order. A matched task
-/// whose parent is also present (matched, or pulled in as a subtask) nests
-/// under that parent rather than becoming a second root, so nothing appears
-/// twice. Siblings within a subtree follow source order.
+/// the forest on, already in the caller's desired root order. The hierarchy
+/// is a DAG: a task shows under **every** effective parent present in the
+/// output (subtrees repeat), and a matched task is a root only when none of
+/// its parents is present. A task already on the current root-to-row path
+/// is not emitted again on it, and emission stops at [`MAX_FOREST_ROWS`].
 pub fn expand_forest(all: &[Task], matched: &[TaskKey]) -> Vec<ForestRow> {
     let index = key_index(all);
     let children = children_map(all, &index);
+    let display = display_set(matched, &index, &children);
 
-    // Display set = matched ∪ all descendants of matched.
-    let mut display: HashSet<usize> = HashSet::new();
-    for key in matched {
-        if let Some(&i) = index.get(key) {
-            collect_subtree(i, &children, &mut display);
-        }
-    }
-
-    // Roots: matched tasks whose parent is not itself in the display set.
-    // (Descendants always have a matched ancestor, so they're never roots.)
     let mut rows = Vec::with_capacity(display.len());
-    let mut seen: HashSet<usize> = HashSet::new();
-    for key in matched {
-        let Some(&i) = index.get(key) else { continue };
-        if parent_idx(all, &index, i).is_some_and(|p| display.contains(&p)) {
-            continue; // nests under a parent we'll emit
-        }
-        emit_subtree(i, 0, &children, &display, &mut seen, &mut rows);
+    let mut path = Vec::new();
+    for i in roots(all, matched, &index, &display) {
+        emit_subtree(i, None, &children, &display, &mut path, &mut rows);
     }
     rows
 }
 
-/// Pre-order walk emitting `idx` then its in-display children (source order).
+/// Pre-order walk emitting `idx` then its in-display children.
 fn emit_subtree(
     idx: usize,
-    depth: usize,
+    via: Option<usize>,
     children: &HashMap<usize, Vec<usize>>,
     display: &HashSet<usize>,
-    seen: &mut HashSet<usize>,
+    path: &mut Vec<usize>,
     rows: &mut Vec<ForestRow>,
 ) {
-    if !seen.insert(idx) {
+    if path.contains(&idx) || rows.len() >= MAX_FOREST_ROWS {
         return;
     }
     let kids = children.get(&idx);
     rows.push(ForestRow {
         idx,
-        depth,
+        depth: path.len(),
         has_children: kids.is_some_and(|k| !k.is_empty()),
+        via,
     });
     if let Some(kids) = kids {
+        path.push(idx);
         for &child in kids {
             if display.contains(&child) {
-                emit_subtree(child, depth + 1, children, display, seen, rows);
+                emit_subtree(child, Some(idx), children, display, path, rows);
             }
         }
+        path.pop();
     }
 }
 
@@ -102,17 +106,14 @@ pub struct VisibleRow {
     pub depth: usize,
     pub has_children: bool,
     pub expanded: bool,
+    pub via: Option<usize>,
 }
 
 /// Like [`expand_forest`] but respects a live expand/collapse state: a
-/// matched task's subtasks are emitted only if the task's key is in
-/// `expanded`. Unexpanded parents emit as a leaf row (their `has_children`
-/// flag still signals the affordance). The result is deduplicated — a task
-/// that is both matched and a child of another matched task appears exactly
-/// once, nested under its parent — mirroring [`expand_forest`]'s `seen`-set.
-///
-/// `matched` is in the caller's desired root order. Roots are matched
-/// tasks whose parent is not itself in the display set.
+/// task's subtasks are emitted only if the task's key is in `expanded`
+/// (expanding a task expands every occurrence of it). Unexpanded parents
+/// emit as a leaf row (their `has_children` flag still signals the
+/// affordance). Roots and repeats follow [`expand_forest`].
 pub fn expand_forest_visible(
     all: &[Task],
     matched: &[TaskKey],
@@ -120,29 +121,18 @@ pub fn expand_forest_visible(
 ) -> Vec<VisibleRow> {
     let index = key_index(all);
     let children = children_map(all, &index);
-
-    // Display set = matched ∪ all descendants of matched.
-    let mut display: HashSet<usize> = HashSet::new();
-    for key in matched {
-        if let Some(&i) = index.get(key) {
-            collect_subtree(i, &children, &mut display);
-        }
-    }
+    let display = display_set(matched, &index, &children);
 
     let mut rows = Vec::with_capacity(display.len());
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut path = Vec::new();
     let ctx = VisCtx {
         all,
         children: &children,
         display: &display,
         expanded,
     };
-    for key in matched {
-        let Some(&i) = index.get(key) else { continue };
-        if parent_idx(all, &index, i).is_some_and(|p| display.contains(&p)) {
-            continue;
-        }
-        emit_visible(i, 0, &ctx, &mut seen, &mut rows);
+    for i in roots(all, matched, &index, &display) {
+        emit_visible(i, None, &ctx, &mut path, &mut rows);
     }
     rows
 }
@@ -160,12 +150,12 @@ struct VisCtx<'a> {
 /// into its in-display children only when `idx` is expanded.
 fn emit_visible(
     idx: usize,
-    depth: usize,
+    via: Option<usize>,
     ctx: &VisCtx,
-    seen: &mut HashSet<usize>,
+    path: &mut Vec<usize>,
     rows: &mut Vec<VisibleRow>,
 ) {
-    if !seen.insert(idx) {
+    if path.contains(&idx) || rows.len() >= MAX_FOREST_ROWS {
         return;
     }
     let kids = ctx.children.get(&idx);
@@ -174,29 +164,62 @@ fn emit_visible(
     let is_expanded = has_children && ctx.expanded.contains(&key);
     rows.push(VisibleRow {
         idx,
-        depth,
+        depth: path.len(),
         has_children,
         expanded: is_expanded,
+        via,
     });
-    if is_expanded {
-        if let Some(kids) = kids {
-            for &child in kids {
-                if ctx.display.contains(&child) {
-                    emit_visible(child, depth + 1, ctx, seen, rows);
-                }
+    if let (true, Some(kids)) = (is_expanded, kids) {
+        path.push(idx);
+        for &child in kids {
+            if ctx.display.contains(&child) {
+                emit_visible(child, Some(idx), ctx, path, rows);
             }
         }
+        path.pop();
     }
+}
+
+/// Matched tasks plus all of their transitive descendants.
+fn display_set(
+    matched: &[TaskKey],
+    index: &HashMap<TaskKey, usize>,
+    children: &HashMap<usize, Vec<usize>>,
+) -> HashSet<usize> {
+    let mut display = HashSet::new();
+    for key in matched {
+        if let Some(&i) = index.get(key) {
+            collect_subtree(i, children, &mut display);
+        }
+    }
+    display
+}
+
+/// Matched tasks (in matched order, once each) none of whose effective
+/// parents is in the display set — the others nest under those parents.
+fn roots(
+    all: &[Task],
+    matched: &[TaskKey],
+    index: &HashMap<TaskKey, usize>,
+    display: &HashSet<usize>,
+) -> Vec<usize> {
+    let mut seen = HashSet::new();
+    matched
+        .iter()
+        .filter_map(|k| index.get(k).copied())
+        .filter(|&i| seen.insert(i))
+        .filter(|&i| !parent_idxs(all, index, i).any(|p| display.contains(&p)))
+        .collect()
 }
 
 /// Collect `idx` and all of its transitive descendants into `out`.
 fn collect_subtree(idx: usize, children: &HashMap<usize, Vec<usize>>, out: &mut HashSet<usize>) {
-    if !out.insert(idx) {
-        return;
-    }
-    if let Some(kids) = children.get(&idx) {
-        for &child in kids {
-            collect_subtree(child, children, out);
+    let mut todo = vec![idx];
+    while let Some(i) = todo.pop() {
+        if out.insert(i) {
+            if let Some(kids) = children.get(&i) {
+                todo.extend(kids);
+            }
         }
     }
 }
@@ -209,35 +232,44 @@ fn key_index(all: &[Task]) -> HashMap<TaskKey, usize> {
         .collect()
 }
 
-/// Index of the effective parent task of `all[idx]`, if it has one.
-fn parent_idx(all: &[Task], index: &HashMap<TaskKey, usize>, idx: usize) -> Option<usize> {
-    index.get(&parent_key(&all[idx])?).copied()
+/// Indices of the effective parents of `all[idx]`.
+fn parent_idxs<'a>(
+    all: &'a [Task],
+    index: &'a HashMap<TaskKey, usize>,
+    idx: usize,
+) -> impl Iterator<Item = usize> + 'a {
+    parent_keys(&all[idx])
+        .into_iter()
+        .filter_map(|k| index.get(&k).copied())
 }
 
 /// Map each parent task index to its direct subtasks' indices (physical
-/// children in source order, then linked children). Indices point into `all`. Useful for lazy, one-level-at-a-time
-/// expansion (e.g. the TUI tree). Built from `parent` pointers, so hierarchy
-/// must already be resolved.
+/// children in source order, then linked children). A task with several
+/// parents is listed under each. Indices point into `all`. Useful for lazy,
+/// one-level-at-a-time expansion (e.g. the TUI tree). Built from resolved
+/// hierarchy, so the scan's post-pass must already have run.
 pub fn child_index_map(all: &[Task]) -> HashMap<usize, Vec<usize>> {
     children_map(all, &key_index(all))
 }
 
-/// Map each parent task index to its direct children's indices, in source
-/// order. Built from `parent` pointers, so hierarchy must already be resolved.
 fn children_map(all: &[Task], index: &HashMap<TaskKey, usize>) -> HashMap<usize, Vec<usize>> {
     let mut map: HashMap<usize, Vec<usize>> = HashMap::new();
     for i in 0..all.len() {
-        if let Some(p) = parent_idx(all, index, i) {
+        for p in parent_idxs(all, index, i) {
             map.entry(p).or_default().push(i);
         }
     }
     // Don't trust scan order: physical children first in source order, then
     // linked children (from other files or not nested) by `(path, line)`.
-    for kids in map.values_mut() {
+    for (&p, kids) in map.iter_mut() {
+        let parent = &all[p];
+        let linked = |t: &Task| {
+            !(t.source_file == parent.source_file && t.parent == Some(parent.source_line))
+        };
         kids.sort_by(|&a, &b| {
             let (ta, tb) = (&all[a], &all[b]);
-            (ta.parent.is_none(), &ta.source_file, ta.source_line).cmp(&(
-                tb.parent.is_none(),
+            (linked(ta), &ta.source_file, ta.source_line).cmp(&(
+                linked(tb),
                 &tb.source_file,
                 tb.source_line,
             ))

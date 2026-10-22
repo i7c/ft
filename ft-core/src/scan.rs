@@ -63,10 +63,6 @@ pub struct ParsedFile {
     /// file list (no second filesystem pass). The only mtime source in
     /// the crate — consumers needing recency order read it here.
     pub mtime: std::time::SystemTime,
-    /// Trailing ` ^id` block ids on any content line, with their
-    /// 1-indexed line. Lets parent-link resolution tell a block
-    /// reference to a non-task line from a dangling one.
-    pub block_ids: Vec<(String, usize)>,
     /// Number of lines in the file's content, computed from the single
     /// read. Lets consumers compute section bounds (e.g. "to EOF")
     /// without re-reading the file.
@@ -142,7 +138,7 @@ pub fn scan_vault(root: &Path, ignored: &[String]) -> Scan {
         }
     }
     scan.dirs = dirs;
-    crate::task::links::resolve_parent_links(&mut scan);
+    crate::task::links::resolve_parent_refs(&mut scan);
     scan
 }
 
@@ -251,14 +247,10 @@ fn parse_file(
     // `OwnsTask` edge to be total) and avoids parsing code-block examples as
     // phantom tasks.
     let mut tasks = Vec::new();
-    let mut block_ids = Vec::new();
     let mut skip_state = LineSkipState::new();
     for (lineno, line) in content.lines().enumerate() {
         if skip_state.skip_line(line) {
             continue;
-        }
-        if let Some(id) = trailing_block_id(line) {
-            block_ids.push((id.to_string(), lineno + 1));
         }
         let ctx = ParseContext {
             source_file: rel.to_path_buf(),
@@ -280,7 +272,6 @@ fn parse_file(
         frontmatter: frontmatter::block(&content).map(str::to_string),
         mtime,
         line_count: content.lines().count() as u32,
-        block_ids,
     };
     (tasks, Some(parsed), None)
 }
