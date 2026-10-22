@@ -1523,8 +1523,13 @@ pub struct UnlinkArgs {
     pub selector: String,
 
     /// Remove only the reference to this parent (must match one task).
-    #[arg(long, value_name = "SELECTOR", conflicts_with = "all")]
+    #[arg(long, value_name = "SELECTOR", conflicts_with_all = ["all", "id"])]
     pub from: Option<String>,
+
+    /// Remove only the reference to this id — also for references that
+    /// don't resolve (dangling, ambiguous).
+    #[arg(long, value_name = "ID", conflicts_with = "all")]
+    pub id: Option<String>,
 
     /// Remove every parent reference on the task's line.
     #[arg(long)]
@@ -1588,13 +1593,14 @@ fn run_unlink(args: UnlinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let scan = vault.scan();
     let task = resolve_unique("selector", &args.selector, &scan.tasks)?;
-    let which = match (&args.from, args.all) {
-        (Some(sel), _) => {
+    let which = match (&args.from, &args.id, args.all) {
+        (Some(sel), ..) => {
             let p = resolve_unique("--from", sel, &scan.tasks)?;
             links::Unlink::Parent((p.source_file.clone(), p.source_line))
         }
-        (None, true) => links::Unlink::All,
-        (None, false) => links::Unlink::Only,
+        (None, Some(id), _) => links::Unlink::Id(id.clone()),
+        (None, None, true) => links::Unlink::All,
+        (None, None, false) => links::Unlink::Only,
     };
     let plan = match links::plan_unlink(&source_of(&vault, task), &which, vault.task_format()) {
         Err(links::LinkError::NeedsChoice { refs, .. }) => {
@@ -1615,7 +1621,7 @@ fn run_unlink(args: UnlinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
                 .collect();
             return Err(crate::cmd::common::ChoiceError {
                 message: format!(
-                    "{}:{} has several parents — pass --from SELECTOR or --all:\n{}",
+                    "{}:{} has several parents — pass --from SELECTOR, --id ID or --all:\n{}",
                     task.source_file.display(),
                     task.source_line,
                     rows.join("\n")

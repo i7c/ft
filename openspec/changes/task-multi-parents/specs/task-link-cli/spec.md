@@ -46,6 +46,7 @@ A child's existing references SHALL be kept; linking only adds. Children in the 
 
 `task::links::plan_unlink(task, which, format)` SHALL remove line references from the task's `parent_ids`, where `which` is one of:
 - `Only`: the task's single line reference. With none it fails with `LinkError::NoParentLink`; with more than one it fails with `LinkError::NeedsChoice { refs }`, listing each reference's id and resolved parent (path, line, description) when resolved.
+- `Id(String)`: the line reference to that id, resolved or not. With none it fails with `LinkError::NotLinkedTo`, or `ParentFromFrontmatter` when the id is the frontmatter parent.
 - `Parent(TaskKey)`: every line reference resolving to that task. With none it fails with `LinkError::NotLinkedTo`. If that parent comes only from the anchor note's frontmatter, it fails with `LinkError::ParentFromFrontmatter`.
 - `All`: every line reference. With none it fails with `NoParentLink`.
 
@@ -67,7 +68,7 @@ Removing the last id SHALL remove the whole `⤴` field. The parent's `🆔` SHA
 
 The CLI SHALL provide:
 - `ft tasks link <SELECTOR>... --under <SELECTOR>`. Each child selector and the parent selector must match exactly one task. A bare `🆔` value is a valid selector.
-- `ft tasks unlink <SELECTOR> [--from <SELECTOR> | --all]`. The task selector must match exactly one task. `--from` maps to `Parent`, `--all` to `All`, and neither to `Only`.
+- `ft tasks unlink <SELECTOR> [--from <SELECTOR> | --id <ID> | --all]`. The task selector must match exactly one task. `--from` maps to `Parent`, `--id` to `Id` (works for unresolved references too), `--all` to `All`, and none of them to `Only`.
 
 Both SHALL support `--dry-run` (unified diff) and `--format text|json`.
 

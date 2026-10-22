@@ -315,13 +315,13 @@ the graph has a `subtask` edge from every parent. The query attributes
 ```sh
 ft tasks link journal/2026-10-21.md:3 --under "Vendor onboarding"   # adds a parent (and a 🆔 to it if needed)
 ft tasks link journal/2026-10-21.md:3 --under ABC-123                # …and another
-ft tasks unlink journal/2026-10-21.md:3 --from ABC-123               # several parents: name one, or --all
+ft tasks unlink journal/2026-10-21.md:3 --from ABC-123               # several parents: name one (--id ID for any ref), or --all
 ft tasks create "write regression test" --link-parent ABC-123 --link-parent k3x9qa   # lands in today's note
 ft tasks check            # dangling / ambiguous / cycle / redundant refs, duplicate ids; exit 1 on issues
 ft tasks list orphaned    # open tasks whose parents are all done or cancelled
 ```
 
-`unlink` without `--from`/`--all` on a task with several parents exits
+`unlink` without `--from`/`--id`/`--all` on a task with several parents exits
 2 and lists them; in the TUI, `U` unlinks the parent the row is shown
 under, or asks.
 

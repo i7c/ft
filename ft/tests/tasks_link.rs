@@ -212,7 +212,7 @@ fn unlink_one_of_several() {
     ft(dir.path(), &["unlink", "reproduce"])
         .code(2)
         .stderr(predicate::str::contains(
-            "has several parents — pass --from SELECTOR or --all",
+            "has several parents — pass --from SELECTOR, --id ID or --all",
         ))
         .stderr(predicate::str::contains(
             "ABC-123  jira/ABC-123.md:6  Fix login",
@@ -249,6 +249,13 @@ fn unlink_one_of_several() {
         )));
     ft(dir.path(), &["link", "call legal", "--under", "proj.md:1"]).success();
     ft(dir.path(), &["link", "call legal", "--under", "ABC-123"]).success();
+    std::fs::write(
+        dir.path().join(JOURNAL),
+        read(&dir, JOURNAL).replace("⤴ vo1,ABC-123", "⤴ vo1,ABC-123,gone"),
+    )
+    .unwrap();
+    ft(dir.path(), &["unlink", "call legal", "--id", "gone"]).success();
+    assert!(read(&dir, JOURNAL).ends_with("- [ ] call legal ⤴ vo1,ABC-123\n"));
     ft(dir.path(), &["unlink", "call legal", "--all"]).success();
     assert!(read(&dir, JOURNAL).ends_with("- [ ] call legal\n"));
 }
