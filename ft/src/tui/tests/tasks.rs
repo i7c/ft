@@ -524,11 +524,27 @@ fn help_overlay_over_tasks_tab_renders() -> Result<()> {
     Ok(())
 }
 
+/// The `?` overlay lists the Tasks tab's own bindings (built from the
+/// tab keymap), not just the Global section.
+#[test]
+fn help_overlay_lists_tasks_bindings() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(5)?;
+    app.enter_help();
+    let frame = render(&mut app, 100, 120);
+    for needle in [
+        "Navigation",
+        "Restructure",
+        "Add the selected task as a parent of the cut tasks",
+        "Promote the selected task",
+    ] {
+        assert!(frame.contains(needle), "missing `{needle}`:\n{frame}");
+    }
+    Ok(())
+}
+
 /// The Tasks tab's `help_sections()` advertises the Ctrl+P preset row.
-/// The rendered 80×24 overlay only shows the Global section (the
-/// Tasks-specific sections are below the fold), so assert on the
-/// section data directly — the coverage the `?` overlay can't give at
-/// default geometry.
 #[test]
 fn tasks_help_sections_advertise_ctrl_p() {
     use crate::tui::help::HelpSection;

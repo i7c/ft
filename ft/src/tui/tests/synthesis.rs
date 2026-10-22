@@ -780,6 +780,39 @@ fn keymap_override_applies_to_graph_tab() -> Result<()> {
 }
 
 #[test]
+fn keymap_override_applies_to_tasks_tab() -> Result<()> {
+    let toml = r#"
+[keymap."tab/tasks"]
+"Ctrl+l" = "tasks.link"
+
+[[keymap.unbind]]
+scope = "tab/tasks"
+chord = "j"
+"#;
+    let (dir, vault) = vault_with_keymap_config(toml);
+    std::fs::write(
+        dir.path().join("keymap-vault/t.md"),
+        "- [ ] first 📅 2026-05-11\n- [ ] second 📅 2026-05-12\n",
+    )
+    .unwrap();
+    let mut app = App::for_test(vault);
+
+    use crate::tui::keymap::KeyChord;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let km = app.tab_keymap_for_test(5);
+    let chord = KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    assert_eq!(km.lookup(chord).map(|c| c.name), Some("tasks.link"));
+    // The Tasks view resolves keys through the overridden map too.
+    app.switch_to(5)?;
+    app.pump_graph_rebuild_for_test();
+    app.dispatch(key('j'))?;
+    let frame = render(&mut app, 100, 14);
+    let selected = frame.lines().find(|l| l.contains('▶')).unwrap_or_default();
+    assert!(selected.contains("first"), "j is unbound:\n{frame}");
+    Ok(())
+}
+
+#[test]
 fn keymap_unbind_removes_default_chord() -> Result<()> {
     // Unbind 'q' from the global scope.
     let toml = r#"

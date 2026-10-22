@@ -52,7 +52,7 @@ use crate::tui::{
 /// capture keys at the top of `handle_event` and bypass this map.
 /// Command names live in `tabs::tasks::TASKS_COMMANDS` (see
 /// `tabs/tasks/mod.rs`).
-pub(super) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
     KeyMap::new()
         // Navigation
         .bind("/", "tasks.edit-query")
@@ -182,6 +182,9 @@ pub struct SearchView {
     /// Expand the ancestors of `pending_anchors` on the next adoption so
     /// a task just nested under a collapsed parent stays visible.
     reveal_anchor: bool,
+    /// Idle-state bindings: [`TASKS_KEYMAP`] with the user's `tab/tasks`
+    /// overrides applied.
+    keymap: KeyMap,
 }
 
 /// A task in the cut set: its key at marking time (kept current across
@@ -256,6 +259,7 @@ impl SearchView {
             link_parent: None,
             cut: Vec::new(),
             reveal_anchor: false,
+            keymap: TASKS_KEYMAP.clone(),
         }
     }
 
@@ -870,7 +874,7 @@ impl View for SearchView {
         // (popup, quickline, edit_state) handled their keys above and
         // returned early — only Idle reaches this point.
         let chord = KeyChord::from_key_event(k);
-        let Some(cmd) = SEARCH_KEYMAP.lookup(chord).cloned() else {
+        let Some(cmd) = self.keymap.lookup(chord).cloned() else {
             return Ok(EventOutcome::NotHandled);
         };
         match self.dispatch_idle_command(&cmd, ctx)? {
@@ -897,6 +901,10 @@ impl View for SearchView {
 
     fn on_graph_ready(&mut self, ctx: &mut TabCtx) {
         let _ = self.adopt_snapshot(ctx);
+    }
+
+    fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
     }
 
     fn parent_picked(

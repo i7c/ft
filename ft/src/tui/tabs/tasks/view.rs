@@ -47,6 +47,10 @@ pub trait View {
     /// adopted. Default: no-op.
     fn select_after_refresh(&mut self, _key: ft_core::task::TaskKey) {}
 
+    /// Replace the view's idle bindings (the tab's keymap with user
+    /// overrides applied). Default: no-op.
+    fn set_keymap(&mut self, _keymap: crate::tui::keymap::KeyMap) {}
+
     /// Act on the task-parent-pick modal's `choice` for `task`. Default:
     /// no-op.
     fn parent_picked(

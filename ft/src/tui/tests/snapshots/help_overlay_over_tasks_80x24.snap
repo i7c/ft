@@ -3,26 +3,26 @@ source: ft/src/tui/tests/tasks.rs
 expression: frame
 ---
   1 Graph ┌ help ────────────────────────────────────────────────────┐s  │  7 Ti
-┌ query ──│Keybindings — Tasks                                       │─────────┐
-│(status i│                                                          │         │
-└─────────│  Global                                                  │─────────┘
-┌ tasks ──│  q / Ctrl+c  Quit the TUI                                │─────────┐
-│ ── overd│  ?           Open the keymap help overlay                │         │
-│▶   !!  P│  g           Enter the git-sync leader (then `s` to sync,│         │
-│    !   R│  Tab         Switch to the next tab                      │         │
-│ ── upcom│  BackTab     Switch to the previous tab                  │         │
-│        R│  1..9        Switch to the tab at the given 0-based index│         │
-│    !!  S│                                                          │rrow     │
-│    v   B│  ↑/↓ or j/k scroll · PgUp/PgDn · g/G · ?/Esc/q close     │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
-│         │                                                          │         │
+┌ query ──│Keybindings — Tasks                                      █│─────────┐
+│(status i│                                                         █│         │
+└─────────│  Global                                                 █│─────────┘
+┌ tasks ──│  q / Ctrl+c  Quit the TUI                               █│─────────┐
+│ ── overd│  ?           Open the keymap help overlay               █│         │
+│▶   !!  P│  g           Enter the git-sync leader (then `s` to sync█│         │
+│    !   R│  Tab         Switch to the next tab                     ║│         │
+│ ── upcom│  BackTab     Switch to the previous tab                 ║│         │
+│        R│  1..9        Switch to the tab at the given 0-based inde║│         │
+│    !!  S│                                                         ║│rrow     │
+│    v   B│  Navigation                                             ║│         │
+│         │  /           Open the query editor                      ║│         │
+│         │  Ctrl+p      Load a task preset into the active query   ║│         │
+│         │  ↑ / k       Move the cursor up one task                ║│         │
+│         │  ↓ / j       Move the cursor down one task              ║│         │
+│         │  Shift+r     Reload the task list from the vault        ║│         │
+│         │  Enter       Open the selected task in $EDITOR          ║│         │
+│         │  l / →       Expand the selected task's subtasks        ║│         │
+│         │  h / ←       Collapse the selected task's subtasks      ║│         │
+│         │                                                         ║│         │
+│         │  Mutations                                              ║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help

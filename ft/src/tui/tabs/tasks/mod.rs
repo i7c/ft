@@ -4,8 +4,6 @@ mod quickline;
 mod search;
 mod view;
 
-use std::sync::LazyLock;
-
 use anyhow::Result;
 use ratatui::{layout::Rect, Frame};
 
@@ -17,10 +15,10 @@ use crate::tui::{
     tab::{EventOutcome, Tab, TabCtx, TabKind, TasksRequest},
 };
 
-/// Empty tab-level keymap (sidebar removed). Kept as a named static so
-/// downstream sites that reference it (`app.rs`, `mod.rs`) compile without
-/// change. The tab delegates all keys to the active view.
-pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(KeyMap::empty);
+/// The Tasks tab's bindings — owned by its (only) view, the SearchView,
+/// and exposed here as the tab keymap so the `?` overlay, `ft commands
+/// docs` and user `[keymap]` overrides all see them.
+pub(crate) use search::TASKS_KEYMAP;
 
 use search::SearchView;
 use view::View;
@@ -409,6 +407,8 @@ pub struct TasksTab {
     /// (the sidebar was removed but the View trait abstraction remains).
     views: Vec<Box<dyn View>>,
     active_view: usize,
+    /// [`TASKS_KEYMAP`] with the user's `tab/tasks` overrides applied.
+    keymap: KeyMap,
 }
 
 impl TasksTab {
@@ -417,12 +417,15 @@ impl TasksTab {
         Self {
             views,
             active_view: 0,
+            keymap: TASKS_KEYMAP.clone(),
         }
     }
 
-    pub fn with_keymap_overlay(self, _overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
-        // Keymap overlay kept for API compatibility; the sidebar keymap
-        // (which used it) is removed.
+    pub fn with_keymap_overlay(mut self, overlay: &crate::tui::keymap::KeymapOverlay) -> Self {
+        self.keymap = TASKS_KEYMAP.with_overlay(overlay);
+        for v in &mut self.views {
+            v.set_keymap(self.keymap.clone());
+        }
         self
     }
 }
@@ -448,7 +451,7 @@ impl Tab for TasksTab {
     }
 
     fn keymap(&self) -> &KeyMap {
-        &TASKS_KEYMAP
+        &self.keymap
     }
 
     fn dispatch_command(&mut self, _cmd: &Command, _ctx: &mut TabCtx) -> CommandOutcome {
