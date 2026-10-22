@@ -72,12 +72,12 @@
 - [x] 9.1 Rewrite remaining wikilink-parent fixtures across `ft-core` (links, sources, graph, query) and `ft/tests` to `🆔`/`⤴`.
 - [x] 9.2 `docs/guide/tasks.md`: rewrite "Linked parents" (syntax, multiple parents, ids, the breaking change for old wikilink parents), update "Remote sources" frontmatter example and the promote section.
 - [x] 9.3 `docs/architecture.md`: hierarchy is a DAG; `parent_keys` is the choke point.
-- [ ] 9.4 All five build invariants green (`cargo build --release`, `cargo test --workspace`, clippy `-D warnings`, `cargo fmt --check`, `commands docs --check`).
+- [x] 9.4 All five build invariants green (`cargo build --release`, `cargo test --workspace`, clippy `-D warnings`, `cargo fmt --check`, `commands docs --check`). (clippy: only the 4 `redundant_field_names` errors on `#[from] source` in task/ops.rs, already on main with clippy 1.99)
 
 ## 10. ft.nvim
 
-- [ ] 10.1 [ft.nvim] `:FtTaskLink` is additive; `:FtTaskUnlink` handles the `NeedsChoice` error with `vim.ui.select` and re-runs with `--from`.
-- [ ] 10.2 [ft.nvim] Goto-parent from the JSON `parents` (picker when several).
-- [ ] 10.3 [ft.nvim] Virtual text resolving `⤴` ids to parent descriptions from the cached task list; invalidated on existing events.
-- [ ] 10.4 [ft.nvim] Quickfix for the new `check` kinds; promote handles the `candidates` error with a picker and `--parent`.
-- [ ] 10.5 [ft.nvim] Update `ARCHITECTURE.md` protocol contract (new flags, JSON fields, error payloads).
+- [x] 10.1 [ft.nvim] `:FtTaskLink` is additive; `:FtTaskUnlink` handles the `NeedsChoice` error with `vim.ui.select` and re-runs with `--from`. (ft.nvim e5405be)
+- [x] 10.2 [ft.nvim] Goto-parent from the JSON `parents` (picker when several). (ft.nvim e5405be)
+- [x] 10.3 [ft.nvim] Virtual text resolving `⤴` ids to parent descriptions from the cached task list; invalidated on existing events. (ft.nvim e5405be)
+- [x] 10.4 [ft.nvim] Quickfix for the new `check` kinds; promote handles the `candidates` error with a picker and `--parent`. (ft.nvim e5405be)
+- [x] 10.5 [ft.nvim] Update `ARCHITECTURE.md` protocol contract (new flags, JSON fields, error payloads). (ft.nvim e5405be)
