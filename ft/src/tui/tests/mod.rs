@@ -584,6 +584,7 @@ mod snapshot_lifecycle;
 mod sources;
 mod synthesis;
 mod tasks;
+mod tasks_colors;
 mod tasks_link;
 mod tasks_reparent;
 mod timeblocks;

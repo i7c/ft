@@ -45,8 +45,8 @@ the age badge keep their own styles. Selection keeps its background.
 ### D4. Assigning
 
 `tasks.color` (`m`) opens `ActiveModal::TaskColorPick` — the shared
-`FuzzyPicker` over seven entries (`red` … `cyan`, `none`), each label
-showing a colored swatch name. On Enter it posts
+`FuzzyPicker` over seven entries (`red` … `cyan`, `none`), labelled
+by name (the shared picker draws plain labels). On Enter it posts
 `TasksRequest::ColorPicked(Option<TaskColor>)`; the view applies
 `ops::retag_task` with the six color tags as the list and the picked tag
 (or `""` for none) to every cut task (snapshots as guards; the cut set is

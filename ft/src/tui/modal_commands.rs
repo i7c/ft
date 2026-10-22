@@ -481,6 +481,33 @@ pub static TASK_RETAG_PICKER_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("Down", "task-retag-picker.cursor-down")
 });
 
+// ── Task color picker (tui-task-colors) ─────────────────────────────
+
+const TASK_COLOR_PICK_SCOPE: CommandScope = CommandScope::Modal("task-color-pick");
+
+pub static TASK_COLOR_PICK_COMMANDS: &[CommandDef] = &[
+    confirm_def("task-color-pick.confirm", TASK_COLOR_PICK_SCOPE),
+    cancel_def("task-color-pick.cancel", TASK_COLOR_PICK_SCOPE),
+    nav_def(
+        "task-color-pick.cursor-up",
+        "Select the previous color",
+        TASK_COLOR_PICK_SCOPE,
+    ),
+    nav_def(
+        "task-color-pick.cursor-down",
+        "Select the next color",
+        TASK_COLOR_PICK_SCOPE,
+    ),
+];
+
+pub static TASK_COLOR_PICK_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
+    KeyMap::new()
+        .bind("Enter", "task-color-pick.confirm")
+        .bind("Esc", "task-color-pick.cancel")
+        .bind("Up", "task-color-pick.cursor-up")
+        .bind("Down", "task-color-pick.cursor-down")
+});
+
 // ── Task parent picker (task-multi-parents) ─────────────────────────
 
 const TASK_PARENT_PICK_SCOPE: CommandScope = CommandScope::Modal("task-parent-pick");
@@ -855,6 +882,7 @@ mod tests {
             TASK_PRESET_PICKER_COMMANDS,
             TASK_RETAG_PICKER_COMMANDS,
             TASK_PARENT_PICK_COMMANDS,
+            TASK_COLOR_PICK_COMMANDS,
             CAPTURE_PICKER_COMMANDS,
             TASK_MOVE_COMMANDS,
             RELATED_COMMANDS,
@@ -895,6 +923,7 @@ mod tests {
             (&TASK_PRESET_PICKER_KEYMAP, TASK_PRESET_PICKER_COMMANDS),
             (&TASK_RETAG_PICKER_KEYMAP, TASK_RETAG_PICKER_COMMANDS),
             (&TASK_PARENT_PICK_KEYMAP, TASK_PARENT_PICK_COMMANDS),
+            (&TASK_COLOR_PICK_KEYMAP, TASK_COLOR_PICK_COMMANDS),
             (&TASK_MOVE_KEYMAP, TASK_MOVE_COMMANDS),
             (&CAPTURE_PICKER_KEYMAP, CAPTURE_PICKER_COMMANDS),
             (&RELATED_KEYMAP, RELATED_COMMANDS),

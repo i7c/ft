@@ -47,6 +47,15 @@ pub trait View {
     /// adopted. Default: no-op.
     fn select_after_refresh(&mut self, _key: ft_core::task::TaskKey) {}
 
+    /// Set or clear the color of the cut set / selected task (the
+    /// task-color-pick modal's choice). Default: no-op.
+    fn color_picked(
+        &mut self,
+        _color: Option<crate::tui::tabs::tasks::color::TaskColor>,
+        _ctx: &mut TabCtx,
+    ) {
+    }
+
     /// Replace the view's idle bindings (the tab's keymap with user
     /// overrides applied). Default: no-op.
     fn set_keymap(&mut self, _keymap: crate::tui::keymap::KeyMap) {}

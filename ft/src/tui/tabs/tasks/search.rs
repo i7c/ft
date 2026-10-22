@@ -32,14 +32,15 @@ use crate::tui::{
     palette,
     tab::{AppRequest, EventOutcome, ParentChoice, TabCtx, ToastStyle},
     tabs::tasks::{
+        color::{self, TaskColor},
         edit_popup::{
             handle_target_picker_key, merge_tags_into_description, open_target_picker,
             parse_optional_date, parse_priority, parse_tags_field, relative_date,
             render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
         },
         modals::{
-            ParentPickSource, TaskParentPickModal, TaskPresetPickerModal, TaskPresetPickerSource,
-            TaskRetagPickerModal, TaskRetagPickerSource,
+            ChoicePickSource, TaskColorPickModal, TaskParentPickModal, TaskPresetPickerModal,
+            TaskPresetPickerSource, TaskRetagPickerModal, TaskRetagPickerSource,
         },
         quickline::parse_quickline,
         view::View,
@@ -80,6 +81,7 @@ pub(crate) static TASKS_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("X", "tasks.cancel")
         .bind("t", "tasks.due-today")
         .bind("T", "tasks.retag")
+        .bind("m", "tasks.color")
         .bind("e", "tasks.edit-popup")
         // Create / edit
         .bind("c", "tasks.quickline")
@@ -214,6 +216,8 @@ struct DisplayRow {
     via: Option<usize>,
     /// Number of the task's effective parents (`⤴N` badge when > 1).
     parent_count: usize,
+    /// Own `#color/…` tag, else inherited along the displayed path.
+    color: Option<TaskColor>,
 }
 
 /// "New task" quickline state — a single edit buffer plus a slot for
@@ -451,6 +455,7 @@ impl SearchView {
                     linked: r.via.is_some_and(|p| !physical(p)),
                     via: r.via,
                     parent_count: ft_core::task::hierarchy::parent_keys(t).len(),
+                    color: None,
                 });
             }
         };
@@ -471,10 +476,62 @@ impl SearchView {
             ),
             &mut rows,
         );
+        self.assign_colors(&mut rows);
         self.display = rows;
         if self.selected >= self.display.len() {
             self.selected = self.display.len().saturating_sub(1);
         }
+    }
+
+    /// Fill each row's color: its task's own color, else the nearest
+    /// colored ancestor row on its displayed path (rows are pre-order with
+    /// depths); roots seed from their effective ancestors outside the view.
+    fn assign_colors(&self, rows: &mut [DisplayRow]) {
+        let index: std::collections::HashMap<(&std::path::Path, usize), usize> = self
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ((t.source_file.as_path(), t.source_line), i))
+            .collect();
+        // (depth, color) of the open ancestors of the current row.
+        let mut stack: Vec<(usize, Option<TaskColor>)> = Vec::new();
+        for row in rows.iter_mut() {
+            while stack.last().is_some_and(|(d, _)| *d >= row.depth) {
+                stack.pop();
+            }
+            let inherited = match stack.last() {
+                Some((_, c)) => *c,
+                None => self.inherited_root_color(row.task_idx, &index),
+            };
+            row.color = TaskColor::of(&self.tasks[row.task_idx]).or(inherited);
+            stack.push((row.depth, row.color));
+        }
+    }
+
+    /// The first own color among `idx`'s effective ancestors, searched
+    /// breadth-first in `parent_keys` order (physical parent first).
+    fn inherited_root_color(
+        &self,
+        idx: usize,
+        index: &std::collections::HashMap<(&std::path::Path, usize), usize>,
+    ) -> Option<TaskColor> {
+        let mut seen = std::collections::HashSet::from([idx]);
+        let mut queue = std::collections::VecDeque::from([idx]);
+        while let Some(i) = queue.pop_front() {
+            for (path, line) in ft_core::task::hierarchy::parent_keys(&self.tasks[i]) {
+                let Some(&p) = index.get(&(path.as_path(), line)) else {
+                    continue;
+                };
+                if !seen.insert(p) {
+                    continue;
+                }
+                if let Some(c) = TaskColor::of(&self.tasks[p]) {
+                    return Some(c);
+                }
+                queue.push_back(p);
+            }
+        }
+        None
     }
 
     /// Task index under the cursor, if any. The single accessor mutation and
@@ -596,6 +653,41 @@ impl SearchView {
             ops::retag_task(path, task.source_line, format, Some(task), &list, &tag)?;
             Ok(())
         });
+    }
+
+    /// Set (or, with `None`, clear) the color tag of every cut task — the
+    /// cut set is then cleared — or else of the cursor task. Stops at the
+    /// first stale line: toast and refresh.
+    fn apply_color(&mut self, color: Option<TaskColor>, ctx: &mut TabCtx) {
+        let format = ctx.vault.task_format();
+        let list = TaskColor::all_tags();
+        let tag = color.map(TaskColor::tag).unwrap_or_default();
+        let targets: Vec<Task> = if self.cut.is_empty() {
+            self.selected_task_idx()
+                .map(|i| self.tasks[i].clone())
+                .into_iter()
+                .collect()
+        } else {
+            self.cut.iter().map(|c| c.snapshot.clone()).collect()
+        };
+        let Some(first) = targets.first() else {
+            toast(ctx, "select a task first", ToastStyle::Error);
+            return;
+        };
+        let anchor = self
+            .selected_task_idx()
+            .map(|i| self.key_of(i))
+            .unwrap_or_else(|| (first.source_file.clone(), first.source_line));
+        for t in &targets {
+            let path = ctx.vault.path.join(&t.source_file);
+            if let Err(e) = ops::retag_task(&path, t.source_line, format, Some(t), &list, &tag) {
+                toast(ctx, &e.to_string(), ToastStyle::Error);
+                ctx.request_graph_refresh();
+                return;
+            }
+        }
+        self.cut.clear();
+        let _ = self.refresh_after_mutation(ctx, Some(anchor));
     }
 
     // --- rendering helpers -------------------------------------------------
@@ -903,6 +995,10 @@ impl View for SearchView {
         let _ = self.adopt_snapshot(ctx);
     }
 
+    fn color_picked(&mut self, color: Option<TaskColor>, ctx: &mut TabCtx) {
+        SearchView::apply_color(self, color, ctx)
+    }
+
     fn set_keymap(&mut self, keymap: KeyMap) {
         self.keymap = keymap;
     }
@@ -1017,6 +1113,16 @@ impl SearchView {
             }
             "tasks.edit-popup" => {
                 self.open_edit_popup();
+                Ok(CommandOutcome::Handled)
+            }
+            "tasks.color" => {
+                if self.cut.is_empty() && self.selected_task_idx().is_none() {
+                    toast(ctx, "select a task first", ToastStyle::Error);
+                    return Ok(CommandOutcome::Handled);
+                }
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+                    ActiveModal::TaskColorPick(TaskColorPickModal::new()),
+                )));
                 Ok(CommandOutcome::Handled)
             }
             "tasks.retag" => {
@@ -1401,7 +1507,7 @@ impl SearchView {
         let modal = TaskParentPickModal::new(
             (task.source_file.clone(), task.source_line),
             title,
-            ParentPickSource::new(items),
+            ChoicePickSource::new(items),
         );
         *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
             ActiveModal::TaskParentPick(modal),
@@ -2508,7 +2614,10 @@ fn task_line(
         _ => String::new(),
     };
     let text_width = desc_width.saturating_sub(badge.chars().count());
-    let desc = format!("{tree_prefix}{}", task.description.replace('\n', " "));
+    let desc = format!(
+        "{tree_prefix}{}",
+        color::strip_tags(&task.description).replace('\n', " ")
+    );
     let desc_count = desc.chars().count();
     let desc_trimmed = if desc_count > text_width {
         let cut: String = desc.chars().take(text_width.saturating_sub(1)).collect();
@@ -2534,7 +2643,11 @@ fn task_line(
     spans.push(Span::styled(cursor.to_string(), row_style));
     spans.push(Span::styled(status_text, row_style.fg(status_color)));
     spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
-    spans.push(Span::styled(desc_trimmed, row_style));
+    let desc_style = match row.color {
+        Some(c) => row_style.fg(c.color()),
+        None => row_style,
+    };
+    spans.push(Span::styled(desc_trimmed, desc_style));
     if !badge.is_empty() {
         spans.push(Span::styled(badge, row_style.fg(palette::DIM)));
     }

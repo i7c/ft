@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use ft_core::query::preset;
 use ft_core::task::ops::{self, MoveSource, MoveTarget};
 use ft_core::task::Task;
+
+use super::color::TaskColor;
 use ratatui::layout::Rect;
 use ratatui::widgets::Clear;
 use ratatui::Frame;
@@ -329,15 +331,15 @@ impl crate::tui::modal::Modal for TaskRetagPickerModal {
 // ── Task parent picker ───────────────────────────────────────────────
 
 /// Fuzzy-picker source over fixed `(label, choice)` entries — a task's
-/// parents, plus "all parents" when unlinking.
-pub struct ParentPickSource {
-    items: Vec<(String, ParentChoice)>,
+/// parents (plus "all parents" when unlinking), or the task colors.
+pub struct ChoicePickSource<T> {
+    items: Vec<(String, T)>,
     matcher: nucleo_matcher::Matcher,
     buf: Vec<char>,
 }
 
-impl ParentPickSource {
-    pub(crate) fn new(items: Vec<(String, ParentChoice)>) -> Self {
+impl<T> ChoicePickSource<T> {
+    pub(crate) fn new(items: Vec<(String, T)>) -> Self {
         Self {
             items,
             matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
@@ -346,10 +348,10 @@ impl ParentPickSource {
     }
 }
 
-impl PickerSource for ParentPickSource {
-    type Item = ParentChoice;
+impl<T: Clone> PickerSource for ChoicePickSource<T> {
+    type Item = T;
 
-    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<ParentChoice>> {
+    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<T>> {
         let pat = nucleo_matcher::pattern::Pattern::parse(
             q,
             nucleo_matcher::pattern::CaseMatching::Smart,
@@ -376,7 +378,7 @@ impl PickerSource for ParentPickSource {
             .collect()
     }
 
-    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<ParentChoice>> {
+    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<T>> {
         self.items
             .iter()
             .take(limit)
@@ -396,14 +398,14 @@ impl PickerSource for ParentPickSource {
 pub struct TaskParentPickModal {
     task: ft_core::task::TaskKey,
     title: &'static str,
-    inner: FuzzyPicker<ParentPickSource>,
+    inner: FuzzyPicker<ChoicePickSource<ParentChoice>>,
 }
 
 impl TaskParentPickModal {
     pub(crate) fn new(
         task: ft_core::task::TaskKey,
         title: &'static str,
-        source: ParentPickSource,
+        source: ChoicePickSource<ParentChoice>,
     ) -> Self {
         Self {
             task,
@@ -461,6 +463,84 @@ impl crate::tui::modal::Modal for TaskParentPickModal {
 
     fn keymap(&self) -> &KeyMap {
         &mc::TASK_PARENT_PICK_KEYMAP
+    }
+
+    fn dispatch_command(
+        &mut self,
+        _cmd: &crate::tui::command::Command,
+        _ctx: &TabCtx,
+    ) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
+}
+
+// ── Task color picker ────────────────────────────────────────────────
+
+/// Picker over the six task colors plus `none` (`m` on the Tasks tab).
+/// On `Enter` posts `AppRequest::Tasks(TasksRequest::ColorPicked(..))`;
+/// on `Esc` closes with no write.
+pub struct TaskColorPickModal {
+    inner: FuzzyPicker<ChoicePickSource<Option<TaskColor>>>,
+}
+
+impl TaskColorPickModal {
+    pub(crate) fn new() -> Self {
+        let items = TaskColor::ALL
+            .into_iter()
+            .map(|c| (c.name().to_string(), Some(c)))
+            .chain(std::iter::once(("none".to_string(), None)))
+            .collect();
+        Self {
+            inner: FuzzyPicker::new(ChoicePickSource::new(items)),
+        }
+    }
+}
+
+impl crate::tui::modal::Modal for TaskColorPickModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> crate::tui::modal::ModalOutcome {
+        let Event::Key(k) = ev else {
+            return crate::tui::modal::ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(color) => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Tasks(TasksRequest::ColorPicked(color)));
+                crate::tui::modal::ModalOutcome::Closed
+            }
+            PickerOutcome::Cancelled => crate::tui::modal::ModalOutcome::Closed,
+            PickerOutcome::StillOpen => crate::tui::modal::ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => crate::tui::modal::ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        let popup_area = super::edit_popup::centered_rect(40, 50, area);
+        frame.render_widget(Clear, popup_area);
+        self.inner.render(frame, popup_area);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            "Task color picker",
+            &[
+                ("Type", "filter"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "set color"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-color-pick"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_COLOR_PICK_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_COLOR_PICK_KEYMAP
     }
 
     fn dispatch_command(

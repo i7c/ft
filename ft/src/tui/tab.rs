@@ -147,6 +147,8 @@ pub enum TasksRequest {
         task: ft_core::task::TaskKey,
         choice: ParentChoice,
     },
+    /// The task-color-pick modal's choice (`None` = remove the color).
+    ColorPicked(Option<crate::tui::tabs::tasks::color::TaskColor>),
 }
 
 /// What the task-parent-pick modal decided.

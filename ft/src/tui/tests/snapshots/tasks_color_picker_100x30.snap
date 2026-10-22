@@ -1,0 +1,34 @@
+---
+source: ft/src/tui/tests/tasks_colors.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│(status in {Open, InProgress} and due < +1w) or (completed = today)                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ── upcoming (3) ──                                                                               │
+│▶       alpha #work                                                 📅  tomorrow                   │
+│        beta                                                        📅  in 2d                      │
+│        gamma                ┌ find ────────────────────────────────┐  in 3d                      │
+│                             │type to search…                       │                             │
+│                             └──────────────────────────────────────┘                             │
+│                             ┌ recent · type to search ─────────────┐                             │
+│                             │▶ red                                 │                             │
+│                             │  yellow                              │                             │
+│                             │  green                               │                             │
+│                             │  blue                                │                             │
+│                             │  magenta                             │                             │
+│                             │  cyan                                │                             │
+│                             │  none                                │                             │
+│                             │                                      │                             │
+│                             │                                      │                             │
+│                             └──────────────────────────────────────┘                             │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                       refreshed [HH:MM:SS]      modal: task-color-pi

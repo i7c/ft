@@ -471,6 +471,7 @@ Common chords inside the Tasks tab (priority moved from `p` / `P` to
 | `}` / `{` | bump scheduled ±1 day                           |
 | `+` / `-` | cycle priority up / down                         |
 | `M`       | move the selected task to another file / heading |
+| `m`       | color the task (or the marked tasks): red, yellow, green, blue, magenta, cyan, none |
 | `d`       | mark / unmark the selected task for moving (cut) |
 | `p` / `P` | move the marked tasks under / after the selected task |
 | `Esc`     | clear the marked tasks                           |
@@ -496,6 +497,19 @@ and the global App-level chords. The generated reference is at
 
 Every mutation chord calls the same `ft-core` op the CLI does, so the
 state on disk is identical regardless of which surface you used.
+
+### Task colors
+
+Press `m` on a task to give it a color. It's stored as a plain tag on
+the line (`#color/blue`; one of red, yellow, green, blue, magenta, cyan),
+so it travels with the file and works in queries
+(`tags includes "color/blue"`). In the Tasks tab the task's description
+takes that color, and so does everything below it — indented subtasks and
+`⤴`-linked children alike — unless they carry their own color. A task
+with two parents shows in each parent's color under that parent, and a
+task whose colored parent is filtered out of the view still inherits.
+The `#color/…` tag itself is hidden in the row. With tasks marked by
+`d`, `m` colors all of them; `none` removes the color.
 
 ## Scripting patterns
 

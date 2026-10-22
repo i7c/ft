@@ -1,3 +1,4 @@
+pub(crate) mod color;
 pub(crate) mod edit_popup;
 pub(crate) mod modals;
 mod quickline;
@@ -255,6 +256,15 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "tasks.color",
+        description: "Color the selected (or cut) tasks; subtasks inherit the color",
+        scope: CommandScope::Tab("tasks"),
+        group: "Mutations",
+        args_schema: &[],
+        opens_modal: true,
+        is_primary: false,
+    },
+    CommandDef {
         name: "tasks.retag",
         description: "Swap a configured tag into the selected task",
         scope: CommandScope::Tab("tasks"),
@@ -503,6 +513,11 @@ impl Tab for TasksTab {
             TasksRequest::SelectAfterRefresh(key) => {
                 if let Some(v) = self.views.get_mut(self.active_view) {
                     v.select_after_refresh(key);
+                }
+            }
+            TasksRequest::ColorPicked(color) => {
+                if let Some(v) = self.views.get_mut(self.active_view) {
+                    v.color_picked(color, ctx);
                 }
             }
             TasksRequest::ParentPicked { task, choice } => {

@@ -65,7 +65,7 @@ use crate::tui::tabs::notes::view::{
     render_periodic_leader,
 };
 use crate::tui::tabs::tasks::modals::{
-    TaskParentPickModal, TaskPresetPickerModal, TaskRetagPickerModal,
+    TaskColorPickModal, TaskParentPickModal, TaskPresetPickerModal, TaskRetagPickerModal,
 };
 use crate::tui::widgets::{render_inline_input, CursorMode, EditBuffer, InlineInput};
 
@@ -258,6 +258,9 @@ pub enum ActiveModal {
     /// `U` unlinks, or which ticket `I` promotes under. On Enter posts
     /// `AppRequest::Tasks(TasksRequest::ParentPicked { .. })`.
     TaskParentPick(TaskParentPickModal),
+    /// Picker over the task colors (`m` on the Tasks tab). On Enter posts
+    /// `AppRequest::Tasks(TasksRequest::ColorPicked(..))`.
+    TaskColorPick(TaskColorPickModal),
     /// File+heading fuzzy picker for the `tasks.move` flow, hosted by
     /// the Tasks tab. On Enter builds a `MoveTarget` from the picked
     /// `Hit` and runs `ops::plan_move` + `ops::apply_move_plan`; on Esc
@@ -298,6 +301,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskRetagPicker(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskParentPick(s) => s.handle_event(ev, ctx),
+            ActiveModal::TaskColorPick(s) => s.handle_event(ev, ctx),
             ActiveModal::TaskMove(s) => s.handle_event(ev, ctx),
             ActiveModal::ParagraphSynth(s) => s.handle_event(ev, ctx),
             ActiveModal::ConflictResolve(s) => s.handle_event(ev, ctx),
@@ -328,6 +332,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskRetagPicker(s) => s.render(frame, area, ctx),
             ActiveModal::TaskParentPick(s) => s.render(frame, area, ctx),
+            ActiveModal::TaskColorPick(s) => s.render(frame, area, ctx),
             ActiveModal::TaskMove(s) => s.render(frame, area, ctx),
             ActiveModal::ParagraphSynth(s) => s.render(frame, area, ctx),
             ActiveModal::ConflictResolve(s) => s.render(frame, area, ctx),
@@ -356,6 +361,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.keymap_help(),
             ActiveModal::TaskRetagPicker(s) => s.keymap_help(),
             ActiveModal::TaskParentPick(s) => s.keymap_help(),
+            ActiveModal::TaskColorPick(s) => s.keymap_help(),
             ActiveModal::TaskMove(s) => s.keymap_help(),
             ActiveModal::ParagraphSynth(s) => s.keymap_help(),
             ActiveModal::ConflictResolve(s) => s.keymap_help(),
@@ -384,6 +390,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(_) => "task-preset-picker",
             ActiveModal::TaskRetagPicker(_) => "task-retag-picker",
             ActiveModal::TaskParentPick(_) => "task-parent-pick",
+            ActiveModal::TaskColorPick(_) => "task-color-pick",
             ActiveModal::TaskMove(_) => "task-move",
             ActiveModal::ParagraphSynth(_) => "paragraph-synth",
             ActiveModal::ConflictResolve(_) => "conflict-resolve",
@@ -412,6 +419,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.commands(),
             ActiveModal::TaskRetagPicker(s) => s.commands(),
             ActiveModal::TaskParentPick(s) => s.commands(),
+            ActiveModal::TaskColorPick(s) => s.commands(),
             ActiveModal::TaskMove(s) => s.commands(),
             ActiveModal::ParagraphSynth(s) => s.commands(),
             ActiveModal::ConflictResolve(s) => s.commands(),
@@ -440,6 +448,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.keymap(),
             ActiveModal::TaskRetagPicker(s) => s.keymap(),
             ActiveModal::TaskParentPick(s) => s.keymap(),
+            ActiveModal::TaskColorPick(s) => s.keymap(),
             ActiveModal::TaskMove(s) => s.keymap(),
             ActiveModal::ParagraphSynth(s) => s.keymap(),
             ActiveModal::ConflictResolve(s) => s.keymap(),
@@ -468,6 +477,7 @@ impl Modal for ActiveModal {
             ActiveModal::TaskPresetPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskRetagPicker(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskParentPick(s) => s.dispatch_command(cmd, ctx),
+            ActiveModal::TaskColorPick(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::TaskMove(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::ParagraphSynth(s) => s.dispatch_command(cmd, ctx),
             ActiveModal::ConflictResolve(s) => s.dispatch_command(cmd, ctx),
