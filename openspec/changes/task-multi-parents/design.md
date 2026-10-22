@@ -123,10 +123,12 @@ pub enum RefState { Resolved(TaskKey), Dangling, Ambiguous, Cycle }
 
 - `ParentLink`, `ParentLinkState`, `ParentLinkKind` and the `Ignored` /
   `extra` concepts are deleted.
-- `TaskData` (the graph node) carries `parent_refs:
-  Vec<RefStateKind>` (states only), which keeps `NodeKind` within the
-  size lint the same way `ParentLinkKind` did. It also carries
-  `parent_descriptions` / `parent_statuses: Vec<…>` for the DSL.
+- `TaskData` (the graph node) carries `parent_refs: RefKinds`, a
+  one-byte set of the states present, which keeps `NodeKind` within the
+  size lint the same way `ParentLinkKind` did. The task's `🆔` lives in
+  a graph side table (`Graph::task_id`, like `task_remote`). Parent
+  descriptions, statuses and counts come from the incoming `Subtask`
+  edges at evaluation time, so the DSL needs no per-parent copies.
 
 ### D4. Resolution post-pass
 
@@ -200,8 +202,10 @@ expands it in every occurrence.
   shown parent. `table` adds `⤴N` after the description when a task has
   N > 1 effective parents.
 - **`json`:** nested `subtasks` repeat. Every task object (tree or flat)
-  gains `"id": <🆔|null>` and `"parents": [{"id", "path", "line",
-  "state", "origin"}]`. Unresolved refs have `null` path and line.
+  carries `"id": <🆔|null>` and, when it has references,
+  `"parents": [{"id", "path", "line", "state", "origin"}]` (omitted when
+  empty, like the other optional collections). Unresolved refs have
+  `null` path and line.
 - **`ndjson` tree:** emits pre-order rows *with* repeats, each carrying
   `"depth"` and `"via": {"path","line"}|null`, so streaming consumers can
   rebuild the DAG.
@@ -318,9 +322,9 @@ extra read pass is needed.
   - If the cursor row's `via` is a logical parent → unlink from it.
   - If `via` is the physical parent, or the row is a root, and the task
     has exactly one line ref → remove it.
-  - With several → open `ActiveModal::ParentPick` (a list of the task's
-    line refs with parent descriptions, `Enter` to remove the selected
-    one, `a` to remove all, `Esc` to cancel).
+  - With several → open `ActiveModal::TaskParentPick` (a fuzzy picker
+    over the task's line refs with parent descriptions plus an
+    `all parents` entry; `Enter` removes the choice, `Esc` cancels).
   - No line refs → `task has no parent link`.
 - **`I`** (promote). On `ChooseParent`, open the same `ParentPick` modal
   in "choose" mode and re-run promote with the picked key.

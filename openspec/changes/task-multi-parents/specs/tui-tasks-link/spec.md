@@ -2,11 +2,11 @@
 
 ### Requirement: Parent picker modal
 
-The Tasks tab SHALL provide a parent picker as an `ActiveModal` variant. It lists a task's references with each parent's description (or the raw id and state when unresolved). It is used in two modes:
-- **Remove mode** (from `tasks.unlink`): `Enter` removes the selected reference through `plan_unlink(Parent(..))` (by id for unresolved references), `a` removes all line references, `Esc` closes without writing.
-- **Choose mode** (from `tasks.promote`): `Enter` returns the selected key to the caller, `Esc` cancels.
+The Tasks tab SHALL provide a parent picker as an `ActiveModal` variant (`task-parent-pick`, a fuzzy picker). It lists a task's references with each parent's description (or the raw id and state when unresolved). It is used in two modes:
+- **Remove mode** (from `tasks.unlink`): one entry per line reference plus a final `all parents` entry. `Enter` removes the selected reference through `plan_unlink(Id(..))`, or every line reference for `all parents`. `Esc` closes without writing.
+- **Choose mode** (from `tasks.promote`): one entry per eligible ticket. `Enter` promotes under the selected key, `Esc` cancels.
 
-Frontmatter-origin references SHALL be listed but not removable; selecting one toasts the `ParentFromFrontmatter` message.
+Frontmatter-origin references SHALL NOT be listed (they can't be removed locally).
 
 #### Scenario: Remove one of three
 - **WHEN** the picker lists three parents and the user moves to the second and presses Enter
