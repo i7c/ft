@@ -28,7 +28,7 @@
 - [x] 4.1 `TaskData`: per-parent descriptions/statuses, ref state kinds, `parents`, `open_parents`, `children`, `id`; filled at `Graph::build`.
 - [x] 4.2 Attrs `parent`/`parent_status`/`parent_ref` with any-semantics over lists; `parents`, `open_parents`, `children` (Int); `id` (Str); remove `parent_link`. Lexer/parser/eval/display; reject on edges.
 - [x] 4.3 Presets `orphaned` (`status in {Open, InProgress} and parents > 0 and open_parents = 0`) and `broken-links` (`parent_ref in {dangling, ambiguous, cycle}`); round-trip parse tests.
-- [ ] 4.4 Docs: `docs/query-dsl.md` / `docs/graph-query-dsl.md` attribute tables, including the existential semantics note.
+- [x] 4.4 Docs: `docs/query-dsl.md` / `docs/graph-query-dsl.md` attribute tables, including the existential semantics note.
 
 ## 5. Planners
 
@@ -70,8 +70,8 @@
 ## 9. Test ripple + docs
 
 - [x] 9.1 Rewrite remaining wikilink-parent fixtures across `ft-core` (links, sources, graph, query) and `ft/tests` to `🆔`/`⤴`.
-- [ ] 9.2 `docs/guide/tasks.md`: rewrite "Linked parents" (syntax, multiple parents, ids, the breaking change for old wikilink parents), update "Remote sources" frontmatter example and the promote section.
-- [ ] 9.3 `docs/architecture.md`: hierarchy is a DAG; `parent_keys` is the choke point.
+- [x] 9.2 `docs/guide/tasks.md`: rewrite "Linked parents" (syntax, multiple parents, ids, the breaking change for old wikilink parents), update "Remote sources" frontmatter example and the promote section.
+- [x] 9.3 `docs/architecture.md`: hierarchy is a DAG; `parent_keys` is the choke point.
 - [ ] 9.4 All five build invariants green (`cargo build --release`, `cargo test --workspace`, clippy `-D warnings`, `cargo fmt --check`, `commands docs --check`).
 
 ## 10. ft.nvim

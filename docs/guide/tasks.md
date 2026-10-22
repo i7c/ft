@@ -277,57 +277,63 @@ ft tasks outdent proj.md:7    # becomes its parent's next sibling
 
 ## Linked parents
 
-A task can have a parent in another file without moving there. Put a
-wikilink to the parent in the task's description:
+A task can have parents elsewhere in the vault without moving there — as
+many as it contributes to. Name them by their `🆔` in a `⤴` field:
 
 ```markdown
 <!-- projects/vendor.md -->
-- [ ] Vendor onboarding ^vo1
+- [ ] Vendor onboarding 🆔 k3x9qa
+
+<!-- goals/2026-q4.md -->
+- [ ] Ship Q4 integrations 🆔 p2m7rd
 
 <!-- journal/2026-10-21.md -->
-- [ ] reproduce on staging [[vendor#^vo1]] 📅 2026-10-23
+- [ ] reproduce on staging ⤴ k3x9qa,p2m7rd,ABC-123 📅 2026-10-23
 ```
 
-Only two kinds of link make a parent. Every other link is just a link.
+- **Ids are vault-wide.** Any task with a `🆔` can be a parent, wherever
+  it lives — including a synced ticket, whose anchor line carries
+  `🆔 ABC-123`. Ids survive moves, so nothing needs rewriting when a
+  parent or child changes file.
+- **ft makes the ids.** Linking to a task without a `🆔` gives it a
+  random 6-character one (`k3x9qa`). Ids you write yourself
+  (`🆔 vendor-onb`) work just as well.
+- **Indentation adds up.** A task indented under another has that parent
+  *too*; `⤴` adds more.
+- **Wikilinks are just links.** `[[note#^id]]` or `[[ABC-123]]` never
+  make a parent. (Older ft versions read them as parents; re-link such
+  tasks with `ft tasks link`.)
 
-- **A block reference to a task**: `[[note#^id]]`, or `[[#^id]]` within
-  the same file. The `^id` is Obsidian's block id at the end of the
-  parent's line.
-- **A link to an anchor note**: `[[note]]`, where the note's frontmatter
-  names the task that stands for it, and that task carries the matching
-  `🆔`:
-
-  ```markdown
-  ---
-  ft:
-    tasks:
-      anchor: ABC-123
-  ---
-  - [ ] Fix login 🆔 ABC-123
-  ```
-
-The first such link on the line is the parent; any later ones are
-reported by `ft tasks check`. If a task is also indented under another
-task, the indentation wins. Linked children appear under their parent
-everywhere: `ft tasks list --tree`, the TUI tree (marked `↳`), the graph,
-and the query attributes `parent`, `parent_status`, `parent_link` and
-`children`.
+A task with several parents shows under **each** of them:
+`ft tasks list --tree` repeats it (`table` marks it `⤴2`), the TUI tree
+shows it under every expanded parent (marked `↳`, with a `⤴2` badge), and
+the graph has a `subtask` edge from every parent. The query attributes
+`parent` and `parent_status` match when any parent does; `parents`,
+`open_parents`, `parent_ref` and `id` cover the rest (see
+[graph-query-dsl.md](../graph-query-dsl.md#hierarchy-attributes)).
 
 ```sh
-ft tasks link journal/2026-10-21.md:3 --under "Vendor onboarding"   # adds ^id to the parent if needed
-ft tasks unlink journal/2026-10-21.md:3
-ft tasks create "write regression test" --link-parent ABC-123        # lands in today's note
-ft tasks check                                                       # dangling / cycle / ignored / extra; exit 1 on issues
-ft tasks list orphaned                                               # open tasks under a done or cancelled parent
+ft tasks link journal/2026-10-21.md:3 --under "Vendor onboarding"   # adds a parent (and a 🆔 to it if needed)
+ft tasks link journal/2026-10-21.md:3 --under ABC-123                # …and another
+ft tasks unlink journal/2026-10-21.md:3 --from ABC-123               # several parents: name one, or --all
+ft tasks create "write regression test" --link-parent ABC-123 --link-parent k3x9qa   # lands in today's note
+ft tasks check            # dangling / ambiguous / cycle / redundant refs, duplicate ids; exit 1 on issues
+ft tasks list orphaned    # open tasks whose parents are all done or cancelled
 ```
 
-ft keeps links consistent as you restructure:
+`unlink` without `--from`/`--all` on a task with several parents exits
+2 and lists them; in the TUI, `U` unlinks the parent the row is shown
+under, or asks.
 
-- Nesting a task physically (`--under`, indent, TUI paste) removes its
-  now-redundant parent link.
-- Moving a task that carries a block id to another file rewrites every
-  `[[…#^id]]` that pointed at it. `--dry-run` shows those edits, and the
-  move's output counts them.
+Restructuring keeps references consistent:
+
+- Nesting a task physically under one of its parents (`--under`, indent,
+  TUI paste) drops that parent from its `⤴` field; other parents stay.
+- Copying a line copies its `🆔`; references to a duplicated id turn
+  `ambiguous` (and `ft tasks check` lists the copy) instead of guessing.
+- Ordinary block references (`[[note#^id]]`) are still rewritten when
+  their target line moves to another file. `--dry-run` shows those
+  edits, and the move's output counts them.
 
 ## Remote sources
 
@@ -352,7 +358,7 @@ Configure sources in `.ft/config.toml` (see
 ft:
   tasks:
     anchor: ABC-123
-    parent: "[[EPIC-7]]"
+    parent: EPIC-7
   source:
     name: jira
     key: ABC-123
@@ -369,8 +375,10 @@ ft:
 ```
 
 …or link to the ticket from anywhere, e.g. from today's note:
-`- [ ] write regression test [[ABC-123]]`, or
+`- [ ] write regression test ⤴ ABC-123`, or
 `ft tasks create "…" --link-parent ABC-123` (TUI: `S` on the ticket).
+A ticket can itself serve local goals: add `⤴ <id>` to its anchor line —
+sync keeps it and never pushes it.
 
 What sync does:
 
@@ -433,8 +441,12 @@ ft tasks promote "write regression test"     # TUI: `I` on the task
 - **The vault is rearranged to match:** the task becomes the new
   ticket's note. Its subtasks and notes move under the new anchor, the
   original lines disappear, and links to the task's block id follow it.
+  Its other parents stay on the new anchor line (`⤴`), and tasks that
+  referenced its `🆔` now reference the new key.
 - **Conditions:** promote needs a connection (nothing is queued), and
-  the task's direct parent must be a ticket.
+  one of the task's parents must be a ticket. With several ticket
+  parents, pick one: `ft tasks promote "…" --parent ABC-123` (the TUI
+  asks).
 
 ## The Tasks tab in the TUI
 
@@ -463,8 +475,8 @@ Common chords inside the Tasks tab (priority moved from `p` / `P` to
 | `p` / `P` | move the marked tasks under / after the selected task |
 | `Esc`     | clear the marked tasks                           |
 | `>` / `<` | indent / outdent the selected task              |
-| `L`       | link the marked tasks under the selected task (no move) |
-| `U`       | remove the selected task's parent link           |
+| `L`       | add the selected task as a parent of the marked tasks (no move) |
+| `U`       | unlink from the parent the row is shown under (asks when unclear) |
 | `S`       | new task in today's note, linked under the selected task |
 | `I`       | promote the selected task to a remote issue (needs a connection) |
 | `e`       | open the edit popup for the focused task        |

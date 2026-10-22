@@ -117,6 +117,23 @@ inserting its next instance above). Pass `None` only when no scanned
 The CLI binary calls these directly. The TUI (plan 002) will compose
 them at finer granularity.
 
+### Task hierarchy (`task::hierarchy`, `task::links`)
+
+The task hierarchy is a DAG. A task's effective parents are its
+indentation parent (`Task::parent`, same file) plus every task its
+`⤴ id,id` field (`Task::parent_ids`) names by `🆔`, anywhere in the
+vault. The scan's post-pass (`links::resolve_parent_refs`) resolves the
+ids through a vault-wide `🆔` index into `Task::parent_refs`
+(`resolved` / `dangling` / `ambiguous` / `cycle`) and breaks cycles, so
+every consumer holding `&[Task]` sees the same hierarchy.
+`hierarchy::parent_keys` is the single choke point: `children_map`, the
+forest expanders (a task repeats under every parent in view; rows carry
+`via`), graph `Subtask` edges (one per parent) and the DSL all derive
+from it. `Task::parent` keeps its physical-only meaning for
+indent/outdent. Writes (`plan_link`, `plan_unlink`, strip-on-nest in
+`plan_move`) edit the `⤴` field through the format; ids are generated on
+demand and checked against the vault-wide index.
+
 ### Timeblocks (`timeblock`)
 
 `ft-core::timeblock` is the day-planner block layer. It mirrors the

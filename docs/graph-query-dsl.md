@@ -102,7 +102,7 @@ Attribute compatibility:
 | `outdegree` | self only        | Count of outgoing edges (integer)          |
 | `status`, `priority`, `due`, `scheduled`, `created`, `start`, `completed`, `description`, `tags` | self, from, to | Task fields — see [Task attributes](#task-attributes) |
 | `mentions`  | self, from, to   | Concept-existence predicate — see [`mentions`](#mentions) |
-| `parent`, `parent_status`, `parent_link`, `children` | self, from, to | Task hierarchy — see [Hierarchy attributes](#hierarchy-attributes) |
+| `parent`, `parent_status`, `parent_ref`, `parents`, `open_parents`, `children`, `id` | self, from, to | Task hierarchy — see [Hierarchy attributes](#hierarchy-attributes) |
 | `source`, `key`, `remote_status` | self, from, to | Remote issue anchors — see [Remote attributes](#remote-attributes) |
 
 `indegree` / `outdegree` are selection-time properties only — they
@@ -174,23 +174,32 @@ and are NOT the Rust `Debug` of the underlying enum variants.
 
 ## Hierarchy attributes
 
-A task's *effective parent* is its indentation parent, or (when it isn't
-indented under one) the task its parent link points at: a block reference
-`[[note#^id]]` or a link to an anchor note. See
+A task's *effective parents* are its indentation parent plus every task
+its `⤴ id,id` references resolve to (a task can have several). See
 [docs/guide/tasks.md](guide/tasks.md#linked-parents).
 
 | Attribute       | Type   | Optional | Meaning |
 |-----------------|--------|----------|---------|
-| `parent`        | string | yes      | The effective parent's description |
-| `parent_status` | enum   | yes      | The effective parent's status (`Open`, `InProgress`, `Done`, `Cancelled`) |
-| `parent_link`   | enum   | yes      | The parent link's state: `resolved`, `dangling`, `ignored` (the task is indented under another, which wins), `cycle`. Null without a parent link |
+| `parent`        | string | yes      | The effective parents' descriptions — matches when **any** parent matches |
+| `parent_status` | enum   | yes      | The effective parents' statuses (`Open`, `InProgress`, `Done`, `Cancelled`), any-match |
+| `parent_ref`    | enum   | yes      | States of the task's `⤴` references, any-match: `resolved`, `dangling` (no task has the id), `ambiguous` (several do), `cycle`. Null without references |
+| `parents`       | int    | no       | Number of effective parents |
+| `open_parents`  | int    | no       | Number of effective parents that are `Open` or `InProgress` |
 | `children`      | int    | no       | Number of direct children (indented and linked) |
+| `id`            | string | yes      | The task's `🆔` |
+
+The parent attributes are existential, negations included:
+`parent_status != Done` holds when *some* parent isn't done. Ask
+universal questions with the counts — "every parent is closed" is
+`parents > 0 and open_parents = 0`.
 
 ```text
-status = Open and parent_status in {Done, Cancelled}   # built-in preset `orphaned`
-parent_link in {dangling, cycle, ignored}              # built-in preset `broken-links`
+status in {Open, InProgress} and parents > 0 and open_parents = 0   # built-in preset `orphaned`
+parent_ref in {dangling, ambiguous, cycle}                          # built-in preset `broken-links`
 children > 0 and status = Open
-parent is null                                         # top-level tasks
+parents > 1                                                         # tasks serving several goals
+parent is null                                                      # top-level tasks
+id = k3x9qa
 ```
 
 ## Remote attributes
