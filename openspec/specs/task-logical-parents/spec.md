@@ -129,3 +129,16 @@ The parent-link post-pass SHALL perform no file I/O, and SHALL run in time linea
 #### Scenario: Perf gate
 - **WHEN** the perf tests run with `FT_PERF_TESTS=1` on a synthetic 2,000-note vault where every note has tasks and cross-file parent links
 - **THEN** the parent-link post-pass takes less than 10% of the full `scan_vault` time
+
+### Requirement: Anchor-note frontmatter parent
+
+When a note is an anchor note (`ft.tasks.anchor` names a task in it) and its frontmatter also has `ft.tasks.parent` set to a wikilink string (e.g. `"[[EPIC-7]]"`), the anchor task's parent link SHALL be resolved from that value, using the same candidate rules as a parent link on a task line. The resulting `ParentLink.raw` SHALL be the frontmatter value, and states follow the same rules:
+- `Ignored` when the anchor line is indented under another task;
+- `Dangling` when the target doesn't resolve to a task;
+- cycle handling as for line links.
+
+A parent link on the anchor line itself SHALL take precedence over the frontmatter value; the frontmatter value then counts as an extra link. `plan_unlink` on a task whose parent comes from frontmatter SHALL fail with `LinkError::ParentFromFrontmatter`, rendered as `parent comes from the note's ft.tasks.parent — edit the frontmatter (or the issue in its source)`.
+
+#### Scenario: Story under epic
+- **WHEN** `jira/ABC-123.md` (anchor `ABC-123`) has `ft.tasks.parent: "[[EPIC-7]]"` and `jira/EPIC-7.md` is the anchor note for `EPIC-7`
+- **THEN** `ABC-123`'s anchor task resolves its parent link to `EPIC-7`'s anchor task
