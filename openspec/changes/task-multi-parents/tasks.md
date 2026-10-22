@@ -76,7 +76,7 @@
 
 ## 10. ft.nvim
 
-- [x] 10.1 [ft.nvim] `:FtTaskLink` is additive; `:FtTaskUnlink` handles the `NeedsChoice` error with `vim.ui.select` and re-runs with `--from`. (ft.nvim e5405be)
+- [x] 10.1 [ft.nvim] `:FtTaskLink` is additive; `:FtTaskUnlink` handles the `NeedsChoice` error (exit 2, `refs`) with the picker seam and re-runs with `--id` / `--all`. (ft.nvim e5405be)
 - [x] 10.2 [ft.nvim] Goto-parent from the JSON `parents` (picker when several). (ft.nvim e5405be)
 - [x] 10.3 [ft.nvim] Virtual text resolving `⤴` ids to parent descriptions from the cached task list; invalidated on existing events. (ft.nvim e5405be)
 - [x] 10.4 [ft.nvim] Quickfix for the new `check` kinds; promote handles the `candidates` error with a picker and `--parent`. (ft.nvim e5405be)
