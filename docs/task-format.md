@@ -41,17 +41,17 @@ The original marker is **not** preserved on rewrite.
 | ❌    | cancelled    | `YYYY-MM-DD`                                |
 | 🆔    | id           | non-whitespace identifier                   |
 | ⛔    | depends_on   | comma-separated identifiers                 |
+| ⤴    | parent_ids   | comma-separated `🆔`s of logical parents (ft extension; `⤴️` also read) |
 
 A trailing ` ^identifier` is parsed as a markdown block-link and
 preserved verbatim.
 
-### Parent links
+### Parents
 
-A wikilink in the description can name the task's parent in another
-file: a block reference to a task (`[[note#^id]]`, `[[#^id]]`), or a link
-to an anchor note (`[[note]]` whose frontmatter has `ft.tasks.anchor: <id>`
-matching a task's `🆔`). The first such link wins. Indentation beats a
-link. The link text stays part of the description; see
+`⤴ id,id` names the task's logical parents by their `🆔`, anywhere in
+the vault — local tasks and remote issue anchors (`🆔 ABC-123`) alike.
+They add to the physical parent (the task it is indented under), so a
+task can have several parents. Wikilinks never make a parent. See
 [guide/tasks.md](guide/tasks.md#linked-parents).
 
 ## Canonical serialization order
@@ -59,11 +59,14 @@ link. The link text stays part of the description; see
 When `ft` rewrites a task, fields are emitted in this order:
 
 ```
-description, priority, recurrence, created, start, scheduled, due,
+description, parent_ids, priority, recurrence, created, start, scheduled, due,
 done, cancelled, id, depends_on, [raw_trailing], [^block-link]
 ```
 
-This matches the plugin's own canonical order. Round-trip property is:
+This matches the plugin's own canonical order, plus `⤴` right after the
+description: the plugin reads fields from the end of the line and stops
+at the first one it doesn't know, so `⤴` there leaves the rest
+parseable for it. Round-trip property is:
 `serialize(parse(line)) == line` byte-for-byte for any line already in
 canonical order; lines in non-canonical order normalize on first
 rewrite.

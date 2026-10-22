@@ -21,6 +21,9 @@ const DONE: &str = "✅";
 const CANCELLED: &str = "❌";
 const ID: &str = "🆔";
 const DEPENDS_ON: &str = "⛔";
+/// Logical parents: `⤴ id,id`. Read with or without U+FE0F, written bare.
+const PARENTS: &str = "⤴";
+const VS16: char = '\u{FE0F}';
 
 /// All field-marker emoji strings, used to detect field boundaries.
 const ALL_FIELD_EMOJIS: &[&str] = &[
@@ -38,6 +41,7 @@ const ALL_FIELD_EMOJIS: &[&str] = &[
     CANCELLED,
     ID,
     DEPENDS_ON,
+    PARENTS,
 ];
 
 // ── public format struct ─────────────────────────────────────────────────────
@@ -125,6 +129,7 @@ fn parse_line(line: &str, ctx: ParseContext) -> Option<Task> {
         recurrence: fields.recurrence,
         id: fields.id,
         depends_on: fields.depends_on,
+        parent_ids: fields.parent_ids,
         on_completion: None,
         block_link: block_link.map(str::to_string),
         raw_trailing: fields.raw_trailing,
@@ -149,6 +154,13 @@ fn serialize_line(task: &Task) -> String {
 
     // Build the content portion: description then fields in canonical order.
     let mut parts: Vec<String> = vec![task.description.clone()];
+
+    // First after the description: the Tasks plugin strips known fields from
+    // the end and stops at the first unknown token, so `⤴` must not sit
+    // between it and the fields it understands.
+    if !task.parent_ids.is_empty() {
+        parts.push(format!("{PARENTS} {}", task.parent_ids.join(",")));
+    }
 
     if let Some(priority) = task.priority {
         parts.push(priority.emoji().to_string());
@@ -276,6 +288,9 @@ fn fields_boundary(content: &str) -> usize {
     for &emoji in TEXT_EMOJIS {
         check(emoji, &|after| after.starts_with(' '));
     }
+    check(PARENTS, &|after| {
+        after.strip_prefix(VS16).unwrap_or(after).starts_with(' ')
+    });
 
     min_pos
 }
@@ -302,6 +317,7 @@ struct ParsedFields {
     cancelled: Option<NaiveDate>,
     id: Option<String>,
     depends_on: Vec<String>,
+    parent_ids: Vec<String>,
     raw_trailing: Option<String>,
 }
 
@@ -376,14 +392,20 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
             let (spaces, value) = take_leading_spaces(after);
             if spaces >= 1 {
                 let end = next_field_boundary(value);
-                let ids_str = value[..end].trim_end();
-                fields.depends_on = ids_str
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect();
+                fields.depends_on = split_ids(&value[..end]);
                 pos += DEPENDS_ON.len() + spaces + end;
+                continue;
+            }
+        }
+
+        // Parents: ⤴ <comma-separated IDs>, optional U+FE0F after the arrow.
+        if let Some(after) = rest.strip_prefix(PARENTS) {
+            let vs = if after.starts_with(VS16) { VS16.len_utf8() } else { 0 };
+            let (spaces, value) = take_leading_spaces(&after[vs..]);
+            if spaces >= 1 {
+                let end = next_field_boundary(value);
+                fields.parent_ids = split_ids(&value[..end]);
+                pos += PARENTS.len() + vs + spaces + end;
                 continue;
             }
         }
@@ -393,6 +415,14 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
         fields.raw_trailing.get_or_insert_with(String::new).push(ch);
         pos += ch.len_utf8();
     }
+}
+
+fn split_ids(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn try_priority(s: &str) -> Option<(Priority, usize)> {
@@ -718,6 +748,50 @@ mod tests {
         assert_eq!(task.depends_on, vec!["id1", "id2", "id3"]);
     }
 
+    // ── parents (⤴) ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn parents_parse_and_serialize_first() {
+        let task = parse("- [ ] write regression test ⤴ k3x9qa, ABC-123 ⏫ 📅 2026-10-30");
+        assert_eq!(task.parent_ids, vec!["k3x9qa", "ABC-123"]);
+        assert_eq!(task.description, "write regression test");
+        assert_eq!(task.priority, Some(Priority::High));
+        assert_eq!(
+            EmojiFormat.serialize_line(&task),
+            "- [ ] write regression test ⤴ k3x9qa,ABC-123 ⏫ 📅 2026-10-30"
+        );
+    }
+
+    #[test]
+    fn parents_accept_presentation_selector() {
+        let task = parse("- [ ] t ⤴\u{FE0F} k3x9qa");
+        assert_eq!(task.parent_ids, vec!["k3x9qa"]);
+        assert_eq!(task.description, "t");
+        assert_eq!(EmojiFormat.serialize_line(&task), "- [ ] t ⤴ k3x9qa");
+    }
+
+    #[test]
+    fn parents_field_order() {
+        let task = parse("- [ ] t 📅 2026-10-30 🆔 abc123 ⏫ ⤴ p1p1p1");
+        assert_eq!(
+            EmojiFormat.serialize_line(&task),
+            "- [ ] t ⤴ p1p1p1 ⏫ 📅 2026-10-30 🆔 abc123"
+        );
+    }
+
+    #[test]
+    fn parents_keep_duplicates_and_drop_empties() {
+        let task = parse("- [ ] t ⤴ a1,,a1 ");
+        assert_eq!(task.parent_ids, vec!["a1", "a1"]);
+    }
+
+    #[test]
+    fn arrow_without_space_stays_in_description() {
+        let task = parse("- [ ] go ⤴up");
+        assert!(task.parent_ids.is_empty());
+        assert_eq!(task.description, "go ⤴up");
+    }
+
     // ── block link ────────────────────────────────────────────────────────────
 
     #[test]
@@ -986,6 +1060,13 @@ mod tests {
         ]
     }
 
+    fn arb_parent_ids() -> impl Strategy<Value = Vec<String>> {
+        proptest::collection::vec(
+            proptest::string::string_regex("[a-z0-9]{6}|[A-Z]{2,4}-[0-9]{1,4}").unwrap(),
+            0..4,
+        )
+    }
+
     proptest! {
         #[test]
         fn prop_roundtrip_serialize_parse(
@@ -999,6 +1080,7 @@ mod tests {
             done in arb_date(),
             cancelled in arb_date(),
             recurrence in arb_recurrence(),
+            parent_ids in arb_parent_ids(),
         ) {
             let tags = extract_tags(&description);
             let task = Task {
@@ -1015,6 +1097,7 @@ mod tests {
                 recurrence,
                 id: None,
                 depends_on: vec![],
+                parent_ids,
                 on_completion: None,
                 block_link: None,
                 raw_trailing: None,
@@ -1042,6 +1125,7 @@ mod tests {
             prop_assert_eq!(task.recurrence, parsed.recurrence);
             prop_assert_eq!(task.id, parsed.id);
             prop_assert_eq!(task.depends_on, parsed.depends_on);
+            prop_assert_eq!(task.parent_ids, parsed.parent_ids);
         }
 
         /// For any line that parses, re-serializing must produce the same line.
@@ -1051,6 +1135,7 @@ mod tests {
             priority in arb_priority(),
             description in arb_description(),
             due in arb_date(),
+            parent_ids in arb_parent_ids(),
         ) {
             let tags = extract_tags(&description);
             let task = Task {
@@ -1067,6 +1152,7 @@ mod tests {
                 recurrence: None,
                 id: None,
                 depends_on: vec![],
+                parent_ids,
                 on_completion: None,
                 block_link: None,
                 raw_trailing: None,

@@ -1,9 +1,9 @@
 ## 1. Format: `⤴` field
 
-- [ ] 1.1 `EmojiFormat`: `PARENTS = "⤴"` in `ALL_FIELD_EMOJIS`; parse with optional U+FE0F; comma split like `⛔` (trim, drop empties, keep duplicates) into `Task::parent_ids`.
-- [ ] 1.2 `serialize_line` writes `⤴ a,b` directly after the description (before priority); no field when empty.
-- [ ] 1.3 Tests: parse/serialize scenarios, FE0F accepted and normalised on rewrite, field order; extend the proptest strategy with `parent_ids` and assert `serialize(parse(line)) == line`.
-- [ ] 1.4 `docs/task-format.md`: document the field and its placement.
+- [x] 1.1 `EmojiFormat`: `PARENTS = "⤴"` in `ALL_FIELD_EMOJIS`; parse with optional U+FE0F; comma split like `⛔` (trim, drop empties, keep duplicates) into `Task::parent_ids`.
+- [x] 1.2 `serialize_line` writes `⤴ a,b` directly after the description (before priority); no field when empty.
+- [x] 1.3 Tests: parse/serialize scenarios, FE0F accepted and normalised on rewrite, field order; extend the proptest strategy with `parent_ids` and assert `serialize(parse(line)) == line`.
+- [x] 1.4 `docs/task-format.md`: document the field and its placement.
 
 ## 2. Model + resolution post-pass
 

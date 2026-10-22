@@ -87,6 +87,9 @@ pub struct Task {
     pub recurrence: Option<String>,
     pub id: Option<String>,
     pub depends_on: Vec<String>,
+    /// `⤴` ids of this task's logical parents, as written (format-owned).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parent_ids: Vec<String>,
     /// Reserved: on-completion action preserved verbatim (not yet parsed).
     pub on_completion: Option<String>,
     /// Obsidian block identifier (the part after `^`).
