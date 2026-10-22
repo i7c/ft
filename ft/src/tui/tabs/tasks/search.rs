@@ -30,7 +30,7 @@ use crate::tui::{
     keymap::{KeyChord, KeyMap},
     modal::ActiveModal,
     palette,
-    tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
+    tab::{AppRequest, EventOutcome, ParentChoice, TabCtx, ToastStyle},
     tabs::tasks::{
         edit_popup::{
             handle_target_picker_key, merge_tags_into_description, open_target_picker,
@@ -38,8 +38,8 @@ use crate::tui::{
             render_edit_popup, EditField, EditPopup, PopupFields, PopupMode,
         },
         modals::{
-            TaskPresetPickerModal, TaskPresetPickerSource, TaskRetagPickerModal,
-            TaskRetagPickerSource,
+            ParentPickSource, TaskParentPickModal, TaskPresetPickerModal, TaskPresetPickerSource,
+            TaskRetagPickerModal, TaskRetagPickerSource,
         },
         quickline::parse_quickline,
         view::View,
@@ -115,6 +115,9 @@ pub struct SearchView {
     /// Cursor targets to try (in order) after the next adoption —
     /// e.g. `[new task, prior cursor]` after a create. First hit wins.
     pending_anchors: Vec<(std::path::PathBuf, usize)>,
+    /// The parent the cursor's row hung under when `pending_anchors` was
+    /// set, so a task shown under several parents keeps its occurrence.
+    pending_via: Option<(std::path::PathBuf, usize)>,
     /// Whether `tasks` reflects an adopted snapshot (vs. initial empty).
     loaded: bool,
     /// Indices into `tasks` (sorted) that match the active query and pass
@@ -200,9 +203,14 @@ struct DisplayRow {
     has_children: bool,
     /// Whether this task is currently expanded.
     expanded: bool,
-    /// Whether this row nests under its parent via a parent link rather
-    /// than indentation (drawn with `↳`).
+    /// Whether this row nests under its parent via a parent reference
+    /// rather than indentation (drawn with `↳`).
     linked: bool,
+    /// The task this occurrence hangs under (`None` for roots) — a task
+    /// with several parents shows once under each.
+    via: Option<usize>,
+    /// Number of the task's effective parents (`⤴N` badge when > 1).
+    parent_count: usize,
 }
 
 /// "New task" quickline state — a single edit buffer plus a slot for
@@ -230,6 +238,7 @@ impl SearchView {
             tasks: Vec::new(),
             snapshot: None,
             pending_anchors: Vec::new(),
+            pending_via: None,
             loaded: false,
             matches: Vec::new(),
             overdue_count: 0,
@@ -426,12 +435,18 @@ impl SearchView {
         let push = |vrows: Vec<ft_core::task::hierarchy::VisibleRow>,
                     rows: &mut Vec<DisplayRow>| {
             for r in vrows {
+                let t = &tasks[r.idx];
+                let physical = |p: usize| {
+                    tasks[p].source_file == t.source_file && t.parent == Some(tasks[p].source_line)
+                };
                 rows.push(DisplayRow {
                     task_idx: r.idx,
                     depth: r.depth,
                     has_children: r.has_children,
                     expanded: r.expanded,
-                    linked: r.depth > 0 && tasks[r.idx].parent.is_none(),
+                    linked: r.via.is_some_and(|p| !physical(p)),
+                    via: r.via,
+                    parent_count: ft_core::task::hierarchy::parent_keys(t).len(),
                 });
             }
         };
@@ -884,6 +899,33 @@ impl View for SearchView {
         let _ = self.adopt_snapshot(ctx);
     }
 
+    fn parent_picked(
+        &mut self,
+        task: ft_core::task::TaskKey,
+        choice: ParentChoice,
+        ctx: &mut TabCtx,
+    ) {
+        let Some(t) = self
+            .tasks
+            .iter()
+            .find(|t| t.source_file == task.0 && t.source_line == task.1)
+            .cloned()
+        else {
+            toast(
+                ctx,
+                "task changed on disk — reload and retry",
+                ToastStyle::Error,
+            );
+            return;
+        };
+        match choice {
+            ParentChoice::Unlink(which) => {
+                let _ = self.unlink(ctx, &t, &which);
+            }
+            ParentChoice::PromoteUnder(key) => self.promote(ctx, t, Some(&key)),
+        }
+    }
+
     fn select_after_refresh(&mut self, key: ft_core::task::TaskKey) {
         self.pending_anchors = vec![key];
         self.reveal_anchor = true;
@@ -1221,7 +1263,7 @@ impl SearchView {
                     .tasks
                     .iter()
                     .find(|t| t.source_file == key.0 && t.source_line == key.1)
-                    .and_then(ft_core::task::hierarchy::parent_key)
+                    .and_then(|t| ft_core::task::hierarchy::parent_keys(t).into_iter().next())
                 else {
                     break;
                 };
@@ -1307,20 +1349,55 @@ impl SearchView {
             toast(ctx, "select a task first", ToastStyle::Error);
             return;
         };
+        let task = self.tasks[i].clone();
+        self.promote(ctx, task, None);
+    }
+
+    /// Promote `task` under `parent` (or its only ticket parent), opening
+    /// the parent picker when several tickets qualify.
+    fn promote(&mut self, ctx: &mut TabCtx, task: Task, parent: Option<&str>) {
+        use ft_core::sources::promote::{self, PromoteError};
         let Some(snap) = ctx.snapshot.as_ref() else {
             return;
         };
-        let task = self.tasks[i].clone();
-        match ft_core::sources::promote::check(&snap.scan, &task, &ctx.vault.config.config.sources)
-        {
+        match promote::check(&snap.scan, &task, &ctx.vault.config.config.sources, parent) {
             Ok(target) => {
                 *ctx.pending_request.borrow_mut() = Some(AppRequest::PromoteTask {
                     task: Box::new(task),
                     target,
                 });
             }
-            Err(e) => toast(ctx, &e, ToastStyle::Error),
+            Err(PromoteError::ChooseParent { candidates }) => {
+                let items = candidates
+                    .into_iter()
+                    .map(|c| {
+                        (
+                            format!("{}  {}", c.key, c.description),
+                            ParentChoice::PromoteUnder(c.key),
+                        )
+                    })
+                    .collect();
+                self.open_parent_pick(ctx, &task, "Promote under which ticket?", items);
+            }
+            Err(e) => toast(ctx, &e.to_string(), ToastStyle::Error),
         }
+    }
+
+    fn open_parent_pick(
+        &self,
+        ctx: &TabCtx,
+        task: &Task,
+        title: &'static str,
+        items: Vec<(String, ParentChoice)>,
+    ) {
+        let modal = TaskParentPickModal::new(
+            (task.source_file.clone(), task.source_line),
+            title,
+            ParentPickSource::new(items),
+        );
+        *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenModal(Box::new(
+            ActiveModal::TaskParentPick(modal),
+        )));
     }
 
     fn link_cut(&mut self, ctx: &mut TabCtx) -> Result<()> {
@@ -1361,11 +1438,16 @@ impl SearchView {
         match result {
             Ok(plan) => {
                 self.cut.clear();
+                let unchanged = plan.children.iter().filter(|c| c.unchanged).count();
+                let already = match unchanged {
+                    0 => String::new(),
+                    n => format!(" ({n} already linked)"),
+                };
                 toast(
                     ctx,
                     &format!(
-                        "linked {} task(s) under {}",
-                        plan.children.len(),
+                        "linked {} task(s) under {}{already}",
+                        plan.children.len() - unchanged,
                         parent.description
                     ),
                     ToastStyle::Success,
@@ -1381,25 +1463,82 @@ impl SearchView {
         }
     }
 
+    /// `U`: unlink from the parent the cursor's row hangs under when that
+    /// is a logical parent; otherwise the task's only line reference, or a
+    /// picker when it has several.
     fn unlink_selected(&mut self, ctx: &mut TabCtx) -> Result<()> {
-        let Some(i) = self.selected_task_idx() else {
+        let Some(row) = self.display.get(self.selected).copied() else {
             toast(ctx, "select a task first", ToastStyle::Error);
             return Ok(());
         };
-        let t = self.tasks[i].clone();
-        if t.parent_link.is_none() {
-            toast(ctx, "task has no parent link", ToastStyle::Info);
-            return Ok(());
-        }
+        let t = self.tasks[row.task_idx].clone();
+        let line_refs: Vec<&links::ParentRef> = t
+            .parent_refs
+            .iter()
+            .filter(|r| r.origin == links::RefOrigin::Line)
+            .collect();
+        let context = row.via.filter(|_| row.linked).map(|v| self.key_of(v));
+        let which = match (context, line_refs.len()) {
+            (Some(k), _) if line_refs.iter().any(|r| r.state.resolved() == Some(&k)) => {
+                links::Unlink::Parent(k)
+            }
+            (_, 0) => {
+                let text = if t.parent_refs.is_empty() {
+                    "task has no parent link".to_string()
+                } else {
+                    links::LinkError::ParentFromFrontmatter {
+                        path: Default::default(),
+                        line: 0,
+                    }
+                    .to_string()
+                };
+                toast(ctx, &text, ToastStyle::Info);
+                return Ok(());
+            }
+            (_, 1) => links::Unlink::Only,
+            _ => {
+                let mut items: Vec<(String, ParentChoice)> = line_refs
+                    .iter()
+                    .map(|r| {
+                        let what = r
+                            .state
+                            .resolved()
+                            .and_then(|k| {
+                                self.tasks
+                                    .iter()
+                                    .find(|p| p.source_file == k.0 && p.source_line == k.1)
+                            })
+                            .map_or_else(
+                                || r.state.as_str().to_string(),
+                                |p| p.description.clone(),
+                            );
+                        (
+                            format!("{}  {what}", r.id),
+                            ParentChoice::Unlink(links::Unlink::Id(r.id.clone())),
+                        )
+                    })
+                    .collect();
+                items.push((
+                    "all parents".into(),
+                    ParentChoice::Unlink(links::Unlink::All),
+                ));
+                self.open_parent_pick(ctx, &t, "Unlink from which parent?", items);
+                return Ok(());
+            }
+        };
+        self.unlink(ctx, &t, &which)
+    }
+
+    fn unlink(&mut self, ctx: &mut TabCtx, t: &Task, which: &links::Unlink) -> Result<()> {
         let source = MoveSource {
             path: ctx.vault.path.join(&t.source_file),
             line: t.source_line,
             expected: Some(t.clone()),
         };
-        let result = links::plan_unlink(&source, ctx.vault.task_format())
+        let result = links::plan_unlink(&source, which, ctx.vault.task_format())
             .and_then(|plan| links::apply_link_plan(&plan).map(|()| plan));
         match result {
-            Ok(_) => self.refresh_after_mutation(ctx, Some((t.source_file, t.source_line))),
+            Ok(_) => self.refresh_after_mutation(ctx, Some((t.source_file.clone(), t.source_line))),
             Err(e) => {
                 self.report_link_error(ctx, &e);
                 Ok(())
@@ -1407,17 +1546,12 @@ impl SearchView {
         }
     }
 
-    /// `description` with a parent link appended when the create flow was
-    /// opened with `S` (giving the parent a block id first if it needs
-    /// one). Errors are user-facing strings for the form's error slot.
-    fn linked_description(
-        &self,
-        ctx: &TabCtx,
-        target: &std::path::Path,
-        description: &str,
-    ) -> std::result::Result<String, String> {
+    /// The `⤴` ids for a task created by the `S` flow: the link parent's
+    /// `🆔` (assigned first when it has none). Empty for other creates.
+    /// Errors are user-facing strings for the form's error slot.
+    fn link_parent_ids(&self, ctx: &TabCtx) -> std::result::Result<Vec<String>, String> {
         let Some((file, line)) = &self.link_parent else {
-            return Ok(description.to_string());
+            return Ok(Vec::new());
         };
         let Some(snap) = ctx.snapshot.as_ref() else {
             return Err("vault not loaded yet".into());
@@ -1434,13 +1568,12 @@ impl SearchView {
             line: *line,
             expected: Some(parent.clone()),
         };
-        let child_rel = target.strip_prefix(root).unwrap_or(target);
         let link_ctx = links::LinkCtx::new(root, &snap.scan);
-        let (text, plan) =
-            links::plan_parent_for_new_task(child_rel, &source, &link_ctx, ctx.vault.task_format())
+        let (ids, plan) =
+            links::plan_parents_for_new_task(&[source], &link_ctx, ctx.vault.task_format())
                 .map_err(|e| e.to_string())?;
         links::apply_link_plan(&plan).map_err(|e| e.to_string())?;
-        Ok(format!("{description} {text}"))
+        Ok(ids)
     }
 
     fn report_link_error(&self, ctx: &mut TabCtx, e: &links::LinkError) {
@@ -1448,8 +1581,8 @@ impl SearchView {
             links::LinkError::WouldCycle { .. } => {
                 "can't link a task under its own subtask".to_string()
             }
-            links::LinkError::PhysicallyNested { description, .. } => {
-                format!("{description} is nested under another task — outdent it first")
+            links::LinkError::AlreadyPhysicalParent { description, .. } => {
+                format!("{description} is already nested under it")
             }
             other => other.to_string(),
         };
@@ -1582,22 +1715,44 @@ impl SearchView {
         ctx: &mut TabCtx,
         anchor: Option<(std::path::PathBuf, usize)>,
     ) -> Result<()> {
+        self.pending_via = self.display.get(self.selected).and_then(|r| {
+            let t = &self.tasks[r.task_idx];
+            let on_anchor = anchor
+                .as_ref()
+                .is_some_and(|a| t.source_file == a.0 && t.source_line == a.1);
+            on_anchor.then(|| r.via.map(|v| self.key_of(v))).flatten()
+        });
         self.pending_anchors = anchor.into_iter().collect();
         ctx.request_graph_refresh();
         Ok(())
     }
 
+    fn key_of(&self, idx: usize) -> (std::path::PathBuf, usize) {
+        let t = &self.tasks[idx];
+        (t.source_file.clone(), t.source_line)
+    }
+
     /// Move the cursor to the display row for `key` (a `(path, line)`),
-    /// returning whether it was found.
+    /// preferring the occurrence under `pending_via`, returning whether it
+    /// was found.
     fn select_display_row(&mut self, key: &(std::path::PathBuf, usize)) -> bool {
-        if let Some(i) = self.display.iter().position(|r| {
-            let t = &self.tasks[r.task_idx];
-            t.source_file == key.0 && t.source_line == key.1
-        }) {
-            self.selected = i;
-            true
-        } else {
-            false
+        let via = self.pending_via.take();
+        let rows: Vec<usize> = (0..self.display.len())
+            .filter(|&i| {
+                let t = &self.tasks[self.display[i].task_idx];
+                t.source_file == key.0 && t.source_line == key.1
+            })
+            .collect();
+        let same_parent = rows
+            .iter()
+            .copied()
+            .find(|&i| via.is_some() && self.display[i].via.map(|v| self.key_of(v)) == via);
+        match same_parent.or(rows.first().copied()) {
+            Some(i) => {
+                self.selected = i;
+                true
+            }
+            None => false,
         }
     }
 
@@ -1943,8 +2098,8 @@ impl SearchView {
             }
         };
 
-        let description = match self.linked_description(ctx, &resolved, &description) {
-            Ok(d) => d,
+        let parent_ids = match self.link_parent_ids(ctx) {
+            Ok(ids) => ids,
             Err(e) => {
                 self.popup.as_mut().unwrap().error = Some(e);
                 return Ok(EventOutcome::Consumed);
@@ -1952,6 +2107,7 @@ impl SearchView {
         };
         let input = CreateInput {
             description,
+            parent_ids,
             status: ft_core::task::Status::Open,
             priority,
             tags,
@@ -2117,15 +2273,16 @@ impl SearchView {
             }
         };
 
-        let description = match self.linked_description(ctx, &target, &parse.description) {
-            Ok(d) => d,
+        let parent_ids = match self.link_parent_ids(ctx) {
+            Ok(ids) => ids,
             Err(e) => {
                 self.quickline.as_mut().unwrap().error = Some(e);
                 return Ok(EventOutcome::Consumed);
             }
         };
         let input = CreateInput {
-            description,
+            description: parse.description.clone(),
+            parent_ids,
             status: ft_core::task::Status::Open,
             priority: parse.priority,
             tags: parse.tags.clone(),
@@ -2237,6 +2394,7 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
         recurrence: parse.recurrence.clone(),
         id: parse.id.clone(),
         depends_on: Vec::new(),
+        parent_ids: Vec::new(),
     });
     use ft_core::task::{emoji::EmojiFormat, format::TaskFormat};
     let serialized = EmojiFormat.serialize_line(&task);
@@ -2335,22 +2493,22 @@ fn task_line(
     };
     let tree_prefix = format!("{}{marker}", "  ".repeat(row.depth));
 
-    // Description: truncate if too long, pad to fill the column budget.
-    // A linked row's `↳` already says where it hangs; drop the link text.
-    let description = match (&task.parent_link, row.linked) {
-        (Some(link), true) => links::remove_link_text(&task.description, &link.raw)
-            .unwrap_or_else(|| task.description.clone()),
-        _ => task.description.clone(),
+    // Description: truncate if too long, pad to fill the column budget,
+    // keeping room for the `⤴N` badge of a task with several parents.
+    let badge = match row.parent_count {
+        n if n > 1 => format!(" ⤴{n}"),
+        _ => String::new(),
     };
-    let desc = format!("{tree_prefix}{}", description.replace('\n', " "));
+    let text_width = desc_width.saturating_sub(badge.chars().count());
+    let desc = format!("{tree_prefix}{}", task.description.replace('\n', " "));
     let desc_count = desc.chars().count();
-    let desc_trimmed = if desc_count > desc_width {
-        let cut: String = desc.chars().take(desc_width.saturating_sub(1)).collect();
+    let desc_trimmed = if desc_count > text_width {
+        let cut: String = desc.chars().take(text_width.saturating_sub(1)).collect();
         format!("{cut}…")
     } else {
         desc
     };
-    let desc_padded = format!("{:<width$}", desc_trimmed, width = desc_width);
+    let pad = " ".repeat(text_width.saturating_sub(desc_trimmed.chars().count()));
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
     // Non-selected done/cancelled rows fade.
@@ -2368,7 +2526,11 @@ fn task_line(
     spans.push(Span::styled(cursor.to_string(), row_style));
     spans.push(Span::styled(status_text, row_style.fg(status_color)));
     spans.push(Span::styled(pri_text, row_style.fg(pri_color)));
-    spans.push(Span::styled(desc_padded, row_style));
+    spans.push(Span::styled(desc_trimmed, row_style));
+    if !badge.is_empty() {
+        spans.push(Span::styled(badge, row_style.fg(palette::DIM)));
+    }
+    spans.push(Span::styled(pad, row_style));
 
     // Due and scheduled in fixed-width columns so the 📅 / ⏳ emoji align.
     if let Some(due) = &due_str {

@@ -107,7 +107,7 @@ pub struct Task {
     pub parent: Option<usize>,
     /// [`Task::parent_ids`] (plus an anchor note's `ft.tasks.parent`),
     /// resolved by the scan's post-pass ([`links::resolve_parent_refs`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "parents", skip_serializing_if = "Vec::is_empty")]
     pub parent_refs: Vec<links::ParentRef>,
 }
 

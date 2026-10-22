@@ -41,35 +41,35 @@
 
 ## 6. CLI
 
-- [ ] 6.1 `ft tasks link` JSON shape (`id`, `parents`, `unchanged`); text summary counts unchanged.
-- [ ] 6.2 `ft tasks unlink --from SEL | --all`; `NeedsChoice` → exit 2 with listing; `--json-errors` carries `refs`.
-- [ ] 6.3 `ft tasks create --link-parent` repeatable (ids in flag order, ids assigned in the same run).
-- [ ] 6.4 `ft tasks check` text/JSON for the new kinds.
-- [ ] 6.5 `ft tasks list --tree`: repeated subtrees, `⤴N` in table, JSON `id`/`parents` on every task, ndjson rows with `depth`/`via`, stderr warning on row cap.
-- [ ] 6.6 Integration tests (`assert_cmd`) + insta snapshots for tree outputs, link/unlink/check JSON.
+- [x] 6.1 `ft tasks link` JSON shape (`id`, `parents`, `unchanged`); text summary counts unchanged.
+- [x] 6.2 `ft tasks unlink --from SEL | --all`; `NeedsChoice` → exit 2 with listing; `--json-errors` carries `refs`.
+- [x] 6.3 `ft tasks create --link-parent` repeatable (ids in flag order, ids assigned in the same run).
+- [x] 6.4 `ft tasks check` text/JSON for the new kinds.
+- [x] 6.5 `ft tasks list --tree`: repeated subtrees, `⤴N` in table, JSON `id`/`parents` on every task, ndjson rows with `depth`/`via`, stderr warning on row cap.
+- [x] 6.6 Integration tests (`assert_cmd`) + insta snapshots for tree outputs, link/unlink/check JSON.
 
 ## 7. Sources
 
 - [x] 7.1 Sync writes `ft.tasks.parent: <KEY>` (plain scalar); old wikilink values rewritten on next sync; tests.
-- [ ] 7.2 Anchor-line rewrite preserves `parent_ids`; never pushed; test with `⤴` on an anchor line.
-- [ ] 7.3 Promote: eligible-parent computation, `ChooseParent { candidates }`, `--parent KEY` flag (CLI exit 2 + `candidates` JSON error).
+- [x] 7.2 Anchor-line rewrite preserves `parent_ids`; never pushed; test with `⤴` on an anchor line.
+- [x] 7.3 Promote: eligible-parent computation, `ChooseParent { candidates }`, `--parent KEY` flag (CLI exit 2 + `candidates` JSON error).
 - [x] 7.4 Promote restructuring: new note `parent: KEY`; anchor keeps other `⤴` ids; preserve a non-anchor physical parent as a `⤴` ref (assigning its `🆔`); rewrite other tasks' refs to the promoted task's old `🆔` → new key.
-- [ ] 7.5 Tests for every scenario in the `task-source-sync` / `task-source-promote` deltas.
+- [x] 7.5 Tests for every scenario in the `task-source-sync` / `task-source-promote` deltas.
 
 ## 8. TUI
 
-- [ ] 8.1 `DisplayRow` gains `via` + `parent_count`; `linked` derived from `via`; description hides the `⤴` field; dim `⤴N` badge.
-- [ ] 8.2 Occurrence-based selection and pending cursor anchor `(TaskKey, via)` with fallbacks; expansion stays per task.
-- [ ] 8.3 `ActiveModal::ParentPick` (remove / choose modes; `Enter`, `a`, `Esc`; frontmatter refs not removable).
-- [ ] 8.4 `tasks.link` additive with `(M already linked)` toast and `AlreadyPhysicalParent` toast.
-- [ ] 8.5 `tasks.unlink` context-aware (via → that parent; single ref; else picker).
-- [ ] 8.6 `tasks.promote` opens the picker in choose mode on several ticket parents.
-- [ ] 8.7 `S` writes `⤴ <id>`; update `CommandDef` descriptions; regenerate `docs/keybindings.md`.
-- [ ] 8.8 `TestBackend` snapshots: multi-parent tree, badge, picker modal; rewrite `ft/src/tui/tests/tasks_link.rs` fixtures to `🆔`/`⤴`.
+- [x] 8.1 `DisplayRow` gains `via` + `parent_count`; `linked` derived from `via`; description hides the `⤴` field; dim `⤴N` badge.
+- [x] 8.2 Occurrence-based selection and pending cursor anchor `(TaskKey, via)` with fallbacks; expansion stays per task.
+- [x] 8.3 `ActiveModal::ParentPick` (remove / choose modes; `Enter`, `a`, `Esc`; frontmatter refs not removable).
+- [x] 8.4 `tasks.link` additive with `(M already linked)` toast and `AlreadyPhysicalParent` toast.
+- [x] 8.5 `tasks.unlink` context-aware (via → that parent; single ref; else picker).
+- [x] 8.6 `tasks.promote` opens the picker in choose mode on several ticket parents.
+- [x] 8.7 `S` writes `⤴ <id>`; update `CommandDef` descriptions; regenerate `docs/keybindings.md`.
+- [x] 8.8 `TestBackend` snapshots: multi-parent tree, badge, picker modal; rewrite `ft/src/tui/tests/tasks_link.rs` fixtures to `🆔`/`⤴`.
 
 ## 9. Test ripple + docs
 
-- [ ] 9.1 Rewrite remaining wikilink-parent fixtures across `ft-core` (links, sources, graph, query) and `ft/tests` to `🆔`/`⤴`.
+- [x] 9.1 Rewrite remaining wikilink-parent fixtures across `ft-core` (links, sources, graph, query) and `ft/tests` to `🆔`/`⤴`.
 - [ ] 9.2 `docs/guide/tasks.md`: rewrite "Linked parents" (syntax, multiple parents, ids, the breaking change for old wikilink parents), update "Remote sources" frontmatter example and the promote section.
 - [ ] 9.3 `docs/architecture.md`: hierarchy is a DAG; `parent_keys` is the choke point.
 - [ ] 9.4 All five build invariants green (`cargo build --release`, `cargo test --workspace`, clippy `-D warnings`, `cargo fmt --check`, `commands docs --check`).

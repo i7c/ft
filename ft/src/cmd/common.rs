@@ -10,6 +10,24 @@ use ft_core::query::{interpolate, SigilCtx};
 use ft_core::scan::Scan;
 use ft_core::vault::Vault;
 
+/// A failure that needs the caller to choose before retrying: exits 2,
+/// and `--json-errors` adds `detail` under `key` so editor clients can
+/// offer a picker.
+#[derive(Debug)]
+pub struct ChoiceError {
+    pub message: String,
+    pub key: &'static str,
+    pub detail: serde_json::Value,
+}
+
+impl std::fmt::Display for ChoiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ChoiceError {}
+
 /// Discover a vault (`--vault` flag → `$FT_VAULT` → CWD walk-up →
 /// user-config `default_vault`) with the standard "could not locate"
 /// context attached. Used by every CLI subcommand.

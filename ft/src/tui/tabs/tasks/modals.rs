@@ -20,7 +20,7 @@ use crate::tui::event::Event;
 use crate::tui::help::HelpSection;
 use crate::tui::keymap::KeyMap;
 use crate::tui::modal_commands as mc;
-use crate::tui::tab::{AppRequest, TabCtx, TasksRequest, ToastStyle};
+use crate::tui::tab::{AppRequest, ParentChoice, TabCtx, TasksRequest, ToastStyle};
 use crate::tui::widgets::{
     FuzzyPicker, PickerItem, PickerOutcome, PickerSource, VaultFilePickerSource,
 };
@@ -315,6 +315,152 @@ impl crate::tui::modal::Modal for TaskRetagPickerModal {
 
     fn keymap(&self) -> &KeyMap {
         &mc::TASK_RETAG_PICKER_KEYMAP
+    }
+
+    fn dispatch_command(
+        &mut self,
+        _cmd: &crate::tui::command::Command,
+        _ctx: &TabCtx,
+    ) -> CommandOutcome {
+        CommandOutcome::NotHandled
+    }
+}
+
+// ── Task parent picker ───────────────────────────────────────────────
+
+/// Fuzzy-picker source over fixed `(label, choice)` entries — a task's
+/// parents, plus "all parents" when unlinking.
+pub struct ParentPickSource {
+    items: Vec<(String, ParentChoice)>,
+    matcher: nucleo_matcher::Matcher,
+    buf: Vec<char>,
+}
+
+impl ParentPickSource {
+    pub(crate) fn new(items: Vec<(String, ParentChoice)>) -> Self {
+        Self {
+            items,
+            matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
+            buf: Vec::new(),
+        }
+    }
+}
+
+impl PickerSource for ParentPickSource {
+    type Item = ParentChoice;
+
+    fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<ParentChoice>> {
+        let pat = nucleo_matcher::pattern::Pattern::parse(
+            q,
+            nucleo_matcher::pattern::CaseMatching::Smart,
+            nucleo_matcher::pattern::Normalization::Smart,
+        );
+        let mut ranked: Vec<(u32, usize, Vec<u32>)> = Vec::new();
+        for (i, (label, _)) in self.items.iter().enumerate() {
+            self.buf.clear();
+            let haystack = nucleo_matcher::Utf32Str::new(label, &mut self.buf);
+            let mut indices = Vec::new();
+            if let Some(score) = pat.indices(haystack, &mut self.matcher, &mut indices) {
+                ranked.push((score, i, indices));
+            }
+        }
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.0));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, i, match_indices)| PickerItem {
+                label: self.items[i].0.clone(),
+                match_indices,
+                data: self.items[i].1.clone(),
+            })
+            .collect()
+    }
+
+    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<ParentChoice>> {
+        self.items
+            .iter()
+            .take(limit)
+            .map(|(label, choice)| PickerItem {
+                label: label.clone(),
+                match_indices: Vec::new(),
+                data: choice.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Picker over a task's parents (`U` with several references, `I` with
+/// several ticket parents). On `Enter` posts
+/// `AppRequest::Tasks(TasksRequest::ParentPicked { task, choice })`; on
+/// `Esc` closes with no write.
+pub struct TaskParentPickModal {
+    task: ft_core::task::TaskKey,
+    title: &'static str,
+    inner: FuzzyPicker<ParentPickSource>,
+}
+
+impl TaskParentPickModal {
+    pub(crate) fn new(
+        task: ft_core::task::TaskKey,
+        title: &'static str,
+        source: ParentPickSource,
+    ) -> Self {
+        Self {
+            task,
+            title,
+            inner: FuzzyPicker::new(source),
+        }
+    }
+}
+
+impl crate::tui::modal::Modal for TaskParentPickModal {
+    fn handle_event(&mut self, ev: Event, ctx: &TabCtx) -> crate::tui::modal::ModalOutcome {
+        let Event::Key(k) = ev else {
+            return crate::tui::modal::ModalOutcome::NotHandled;
+        };
+        match self.inner.handle_key(k) {
+            PickerOutcome::Selected(choice) => {
+                *ctx.pending_request.borrow_mut() =
+                    Some(AppRequest::Tasks(TasksRequest::ParentPicked {
+                        task: self.task.clone(),
+                        choice,
+                    }));
+                crate::tui::modal::ModalOutcome::Closed
+            }
+            PickerOutcome::Cancelled => crate::tui::modal::ModalOutcome::Closed,
+            PickerOutcome::StillOpen => crate::tui::modal::ModalOutcome::Consumed,
+            PickerOutcome::NotHandled => crate::tui::modal::ModalOutcome::NotHandled,
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+        let popup_area = super::edit_popup::centered_rect(60, 40, area);
+        frame.render_widget(Clear, popup_area);
+        self.inner.render(frame, popup_area);
+    }
+
+    fn keymap_help(&self) -> HelpSection {
+        HelpSection::new(
+            self.title,
+            &[
+                ("Type", "filter"),
+                ("↑ / ↓", "navigate"),
+                ("Enter", "choose"),
+                ("Esc", "cancel"),
+            ],
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "task-parent-pick"
+    }
+
+    fn commands(&self) -> &'static [CommandDef] {
+        mc::TASK_PARENT_PICK_COMMANDS
+    }
+
+    fn keymap(&self) -> &KeyMap {
+        &mc::TASK_PARENT_PICK_KEYMAP
     }
 
     fn dispatch_command(

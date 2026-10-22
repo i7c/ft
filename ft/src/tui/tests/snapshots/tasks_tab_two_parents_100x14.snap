@@ -1,0 +1,18 @@
+---
+source: ft/src/tui/tests/tasks_link.rs
+expression: frame
+---
+  1 Graph  │  2 Notes  │  3 Pulse  │  4 Recent  │  5 Search  │  6 Tasks  │  7 Timeblocks            
+┌ query ───────────────────────────────────────────────────────────────────────────────────────────┐
+│(status in {Open, InProgress} and due < +1w) or (completed = today)                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tasks ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ── upcoming (4) ──                                                                               │
+│        keep                                                        📅  in 2d                      │
+│        ▾ Vendor onboarding                                         📅  in 3d                      │
+│          ↳ call vendor ⤴2                                          📅  tomorrow                   │
+│▶       ▾ Other                                                     📅  in 4d                      │
+│          ↳ call vendor ⤴2                                          📅  tomorrow                   │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks                       refreshed [HH:MM:SS]             mode: normal

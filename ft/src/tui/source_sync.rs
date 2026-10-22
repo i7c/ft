@@ -301,6 +301,7 @@ impl PromoteJob {
                 self.today,
                 &self.task,
                 &created,
+                &self.target.parent.key,
             )
             .map_err(|e| format!("created {} but couldn't update the vault: {e}", created.key))?;
             let note_abs = self.vault.path.join(&plan.note);

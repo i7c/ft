@@ -336,14 +336,14 @@ mod tests {
             anchor_line(&i, None, Status::InProgress, None, &EmojiFormat),
             "- [/] [ABC-123](https://x.test/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123"
         );
-        let old = "  - [/] [ABC-123](https://x.test/browse/ABC-123) Old title #work #wait ⏳ 2026-10-25 📅 2026-10-28 🆔 ABC-123 ^blk";
+        let old = "  - [/] [ABC-123](https://x.test/browse/ABC-123) Old title #work #wait ⤴ p2m7rd ⏳ 2026-10-25 📅 2026-10-28 🆔 ABC-123 ^blk";
         let t = parse(old, &EmojiFormat).unwrap();
         let mut i2 = i.clone();
         i2.title = "Fix login on Safari".into();
         i2.due = None;
         assert_eq!(
             anchor_line(&i2, Some((old, &t)), Status::InProgress, None, &EmojiFormat),
-            "  - [/] [ABC-123](https://x.test/browse/ABC-123) Fix login on Safari #work #wait ⏫ ⏳ 2026-10-25 🆔 ABC-123 ^blk"
+            "  - [/] [ABC-123](https://x.test/browse/ABC-123) Fix login on Safari #work #wait ⤴ p2m7rd ⏫ ⏳ 2026-10-25 🆔 ABC-123 ^blk"
         );
         let done = anchor_line(
             &i2,

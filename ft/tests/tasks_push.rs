@@ -429,7 +429,7 @@ fn promote_creates_subtask_and_restructures_vault() {
     let (dir, state) = setup(&[("ABC-123", story())], "");
     ft(&dir, &["tasks", "sync"], true).success();
     dir.child("journal.md")
-        .write_str("# Day\n- [/] write regression test [[ABC-123]] #work ^wr1\n  - [ ] cover Safari\n- [ ] other\n")
+        .write_str("# Day\n- [/] write regression test #work ⤴ ABC-123 ^wr1\n  - [ ] cover Safari\n- [ ] other\n")
         .unwrap();
     dir.child("notes.md")
         .write_str("see [[journal#^wr1]]\n")
@@ -473,7 +473,7 @@ fn promote_preconditions() {
     let (dir, _state) = setup(&[("ABC-123", story())], "");
     ft(&dir, &["tasks", "sync"], true).success();
     dir.child("j.md")
-        .write_str("- [ ] P\n  - [ ] local child\n- [ ] linked [[ABC-123]]\n")
+        .write_str("- [ ] P\n  - [ ] local child\n- [ ] linked ⤴ ABC-123\n")
         .unwrap();
     ft(&dir, &["tasks", "promote", "local child"], true)
         .failure()
@@ -483,6 +483,32 @@ fn promote_preconditions() {
     ft(&dir, &["tasks", "promote", "linked"], false)
         .failure()
         .stderr(predicate::str::contains("no credentials"));
+    // Two ticket parents: the caller must choose (exit 2, no network).
+    dir.child("two.md")
+        .write_str("- [ ] both ⤴ ABC-123,ABC-123x\n")
+        .unwrap();
+    dir.child("jira/ABC-123x.md")
+        .write_str(&read(&dir, "jira/ABC-123.md").replace("ABC-123", "ABC-123x"))
+        .unwrap();
+    ft(&dir, &["tasks", "promote", "both"], false)
+        .code(2)
+        .stderr(predicate::str::contains(
+            "several ticket parents (ABC-123, ABC-123x) — pass --parent KEY",
+        ));
+    ft(
+        &dir,
+        &["tasks", "promote", "both", "--parent", "ABC-9"],
+        false,
+    )
+    .failure()
+    .stderr(predicate::str::contains("ABC-9 is not a ticket parent"));
+    ft(
+        &dir,
+        &["tasks", "promote", "both", "--parent", "ABC-123x"],
+        false,
+    )
+    .failure()
+    .stderr(predicate::str::contains("no credentials"));
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -508,6 +534,6 @@ fn promote_preconditions() {
         ));
     assert_eq!(
         read(&dir, "j.md"),
-        "- [ ] P\n  - [ ] local child\n- [ ] linked [[ABC-123]]\n"
+        "- [ ] P\n  - [ ] local child\n- [ ] linked ⤴ ABC-123\n"
     );
 }

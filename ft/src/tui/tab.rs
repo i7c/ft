@@ -141,6 +141,19 @@ pub enum TasksRequest {
     /// Put the cursor on this task (expanding its ancestors) after the
     /// next snapshot refresh — e.g. a freshly promoted issue anchor.
     SelectAfterRefresh(ft_core::task::TaskKey),
+    /// The task-parent-pick modal's choice for `task`: which parent
+    /// reference(s) to unlink, or which ticket to promote under.
+    ParentPicked {
+        task: ft_core::task::TaskKey,
+        choice: ParentChoice,
+    },
+}
+
+/// What the task-parent-pick modal decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParentChoice {
+    Unlink(ft_core::task::links::Unlink),
+    PromoteUnder(String),
 }
 
 /// Side-effect a tab/view can request from the App. Lets the App orchestrate

@@ -111,7 +111,7 @@ fn sync_creates_notes_and_tree_shows_epic_story_local() {
     assert!(read(&dir, "jira/EPIC-7.md").contains("state: context"));
 
     dir.child("journal.md")
-        .write_str("- [ ] write regression test [[ABC-123]]\n")
+        .write_str("- [ ] write regression test ⤴ ABC-123\n")
         .unwrap();
     let out = ft(
         &dir,

@@ -18,8 +18,11 @@ use crate::graph::resolve::{resolve_wiki, Resolution, ScanNoteIndex};
 use crate::graph::LinkForm;
 use crate::scan::Scan;
 
-/// One logical parent reference of a task.
+/// One logical parent reference of a task. Serializes flat, as
+/// `{"id", "path", "line", "state", "origin"}` (`null` location unless
+/// resolved) — the shape editor clients read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "RefWire", try_from = "RefWire")]
 pub struct ParentRef {
     /// The referenced `🆔`.
     pub id: String,
@@ -27,8 +30,53 @@ pub struct ParentRef {
     pub state: RefState,
 }
 
+#[derive(Serialize, Deserialize)]
+struct RefWire {
+    id: String,
+    path: Option<PathBuf>,
+    line: Option<usize>,
+    state: String,
+    origin: RefOrigin,
+}
+
+impl From<ParentRef> for RefWire {
+    fn from(r: ParentRef) -> Self {
+        let (path, line) = match &r.state {
+            RefState::Resolved((p, l)) => (Some(p.clone()), Some(*l)),
+            _ => (None, None),
+        };
+        RefWire {
+            id: r.id,
+            path,
+            line,
+            state: r.state.as_str().to_string(),
+            origin: r.origin,
+        }
+    }
+}
+
+impl TryFrom<RefWire> for ParentRef {
+    type Error = String;
+
+    fn try_from(w: RefWire) -> Result<Self, String> {
+        let state = match (w.state.as_str(), w.path, w.line) {
+            ("resolved", Some(p), Some(l)) => RefState::Resolved((p, l)),
+            ("dangling", ..) => RefState::Dangling,
+            ("ambiguous", ..) => RefState::Ambiguous,
+            ("cycle", ..) => RefState::Cycle,
+            (s, ..) => return Err(format!("invalid parent reference state `{s}`")),
+        };
+        Ok(ParentRef {
+            id: w.id,
+            origin: w.origin,
+            state,
+        })
+    }
+}
+
 /// Where a reference was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RefOrigin {
     /// The task line's `⤴` field.
     Line,

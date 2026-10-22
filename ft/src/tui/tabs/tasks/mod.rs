@@ -366,7 +366,7 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "tasks.link",
-        description: "Link the cut tasks under the selected task (they stay in place)",
+        description: "Add the selected task as a parent of the cut tasks (they stay in place)",
         scope: CommandScope::Tab("tasks"),
         group: "Restructure",
         args_schema: &[],
@@ -375,7 +375,8 @@ pub(crate) static TASKS_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "tasks.unlink",
-        description: "Remove the selected task's parent link",
+        description:
+            "Remove a parent link from the selected task (the one it is shown under, or pick)",
         scope: CommandScope::Tab("tasks"),
         group: "Restructure",
         args_schema: &[],
@@ -499,6 +500,11 @@ impl Tab for TasksTab {
             TasksRequest::SelectAfterRefresh(key) => {
                 if let Some(v) = self.views.get_mut(self.active_view) {
                     v.select_after_refresh(key);
+                }
+            }
+            TasksRequest::ParentPicked { task, choice } => {
+                if let Some(v) = self.views.get_mut(self.active_view) {
+                    v.parent_picked(task, choice, ctx);
                 }
             }
         }

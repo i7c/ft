@@ -59,11 +59,15 @@ fn render_one(rows: &[TreeRow], opts: TableOpts) -> String {
         path.push(':');
         path.push_str(&task.source_line.to_string());
         let tags = task.tags.join(", ");
-        let desc = if depth > 0 {
+        let mut desc = if depth > 0 {
             format!("{}↳ {}", "  ".repeat(depth - 1), task.description)
         } else {
             task.description.clone()
         };
+        let parents = ft_core::task::hierarchy::parent_keys(task).len();
+        if parents > 1 {
+            desc.push_str(&format!(" ⤴{parents}"));
+        }
         let mut row: Vec<Cell> = vec![
             status_cell,
             pri_cell,

@@ -46,4 +46,14 @@ pub trait View {
     /// Select `key` (revealing its ancestors) once the next snapshot is
     /// adopted. Default: no-op.
     fn select_after_refresh(&mut self, _key: ft_core::task::TaskKey) {}
+
+    /// Act on the task-parent-pick modal's `choice` for `task`. Default:
+    /// no-op.
+    fn parent_picked(
+        &mut self,
+        _task: ft_core::task::TaskKey,
+        _choice: crate::tui::tab::ParentChoice,
+        _ctx: &mut TabCtx,
+    ) {
+    }
 }

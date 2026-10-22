@@ -75,6 +75,11 @@ pub struct PromoteArgs {
     #[arg(value_name = "SELECTOR")]
     pub selector: String,
 
+    /// The ticket to promote under, when the task has several ticket
+    /// parents (its issue key, e.g. `ABC-123`).
+    #[arg(long, value_name = "KEY")]
+    pub parent: Option<String>,
+
     /// Output format for the result.
     #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
     pub format: MoveFormat,
@@ -270,7 +275,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         }
         TasksCommand::Promote(a) => {
             let vault = crate::cmd::common::discover_vault(vault_flag)?;
-            crate::cmd::sources::run_promote(&vault, &a.selector, a.format)
+            crate::cmd::sources::run_promote(&vault, &a.selector, a.parent.as_deref(), a.format)
         }
     }
 }
@@ -370,6 +375,12 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             .map(|t| (t.source_file.clone(), t.source_line))
             .collect();
         let forest = ft_core::task::hierarchy::expand_forest(&scan.tasks, &matched_keys);
+        if forest.len() >= ft_core::task::hierarchy::MAX_FOREST_ROWS {
+            eprintln!(
+                "warning: tree truncated at {} rows (tasks repeat under each of their parents)",
+                ft_core::task::hierarchy::MAX_FOREST_ROWS
+            );
+        }
         let rows: Vec<(usize, &Task)> = forest
             .iter()
             .map(|r| (r.depth, &scan.tasks[r.idx]))
@@ -384,8 +395,11 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             }
             Format::Json => output::json::render_tree(&rows)?,
             Format::Ndjson => {
-                let flat: Vec<&Task> = rows.iter().map(|(_, t)| *t).collect();
-                output::ndjson::render(&flat)?;
+                let via: Vec<Option<&Task>> = forest
+                    .iter()
+                    .map(|r| r.via.map(|v| &scan.tasks[v]))
+                    .collect();
+                output::ndjson::render_tree(&rows, &via)?;
             }
             Format::Markdown => print!("{}", output::markdown::render_tree(&rows)),
         }
@@ -641,10 +655,11 @@ pub struct CreateArgs {
     pub parent: Option<String>,
 
     /// Create the task at its usual place (today's daily note by default)
-    /// with a parent link to the task selected by SELECTOR, making it that
-    /// task's child without nesting it. Must match exactly one task.
+    /// with a `⤴` reference to the task selected by SELECTOR, making it
+    /// that task's child without nesting it. Repeatable (one parent each);
+    /// each must match exactly one task, and gets a `🆔` if it has none.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "parent")]
-    pub link_parent: Option<String>,
+    pub link_parent: Vec<String>,
 }
 
 fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -686,24 +701,26 @@ fn run_create(args: CreateArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
         dates::parse(s, today).map_err(|e| anyhow!("--{label}: {e}"))
     };
 
-    let mut description = args.description.join(" ");
-    if let Some(sel) = args.link_parent.as_deref() {
+    let description = args.description.join(" ");
+    let mut parent_ids = Vec::new();
+    if !args.link_parent.is_empty() {
         let scan = vault.scan();
-        let parent = resolve_unique("--link-parent", sel, &scan.tasks)?;
+        let parents = args
+            .link_parent
+            .iter()
+            .map(|sel| {
+                resolve_unique("--link-parent", sel, &scan.tasks).map(|t| source_of(&vault, t))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let ctx = links::LinkCtx::new(&vault.path, &scan);
-        let child_rel = vault.relativize(&target);
-        let (text, plan) = links::plan_parent_for_new_task(
-            &child_rel,
-            &source_of(&vault, parent),
-            &ctx,
-            vault.task_format(),
-        )
-        .map_err(|e| relativize_link_error(e, &vault))?;
+        let (ids, plan) = links::plan_parents_for_new_task(&parents, &ctx, vault.task_format())
+            .map_err(|e| relativize_link_error(e, &vault))?;
         links::apply_link_plan(&plan)?;
-        description = format!("{description} {text}");
+        parent_ids = ids;
     }
     let input = CreateInput {
         description,
+        parent_ids,
         status: Status::Open,
         priority: args.priority.map(Into::into),
         tags: args.tag,
@@ -1499,9 +1516,19 @@ pub struct LinkArgs {
 
 #[derive(Args, Debug)]
 pub struct UnlinkArgs {
-    /// The task whose parent link to remove (must match exactly one task).
+    /// The task whose parent reference to remove (must match exactly one
+    /// task). With several references, name one with `--from` or use
+    /// `--all`.
     #[arg(value_name = "SELECTOR")]
     pub selector: String,
+
+    /// Remove only the reference to this parent (must match one task).
+    #[arg(long, value_name = "SELECTOR", conflicts_with = "all")]
+    pub from: Option<String>,
+
+    /// Remove every parent reference on the task's line.
+    #[arg(long)]
+    pub all: bool,
 
     /// Print a unified diff of the affected file without writing anything.
     #[arg(long)]
@@ -1544,32 +1571,98 @@ fn run_link(args: LinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         vault.task_format(),
     )
     .map_err(|e| relativize_link_error(e, &vault))?;
-    let label = format!(
+    let unchanged = plan.children.iter().filter(|c| c.unchanged).count();
+    let mut label = format!(
         "Linked {} task(s) under {}:{}",
-        plan.children.len(),
+        plan.children.len() - unchanged,
         parent.source_file.display(),
         parent.source_line
     );
-    finish_link(&vault, &plan, args.dry_run, args.format, &label)
+    if unchanged > 0 {
+        label.push_str(&format!(" ({unchanged} already linked)"));
+    }
+    finish_link(&vault, &scan, &plan, args.dry_run, args.format, &label)
 }
 
 fn run_unlink(args: UnlinkArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let scan = vault.scan();
     let task = resolve_unique("selector", &args.selector, &scan.tasks)?;
-    let plan = links::plan_unlink(&source_of(&vault, task), vault.task_format())
-        .map_err(|e| relativize_link_error(e, &vault))?;
+    let which = match (&args.from, args.all) {
+        (Some(sel), _) => {
+            let p = resolve_unique("--from", sel, &scan.tasks)?;
+            links::Unlink::Parent((p.source_file.clone(), p.source_line))
+        }
+        (None, true) => links::Unlink::All,
+        (None, false) => links::Unlink::Only,
+    };
+    let plan = match links::plan_unlink(&source_of(&vault, task), &which, vault.task_format()) {
+        Err(links::LinkError::NeedsChoice { refs, .. }) => {
+            let rows: Vec<String> = refs
+                .iter()
+                .map(|r| {
+                    let what = match ref_task(&scan, r) {
+                        Some(p) => format!(
+                            "{}:{}  {}",
+                            p.source_file.display(),
+                            p.source_line,
+                            p.description
+                        ),
+                        None => r.state.as_str().to_string(),
+                    };
+                    format!("  {}  {what}", r.id)
+                })
+                .collect();
+            return Err(crate::cmd::common::ChoiceError {
+                message: format!(
+                    "{}:{} has several parents — pass --from SELECTOR or --all:\n{}",
+                    task.source_file.display(),
+                    task.source_line,
+                    rows.join("\n")
+                ),
+                key: "refs",
+                detail: serde_json::Value::Array(refs.iter().map(|r| ref_json(&scan, r)).collect()),
+            }
+            .into());
+        }
+        other => other.map_err(|e| relativize_link_error(e, &vault))?,
+    };
     let label = format!(
         "Unlinked {}:{}",
         task.source_file.display(),
         task.source_line
     );
-    finish_link(&vault, &plan, args.dry_run, args.format, &label)
+    finish_link(&vault, &scan, &plan, args.dry_run, args.format, &label)
 }
 
-/// Shared tail of `link` / `unlink`: diff or apply, then report.
+/// The scanned task a resolved reference points at.
+fn ref_task<'a>(scan: &'a ft_core::scan::Scan, r: &links::ParentRef) -> Option<&'a Task> {
+    let (path, line) = r.state.resolved()?;
+    scan.tasks
+        .iter()
+        .find(|t| &t.source_file == path && t.source_line == *line)
+}
+
+/// One parent reference as JSON: `{"id", "path", "line", "description",
+/// "state", "origin"}` (`null` location for unresolved ones).
+fn ref_json(scan: &ft_core::scan::Scan, r: &links::ParentRef) -> serde_json::Value {
+    let p = ref_task(scan, r);
+    serde_json::json!({
+        "id": r.id,
+        "path": p.map(|t| &t.source_file),
+        "line": p.map(|t| t.source_line),
+        "description": p.map(|t| &t.description),
+        "state": r.state.as_str(),
+        "origin": r.origin.as_str(),
+    })
+}
+
+/// Shared tail of `link` / `unlink`: diff or apply, then report. JSON rows
+/// describe each child after the edit (a fresh scan; for `--dry-run`, the
+/// planned lines resolved against the current scan).
 fn finish_link(
     vault: &Vault,
+    scan: &ft_core::scan::Scan,
     plan: &links::LinkPlan,
     dry_run: bool,
     format: MoveFormat,
@@ -1587,16 +1680,38 @@ fn finish_link(
     match format {
         MoveFormat::Text => println!("{label}"),
         MoveFormat::Json => {
-            let loc = |p: &std::path::Path, line: usize| serde_json::json!({ "path": vault.relativize(p), "line": line });
+            let after = if dry_run { None } else { Some(vault.scan()) };
             let rows: Vec<serde_json::Value> = plan
                 .children
                 .iter()
                 .map(|c| {
+                    let rel = vault.relativize(&c.path);
+                    let parents: Vec<serde_json::Value> = match &after {
+                        Some(s) => s
+                            .tasks
+                            .iter()
+                            .find(|t| t.source_file == rel && t.source_line == c.line)
+                            .map(|t| t.parent_refs.iter().map(|r| ref_json(s, r)).collect())
+                            .unwrap_or_default(),
+                        None => planned_refs(vault, scan, plan, c)
+                            .iter()
+                            .map(|r| ref_json(scan, r))
+                            .collect(),
+                    };
+                    let id = after
+                        .as_ref()
+                        .unwrap_or(scan)
+                        .tasks
+                        .iter()
+                        .find(|t| t.source_file == rel && t.source_line == c.line)
+                        .and_then(|t| t.id.clone());
                     serde_json::json!({
                         "description": c.description,
-                        "path": vault.relativize(&c.path),
+                        "path": rel,
                         "line": c.line,
-                        "parent": plan.parent.as_ref().map(|(p, l)| loc(p, *l)),
+                        "id": id,
+                        "parents": parents,
+                        "unchanged": c.unchanged,
                     })
                 })
                 .collect();
@@ -1606,19 +1721,67 @@ fn finish_link(
     Ok(ExitCode::SUCCESS)
 }
 
+/// A child's references as `plan` would leave them: its planned line's
+/// `⤴` ids resolved against `scan`, the plan's parent standing in for an
+/// id the plan generates.
+fn planned_refs(
+    vault: &Vault,
+    scan: &ft_core::scan::Scan,
+    plan: &links::LinkPlan,
+    c: &links::LinkedChild,
+) -> Vec<links::ParentRef> {
+    use links::{ParentRef, RefOrigin, RefState};
+    let line = plan
+        .edits
+        .iter()
+        .find(|e| e.path == c.path)
+        .and_then(|e| e.new.split('\n').nth(c.line - 1).map(str::to_string));
+    let Some(task) = line.and_then(|l| {
+        vault
+            .task_format()
+            .parse_line(&l, ft_core::task::format::ParseContext::default())
+    }) else {
+        return Vec::new();
+    };
+    let planned_parent = plan.parent.as_ref().map(|(p, l)| (vault.relativize(p), *l));
+    let mut seen = Vec::new();
+    task.parent_ids
+        .iter()
+        .filter(|id| {
+            let fresh = !seen.contains(id);
+            seen.push(*id);
+            fresh
+        })
+        .map(|id| {
+            let hits: Vec<&Task> = scan
+                .tasks
+                .iter()
+                .filter(|t| t.id.as_deref() == Some(id.as_str()))
+                .collect();
+            let state = match (hits.as_slice(), &planned_parent) {
+                ([one], _) => RefState::Resolved((one.source_file.clone(), one.source_line)),
+                ([], Some(p)) => RefState::Resolved(p.clone()),
+                ([], None) => RefState::Dangling,
+                _ => RefState::Ambiguous,
+            };
+            ParentRef {
+                id: id.clone(),
+                origin: RefOrigin::Line,
+                state,
+            }
+        })
+        .collect()
+}
+
 fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let vault = crate::cmd::common::discover_vault(vault_flag)?;
     let scan = vault.scan();
-    let mut issues: Vec<(&'static str, &Task, String)> = Vec::new();
-    for t in &scan.tasks {
-        let Some(link) = &t.parent_link else { continue };
-        if !matches!(link.state, links::ParentLinkState::Resolved(_)) {
-            issues.push((link.state.as_str(), t, link.raw.clone()));
-        }
-        for extra in &link.extra {
-            issues.push(("extra", t, extra.clone()));
-        }
-    }
+    // (kind, task, id of a parent issue, detail of a source issue)
+    let mut issues: Vec<(&'static str, &Task, Option<String>, Option<String>)> =
+        links::check(&scan.tasks)
+            .into_iter()
+            .map(|i| (i.kind.as_str(), &scan.tasks[i.task], Some(i.id), None))
+            .collect();
     // Issue notes: stored status conflicts and (machine-local) push failures.
     let failures = ft_core::sources::run::AttemptLog::load(&vault.path).push_failures;
     for f in &scan.files {
@@ -1640,11 +1803,12 @@ fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             issues.push((
                 "conflict",
                 anchor,
-                format!("local={} remote={remote}", anchor.status.as_str()),
+                None,
+                Some(format!("local={} remote={remote}", anchor.status.as_str())),
             ));
         }
         if let Some(reason) = failures.get(&src.name).and_then(|m| m.get(&src.key)) {
-            issues.push(("push-failed", anchor, reason.clone()));
+            issues.push(("push-failed", anchor, None, Some(reason.clone())));
         }
     }
     issues.sort_by(|a, b| {
@@ -1653,9 +1817,10 @@ fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.format {
         MoveFormat::Text if issues.is_empty() => println!("no issues"),
         MoveFormat::Text => {
-            for (kind, t, link) in &issues {
+            for (kind, t, id, detail) in &issues {
+                let what = id.as_deref().or(detail.as_deref()).unwrap_or("");
                 println!(
-                    "{}:{}  {kind:<8}  {link}  {}",
+                    "{}:{}  {kind:<12}  {what}  {}",
                     t.source_file.display(),
                     t.source_line,
                     t.description
@@ -1665,14 +1830,19 @@ fn run_check(args: CheckArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         MoveFormat::Json => {
             let rows: Vec<serde_json::Value> = issues
                 .iter()
-                .map(|(kind, t, link)| {
-                    serde_json::json!({
+                .map(|(kind, t, id, detail)| {
+                    let mut row = serde_json::json!({
                         "kind": kind,
                         "path": t.source_file,
                         "line": t.source_line,
                         "description": t.description,
-                        "link": link,
-                    })
+                    });
+                    match (id, detail) {
+                        (Some(id), _) => row["id"] = id.as_str().into(),
+                        (None, Some(d)) => row["link"] = d.as_str().into(),
+                        (None, None) => {}
+                    }
+                    row
                 })
                 .collect();
             println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -1695,6 +1865,9 @@ fn relativize_link_error(e: links::LinkError, vault: &Vault) -> anyhow::Error {
             rel(&path)
         ),
         E::NoParentLink { path, line } => anyhow!("{}:{line} has no parent link", rel(&path)),
+        E::NotLinkedTo { path, line } => {
+            anyhow!("{}:{line} is not linked to that parent", rel(&path))
+        }
         E::LineChanged {
             path,
             line,

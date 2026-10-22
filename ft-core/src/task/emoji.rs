@@ -407,7 +407,7 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
             };
             let (spaces, value) = take_leading_spaces(&after[vs..]);
             if spaces >= 1 {
-                let end = next_field_boundary(value);
+                let end = id_list_end(value);
                 fields.parent_ids = split_ids(&value[..end]);
                 pos += PARENTS.len() + vs + spaces + end;
                 continue;
@@ -418,6 +418,32 @@ fn parse_field_section(s: &str, fields: &mut ParsedFields) {
         let ch = rest.chars().next().unwrap();
         fields.raw_trailing.get_or_insert_with(String::new).push(ch);
         pos += ch.len_utf8();
+    }
+}
+
+/// End of a comma-separated id list at the start of `s`: ids are runs of
+/// non-whitespace, non-comma characters; spaces are allowed around commas
+/// only, so `a, b #tag` ends before ` #tag`.
+fn id_list_end(s: &str) -> usize {
+    let mut end = 0;
+    let mut i = 0;
+    loop {
+        let id_end = s[i..]
+            .find(|c: char| c.is_whitespace() || c == ',')
+            .map_or(s.len(), |n| i + n);
+        if id_end > i {
+            end = id_end;
+        }
+        let t = s[id_end..].trim_start_matches(' ');
+        let Some(after_comma) = t.strip_prefix(',') else {
+            return end;
+        };
+        end = s.len() - after_comma.len();
+        let next = after_comma.trim_start_matches(' ');
+        if next.is_empty() || next.starts_with(char::is_whitespace) {
+            return end;
+        }
+        i = s.len() - next.len();
     }
 }
 
@@ -787,6 +813,15 @@ mod tests {
     fn parents_keep_duplicates_and_drop_empties() {
         let task = parse("- [ ] t ⤴ a1,,a1 ");
         assert_eq!(task.parent_ids, vec!["a1", "a1"]);
+    }
+
+    #[test]
+    fn parents_stop_at_whitespace() {
+        let line = "- [ ] t ⤴ a1, b2 #work ⏫";
+        let task = parse(line);
+        assert_eq!(task.parent_ids, vec!["a1", "b2"]);
+        assert_eq!(task.priority, Some(Priority::High));
+        assert_eq!(task.raw_trailing.as_deref().map(str::trim), Some("#work"));
     }
 
     #[test]

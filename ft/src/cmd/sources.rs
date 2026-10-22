@@ -359,12 +359,41 @@ pub fn run_resolve(vault: &Vault, only: &[String], take: &[String]) -> Result<Ex
 }
 
 /// `ft tasks promote`.
-pub fn run_promote(vault: &Vault, selector: &str, format: MoveFormat) -> Result<ExitCode> {
-    use ft_core::sources::promote;
+pub fn run_promote(
+    vault: &Vault,
+    selector: &str,
+    parent: Option<&str>,
+    format: MoveFormat,
+) -> Result<ExitCode> {
+    use ft_core::sources::promote::{self, PromoteError};
     let scan = vault.scan();
     let task = super::tasks::resolve_unique("selector", selector, &scan.tasks)?;
-    let target =
-        promote::check(&scan, task, &vault.config.config.sources).map_err(|e| anyhow!(e))?;
+    let target = match promote::check(&scan, task, &vault.config.config.sources, parent) {
+        Ok(t) => t,
+        Err(e @ PromoteError::ChooseParent { .. }) => {
+            let PromoteError::ChooseParent { candidates } = &e else {
+                unreachable!()
+            };
+            let detail = candidates
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "key": c.key,
+                        "path": c.path,
+                        "line": c.line,
+                        "description": c.description,
+                    })
+                })
+                .collect();
+            return Err(super::common::ChoiceError {
+                message: e.to_string(),
+                key: "candidates",
+                detail: serde_json::Value::Array(detail),
+            }
+            .into());
+        }
+        Err(e) => return Err(anyhow!(e.to_string())),
+    };
     let cfg = source_cfg(vault, &target.source)?;
     let new = promote::new_issue(task);
     let (created, push_failure) =
@@ -386,6 +415,7 @@ pub fn run_promote(vault: &Vault, selector: &str, format: MoveFormat) -> Result<
         ft_core::dates::today(),
         task,
         &created,
+        &target.parent.key,
     )
     .and_then(|p| promote::apply_guarded(&p.edits).map(|()| p))
     .map_err(|e| anyhow!("created {} but couldn't update the vault: {e}", created.key))?;

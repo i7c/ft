@@ -277,7 +277,7 @@ fn promote_from_tasks_tab() -> Result<()> {
     app.tick_for_test()?;
     std::fs::write(
         dir.path().join("test-vault/today.md"),
-        "- [ ] write regression test [[ABC-123]] 📅 2026-05-11\n  - [ ] cover Safari\n",
+        "- [ ] write regression test ⤴ ABC-123 📅 2026-05-11\n  - [ ] cover Safari\n",
     )
     .unwrap();
     app.set_promoter_for_test(Arc::new(|_, _, parent, new, _| {
@@ -347,6 +347,44 @@ fn promote_precondition_toast_without_network() -> Result<()> {
     assert_eq!(
         toast(&app),
         "promote needs a parent that is a remote issue — move or link it under one first"
+    );
+    Ok(())
+}
+
+#[test]
+fn promote_with_two_ticket_parents_asks_which() -> Result<()> {
+    let (dir, vault) = sources_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    fetcher(&mut app);
+    app.tick_for_test()?;
+    let root = dir.path().join("test-vault");
+    let story = std::fs::read_to_string(root.join("jira/ABC-123.md")).unwrap();
+    std::fs::write(
+        root.join("jira/ABC-200.md"),
+        story.replace("ABC-123", "ABC-200"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("today.md"),
+        "- [ ] both ⤴ ABC-123,ABC-200 📅 2026-05-11\n",
+    )
+    .unwrap();
+    app.set_promoter_for_test(Arc::new(|_, _, _, _, _| panic!("no network call expected")));
+    app.switch_to(5)?;
+    app.dispatch(key('R'))?;
+    app.pump_graph_rebuild_for_test();
+    // Rows: the two anchors, each with `both` collapsed beneath it.
+    app.dispatch(key('l'))?;
+    app.dispatch(key('j'))?;
+    let frame = render(&mut app, 100, 30);
+    let selected = frame.lines().find(|l| l.contains('▶')).unwrap_or_default();
+    assert!(selected.contains("both ⤴2"), "{frame}");
+    app.dispatch(key('I'))?;
+    app.service_pending_requests()?;
+    let frame = render(&mut app, 100, 40);
+    assert!(
+        frame.contains("ABC-123") && frame.contains("ABC-200") && frame.contains("task-parent-p"),
+        "{frame}"
     );
     Ok(())
 }

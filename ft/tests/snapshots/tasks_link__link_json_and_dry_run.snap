@@ -5,11 +5,19 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
 [
   {
     "description": "reproduce",
+    "id": null,
     "line": 2,
-    "parent": {
-      "line": 1,
-      "path": "proj.md"
-    },
-    "path": "journal/2026-10-21.md"
+    "parents": [
+      {
+        "description": "Vendor onboarding",
+        "id": "vo1",
+        "line": 1,
+        "origin": "line",
+        "path": "proj.md",
+        "state": "resolved"
+      }
+    ],
+    "path": "journal/2026-10-21.md",
+    "unchanged": false
   }
 ]

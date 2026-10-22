@@ -89,6 +89,8 @@ pub struct CreateInput {
     pub recurrence: Option<String>,
     pub id: Option<String>,
     pub depends_on: Vec<String>,
+    /// `🆔`s of logical parents (the `⤴` field).
+    pub parent_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +140,7 @@ pub fn build_task(input: &CreateInput) -> Task {
         recurrence: input.recurrence.clone(),
         id: input.id.clone(),
         depends_on: input.depends_on.clone(),
+        parent_ids: input.parent_ids.clone(),
         ..Default::default()
     }
 }

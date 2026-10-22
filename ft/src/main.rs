@@ -117,16 +117,23 @@ fn main() -> ExitCode {
             } else {
                 eprintln!("Error: {e:#}");
             }
-            ExitCode::FAILURE
+            if e.downcast_ref::<cmd::common::ChoiceError>().is_some() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
 
 fn print_json_error(e: &anyhow::Error) {
     let chain: Vec<String> = e.chain().map(|c| c.to_string()).collect();
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "error": e.to_string(),
         "chain": chain,
     });
+    if let Some(c) = e.downcast_ref::<cmd::common::ChoiceError>() {
+        body[c.key] = c.detail.clone();
+    }
     eprintln!("{body}");
 }
