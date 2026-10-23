@@ -98,6 +98,15 @@ pub(crate) static GRAPH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "graph.search-near",
+        description: "Open Search ranked by proximity to the selected note (type to search)",
+        scope: CommandScope::Tab("graph"),
+        group: "Notes",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "graph.search-mentions-multi",
         description: "Search selected (or cursor) Note/Ghost rows' mentions (any-mode)",
         scope: CommandScope::Tab("graph"),
@@ -508,6 +517,7 @@ pub(crate) static GRAPH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         // Cross-tab
         .bind("R", "graph.related")
         .bind("J", "graph.search-mentions")
+        .bind("N", "graph.search-near")
         .bind("Ctrl+j", "graph.search-mentions-multi")
         // Query bar / search
         .bind("/", "graph.query-bar")

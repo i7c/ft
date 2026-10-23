@@ -18,11 +18,11 @@ expression: down
 │         │  Notes                                                  ║│         │
 │         │  Shift+r        Open the Related panel for the selected ║│         │
 │         │  Shift+j        Open Search for the selected note or gho║│         │
+│         │  Shift+n        Open Search ranked by proximity to the s║│         │
 │         │  Ctrl+j         Search selected (or cursor) Note/Ghost r║│         │
 │         │  o              Open the selected note in $EDITOR       ║│         │
 │         │  Ctrl+o         Open the selected note in Obsidian      ║│         │
 │         │  c              Create a new note (blank) in the selecte║│         │
 │         │  Shift+c        Create a new note from a template       ║│         │
-│         │  Shift+p        Promote the selected ghost into a synth ║│         │
 └─────────└──────────────────────────────────────────────────────────┘─────────┘
  vault: test-vault  ·  tab: Graph           not yet refreshed        mode: help

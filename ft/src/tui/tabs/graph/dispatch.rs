@@ -92,6 +92,28 @@ impl GraphTab {
                 }
                 CommandOutcome::Handled
             }
+            "graph.search-near" => {
+                let title = Self::graph_of(&self.snapshot).and_then(|graph| {
+                    let row = self
+                        .active_view()
+                        .tree
+                        .rows()
+                        .get(self.active_view().selected)?;
+                    match graph.node(row.note_id) {
+                        NodeKind::Note(n) => Some(n.title.clone()),
+                        _ => None,
+                    }
+                });
+                if let Some(title) = title {
+                    *ctx.pending_request.borrow_mut() = Some(AppRequest::SearchWithQuery {
+                        query: format!("near:[[{title}]] "),
+                        any: false,
+                    });
+                } else {
+                    queue_toast(ctx, "select a note to search near it", ToastStyle::Error);
+                }
+                CommandOutcome::Handled
+            }
             "graph.search-mentions-multi" => {
                 let titles: Vec<String> = match Self::graph_of(&self.snapshot) {
                     Some(graph) => {

@@ -463,3 +463,21 @@ fn stale_recency_generation_is_ignored() -> Result<()> {
     );
     Ok(())
 }
+
+/// `n` adds a `near:` clause for the focused result's note, replacing
+/// any existing one and keeping the other clauses.
+#[test]
+fn n_sets_near_to_the_focused_result() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "eigen near:[[baseline]]")?;
+    app.dispatch(key('n'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("eigen near:[[notes]]") && !frame.contains("near:[[baseline]]"),
+        "near replaced with the focused note:\n{frame}"
+    );
+    assert!(frame.contains("(2 results"), "{frame}");
+    Ok(())
+}

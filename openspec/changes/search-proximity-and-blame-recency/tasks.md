@@ -29,10 +29,10 @@
 
 ## 5. Search near
 
-- [ ] 5.1 Graph tab `N` → `graph.search-near` (Note rows only; otherwise a toast), raising `SearchWithQuery` with `near:[[Title]] ` and the editor active; help section row
-- [ ] 5.2 Search tab `n` → `search.near-focused`: replace or add the `near:` clause from the focused result's title, update the input, re-run; status hint for a near-only query
-- [ ] 5.3 `COMMANDS` / `KEYMAP` rows, `dispatch_command` arms, regenerate `docs/keybindings.md`
-- [ ] 5.4 `TestBackend` tests: `N` from a Note row then typing; `N` on a Ghost row toasts; `n` adds and replaces `near:`
+- [x] 5.1 Graph tab `N` → `graph.search-near` (Note rows only; otherwise a toast), raising `SearchWithQuery` with `near:[[Title]] ` and the editor active; help section row
+- [x] 5.2 Search tab `n` → `search.near-focused`: replace or add the `near:` clause from the focused result's title, update the input, re-run; status hint for a near-only query
+- [x] 5.3 `COMMANDS` / `KEYMAP` rows, `dispatch_command` arms, regenerate `docs/keybindings.md`
+- [x] 5.4 `TestBackend` tests: `N` from a Note row then typing; `N` on a Ghost row toasts; `n` adds and replaces `near:`
 
 ## 6. Docs and finish
 

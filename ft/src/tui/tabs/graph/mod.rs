@@ -917,6 +917,7 @@ impl Tab for GraphTab {
                 &[
                     ("Shift+J", "open Search for the selected note"),
                     ("Ctrl+J", "search selected (or cursor) rows' mentions"),
+                    ("Shift+N", "search near the selected note (type the query)"),
                 ],
             ),
             HelpSection::new(

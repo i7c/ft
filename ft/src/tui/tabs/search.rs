@@ -93,6 +93,15 @@ pub(crate) static SEARCH_COMMANDS: &[CommandDef] = &[
         is_primary: false,
     },
     CommandDef {
+        name: "search.near-focused",
+        description: "Rank by proximity to the focused result's note (sets near:[[…]])",
+        scope: CommandScope::Tab("search"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
         name: "search.result-up",
         description: "Move the cursor up one row",
         scope: CommandScope::Tab("search"),
@@ -172,6 +181,7 @@ pub(crate) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("a", "search.toggle-any")
         .bind("o", "search.cycle-sort")
         .bind("g", "search.toggle-grouping")
+        .bind("n", "search.near-focused")
         .bind("Up", "search.result-up")
         .bind("k", "search.result-up")
         .bind("Down", "search.result-down")
@@ -316,6 +326,29 @@ impl SearchTab {
         self.selected.clear();
         self.cursor = 0;
         self.rebuild_rows(false);
+    }
+
+    /// Replace the query's `near:` clauses with one for the focused
+    /// result's note and re-run.
+    fn near_focused(&mut self, ctx: &TabCtx) {
+        let Some(title) = self
+            .cursor_result()
+            .and_then(|i| self.results.get(i))
+            .map(|r| r.title.clone())
+        else {
+            return;
+        };
+        let parsed = parse_query(&self.input.text, self.any);
+        let mut parts: Vec<String> = parsed
+            .clauses
+            .iter()
+            .filter(|c| c.mode != ft_core::search::Mode::Near)
+            .map(|c| c.raw.clone())
+            .collect();
+        parts.push(format!("near:[[{title}]]"));
+        self.input = EditBuffer::from(&parts.join(" "));
+        self.requery();
+        self.run_query(ctx);
     }
 
     /// Re-run the query keeping the focused and selected paragraphs
@@ -531,6 +564,10 @@ impl Tab for SearchTab {
                 self.run_query(ctx);
                 CommandOutcome::Handled
             }
+            "search.near-focused" => {
+                self.near_focused(ctx);
+                CommandOutcome::Handled
+            }
             "search.toggle-grouping" => {
                 self.toggle_grouping();
                 CommandOutcome::Handled
@@ -704,8 +741,14 @@ impl Tab for SearchTab {
         }
 
         if self.results.is_empty() {
+            let near_only = self
+                .last_query
+                .as_ref()
+                .is_some_and(|q| q.nears().next().is_some() && q.positives().next().is_none());
             let text = if self.input.text.trim().is_empty() {
                 "press / to start typing — results update live"
+            } else if near_only {
+                "type what you are looking for — results near that note rank first"
             } else {
                 "no matches — try =word, ~fuzzy, or [[link]] syntax"
             };
@@ -862,6 +905,7 @@ impl Tab for SearchTab {
                     ("a", "toggle all-match (AND) ↔ any-match (OR)"),
                     ("o", "cycle sort: relevance ↔ date"),
                     ("g", "toggle grouped by note ↔ flat"),
+                    ("n", "rank near the focused result's note (near:[[…]])"),
                 ],
             ),
             HelpSection::new(

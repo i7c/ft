@@ -47,6 +47,76 @@ fn graph_j_jumps_to_search_for_selected_note() -> Result<()> {
     Ok(())
 }
 
+/// `N` on a Note row opens Search with `near:[[Note]] ` and the editor
+/// active, so typing goes straight into the query.
+#[test]
+fn graph_n_searches_near_the_selected_note() -> Result<()> {
+    let (_dir, vault) = rename_vault(&[
+        (
+            "Caching.md",
+            "# Caching\n\nInvalidation basics. See [[Linked]].\n",
+        ),
+        ("Linked.md", "Invalidation details here.\n"),
+        ("Other.md", "Invalidation elsewhere, unrelated.\n"),
+    ]);
+    let mut app = App::for_test(vault);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for _ in 0..6 {
+        if app.graph_tab_selected_is_note_for_test() {
+            break;
+        }
+        app.dispatch(key('j'))?;
+    }
+    assert!(app.graph_tab_selected_is_note_for_test());
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('N'),
+        KeyModifiers::SHIFT,
+    )))?;
+    app.service_pending_requests()?;
+    assert_eq!(app.active_title(), "Search");
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("near:[[Caching]]") && frame.contains("type what you are looking for"),
+        "near-only query waits for search terms:\n{frame}"
+    );
+    for c in "invalidation".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("near:[[Caching]] invalidation"),
+        "typing appends to the prefilled query:\n{frame}"
+    );
+    assert!(frame.contains("(3 results"), "near never filters:\n{frame}");
+    let headers: Vec<&str> = frame.lines().filter(|l| l.contains(".md (")).collect();
+    assert_eq!(headers.len(), 3);
+    assert!(
+        headers[2].contains("Other.md"),
+        "the unrelated note ranks below the seed and its neighbour:\n{frame}"
+    );
+    Ok(())
+}
+
+/// `N` on a non-Note row toasts and stays on Graph.
+#[test]
+fn graph_n_on_non_note_row_toasts() -> Result<()> {
+    let (_dir, vault) = rename_vault(&[("Target.md", "# Target\n")]);
+    let mut app = App::for_test(vault);
+    switch_to_graph(&mut app)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('N'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let toast = app.current_toast().expect("expected an error toast");
+    assert!(toast.text.contains("select a note to search near it"));
+    assert_eq!(app.active_title(), "Graph");
+    Ok(())
+}
+
 /// `J` on a non-Note row produces an error toast and stays on Graph.
 #[test]
 fn graph_j_on_non_note_row_queues_toast_and_stays_on_graph() -> Result<()> {
