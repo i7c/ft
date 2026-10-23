@@ -18,9 +18,10 @@
 //!   candidate generation;
 //! - one **stem map** per configured Snowball algorithm.
 //!
-//! Each note also carries a bounded ranking prior (in-degree and relative
-//! recency) and its undirected note-link adjacency for `near:` boosts,
-//! both derived from the scan's links with the graph's own resolution
+//! Each note also carries a bounded in-degree prior, its file's mtime
+//! day (the recency fallback, see [`crate::search::recency`]), and its
+//! undirected note-link adjacency for `near:` boosts, the link data
+//! derived from the scan's links with the graph's own resolution
 //! rules ([`crate::graph::resolve`]) — no graph build needed.
 
 use std::collections::{HashMap, HashSet};
@@ -107,6 +108,7 @@ pub struct ParagraphDoc {
 /// Per-note context shared by the note's paragraphs.
 #[derive(Debug, Clone)]
 pub(crate) struct NoteCtx {
+    pub(crate) path: PathBuf,
     pub(crate) folded_path: String,
     /// File stem, as written.
     pub(crate) title: String,
@@ -119,9 +121,11 @@ pub(crate) struct NoteCtx {
     pub(crate) title_len: u32,
     pub(crate) alias_len: u32,
     pub(crate) tag_len: u32,
-    /// Ranking prior in `[1.0, 1.25]`.
+    /// In-degree prior in `[1.0, 1.15]`; paragraph recency adds up to
+    /// 0.10 more at query time.
     pub(crate) prior: f64,
-    pub(crate) mtime: SystemTime,
+    /// The file's mtime as whole days since the epoch.
+    pub(crate) mtime_day: i32,
     /// Lines in the file (huge files are never blamed).
     pub(crate) line_count: u32,
 }
@@ -295,19 +299,13 @@ impl SearchIndex {
         }
 
         let max_in = indegree.iter().copied().max().unwrap_or(0);
-        let newest = self.mtimes_newest();
         for (i, note) in self.notes.iter_mut().enumerate() {
             let link_part = if max_in == 0 {
                 0.0
             } else {
                 PRIOR_INDEGREE * (1.0 + indegree[i] as f64).ln() / (1.0 + max_in as f64).ln()
             };
-            // Whole days: files saved moments apart must not reorder ties.
-            let age_days = newest
-                .and_then(|newest| newest.duration_since(note.mtime).ok())
-                .map_or(0.0, |d| (d.as_secs() / 86_400) as f64);
-            let recency_part = PRIOR_RECENCY * (-age_days / PRIOR_RECENCY_DAYS).exp();
-            note.prior = 1.0 + link_part.min(PRIOR_INDEGREE) + recency_part.min(PRIOR_RECENCY);
+            note.prior = 1.0 + link_part.min(PRIOR_INDEGREE);
         }
         self.adjacency = adjacency
             .into_iter()
@@ -319,17 +317,21 @@ impl SearchIndex {
             .collect();
     }
 
-    fn mtimes_newest(&self) -> Option<SystemTime> {
-        self.notes.iter().map(|n| n.mtime).max()
+    /// The newest file mtime day across indexed notes.
+    pub(crate) fn newest_mtime_day(&self) -> Option<i32> {
+        self.notes.iter().map(|n| n.mtime_day).max()
     }
+}
+
+/// Whole days since the Unix epoch. Whole days keep files saved moments
+/// apart from reordering ties.
+pub(crate) fn day_of(t: SystemTime) -> i32 {
+    t.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| (d.as_secs() / 86_400) as i32)
 }
 
 /// Max prior share from in-degree (log-scaled against the vault max).
 pub(crate) const PRIOR_INDEGREE: f64 = 0.15;
-/// Max prior share from recency (exponential decay of relative age).
-pub(crate) const PRIOR_RECENCY: f64 = 0.10;
-/// Recency decay constant, in days.
-const PRIOR_RECENCY_DAYS: f64 = 90.0;
 
 /// Accumulates the index file by file.
 struct Builder {
@@ -539,6 +541,7 @@ impl Builder {
         }
 
         self.index.notes.push(NoteCtx {
+            path: pf.rel.clone(),
             folded_path,
             title,
             folded_title,
@@ -549,7 +552,7 @@ impl Builder {
             alias_len,
             tag_len,
             prior: 1.0,
-            mtime: pf.mtime,
+            mtime_day: day_of(pf.mtime),
             line_count: pf.line_count,
         });
     }
@@ -850,12 +853,9 @@ mod tests {
         assert!(prior("hub.md") > prior("orphan.md"));
         assert!(prior("hub.md") > prior("a.md"));
         // Three distinct sources (a, b, the excluded journal note); no self link.
-        assert!(
-            (prior("hub.md") - 1.25).abs() < 1e-9,
-            "max in-degree + newest"
-        );
+        assert!((prior("hub.md") - 1.15).abs() < 1e-9, "max in-degree");
         for n in &idx.notes {
-            assert!((1.0..=1.25).contains(&n.prior), "{} {}", n.title, n.prior);
+            assert!((1.0..=1.15).contains(&n.prior), "{} {}", n.title, n.prior);
         }
         let hub = idx.note_by_path[&PathBuf::from("hub.md")];
         let a = idx.note_by_path[&PathBuf::from("a.md")];

@@ -284,11 +284,23 @@ impl SearchTab {
         let sctx = SearchCtx {
             graph: Some(&snap.graph),
             presets: Some(&ctx.vault.config.config.graph.presets),
+            ..Default::default()
         };
         let outcome = if self.sort == Sort::Date || query.has_date_filters() {
             let mut cache = self.cache.take().unwrap_or_default();
-            let r = search_with_dates(index, &query, sctx, ctx.vault, &mut cache, self.sort)
-                .map(|d| d.results);
+            let validity = ft_core::blame_cache::BlameValidity::snapshot(&ctx.vault.path)
+                .ok()
+                .flatten();
+            let r = search_with_dates(
+                index,
+                &query,
+                sctx,
+                ctx.vault,
+                validity.as_ref(),
+                &mut cache,
+                self.sort,
+            )
+            .map(|d| d.results);
             self.cache = Some(cache);
             r
         } else {

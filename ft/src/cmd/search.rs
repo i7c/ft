@@ -14,11 +14,11 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use ft_core::blame_cache::BlameCache;
+use ft_core::blame_cache::{BlameCache, BlameValidity};
 use ft_core::scan::Scan;
 use ft_core::search::{
-    fill_highlights, group, parse_query, search_with_dates, DatedSearch, SearchCtx, SearchError,
-    SearchIndex, SearchQuery, SearchResult, Sort,
+    fill_highlights, group, parse_query, search_with_dates, DatedSearch, RecencyTable, SearchCtx,
+    SearchError, SearchIndex, SearchQuery, SearchResult, Sort,
 };
 use ft_core::vault::Vault;
 use serde::Serialize;
@@ -106,16 +106,31 @@ pub(crate) fn run_query(
     } else {
         None
     };
-    let ctx = SearchCtx {
-        graph: graph.as_ref(),
-        presets: Some(&cfg.graph.presets),
-    };
-    let mut cache = if sort == Sort::Date || query.has_date_filters() {
+    // Recency reads whatever blame the cache already holds; a plain
+    // relevance search never runs `git blame`.
+    let validity = BlameValidity::snapshot(&vault.path).context("reading git state")?;
+    let mut cache = if validity.is_some() {
         BlameCache::load(&vault.path).context("loading blame cache")?
     } else {
         BlameCache::default()
     };
-    match search_with_dates(&index, query, ctx, vault, &mut cache, sort) {
+    let recency = validity
+        .as_ref()
+        .map(|v| RecencyTable::build(&index, &cache, v));
+    let ctx = SearchCtx {
+        graph: graph.as_ref(),
+        presets: Some(&cfg.graph.presets),
+        recency: recency.as_ref(),
+    };
+    match search_with_dates(
+        &index,
+        query,
+        ctx,
+        vault,
+        validity.as_ref(),
+        &mut cache,
+        sort,
+    ) {
         Ok(mut found) => {
             if found.undated_dropped > 0 {
                 eprintln!(

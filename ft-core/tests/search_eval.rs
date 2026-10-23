@@ -221,6 +221,7 @@ impl Engine {
         let ctx = SearchCtx {
             graph: Some(&self.graph),
             presets: Some(&self.presets),
+            ..Default::default()
         };
         search(&self.index, &query, ctx)
             .unwrap_or_else(|e| panic!("query {:?}: {e}", case.query))

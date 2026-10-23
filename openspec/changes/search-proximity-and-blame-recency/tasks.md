@@ -9,16 +9,16 @@
 
 ## 2. Query-time recency
 
-- [ ] 2.1 `search/index.rs`: the note prior becomes in-degree only (cap 0.15); store each doc's file mtime day and the newest mtime day
-- [ ] 2.2 New `search/recency.rs`: `RecencyTable::build(index, cache, validity)` (per-doc blame day, `doc_count`, newest day); `SearchCtx::recency`; a stale table (doc-count mismatch) is ignored
-- [ ] 2.3 `search/engine.rs`: paragraph recency part `0.10 · exp(−age/90)` over whole days, blame day else mtime day; total prior ≤ 1.25
-- [ ] 2.4 Tests: fresh paragraph in an old note (temp git repo with two commit dates), uncached file falls back to mtime, prior stays bounded, no table equals mtime-only ranking
+- [x] 2.1 `search/index.rs`: the note prior becomes in-degree only (cap 0.15); store each doc's file mtime day and the newest mtime day
+- [x] 2.2 New `search/recency.rs`: `RecencyTable::build(index, cache, validity)` (per-doc blame day, `doc_count`, newest day); `SearchCtx::recency`; a stale table (doc-count mismatch) is ignored
+- [x] 2.3 `search/engine.rs`: paragraph recency part `0.10 · exp(−age/90)` over whole days, blame day else mtime day; total prior ≤ 1.25
+- [x] 2.4 Tests: fresh paragraph in an old note (temp git repo with two commit dates), uncached file falls back to mtime, prior stays bounded, no table equals mtime-only ranking
 - [ ] 2.5 Fixture eval unchanged (no table); record the real-vault report with a warm cache in the change notes
 
 ## 3. CLI
 
-- [ ] 3.1 `cmd::search::run_query`: load the cache and validity, build the table, pass it in `SearchCtx`; no table outside git
-- [ ] 3.2 Integration test: a plain search in a git vault spawns no blame (cache file untouched), and `--sort date` populates the v2 cache
+- [x] 3.1 `cmd::search::run_query`: load the cache and validity, build the table, pass it in `SearchCtx`; no table outside git
+- [x] 3.2 Integration test: a plain search in a git vault spawns no blame (cache file untouched), and `--sort date` populates the v2 cache
 
 ## 4. TUI warm-up
 

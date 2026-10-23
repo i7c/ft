@@ -393,3 +393,40 @@ fn date_filter_without_git_warns_and_prints_nothing() {
             "3 matching paragraph(s) have no blame date",
         ));
 }
+
+fn git_commit_all(dir: &std::path::Path) {
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.name", "T"]);
+    run(&["config", "user.email", "t@e.com"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "c1"]);
+}
+
+#[test]
+fn plain_search_never_blames_but_date_sort_fills_the_cache() {
+    let tmp = make_rich_vault();
+    git_commit_all(tmp.path());
+    let cache = tmp.path().join(".ft/cache/blame.msgpack");
+
+    let stdout = stdout_of(&tmp, &["eigenvalue", "--flat"]);
+    assert_eq!(stdout.lines().count(), 3);
+    assert!(!cache.exists(), "a relevance search must not blame");
+
+    stdout_of(&tmp, &["eigenvalue", "--sort", "date", "--flat"]);
+    assert!(cache.exists(), "the date sort populates the cache");
+    let first = std::fs::read(&cache).unwrap();
+
+    // A relevance search reads the warm cache without rewriting it.
+    stdout_of(&tmp, &["eigenvalue", "--flat"]);
+    assert_eq!(std::fs::read(&cache).unwrap(), first);
+}

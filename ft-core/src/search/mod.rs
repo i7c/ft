@@ -411,6 +411,7 @@ impl Vault {
 pub mod engine;
 pub mod index;
 pub mod query;
+pub mod recency;
 pub mod text;
 
 pub use engine::{
@@ -419,6 +420,7 @@ pub use engine::{
 };
 pub use index::{Field, SearchIndex};
 pub use query::{parse as parse_query, Clause, Filter, Mode, SearchQuery};
+pub use recency::RecencyTable;
 
 // ── tests ────────────────────────────────────────────────────────────────────
 

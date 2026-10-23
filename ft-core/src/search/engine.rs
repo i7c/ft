@@ -13,8 +13,10 @@
 //! weighted and length-normalized per field, saturated by `K1`, times the
 //! highest per-field inverse document frequency, damped when only
 //! context fields matched. The paragraph score is
-//! the sum over matched positive clauses, multiplied by the note prior
-//! (in-degree and recency, `[1, 1.25]`) and the `near:` boost. Ties
+//! the sum over matched positive clauses, multiplied by the prior —
+//! note in-degree plus paragraph recency (blame day when the query-time
+//! [`RecencyTable`] has it, else file mtime), `[1, 1.25]` — and the
+//! `near:` boost. Ties
 //! break on vault-relative path then line start, so identical queries
 //! over an identical index order identically.
 
@@ -30,6 +32,7 @@ use crate::graph::query::{Profile, WalkNode, WalkOptions};
 use crate::graph::{Graph, NodeKind};
 use crate::search::index::{FastMap, Field, SearchIndex, FIELDS};
 use crate::search::query::{Clause, Filter, Mode, SearchQuery};
+use crate::search::recency::{recency_part, RecencyTable};
 use crate::search::text::{self, TokenKind};
 use crate::vault::Vault;
 
@@ -117,11 +120,14 @@ pub struct SearchResult {
 }
 
 /// What a query may consult beyond the index: the link graph (for
-/// `scope:`) and the user's graph presets (shadowing built-ins).
+/// `scope:`), the user's graph presets (shadowing built-ins), and the
+/// paragraph recency table.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SearchCtx<'a> {
     pub graph: Option<&'a Graph>,
     pub presets: Option<&'a HashMap<String, String>>,
+    /// Paragraph blame days; without it recency uses file mtimes.
+    pub recency: Option<&'a RecencyTable>,
 }
 
 /// Errors a query can raise at search time.
@@ -167,14 +173,17 @@ pub struct DatedSearch {
 
 /// Run a query that needs blame dates — a date sort or `after:` /
 /// `before:` filters — blaming only the files of the paragraphs that
-/// survive every other clause, through the shared cache. Paragraphs
-/// without a blame date (untracked, no git) never pass a date filter
-/// and sort as oldest.
+/// survive every other clause, through the shared cache (saved under
+/// `vault` when anything was blamed). `validity` is the caller's
+/// [`BlameValidity`] snapshot, `None` outside git. Paragraphs without a
+/// blame date (untracked, no git) never pass a date filter and sort as
+/// oldest.
 pub fn search_with_dates(
     index: &SearchIndex,
     query: &SearchQuery,
     ctx: SearchCtx<'_>,
     vault: &Vault,
+    validity: Option<&BlameValidity>,
     cache: &mut BlameCache,
     sort: Sort,
 ) -> Result<DatedSearch, SearchError> {
@@ -196,7 +205,7 @@ pub fn search_with_dates(
         });
     }
 
-    if let Some(validity) = BlameValidity::snapshot(&vault.path)? {
+    if let Some(validity) = validity {
         // Per-file blame, loaded once per file; per-paragraph dates
         // derived from it (line ranges differ within a file).
         let mut blame_by_path: HashMap<PathBuf, Option<Vec<git::LineBlame>>> = HashMap::new();
@@ -207,7 +216,7 @@ pub fn search_with_dates(
                     .note_by_path
                     .get(&r.path)
                     .map_or(0, |&n| index.notes[n as usize].line_count);
-                let (blame, ran) = cache.ensure(&r.path, lines, &validity);
+                let (blame, ran) = cache.ensure(&r.path, lines, validity);
                 blamed |= ran;
                 blame
             });
@@ -398,7 +407,7 @@ fn run(
                     .into_iter()
                     .map(|i| positives[i].raw.clone())
                     .collect(),
-                score: base * note.prior * boost,
+                score: base * (note.prior + recency_part(index, ctx.recency, doc)) * boost,
                 date: None,
                 title: note.title.clone(),
                 heading_path: index.sections[d.section as usize].heading_path.clone(),
@@ -864,6 +873,7 @@ mod tests {
     use super::*;
     use crate::config::SearchCfg;
     use crate::search::query::parse;
+    use std::path::Path;
 
     fn scan_of(files: &[(&str, &str)]) -> (assert_fs::TempDir, crate::scan::Scan) {
         let tmp = assert_fs::TempDir::new().unwrap();
@@ -1265,6 +1275,7 @@ mod tests {
         let ctx = SearchCtx {
             graph: Some(&graph),
             presets: Some(&presets),
+            ..Default::default()
         };
         let got = search(&index, &parse("cache scope:work", false), ctx).unwrap();
         assert_eq!(paths(&got), vec!["proj/a.md"]);
@@ -1276,6 +1287,7 @@ mod tests {
         let ctx = SearchCtx {
             graph: Some(&graph),
             presets: None,
+            ..Default::default()
         };
         match search(&index, &parse("cache scope:nope", false), ctx) {
             Err(SearchError::UnknownScope { name, available }) => {
@@ -1342,11 +1354,13 @@ mod tests {
 
     fn dated(index: &SearchIndex, vault: &Vault, q: &str, sort: Sort) -> DatedSearch {
         let mut cache = BlameCache::default();
+        let validity = BlameValidity::snapshot(&vault.path).unwrap();
         search_with_dates(
             index,
             &parse(q, false),
             SearchCtx::default(),
             vault,
+            validity.as_ref(),
             &mut cache,
             sort,
         )
@@ -1392,6 +1406,110 @@ mod tests {
         let got = dated(&index, &vault, "cache after:2026-01-01", Sort::Relevance);
         assert!(got.results.is_empty());
         assert_eq!(got.undated_dropped, 1);
+    }
+
+    /// One file whose first paragraph was committed in 2023 and whose
+    /// second (equally matching) paragraph was rewritten in 2026.
+    fn two_era_vault() -> (assert_fs::TempDir, SearchIndex, BlameValidity) {
+        use std::process::Command;
+        let tmp = assert_fs::TempDir::new().unwrap();
+        let git = |args: &[&str], date: Option<&str>| {
+            let mut c = Command::new("git");
+            c.current_dir(tmp.path()).args(args);
+            if let Some(d) = date {
+                c.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+            }
+            let out = c.output().expect("git on PATH");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q", "-b", "main"], None);
+        git(&["config", "user.name", "Test"], None);
+        git(&["config", "user.email", "test@example.com"], None);
+        git(&["config", "commit.gpgsign", "false"], None);
+        let f = tmp.path().join("note.md");
+        std::fs::write(&f, "cache alpha line.\n\nunrelated words here.\n").unwrap();
+        git(&["add", "."], None);
+        git(
+            &["commit", "-q", "-m", "old"],
+            Some("2023-01-10T12:00:00+00:00"),
+        );
+        std::fs::write(&f, "cache alpha line.\n\ncache bravo line.\n").unwrap();
+        git(
+            &["commit", "-q", "-am", "new"],
+            Some("2026-10-20T12:00:00+00:00"),
+        );
+        let scan = crate::scan::scan_vault(tmp.path(), &[]);
+        let index = SearchIndex::build(&scan, &[]);
+        let validity = BlameValidity::snapshot(tmp.path()).unwrap().unwrap();
+        (tmp, index, validity)
+    }
+
+    #[test]
+    fn fresh_paragraph_in_an_old_note_ranks_first() {
+        let (_tmp, index, validity) = two_era_vault();
+        let q = parse("cache", false);
+        // Without blame both paragraphs share the file's mtime: a tie.
+        let plain = search(&index, &q, SearchCtx::default()).unwrap();
+        assert_eq!(plain[0].line_start, 1, "tie breaks on line");
+        assert_eq!(plain[0].score, plain[1].score);
+
+        let mut cache = BlameCache::default();
+        cache.ensure(Path::new("note.md"), 3, &validity);
+        let table = RecencyTable::build(&index, &cache, &validity);
+        assert_eq!(table.covered(), 2);
+        let ctx = SearchCtx {
+            recency: Some(&table),
+            ..Default::default()
+        };
+        let got = search(&index, &q, ctx).unwrap();
+        assert_eq!(got[0].line_start, 3, "the 2026 paragraph wins");
+        assert!(
+            got[0].score / got[1].score <= 1.10 + 1e-9,
+            "recency share is bounded"
+        );
+    }
+
+    #[test]
+    fn uncached_file_falls_back_to_mtime() {
+        let (_tmp, index, validity) = two_era_vault();
+        let q = parse("cache", false);
+        let empty = RecencyTable::build(&index, &BlameCache::default(), &validity);
+        assert_eq!(empty.covered(), 0);
+        let with_empty = search(
+            &index,
+            &q,
+            SearchCtx {
+                recency: Some(&empty),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let without = search(&index, &q, SearchCtx::default()).unwrap();
+        for (a, b) in with_empty.iter().zip(&without) {
+            assert_eq!((a.line_start, a.score), (b.line_start, b.score));
+        }
+    }
+
+    #[test]
+    fn stale_table_is_ignored() {
+        let (_tmp, index, validity) = two_era_vault();
+        let mut cache = BlameCache::default();
+        cache.ensure(Path::new("note.md"), 3, &validity);
+        let table = RecencyTable::build(&index, &cache, &validity);
+        let other = idx(&[("x.md", "cache one.\n\ncache two.\n\ncache three.\n")]);
+        let q = parse("cache", false);
+        let with = search(
+            &other,
+            &q,
+            SearchCtx {
+                recency: Some(&table),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let without = search(&other, &q, SearchCtx::default()).unwrap();
+        assert_eq!(paths(&with), paths(&without));
+        assert_eq!(with[0].score, without[0].score);
     }
 
     // ── Priors and near ──────────────────────────────────────────────
@@ -1621,6 +1739,7 @@ mod tests {
         let ctx = SearchCtx {
             graph: Some(&graph),
             presets: None,
+            ..Default::default()
         };
         for query in [
             "eigenvalue",
