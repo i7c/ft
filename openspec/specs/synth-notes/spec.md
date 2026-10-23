@@ -130,7 +130,7 @@ The scaffold's per-section body text SHALL be taken verbatim from the source par
 
 ### Requirement: Plan/apply split for synth mutations
 
-A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), NOT `GatherEntry`; the `RecentEntry` feed caller SHALL lower into `SynthSource` via `From` at the call boundary, and search results, `--from` picks, and TUI flows SHALL construct `SynthSource` directly. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
+A pure planner `plan_synth_scaffold(vault, target, sources: &[SynthSource]) -> SynthScaffoldPlan` SHALL compute the file changes without performing any I/O writes. The planner SHALL accept `SynthSource` inputs (the honest 4-field input type: `source_path`, `line_start`, `line_end`, `body`), and every caller — search results, `--from` picks, and TUI flows — SHALL construct `SynthSource` directly. A separate `apply_synth_scaffold(vault, plan)` SHALL perform writes exclusively via `ft_core::fs::write_atomic`. The plan SHALL distinguish create-vs-append cases and SHALL include the frontmatter content (if creating).
 
 #### Scenario: Planner does no I/O
 

@@ -55,6 +55,7 @@
 
 - [x] 6.1 Delete `openspec/changes/feed-split-layout/` (moot: Pulse/Recent/Gather all gone)
 - [x] 6.2 Note in the archive step that `link-review`, `synthesis-review-tui-tab`, `notes-history`, `history-tui-tab`, and `citation-index` spec folders are removed on sync
+  - Archive note: openspec refuses to rebuild a spec with zero requirements, so these five spec folders were deleted from `openspec/specs/` directly and their all-REMOVED deltas moved to `removed-capabilities/` in this change (kept as the record).
 - [x] 6.3 Confirm no other active change depends on the removed surface (`hierarchical-ft-frontmatter` mentions the files but its spec deltas touch no removed capability)
 
 ## 7. Final verification

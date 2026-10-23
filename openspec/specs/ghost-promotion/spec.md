@@ -4,16 +4,14 @@
 Vault-wide ghost ranking and the promote actions: which concepts
 have earned their page, and one keystroke to give it to them.
 Created by archiving change ghost-promotion.
-
 ## Requirements
 ### Requirement: Core ghost ranking
 `ft_core::graph::ghosts::rank_ghosts(graph)` SHALL return every ghost
 node with its mention count, where the count is the number of
 **distinct paragraph nodes** holding a `ParagraphLink` edge to the
-ghost (multiple mentions inside one paragraph count once — the same
-dedup rule as `ft notes pulse`). Results SHALL be sorted by count
-descending, then ghost name ascending. The ranking SHALL require no
-git history.
+ghost (multiple mentions inside one paragraph count once). Results SHALL be
+sorted by count descending, then ghost name ascending. The ranking SHALL
+require no git history.
 
 #### Scenario: Distinct-paragraph dedup
 - **WHEN** one paragraph mentions `[[foo]]` three times and another
@@ -26,7 +24,7 @@ git history.
 
 ### Requirement: ft notes ghosts CLI
 `ft notes ghosts` SHALL print the ranked ghost list as `(N) [[ghost]]`
-rows (the same row grammar as `ft notes pulse`), highest count first. It
+rows, highest count first. It
 SHALL support `--limit <n>` (truncate), `--min-mentions <n>` (drop
 ghosts below the threshold; default 1), and `--json` (array of
 `{target, mentions}` objects). An empty result SHALL print
@@ -46,9 +44,9 @@ ghosts below the threshold; default 1), and `--json` (array of
   and `mentions` (integer), in ranked order
 
 ### Requirement: Ranked ghost ordering in graph walks
-Wherever the graph walk's deterministic ordering places ghost nodes
-(root selection and sibling sort), ghosts SHALL order by mention count
-descending, then name ascending — so `ft graph query --preset ghosts`
+Ghost nodes SHALL order by mention count descending, then name ascending,
+wherever the graph walk's deterministic ordering places them (root
+selection and sibling sort) — so `ft graph query --preset ghosts`
 and the TUI graph tab present the ranked view without new query
 syntax. Ordering of non-ghost kinds SHALL be unchanged.
 
@@ -100,3 +98,4 @@ appear in the `?` overlay and `ft commands list`, and
 - **WHEN** `cargo run --release -q -- commands docs --check` runs after
   the change
 - **THEN** it passes
+

@@ -5,7 +5,6 @@ The user-facing narrative contract: what README.md and the guide docs
 must communicate about ft's note-taking thesis, which objections they
 must answer, and which framings they must avoid. Established by the
 2026-07-05 critique session (openspec/explorations/note-flow-reframe.md).
-
 ## Requirements
 ### Requirement: README leads with the problem, not the feature list
 README.md SHALL open with the problem ft solves — capture can't wait
@@ -23,8 +22,8 @@ note-flow core, not as the tool's identity.
   "timeblocks" as headline items
 
 ### Requirement: The three thesis claims appear in README and philosophy
-Both README.md (concise form) and docs/guide/philosophy.md (long form)
-SHALL state the three locked thesis claims: (1) "add anywhere" removes
+Both README.md (concise form) and docs/guide/philosophy.md SHALL state
+the three locked thesis claims: (1) "add anywhere" removes
 the global decision ("where does this go?") and keeps only the local
 one ("what is this about?" — a `[[concept]]` mention); (2) because
 journal/related make the unsorted pile retrievable by concept, filing
@@ -41,12 +40,12 @@ write time.
   not depend on filing ever happening
 
 #### Scenario: Pull and sweep are presented honestly
-- **WHEN** the docs describe `ft notes pulse` / `ft notes recent`
-  (window-shaped commands) alongside `ft notes gather` / `ft notes
-  related` (topic-shaped commands)
-- **THEN** the window-shaped commands are framed as the sweep trigger
-  and the topic-shaped commands as the pull trigger, and no text claims
-  ft eliminates periodic sweeping — only that deferring it carries no
+- **WHEN** the docs describe `ft notes search` (including its date-sorted
+  form, the sweep surface) alongside `ft notes related` and
+  `ft notes ghosts` (topic-shaped commands)
+- **THEN** the date-sorted search is framed as the sweep trigger and the
+  topic-shaped commands as the pull trigger, and no text claims ft
+  eliminates periodic sweeping — only that deferring it carries no
   penalty
 
 ### Requirement: No "flow" framing in user-facing docs
@@ -121,3 +120,4 @@ continues to index the guide accurately.
   docs/guide/index.md, and docs/guide/synthesis.md is resolved against
   the repo tree
 - **THEN** every target exists
+
