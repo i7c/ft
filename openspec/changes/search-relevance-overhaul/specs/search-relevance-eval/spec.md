@@ -29,8 +29,11 @@ The repository SHALL ship an evaluation vault under
 25 cases. The cases SHALL include at least one probe of each of: length
 normalization (focused paragraph vs long list), rare vs common terms, a
 context-field match (title, alias, heading, tag), accented text in English and
-Portuguese, stem variants, each filter key, `near:` proximity, and a pre-existing
-DSL feature (phrase, link, fuzzy, exclude) that must not regress.
+Portuguese, stem variants, the `path:`, `tag:`, and `scope:` filters, `near:`
+proximity, and a pre-existing DSL feature (phrase, link, fuzzy, exclude) that
+must not regress. Date filters are excluded from the fixture evaluation (blame
+dates of committed fixture files depend on commit time) and SHALL be covered by
+unit tests against a temporary git repository instead.
 
 #### Scenario: Coverage of probe classes
 

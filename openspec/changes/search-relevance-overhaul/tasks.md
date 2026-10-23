@@ -2,12 +2,12 @@
 
 ## 1. Relevance eval harness (before any ranking change)
 
-- [ ] 1.1 Create `tests/fixtures/search-eval/` (≥ 40 notes): focused vs long-list paragraphs, rare/common terms, title/alias/heading/tag-only matches, English + Portuguese accented prose, stem variants, `proj/…` tag hierarchy, a small link cluster for `near:`, and a few `archive/` notes for negated filters
-- [ ] 1.2 Write `tests/fixtures/search-eval/judgments.toml` with ≥ 25 graded cases; each case's `note` names its probe class (length-norm, idf, context-title/alias/heading/tag, diacritics-en/pt, stemming, filter-path/tag/date/scope, near, regression-phrase/link/fuzzy/exclude)
-- [ ] 1.3 Add a `search_eval` helper (judgment loader with case-indexed errors, range-contained matching, nDCG@10 with `2^g−1` gain, MRR, recall@10, per-case table printer) + unit tests for each metric on hand-computed examples
-- [ ] 1.4 Add `ft-core/tests/search_eval.rs`: build the index from the fixture vault (pinned `FT_TODAY`), run all cases, assert means against `baseline.toml`; cases using syntax the old engine can't parse simply score 0 for now
-- [ ] 1.5 Record the **current** engine's means in `tests/fixtures/search-eval/baseline.toml` and commit the harness on its own (the before-numbers for the change)
-- [ ] 1.6 Add the gated real-vault run (`FT_REAL_VAULT_TESTS=1` + `FT_VAULT` + `FT_SEARCH_EVAL_JUDGMENTS`; report-only, skip when unset); draft a private judgments file for `~/git/fortytwo` outside the repo and record its baseline numbers in the change notes
+- [x] 1.1 Create `tests/fixtures/search-eval/` (≥ 40 notes): focused vs long-list paragraphs, rare/common terms, title/alias/heading/tag-only matches, English + Portuguese accented prose, stem variants, `proj/…` tag hierarchy, a small link cluster for `near:`, and a few `archive/` notes for negated filters
+- [x] 1.2 Write `tests/fixtures/search-eval/judgments.toml` with ≥ 25 graded cases; each case's `note` names its probe class (length-norm, idf, context-title/alias/heading/tag, diacritics-en/pt, stemming, filter-path/tag/scope — date filters are unit-tested, near, regression-phrase/link/fuzzy/exclude)
+- [x] 1.3 Add a `search_eval` helper (judgment loader with case-indexed errors, range-contained matching, nDCG@10 with `2^g−1` gain, MRR, recall@10, per-case table printer) + unit tests for each metric on hand-computed examples
+- [x] 1.4 Add `ft-core/tests/search_eval.rs`: build the index from the fixture vault (pinned `FT_TODAY`), run all cases, assert means against `baseline.toml`; cases using syntax the old engine can't parse simply score 0 for now
+- [x] 1.5 Record the **current** engine's means in `tests/fixtures/search-eval/baseline.toml` and commit the harness on its own (the before-numbers for the change)
+- [x] 1.6 Add the gated real-vault run (`FT_REAL_VAULT_TESTS=1` + `FT_VAULT` + `FT_SEARCH_EVAL_JUDGMENTS`; report-only, skip when unset); draft a private judgments file for `~/git/fortytwo` outside the repo and record its baseline numbers in the change notes
 
 ## 2. Text layer: folding, tokenization, stemming
 

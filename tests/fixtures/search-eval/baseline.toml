@@ -1,0 +1,8 @@
+# Ratchet thresholds for `ft-core/tests/search_eval.rs`: the fixture run
+# fails when a mean drops below these. Raise them (achieved − 0.01) when a
+# ranking change improves the scores; never lower them to make a test pass.
+#
+# Recorded from the pre-overhaul engine (additive clause weights, ASCII
+# tokens, no context fields): nDCG@10 0.379, MRR 0.409, recall@10 0.466.
+ndcg10 = 0.378
+mrr = 0.408

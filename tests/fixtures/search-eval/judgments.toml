@@ -1,0 +1,328 @@
+# Relevance judgments for the paragraph search eval harness.
+# Generated alongside vault/; `line` is any line inside the judged paragraph.
+# grade: 1 = somewhat relevant, 2 = relevant, 3 = ideal.
+
+[[case]]
+query = "memory"
+note = "length-norm: focused paragraphs beat the long bullet list"
+[[case.relevant]]
+path = "know/Symmetric Multiprocessing.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/NUMA.md"
+line = 3
+grade = 2
+[[case.relevant]]
+path = "know/Caching.md"
+line = 3
+grade = 1
+
+[[case]]
+query = "the eigendecomposition"
+any = true
+note = "idf: the rare term outweighs the common one"
+[[case.relevant]]
+path = "know/Eigenvalues.md"
+line = 5
+grade = 3
+
+[[case]]
+query = "eigen memoization"
+note = "context-title: body has eigen, title has memoization"
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 8
+grade = 3
+
+[[case]]
+query = "focus routine"
+note = "context-alias: the alias names the note"
+[[case.relevant]]
+path = "areas/work/Deep Work.md"
+line = 7
+grade = 3
+[[case.relevant]]
+path = "areas/work/Deep Work.md"
+line = 9
+grade = 2
+
+[[case]]
+query = "rollback release"
+note = "context-heading: the heading carries rollback"
+[[case.relevant]]
+path = "areas/work/Runbook.md"
+line = 5
+grade = 3
+
+[[case]]
+query = "retrospective release"
+note = "context-tag: the frontmatter tag carries retrospective"
+[[case.relevant]]
+path = "areas/work/Retro 2026-09.md"
+line = 6
+grade = 3
+
+[[case]]
+query = "=ônibus"
+note = "diacritics-pt: accented word clause"
+[[case.relevant]]
+path = "proj/busao/Ônibus Fretado.md"
+line = 6
+grade = 3
+
+[[case]]
+query = "onibus"
+note = "diacritics-pt: unaccented query finds accented text"
+[[case.relevant]]
+path = "proj/busao/Ônibus Fretado.md"
+line = 6
+grade = 3
+[[case.relevant]]
+path = "proj/busao/Paradas.md"
+line = 3
+grade = 1
+
+[[case]]
+query = "cafe"
+note = "diacritics-en: unaccented query finds café"
+[[case.relevant]]
+path = "areas/home/Café.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "=naive"
+note = "diacritics-en: word clause over naïve"
+[[case.relevant]]
+path = "areas/home/Café.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "=memory garden"
+note = "stemming: memories satisfies =memory"
+[[case.relevant]]
+path = "areas/home/Garden.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "memory path:know/"
+note = "filter-path: only know/ paragraphs"
+[[case.relevant]]
+path = "know/Symmetric Multiprocessing.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/NUMA.md"
+line = 3
+grade = 2
+[[case.relevant]]
+path = "know/Caching.md"
+line = 3
+grade = 1
+
+[[case]]
+query = "ônibus tag:proj"
+note = "filter-tag: hierarchical tag prefix"
+[[case.relevant]]
+path = "proj/busao/Ônibus Fretado.md"
+line = 6
+grade = 3
+
+[[case]]
+query = "cache tag:idea"
+note = "filter-tag: inline paragraph tag"
+[[case.relevant]]
+path = "journal/2026-09-03.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "cache scope:know-notes"
+note = "filter-scope: graph preset scoping"
+[[case.relevant]]
+path = "know/Caching.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 8
+grade = 2
+
+[[case]]
+query = "cache near:[[Memoization]]"
+note = "near: graph proximity to the seed note"
+[[case.relevant]]
+path = "know/Caching.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 8
+grade = 3
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 6
+grade = 1
+
+[[case]]
+query = "\"shared memory\""
+note = "regression-phrase"
+[[case.relevant]]
+path = "know/Symmetric Multiprocessing.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "[[Memoization]]"
+note = "regression-link"
+[[case.relevant]]
+path = "know/Dynamic Programming.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "~memoizaton"
+note = "regression-fuzzy"
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 6
+grade = 3
+[[case.relevant]]
+path = "know/Dynamic Programming.md"
+line = 3
+grade = 2
+
+[[case]]
+query = "memory -cgroup"
+note = "regression-exclude"
+[[case.relevant]]
+path = "know/Symmetric Multiprocessing.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/NUMA.md"
+line = 3
+grade = 2
+
+[[case]]
+query = "eigen"
+note = "general"
+[[case.relevant]]
+path = "know/Eigenvalues.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/Linear Algebra.md"
+line = 3
+grade = 2
+[[case.relevant]]
+path = "know/Eigenvalues.md"
+line = 5
+grade = 2
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 8
+grade = 1
+
+[[case]]
+query = "release"
+note = "general"
+[[case.relevant]]
+path = "areas/work/Release Checklist.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "areas/work/Runbook.md"
+line = 5
+grade = 2
+[[case.relevant]]
+path = "areas/work/Retro 2026-09.md"
+line = 6
+grade = 1
+[[case.relevant]]
+path = "areas/work/Runbook.md"
+line = 9
+grade = 1
+
+[[case]]
+query = "garagem"
+note = "general"
+[[case.relevant]]
+path = "proj/busao/Ônibus Fretado.md"
+line = 6
+grade = 3
+
+[[case]]
+query = "notifications morning"
+note = "general"
+[[case.relevant]]
+path = "areas/work/Deep Work.md"
+line = 7
+grade = 3
+
+[[case]]
+query = "numa"
+note = "general"
+[[case.relevant]]
+path = "know/NUMA.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/Symmetric Multiprocessing.md"
+line = 7
+grade = 2
+
+[[case]]
+query = "invalidation"
+note = "general"
+[[case.relevant]]
+path = "know/Caching.md"
+line = 5
+grade = 3
+
+[[case]]
+query = "deploy"
+note = "general"
+[[case.relevant]]
+path = "areas/work/Runbook.md"
+line = 5
+grade = 3
+[[case.relevant]]
+path = "archive/Old Deploy.md"
+line = 3
+grade = 2
+[[case.relevant]]
+path = "journal/2026-09-05.md"
+line = 3
+grade = 1
+
+[[case]]
+query = "tomatoes"
+note = "general"
+[[case.relevant]]
+path = "areas/home/Garden.md"
+line = 3
+grade = 3
+
+[[case]]
+query = "cache -path:archive/"
+note = "filter-path: negated path filter"
+[[case.relevant]]
+path = "know/Caching.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "areas/work/Build System.md"
+line = 3
+grade = 3
+[[case.relevant]]
+path = "know/Memoization.md"
+line = 8
+grade = 2
+[[case.relevant]]
+path = "journal/2026-09-03.md"
+line = 3
+grade = 2
