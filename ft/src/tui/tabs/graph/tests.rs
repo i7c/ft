@@ -682,6 +682,8 @@ mod view_tests {
             active_modal_name: None,
             host_popup_open: false,
             snapshot: None,
+            recency: None,
+            blame_progress: None,
             graph_refresh: &graph_refresh,
         };
 

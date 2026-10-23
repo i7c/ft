@@ -1730,6 +1730,8 @@ mod tests {
             active_modal_name: None,
             host_popup_open: false,
             snapshot: None,
+            recency: None,
+            blame_progress: None,
             graph_refresh: &graph_refresh,
         };
 
@@ -1779,6 +1781,8 @@ mod tests {
             active_modal_name: None,
             host_popup_open: false,
             snapshot: None,
+            recency: None,
+            blame_progress: None,
             graph_refresh: &graph_refresh,
         };
         assert!(begin_for_source(&ctx, PathBuf::from("Flat.md")).is_none());

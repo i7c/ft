@@ -375,3 +375,91 @@ fn unknown_scope_shows_error() -> Result<()> {
     assert_tui_snapshot!("search_unknown_scope_90x24", frame);
     Ok(())
 }
+
+/// A git vault where `note.md`'s first paragraph dates from 2023 and its
+/// second, equally matching paragraph from 2026.
+fn two_era_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let run_git = |date: Option<&str>, args: &[&str]| {
+        let mut cmd = StdCommand::new("git");
+        cmd.current_dir(&vault_path).env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(d) = date {
+            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+        }
+        let out = cmd.args(args).output().expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    run_git(None, &["init", "-q", "-b", "main"]);
+    run_git(None, &["config", "user.name", "T"]);
+    run_git(None, &["config", "user.email", "t@e.com"]);
+    run_git(None, &["config", "commit.gpgsign", "false"]);
+    let note = vault_path.join("note.md");
+    std::fs::write(&note, "cache alpha line.\n\nunrelated words here.\n").unwrap();
+    run_git(None, &["add", "note.md"]);
+    run_git(
+        Some("2023-01-10T12:00:00+00:00"),
+        &["commit", "-q", "-m", "old"],
+    );
+    std::fs::write(&note, "cache alpha line.\n\ncache bravo line.\n").unwrap();
+    run_git(
+        Some("2026-10-20T12:00:00+00:00"),
+        &["commit", "-q", "-am", "new"],
+    );
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Index of the first `needle` line in a rendered frame.
+fn line_of(frame: &str, needle: &str) -> usize {
+    frame
+        .lines()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} not in frame:\n{frame}"))
+}
+
+/// Blame warm-up re-ranks an open query: the paragraph edited in 2026
+/// overtakes its 2023 sibling once blame dates replace the shared mtime.
+#[test]
+fn blame_warm_up_reranks_the_open_query() -> Result<()> {
+    let (_dir, vault) = two_era_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "cache")?;
+    let before = render(&mut app, 90, 24);
+    assert!(
+        line_of(&before, "L1-1") < line_of(&before, "L3-3"),
+        "tie on mtime breaks by line:\n{before}"
+    );
+
+    app.pump_blame_warm_for_test();
+    let after = render(&mut app, 90, 24);
+    assert!(
+        line_of(&after, "L3-3") < line_of(&after, "L1-1"),
+        "blame recency puts the 2026 paragraph first:\n{after}"
+    );
+    Ok(())
+}
+
+/// A recency table for an older snapshot generation is dropped.
+#[test]
+fn stale_recency_generation_is_ignored() -> Result<()> {
+    let (_dir, vault) = two_era_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "cache")?;
+    app.dispatch(Event::Background(
+        crate::tui::event::BgEvent::BlameWarmProgress {
+            generation: 999,
+            done: 1,
+            total: 5,
+        },
+    ))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        !frame.contains("blame 1/5"),
+        "stale progress dropped:\n{frame}"
+    );
+    Ok(())
+}

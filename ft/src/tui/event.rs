@@ -41,6 +41,18 @@ pub enum BgEvent {
     GraphReady(GraphJobResult),
     SourcesFetched(crate::tui::source_sync::SourcesJobResult),
     PromoteDone(crate::tui::source_sync::PromoteJobResult),
+    /// A paragraph recency table built from the blame cache for the
+    /// snapshot of `generation` (posted before and after a warm-up).
+    RecencyReady {
+        generation: u64,
+        table: std::sync::Arc<ft_core::search::RecencyTable>,
+    },
+    /// Blame warm-up progress for the snapshot of `generation`.
+    BlameWarmProgress {
+        generation: u64,
+        done: usize,
+        total: usize,
+    },
 }
 
 /// Result of one background `scan → build` pass. The snapshot rides in

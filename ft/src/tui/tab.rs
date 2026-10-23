@@ -368,6 +368,11 @@ pub struct TabCtx<'a> {
     /// completes after startup — tabs render a loading state. Cheap
     /// `Arc` clone per ctx; tabs may stash it across events.
     pub snapshot: Option<std::sync::Arc<crate::tui::snapshot::GraphSnapshot>>,
+    /// Paragraph recency from the blame cache for the installed
+    /// snapshot (`None` until the first table arrives, or outside git).
+    pub recency: Option<std::sync::Arc<ft_core::search::RecencyTable>>,
+    /// Background blame warm-up progress `(done, total)` while running.
+    pub blame_progress: Option<(usize, usize)>,
     /// Set via [`TabCtx::request_graph_refresh`] after a vault mutation.
     /// The App consumes it at its drain points and kicks one background
     /// rebuild. A `Cell` flag rather than an [`AppRequest`] because
@@ -421,6 +426,10 @@ pub trait Tab {
     /// Background tabs are not called — they catch up by comparing
     /// `ctx.snapshot` generation in `on_focus`. Default: no-op.
     fn on_graph_ready(&mut self, _ctx: &mut TabCtx) {}
+
+    /// A new recency table (or warm-up progress) arrived for the
+    /// installed snapshot. Tabs that rank by recency re-derive.
+    fn on_recency_ready(&mut self, _ctx: &mut TabCtx) {}
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome>;
 

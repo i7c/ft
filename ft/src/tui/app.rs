@@ -126,6 +126,14 @@ pub struct App {
     /// spawns exactly one follow-up. Separate from `jobs` (git) so a
     /// rebuild never blocks `g s`.
     graph_job: GraphJob,
+    /// Paragraph recency for the installed snapshot, from the blame
+    /// cache; refreshed by the blame warm-up worker.
+    recency: Option<Arc<ft_core::search::RecencyTable>>,
+    /// Warm-up progress `(done, total)` while the worker runs.
+    blame_progress: Option<(usize, usize)>,
+    /// Generation the blame warm-up should serve; a worker for an older
+    /// generation stops at its next file.
+    warm_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Clone of the event-loop sender, installed by `run()`. `None`
     /// outside a live event loop (tests, pre-run) — then rebuild
     /// requests set `graph_job.dirty` and the synchronous test pump
@@ -217,6 +225,9 @@ impl App {
             help_view_height: Cell::new(0),
             graph_snapshot: None,
             graph_job: GraphJob::default(),
+            recency: None,
+            blame_progress: None,
+            warm_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             bg_tx: None,
             graph_refresh: Cell::new(false),
             source_schedule: Default::default(),
@@ -302,6 +313,8 @@ impl App {
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
                 snapshot: self.graph_snapshot.clone(),
+                recency: self.recency.clone(),
+                blame_progress: self.blame_progress,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
@@ -356,6 +369,8 @@ impl App {
             active_modal_name: self.active_modal_name(),
             host_popup_open: false,
             snapshot: self.graph_snapshot.clone(),
+            recency: self.recency.clone(),
+            blame_progress: self.blame_progress,
             graph_refresh: &self.graph_refresh,
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
@@ -574,6 +589,8 @@ impl App {
                     active_modal_name,
                     host_popup_open,
                     snapshot: self.graph_snapshot.clone(),
+                    recency: self.recency.clone(),
+                    blame_progress: self.blame_progress,
                     graph_refresh: &self.graph_refresh,
                 };
                 Some(modal.handle_event(ev.clone(), &ctx))
@@ -609,6 +626,8 @@ impl App {
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
                 snapshot: self.graph_snapshot.clone(),
+                recency: self.recency.clone(),
+                blame_progress: self.blame_progress,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
@@ -707,6 +726,8 @@ impl App {
             active_modal_name,
             host_popup_open: false,
             snapshot: self.graph_snapshot.clone(),
+            recency: self.recency.clone(),
+            blame_progress: self.blame_progress,
             graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
@@ -747,6 +768,8 @@ impl App {
             active_modal_name,
             host_popup_open: false,
             snapshot: self.graph_snapshot.clone(),
+            recency: self.recency.clone(),
+            blame_progress: self.blame_progress,
             graph_refresh: &self.graph_refresh,
         };
         f(&mut self.tabs[idx], &mut ctx);
@@ -882,6 +905,18 @@ impl App {
             BgEvent::SyncCompleted(result) => self.apply_sync_result(result),
             BgEvent::CommitCompleted(result) => self.apply_commit_result(result),
             BgEvent::GraphReady(result) => self.apply_graph_result(result),
+            BgEvent::RecencyReady { generation, table } => {
+                self.apply_recency(generation, Some(table), None);
+                Ok(())
+            }
+            BgEvent::BlameWarmProgress {
+                generation,
+                done,
+                total,
+            } => {
+                self.apply_recency(generation, None, Some((done, total)));
+                Ok(())
+            }
             BgEvent::SourcesFetched(result) => {
                 self.apply_sources_result(result);
                 Ok(())
@@ -1167,7 +1202,16 @@ impl App {
         self.graph_job.in_flight = false;
         match result.outcome {
             Ok(snapshot) => {
+                let generation = snapshot.generation;
                 self.graph_snapshot = Some(snapshot);
+                // The old table indexes the old snapshot's docs.
+                self.recency = None;
+                self.blame_progress = None;
+                self.warm_generation
+                    .store(generation, std::sync::atomic::Ordering::SeqCst);
+                if let Some(tx) = self.bg_tx.clone() {
+                    self.spawn_blame_warm(generation, tx);
+                }
                 let mut ctx = TabCtx {
                     vault: &self.vault,
                     recents: &self.recents,
@@ -1177,6 +1221,8 @@ impl App {
                     active_modal_name: self.active_modal_name(),
                     host_popup_open: false,
                     snapshot: self.graph_snapshot.clone(),
+                    recency: self.recency.clone(),
+                    blame_progress: self.blame_progress,
                     graph_refresh: &self.graph_refresh,
                 };
                 self.tabs[self.active].on_graph_ready(&mut ctx);
@@ -1192,6 +1238,75 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Warm the blame cache for the installed snapshot on a worker
+    /// thread: post the table from what is cached, blame the rest
+    /// (newest first, cancelled when a newer snapshot lands), post the
+    /// final table. A no-op outside git.
+    fn spawn_blame_warm(&self, generation: u64, tx: std::sync::mpsc::Sender<Event>) {
+        let Some(snapshot) = self.graph_snapshot.clone() else {
+            return;
+        };
+        let vault_path = self.vault.path.clone();
+        let current = Arc::clone(&self.warm_generation);
+        std::thread::spawn(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_blame_warm(&vault_path, &snapshot, generation, &current, |ev| {
+                    let _ = tx.send(Event::Background(ev));
+                })
+            }));
+        });
+    }
+
+    /// Install a recency table and/or warm-up progress for `generation`
+    /// (stale generations are dropped) and let the tabs re-rank.
+    fn apply_recency(
+        &mut self,
+        generation: u64,
+        table: Option<Arc<ft_core::search::RecencyTable>>,
+        progress: Option<(usize, usize)>,
+    ) {
+        let current = self.graph_snapshot.as_ref().map(|s| s.generation);
+        if current != Some(generation) {
+            return;
+        }
+        if let Some(t) = table {
+            self.recency = Some(t);
+        }
+        if let Some(p) = progress {
+            self.blame_progress = (p.0 < p.1).then_some(p);
+        }
+        let recency_changed = self.recency.is_some();
+        self.with_tab(TabKind::Search, |tab, ctx| {
+            if recency_changed {
+                tab.on_recency_ready(ctx);
+            }
+        });
+    }
+
+    /// Run the blame warm-up synchronously for the installed snapshot
+    /// and apply its events — the test counterpart of
+    /// [`Self::spawn_blame_warm`].
+    #[cfg(test)]
+    pub fn pump_blame_warm_for_test(&mut self) {
+        let Some(snapshot) = self.graph_snapshot.clone() else {
+            return;
+        };
+        let generation = snapshot.generation;
+        self.warm_generation
+            .store(generation, std::sync::atomic::Ordering::SeqCst);
+        let mut events = Vec::new();
+        run_blame_warm(
+            &self.vault.path.clone(),
+            &snapshot,
+            generation,
+            &Arc::clone(&self.warm_generation),
+            |ev| events.push(ev),
+        );
+        for ev in events {
+            let _ = self.handle_event(Event::Background(ev));
+        }
     }
 
     /// Run any pending graph rebuild synchronously on the calling
@@ -1235,6 +1350,8 @@ impl App {
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
                 snapshot: self.graph_snapshot.clone(),
+                recency: self.recency.clone(),
+                blame_progress: self.blame_progress,
                 graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
@@ -1338,6 +1455,8 @@ impl App {
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
                 snapshot: self.graph_snapshot.clone(),
+                recency: self.recency.clone(),
+                blame_progress: self.blame_progress,
                 graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
@@ -1457,6 +1576,8 @@ impl App {
                 active_modal_name: self.active_modal_name(),
                 host_popup_open: false,
                 snapshot: self.graph_snapshot.clone(),
+                recency: self.recency.clone(),
+                blame_progress: self.blame_progress,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].refresh(&mut ctx)?;
@@ -1764,6 +1885,56 @@ fn run_commit_job(
 /// and posts exactly one [`BgEvent::GraphReady`] back into the main
 /// loop. Panics are caught and converted into `Err` payloads so a bug
 /// doesn't strand the in-flight flag forever.
+/// The blame warm-up body shared by the worker and the test pump:
+/// post the table from the cache, warm the cache (progress events,
+/// cancelled when `current` moves past `generation`), post the final
+/// table. Silent outside git or on a git error.
+fn run_blame_warm(
+    vault_path: &std::path::Path,
+    snapshot: &GraphSnapshot,
+    generation: u64,
+    current: &std::sync::atomic::AtomicU64,
+    mut post: impl FnMut(BgEvent),
+) {
+    use ft_core::blame_cache::{BlameCache, BlameValidity};
+    use ft_core::search::{warm_blame, RecencyTable};
+    let Ok(Some(validity)) = BlameValidity::snapshot(vault_path) else {
+        return;
+    };
+    let mut cache = BlameCache::load(vault_path).unwrap_or_default();
+    let index = &snapshot.search;
+    post(BgEvent::RecencyReady {
+        generation,
+        table: Arc::new(RecencyTable::build(index, &cache, &validity)),
+    });
+    let keep_going = || current.load(std::sync::atomic::Ordering::SeqCst) == generation;
+    let mut last_report = std::time::Instant::now();
+    let blamed = warm_blame(
+        index,
+        vault_path,
+        &validity,
+        &mut cache,
+        keep_going,
+        |done, total| {
+            // Throttle: one progress event per 250 ms, plus the last one.
+            if done == total || last_report.elapsed() >= std::time::Duration::from_millis(250) {
+                last_report = std::time::Instant::now();
+                post(BgEvent::BlameWarmProgress {
+                    generation,
+                    done,
+                    total,
+                });
+            }
+        },
+    );
+    if blamed > 0 && keep_going() {
+        post(BgEvent::RecencyReady {
+            generation,
+            table: Arc::new(RecencyTable::build(index, &cache, &validity)),
+        });
+    }
+}
+
 fn run_graph_job(vault: Arc<Vault>, generation: u64, tx: std::sync::mpsc::Sender<Event>) {
     let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         build_graph_snapshot(&vault, generation)
@@ -1981,6 +2152,8 @@ impl App {
             active_modal_name: self.active_modal_name(),
             host_popup_open: false,
             snapshot: self.graph_snapshot.clone(),
+            recency: self.recency.clone(),
+            blame_progress: self.blame_progress,
             graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_focus(&mut ctx)?;

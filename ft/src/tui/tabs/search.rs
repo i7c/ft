@@ -284,7 +284,7 @@ impl SearchTab {
         let sctx = SearchCtx {
             graph: Some(&snap.graph),
             presets: Some(&ctx.vault.config.config.graph.presets),
-            ..Default::default()
+            recency: ctx.recency.as_deref(),
         };
         let outcome = if self.sort == Sort::Date || query.has_date_filters() {
             let mut cache = self.cache.take().unwrap_or_default();
@@ -316,6 +316,39 @@ impl SearchTab {
         self.selected.clear();
         self.cursor = 0;
         self.rebuild_rows(false);
+    }
+
+    /// Re-run the query keeping the focused and selected paragraphs
+    /// (by path and line) — used when re-ranking arrives while the user
+    /// is navigating.
+    fn rerun_preserving(&mut self, ctx: &TabCtx) {
+        let key = |r: &SearchResult| (r.path.clone(), r.line_start);
+        let focus = self
+            .cursor_result()
+            .and_then(|i| self.results.get(i))
+            .map(key);
+        let selected: HashSet<_> = self
+            .selected
+            .iter()
+            .filter_map(|&i| self.results.get(i).map(key))
+            .collect();
+        let on_header = matches!(self.rows.get(self.cursor), Some(Row::Header { .. }));
+        self.run_query(ctx);
+        self.selected = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| selected.contains(&key(r)))
+            .map(|(i, _)| i)
+            .collect();
+        if on_header {
+            return;
+        }
+        if let Some(i) = focus.and_then(|f| self.results.iter().position(|r| key(r) == f)) {
+            if let Some(row) = self.rows.iter().position(|r| *r == Row::Item(i)) {
+                self.cursor = row;
+            }
+        }
     }
 
     /// Derive the list rows from `results`. With `keep_focus` the cursor
@@ -468,6 +501,12 @@ impl Tab for SearchTab {
         }
     }
 
+    fn on_recency_ready(&mut self, ctx: &mut TabCtx) {
+        if self.last_query.is_some() {
+            self.rerun_preserving(ctx);
+        }
+    }
+
     fn commands(&self) -> &'static [CommandDef] {
         SEARCH_COMMANDS
     }
@@ -613,6 +652,9 @@ impl Tab for SearchTab {
                 " · {filters} filter{}",
                 if filters == 1 { "" } else { "s" }
             ));
+        }
+        if let Some((done, total)) = ctx.blame_progress {
+            status.push_str(&format!(" · blame {done}/{total}"));
         }
         let qtitle = Line::from(Span::styled(
             format!(

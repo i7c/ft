@@ -22,10 +22,10 @@
 
 ## 4. TUI warm-up
 
-- [ ] 4.1 `BgEvent::{RecencyReady { generation, table }, BlameWarmProgress { done, total }}`; a blame-warm worker modelled on the git-sync worker (owns its inputs, cancels on a generation change through a shared `AtomicU64`)
-- [ ] 4.2 The worker posts the table built from the cached entries first, then blames clean, uncached, indexed files newest-mtime first, saves every 50 files, and posts the final table
-- [ ] 4.3 `App` stores `Arc<RecencyTable>` and exposes it via `TabCtx`; the status bar shows warm-up progress; the Search tab re-runs on a `RecencyReady` matching its generation
-- [ ] 4.4 Tests: pump the worker synchronously in tests (like `pump_graph_rebuild_for_test`); a recency update re-ranks the open query; a newer generation cancels the worker
+- [x] 4.1 `BgEvent::{RecencyReady { generation, table }, BlameWarmProgress { done, total }}`; a blame-warm worker modelled on the git-sync worker (owns its inputs, cancels on a generation change through a shared `AtomicU64`)
+- [x] 4.2 The worker posts the table built from the cached entries first, then blames clean, uncached, indexed files newest-mtime first, saves every 50 files, and posts the final table
+- [x] 4.3 `App` stores `Arc<RecencyTable>` and exposes it via `TabCtx`; warm-up progress shows in the Search tab's status line (`· blame d/t`) — the global status bar's right cell has no room; the Search tab re-runs on a `RecencyReady` matching its generation
+- [x] 4.4 Tests: pump the worker synchronously in tests (like `pump_graph_rebuild_for_test`); a recency update re-ranks the open query; a newer generation cancels the worker
 
 ## 5. Search near
 

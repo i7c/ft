@@ -420,7 +420,7 @@ pub use engine::{
 };
 pub use index::{Field, SearchIndex};
 pub use query::{parse as parse_query, Clause, Filter, Mode, SearchQuery};
-pub use recency::RecencyTable;
+pub use recency::{warm_blame, RecencyTable};
 
 // ── tests ────────────────────────────────────────────────────────────────────
 

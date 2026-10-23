@@ -9,8 +9,14 @@
 //! the age in whole days relative to the newest recency day in the
 //! index — not wall-clock "today", so copies of a vault rank alike.
 
-use crate::blame_cache::{paragraph_date, BlameCache, BlameValidity};
+use std::path::{Path, PathBuf};
+
+use crate::blame_cache::{paragraph_date, BlameCache, BlameValidity, MAX_BLAME_LINES};
 use crate::search::index::SearchIndex;
+
+/// Save the cache after this many newly blamed files during a warm-up,
+/// so an interrupted warm-up keeps its progress.
+const SAVE_EVERY: usize = 50;
 
 /// Max prior share from recency.
 pub(crate) const PRIOR_RECENCY: f64 = 0.10;
@@ -82,4 +88,133 @@ pub(crate) fn recency_part(index: &SearchIndex, table: Option<&RecencyTable>, do
     .unwrap_or(day);
     let age = f64::from((newest - day).max(0));
     PRIOR_RECENCY * (-age / RECENCY_DAYS).exp()
+}
+
+/// Indexed files whose paragraphs lack valid cached blame and can be
+/// cached (committed, clean, not huge), newest mtime first so the notes
+/// being worked on are covered first.
+pub fn warm_targets(
+    index: &SearchIndex,
+    cache: &BlameCache,
+    validity: &BlameValidity,
+) -> Vec<(PathBuf, u32)> {
+    let mut targets: Vec<(i32, PathBuf, u32)> = index
+        .notes
+        .iter()
+        .filter(|n| !n.docs.is_empty() && n.line_count <= MAX_BLAME_LINES)
+        .filter(|n| validity.blob(&n.path).is_some() && cache.get(&n.path, validity).is_none())
+        .map(|n| (n.mtime_day, n.path.clone(), n.line_count))
+        .collect();
+    targets.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    targets.into_iter().map(|(_, p, l)| (p, l)).collect()
+}
+
+/// Blame every [`warm_targets`] file into `cache`, saving under
+/// `vault_root` every [`SAVE_EVERY`] files and at the end. Stops early
+/// (after saving) as soon as `keep_going` returns `false`; reports
+/// `(done, total)` after each file. Returns how many files were blamed.
+pub fn warm_blame(
+    index: &SearchIndex,
+    vault_root: &Path,
+    validity: &BlameValidity,
+    cache: &mut BlameCache,
+    keep_going: impl Fn() -> bool,
+    mut progress: impl FnMut(usize, usize),
+) -> usize {
+    let targets = warm_targets(index, cache, validity);
+    let total = targets.len();
+    let mut blamed = 0;
+    for (i, (path, lines)) in targets.into_iter().enumerate() {
+        if !keep_going() {
+            break;
+        }
+        if cache.ensure(&path, lines, validity).1 {
+            blamed += 1;
+            if blamed % SAVE_EVERY == 0 {
+                let _ = cache.save(vault_root);
+            }
+        }
+        progress(i + 1, total);
+    }
+    if blamed > 0 {
+        let _ = cache.save(vault_root);
+    }
+    blamed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git on PATH");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn vault() -> assert_fs::TempDir {
+        let tmp = assert_fs::TempDir::new().unwrap();
+        let d = tmp.path();
+        git(d, &["init", "-q", "-b", "main"]);
+        git(d, &["config", "user.name", "T"]);
+        git(d, &["config", "user.email", "t@e.com"]);
+        git(d, &["config", "commit.gpgsign", "false"]);
+        for n in ["a", "b", "c"] {
+            std::fs::write(d.join(format!("{n}.md")), format!("{n} text.\n")).unwrap();
+        }
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "init"]);
+        // Dirty and untracked files are not warmed.
+        std::fs::write(d.join("c.md"), "c edited.\n").unwrap();
+        std::fs::write(d.join("new.md"), "untracked.\n").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn warm_covers_clean_committed_files_and_persists() {
+        let tmp = vault();
+        let scan = crate::scan::scan_vault(tmp.path(), &[]);
+        let index = SearchIndex::build(&scan, &[]);
+        let validity = BlameValidity::snapshot(tmp.path()).unwrap().unwrap();
+        let mut cache = BlameCache::default();
+        let mut seen = Vec::new();
+        let blamed = warm_blame(
+            &index,
+            tmp.path(),
+            &validity,
+            &mut cache,
+            || true,
+            |d, t| seen.push((d, t)),
+        );
+        assert_eq!(blamed, 2, "a.md and b.md; c.md is dirty, new.md untracked");
+        assert_eq!(seen.last(), Some(&(2, 2)));
+        let table = RecencyTable::build(&index, &cache, &validity);
+        assert_eq!(table.covered(), 2);
+        // Persisted: a fresh load has nothing left to warm.
+        let reloaded = BlameCache::load(tmp.path()).unwrap();
+        assert!(warm_targets(&index, &reloaded, &validity).is_empty());
+    }
+
+    #[test]
+    fn warm_stops_when_told() {
+        let tmp = vault();
+        let scan = crate::scan::scan_vault(tmp.path(), &[]);
+        let index = SearchIndex::build(&scan, &[]);
+        let validity = BlameValidity::snapshot(tmp.path()).unwrap().unwrap();
+        let mut cache = BlameCache::default();
+        let blamed = warm_blame(
+            &index,
+            tmp.path(),
+            &validity,
+            &mut cache,
+            || false,
+            |_, _| {},
+        );
+        assert_eq!(blamed, 0);
+        assert!(cache.is_empty());
+    }
 }
