@@ -25,4 +25,3 @@ pub struct SynthSource {
     /// newline). Hashed and pinned as the callout body.
     pub body: String,
 }
-

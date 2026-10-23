@@ -1,10 +1,7 @@
-//! Shared text/badge formatting for the paragraph-feed tabs (Search,
-//! Recent): inline-markdown span styling, column-aware word wrapping,
-//! width padding, and citation-badge lines derived from the shared
-//! citation index. Extracted from the removed Gather tab so the tabs
-//! that outlived it keep one rendering source.
-
-use std::path::{Path, PathBuf};
+//! Shared text formatting for the Search tab's paragraph feed:
+//! inline-markdown span styling and column-aware word wrapping.
+//! Extracted from the removed Gather tab so the tabs that outlived it
+//! keep one rendering source.
 
 use ratatui::{
     style::{Modifier, Style},
@@ -14,89 +11,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::tui::palette;
-
-/// Citation badge for one feed row: `cited: <stem>`, `cited*: <stem>`
-/// (stale), or `None` when uncited in global mode. In note-context mode
-/// every entry gets a badge — `in note` vs `missing`.
-pub fn citation_badge_line(
-    state: &ft_core::synth::citations::CitationState,
-    context_note: Option<&Path>,
-) -> Option<(String, Style)> {
-    use ft_core::synth::citations::CitationState;
-    if let Some(note) = context_note {
-        return if state.cited_in(note) {
-            Some(("in note".to_string(), Style::default().fg(palette::DIM)))
-        } else {
-            Some((
-                "missing".to_string(),
-                Style::default().fg(palette::SECONDARY),
-            ))
-        };
-    }
-    let stem = |notes: &[PathBuf]| -> String {
-        let first = notes
-            .first()
-            .map(|n| {
-                n.file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| n.display().to_string())
-            })
-            .unwrap_or_default();
-        match notes.len() {
-            0 | 1 => first,
-            n => format!("{first} +{}", n - 1),
-        }
-    };
-    match state {
-        CitationState::Cited { notes } => Some((
-            format!("cited: {}", stem(notes)),
-            Style::default().fg(palette::DIM),
-        )),
-        CitationState::CitedStale { notes } => Some((
-            format!("cited*: {}", stem(notes)),
-            Style::default().fg(palette::TERTIARY),
-        )),
-        CitationState::Uncited => None,
-    }
-}
-
-/// Full citation detail for the preview-pane header: names *every*
-/// citing note (comma-separated stems), and distinguishes fresh
-/// (`cited:`) from stale (`cited*:`) citations. Returns `None` when
-/// the entry is uncited in global mode (no header line). In
-/// context-note mode returns the same `in note` / `missing` label as
-/// [`citation_badge_line`] (the detail is the badge itself).
-pub fn citation_detail_line(
-    state: &ft_core::synth::citations::CitationState,
-    context_note: Option<&Path>,
-) -> Option<(String, Style)> {
-    use ft_core::synth::citations::CitationState;
-    if context_note.is_some() {
-        return citation_badge_line(state, context_note);
-    }
-    let stems = |notes: &[PathBuf]| -> String {
-        notes
-            .iter()
-            .map(|n| {
-                n.file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| n.display().to_string())
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    match state {
-        CitationState::Cited { notes } => Some((
-            format!("cited: {}", stems(notes)),
-            Style::default().fg(palette::DIM),
-        )),
-        CitationState::CitedStale { notes } => Some((
-            format!("cited*: {} (stale)", stems(notes)),
-            Style::default().fg(palette::TERTIARY),
-        )),
-        CitationState::Uncited => None,
-    }
-}
 
 /// Word-wrap one logical line to `width` columns, preserving leading
 /// whitespace on the first wrapped fragment (so an indented bullet
@@ -176,30 +90,6 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
         out.push(String::new());
     }
     out
-}
-
-/// Pad `s` with trailing spaces to exactly `width` terminal columns so a
-/// styled span fills the full row width (giving the header band a solid
-/// background). Over-long input is truncated to fit `width` columns. A
-/// `width` of 0 returns the string unchanged.
-pub fn pad_to_width(s: &str, width: usize) -> String {
-    if width == 0 {
-        return s.to_string();
-    }
-    let len = str_width(s);
-    if len < width {
-        let mut out = s.to_string();
-        out.push_str(&" ".repeat(width - len));
-        out
-    } else if len > width {
-        // Truncate on a grapheme boundary; a trailing wide glyph that
-        // would straddle the edge is dropped, so pad the leftover column.
-        let (mut out, taken) = take_width(s, width);
-        out.push_str(&" ".repeat(width - taken));
-        out
-    } else {
-        s.to_string()
-    }
 }
 
 /// Build styled spans for one already-wrapped body line, applying
@@ -339,23 +229,6 @@ fn str_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
 
-/// Take grapheme clusters from `s` until adding the next one would exceed
-/// `width` columns. Returns the prefix and the columns it actually
-/// occupies (≤ `width`; short by one when a wide glyph sits on the edge).
-fn take_width(s: &str, width: usize) -> (String, usize) {
-    let mut out = String::new();
-    let mut used = 0usize;
-    for g in s.graphemes(true) {
-        let w = grapheme_width(g);
-        if used + w > width {
-            break;
-        }
-        out.push_str(g);
-        used += w;
-    }
-    (out, used)
-}
-
 /// Split `s` into chunks that each fit within `width` columns, breaking on
 /// grapheme boundaries so a multi-column glyph is never sliced. A single
 /// grapheme wider than `width` gets its own chunk (it cannot be split).
@@ -396,7 +269,7 @@ fn grapheme_width(g: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{inline_markdown_spans, pad_to_width, wrap_line};
+    use super::{inline_markdown_spans, wrap_line};
 
     fn rendered_text(spans: &[ratatui::text::Span<'static>]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
@@ -550,16 +423,5 @@ mod tests {
         }
         // Reassembled, the glyphs round-trip verbatim (none sliced).
         assert_eq!(out.concat(), word);
-    }
-
-    #[test]
-    fn pad_to_width_counts_columns_for_wide_glyphs() {
-        // Two glyphs = 4 columns; pad to 8 adds exactly 4 spaces.
-        assert_eq!(cols(&pad_to_width("📅📅", 8)), 8);
-        // Truncation is column-based and never slices a glyph: "📅📅" is
-        // 4 cols, capping at 3 keeps one glyph and pads the odd column.
-        let capped = pad_to_width("📅📅", 3);
-        assert_eq!(cols(&capped), 3);
-        assert_eq!(capped, "📅 ");
     }
 }

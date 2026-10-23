@@ -42,9 +42,9 @@ they're about, the unsorted pile stays retrievable. Two directions:
 - *Pull* — you need everything on a topic, now, maybe minutes before a
   meeting: `ft notes search "[[topic]]"` returns every matching
   paragraph, ranked by relevance (or `--sort date` for newest first).
-- *Sweep* — you want to know what accumulated: `ft notes pulse` ranks the
-  concepts most mentioned in a recent window, and `ft notes recent`
-  feeds back every paragraph you touched in it.
+- *Sweep* — you want to know what accumulated: `ft notes search
+  --sort date` walks the paragraphs you touched, newest first, for
+  whichever concept you suspect has been growing.
 
 **Consolidate when a topic earns it.** Some concepts keep coming up.
 When one does, `ft notes synth scaffold` compiles the scattered paragraphs
@@ -63,12 +63,8 @@ the system.
 ## Ninety seconds of it
 
 ```
-$ ft notes pulse --since 7d        # sweep: what's been on my mind?
-(3) [[onboarding]]
-(2) [[analytics migration]]
-(1) [[activation]]?
-
-$ ft notes search "[[onboarding]] [[analytics migration]] --any"
+$ ft notes search "[[onboarding]] [[analytics migration]]" --any \
+      --sort date                  # sweep: everything on these, newest first
 notes/standup-2026-06-13.md L12-14  [[onboarding]] [[analytics migration]]
 More [[onboarding]] questions in standup — nobody can say what
 "done" means for the [[analytics migration]].
@@ -85,11 +81,12 @@ $ ft notes synth scaffold Synthesis/onboarding-and-analytics.md \
 created Synthesis/onboarding-and-analytics.md with 3 section(s)
 ```
 
-The `?` in the pulse marks a ghost — a concept mentioned three
-times that has no note yet. The `matched:` badge marks co-occurrence:
-paragraphs where the two topics collided, which is usually the
-interesting part. And the scaffolded note is plain text — prose you
-write, with each excerpt pinned to the commit it came from:
+A `[[link]]` with no note behind it is a ghost — run `ft notes ghosts`
+to see the concepts you keep mentioning that have no note yet. The
+`matched:` badge marks co-occurrence: paragraphs where the two topics
+collided, which is usually the interesting part. And the scaffolded
+note is plain text — prose you write, with each excerpt pinned to the
+commit it came from:
 
 ```markdown
 ---
@@ -222,8 +219,8 @@ ft tasks list today
 ft tui
 ```
 
-One thing to know up front: the resurfacing commands (`recent`,
-`pulse`, and `search --sort date`) date paragraphs from `git blame`, so
+One thing to know up front: the resurfacing command
+(`search --sort date`) dates paragraphs from `git blame`, so
 the vault should be a git repository and committed to regularly —
 `ft git sync` does commit + pull + push in one shot. Commit cadence is
 the temporal resolution of your history.
@@ -240,11 +237,11 @@ feature, common workflows, and the design philosophy:
 | [install.md](docs/guide/install.md)                      | Build from source, completions, man pages, first run.      |
 | [vault-and-config.md](docs/guide/vault-and-config.md)    | Vault discovery, the two config layers, periodic notes.    |
 | [tasks.md](docs/guide/tasks.md)                          | List / filter / create / complete / move, CLI + TUI.       |
-| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, search, recent. |
+| [notes.md](docs/guide/notes.md)                          | Open, create, periodic, rename, mv, links, search.         |
 | [capture-and-templates.md](docs/guide/capture-and-templates.md) | Append-with-template and quick-capture presets.     |
 | [timeblocks.md](docs/guide/timeblocks.md)                | Day-planner blocks and time-spent reports.                  |
 | [graph.md](docs/guide/graph.md)                          | The link graph and the graph-query DSL.                    |
-| [synthesis.md](docs/guide/synthesis.md)                  | Pulse → search → synth notes.                              |
+| [synthesis.md](docs/guide/synthesis.md)                  | Search → synth notes.                                      |
 | [tui.md](docs/guide/tui.md)                              | The TUI tour and the command/keymap model.                  |
 | [git-sync.md](docs/guide/git-sync.md)                    | One-shot commit + pull + push.                              |
 | [scripting.md](docs/guide/scripting.md)                  | Pipelines, exit codes, `--json-errors`, `ft do`.            |
@@ -280,8 +277,8 @@ depth.
 - [docs/append-and-capture.md](docs/append-and-capture.md) —
   exhaustive reference for append-with-template and quick capture
 - [docs/architecture.md](docs/architecture.md) (synthesis section) —
-  internals of the consolidation flow (`ft notes pulse`, `ft notes
-  search`, `ft notes recent`, `ft notes synth scaffold` / `verify`),
+  internals of the consolidation flow (`ft notes search`,
+  `ft notes synth scaffold` / `verify`),
   the `[!ft-source]` callout grammar used in synth notes, and the
   `[synth]` config table; `ft notes quote` (the read-only plumbing
   command behind the same pinning mechanics) is documented in

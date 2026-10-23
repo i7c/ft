@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Removed
+
+- feat: remove the Pulse and Recent functionality — `ft notes pulse`, `ft notes
+  recent`, the Pulse and Recent TUI tabs, and the modules behind them
+  (`ft_core::pulse`, `ft_core::recent`, `ft_core::synth::citations`, the CLI
+  feed renderer, the pulse-only git diff helpers). The sweep flow is now
+  `ft notes search --sort date` → `ft notes synth scaffold`. **Breaking:** both
+  subcommands are gone (clap exits 2), the default tabs renumber to
+  `1 Graph  2 Notes  3 Search`, and `tab/pulse` / `tab/recent` `[keymap]`
+  scopes no longer validate; scripts and overrides that reference them must be
+  deleted.
+
 ## 0.1.13
 
 ### Added

@@ -202,7 +202,6 @@ impl GraphTab {
             generation: 1,
             scan: std::sync::Arc::new(ft_core::scan::Scan::default()),
             graph,
-            citations: ft_core::synth::citations::CitationIndex::default(),
             search: std::sync::Arc::new(ft_core::search::SearchIndex::default()),
         }));
         self.seeded = true;

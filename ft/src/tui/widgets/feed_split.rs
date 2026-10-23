@@ -1,8 +1,7 @@
-//! Shared list/preview split widget for the paragraph-feed tabs
-//! (Search, Recent).
+//! Shared list/preview split widget for the paragraph-search feed.
 //!
-//! Both tabs render the same shape — a compact one-line-per-entry list
-//! on top and a single-entry paragraph preview on the bottom, like an
+//! The Search tab renders a compact one-line-per-entry list on top and a
+//! single-entry paragraph preview on the bottom, like an
 //! email client. Each tab builds its own compact list rows + preview
 //! header + wrapped body and hands them here; this widget owns only the
 //! split geometry, the list's cursor-follow + scrollbar (via

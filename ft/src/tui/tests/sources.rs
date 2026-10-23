@@ -71,7 +71,7 @@ fn startup_sync_creates_anchor_visible_in_tasks_tab() -> Result<()> {
     app.tick_for_test()?;
     assert!(note(&dir).contains("🆔 ABC-123"), "startup tick syncs");
     assert_eq!(toast(&app), "jira: 1 new · 0 updated");
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.pump_graph_rebuild_for_test();
     let frame = render(&mut app, 100, 14);
     assert!(
@@ -92,7 +92,7 @@ fn manual_sync_offline_and_pending_toasts() -> Result<()> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
     let next = fetcher(&mut app);
     app.tick_for_test()?;
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     *next.lock().unwrap() = Err(FetchFailure::Offline("connection refused".into()));
     app.dispatch(key('g'))?;
     app.dispatch(key('r'))?;
@@ -103,7 +103,7 @@ fn manual_sync_offline_and_pending_toasts() -> Result<()> {
         active: vec![issue(Status::InProgress)],
         ..Default::default()
     });
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.pump_graph_rebuild_for_test();
     app.dispatch(key('x'))?;
     app.pump_graph_rebuild_for_test();
@@ -125,7 +125,7 @@ fn background_sync_stays_quiet_without_changes_but_reports_auth_errors() -> Resu
         "",
         "no credentials is silent in the background"
     );
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     *next.lock().unwrap() = Err(FetchFailure::Unauthorized(401));
     app.dispatch(key('g'))?;
     app.dispatch(key('r'))?;
@@ -145,7 +145,7 @@ fn owned_field_bump_on_anchor_is_refused() -> Result<()> {
     fetcher(&mut app);
     app.tick_for_test()?;
     let before = note(&dir);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.pump_graph_rebuild_for_test();
     app.dispatch(key(']'))?;
     app.service_pending_requests()?;
@@ -220,7 +220,7 @@ fn background_push_is_summarised() -> Result<()> {
                 },
             })
     }));
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('g'))?;
     app.dispatch(key('r'))?;
     assert_eq!(toast(&app), "jira: 0 new · 1 updated · 1 pushed");
@@ -241,7 +241,7 @@ fn conflict_modal_opens_and_takes_remote() -> Result<()> {
         active: vec![issue(Status::Cancelled)],
         ..Default::default()
     });
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('g'))?;
     app.dispatch(key('r'))?;
     assert_eq!(app.active_modal_name(), Some("conflict-resolve"));
@@ -295,7 +295,7 @@ fn promote_from_tasks_tab() -> Result<()> {
             None,
         ))
     }));
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('R'))?;
     app.pump_graph_rebuild_for_test();
     // Rows: ABC-123 (due 05-12) with its linked child collapsed; the
@@ -339,7 +339,7 @@ fn promote_precondition_toast_without_network() -> Result<()> {
     )
     .unwrap();
     app.set_promoter_for_test(Arc::new(|_, _, _, _, _| panic!("no network call expected")));
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('R'))?;
     app.pump_graph_rebuild_for_test();
     app.dispatch(key('I'))?;
@@ -370,7 +370,7 @@ fn promote_with_two_ticket_parents_asks_which() -> Result<()> {
     )
     .unwrap();
     app.set_promoter_for_test(Arc::new(|_, _, _, _, _| panic!("no network call expected")));
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('R'))?;
     app.pump_graph_rebuild_for_test();
     // Rows: the two anchors, each with `both` collapsed beneath it.

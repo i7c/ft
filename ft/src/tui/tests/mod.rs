@@ -104,7 +104,7 @@ fn help_overlay_renders_over_initial_tab() {
 fn tasks_tab_empty_vault_renders_no_matches() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("tasks_tab_empty_80x24", frame);
     Ok(())
@@ -114,7 +114,7 @@ fn tasks_tab_empty_vault_renders_no_matches() -> Result<()> {
 fn tasks_tab_populated_renders_overdue_and_upcoming() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("tasks_tab_populated_80x24", frame);
     Ok(())
@@ -145,7 +145,7 @@ fn aged_vault() -> (TempDir, Vault) {
 fn tasks_tab_renders_age_badge_bands() -> Result<()> {
     let (_dir, vault) = aged_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let frame = render(&mut app, 100, 24);
     assert_tui_snapshot!("tasks_tab_age_bands_100x24", frame);
     Ok(())
@@ -174,7 +174,7 @@ fn nested_tasks_vault() -> (TempDir, Vault) {
 fn tasks_tab_subtasks_collapse_and_expand() -> Result<()> {
     let (_dir, vault) = nested_tasks_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
 
     // Collapsed: the parent shows a ▸ affordance and its subtasks are hidden.
     let collapsed = render(&mut app, 80, 24);
@@ -224,7 +224,7 @@ fn tasks_tab_subtasks_collapse_and_expand() -> Result<()> {
 fn tasks_tab_dedups_matched_parent_and_subtask() -> Result<()> {
     let (_dir, vault) = nested_tasks_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?; // Tasks tab
+    app.switch_to(3)?; // Tasks tab
 
     // A query matching both the top-level task and its subtask (via the
     // shared source file). Both live in tasks.md.
@@ -266,7 +266,7 @@ fn create_subtask_nests_under_selected_and_auto_expands() -> Result<()> {
     let (_dir, vault) = nested_tasks_vault();
     let task_file = vault.path.join("tasks.md");
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
 
     // Cursor starts on "Build a house". `s` opens the subtask quickline.
     app.dispatch(key('s'))?;
@@ -304,7 +304,7 @@ fn create_subtask_survives_expand_to_form() -> Result<()> {
     let (_dir, vault) = nested_tasks_vault();
     let task_file = vault.path.join("tasks.md");
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
 
     app.dispatch(key('s'))?;
     for c in "Plumbing".chars() {
@@ -345,7 +345,7 @@ fn long_description_vault() -> (TempDir, Vault) {
 fn tasks_tab_wide_terminal_uses_available_width() -> Result<()> {
     let (_dir, vault) = long_description_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let narrow = render(&mut app, 80, 24);
     assert!(
         narrow.contains("This is a fairl") && narrow.contains('…'),
@@ -364,7 +364,7 @@ fn tasks_tab_wide_terminal_uses_available_width() -> Result<()> {
 fn tasks_tab_query_edit_mode_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.dispatch(key('/'))?;
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("tasks_tab_editing_80x24", frame);
@@ -375,7 +375,7 @@ fn tasks_tab_query_edit_mode_renders() -> Result<()> {
 fn tasks_tab_query_parse_error_renders() -> Result<()> {
     let (_dir, vault) = populated_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     // Open the editor, clear it, type garbage, apply.
     app.dispatch(key('/'))?;
     // Select all + delete: simulate by pressing End then Backspace many times.
@@ -402,7 +402,7 @@ fn tasks_tab_query_parse_error_renders() -> Result<()> {
 fn arrow_keys_navigate_view_dropdown_without_panic() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     let up = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     // Single-view list — these wrap to themselves but must not panic or
@@ -417,7 +417,7 @@ fn arrow_keys_navigate_view_dropdown_without_panic() -> Result<()> {
 fn enter_on_dropdown_is_consumed_by_tasks_tab() -> Result<()> {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.dispatch(enter)?;
     // Tasks tab consumed Enter — global keymap (which has no Enter binding)
@@ -577,7 +577,6 @@ fn populated_tasks_path(dir: &TempDir) -> std::path::PathBuf {
 
 mod git;
 mod graph;
-mod history;
 mod notes;
 mod search;
 mod snapshot_lifecycle;
@@ -594,26 +593,22 @@ mod stale_cells;
 
 // ── [tui] tab toggles (note-flow-renames) ────────────────────────────
 
-/// Default config: the adjacent tabs are off; the note-flow five are
-/// the whole layout, in workflow order.
+/// Default config: the adjacent tabs are off; the three note-flow tabs
+/// are the whole layout, in workflow order.
 #[test]
 fn default_layout_hides_adjacent_tabs() {
     let (_dir, vault) = test_vault();
     let mut app = App::for_test_default_tabs(vault);
     let frame = render(&mut app, 80, 24);
     assert!(
-        frame.contains("1 Graph") && frame.contains("2 Notes") && frame.contains("3 Pulse"),
-        "workflow tabs missing:\n{frame}"
-    );
-    assert!(
-        frame.contains("4 Recent") && frame.contains("5 Search"),
+        frame.contains("1 Graph") && frame.contains("2 Notes") && frame.contains("3 Search"),
         "workflow tabs missing:\n{frame}"
     );
     assert!(
         !frame.contains("Tasks") && !frame.contains("Timeblocks"),
         "adjacent tabs must be hidden by default:\n{frame}"
     );
-    assert_tui_snapshot!("default_layout_five_tabs_80x24", frame);
+    assert_tui_snapshot!("default_layout_three_tabs_80x24", frame);
 }
 
 /// `[tui] tasks_tab/timeblocks_tab = true` appends the adjacent tabs
@@ -631,7 +626,7 @@ fn tui_config_enables_adjacent_tabs() {
     let mut app = App::for_test_default_tabs(vault);
     let frame = render(&mut app, 90, 24);
     assert!(
-        frame.contains("6 Tasks") && frame.contains("7 Ti"),
+        frame.contains("4 Tasks") && frame.contains("5 Ti"),
         "enabled adjacent tabs must appear after Search:\n{frame}"
     );
 }

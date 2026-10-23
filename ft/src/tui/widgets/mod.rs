@@ -18,9 +18,7 @@ pub use edit_buffer::EditBuffer;
 pub use edit_keymap::{EDIT_COMMANDS, EDIT_KEYMAP};
 pub use edit_render::{horizontal_scroll, render_inline_input, CursorMode, InlineInput};
 pub use feed_split::render_feed_split;
-pub use feed_text::{
-    citation_badge_line, citation_detail_line, inline_markdown_spans, pad_to_width, wrap_line,
-};
+pub use feed_text::{inline_markdown_spans, wrap_line};
 pub use scroll_list::{render_scroll_list, ScrollListOpts};
 // Re-exported eagerly so the picker is reachable as
 // `crate::tui::widgets::FuzzyPicker` once plan-004 session 4 wires it in.

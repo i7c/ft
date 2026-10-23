@@ -1,5 +1,5 @@
 //! Search tab: live as-you-type paragraph search, all/any toggle, sort
-//! cycle, multi-select + send-to-synth handoff, and the Pulse handoff.
+//! cycle, multi-select, and the send-to-synth handoff.
 
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -7,7 +7,7 @@ use std::process::Command as StdCommand;
 
 /// Index of the Search tab in the production tab layout.
 fn search_tab_idx() -> usize {
-    4
+    2
 }
 
 fn key(c: char) -> Event {
@@ -166,30 +166,6 @@ fn clear_returns_to_empty_state() -> Result<()> {
     assert!(
         frame.contains("(0 results, 0 selected)"),
         "status resets to zero counts:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn pulse_handoff_opens_search_prefilled_in_any_mode() -> Result<()> {
-    use crossterm::event::KeyModifiers;
-    let (_dir, vault) = search_vault();
-    let mut app = App::for_test(vault);
-    // Pulse tab = index 2. The fixture's only commit adds [[Foo]] /
-    // [[Bar]] links, so the pulse (any window that includes c1) ranks
-    // them. Select the first row and hand off with Enter.
-    app.switch_to(2)?;
-    app.dispatch(key(' '))?; // select the cursor row
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )))?;
-    app.service_pending_requests()?;
-    assert_eq!(app.active_title(), "Search", "handoff must land on Search");
-    let frame = render(&mut app, 90, 24);
-    assert!(
-        frame.contains("[[") && frame.contains("ANY"),
-        "prefilled query + any-mode:\n{frame}"
     );
     Ok(())
 }

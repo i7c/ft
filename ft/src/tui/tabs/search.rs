@@ -227,7 +227,7 @@ impl SearchTab {
         self
     }
 
-    /// Install a query (from the Pulse handoff or tests) and re-run it.
+    /// Install a query (from the Graph tab's handoff or tests) and re-run it.
     pub fn queue_query(&mut self, query: String, any: bool) {
         self.input = EditBuffer::from(&query);
         self.any = any;

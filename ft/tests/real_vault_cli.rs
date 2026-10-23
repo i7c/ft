@@ -178,38 +178,7 @@ fn real_vault_dry_run_move_does_not_modify() {
     .failure();
 }
 
-// ── ft review / ft synth against the real vault ────────────────────────────
-
-#[test]
-fn real_vault_review_since_7d_runs() {
-    if !gated() {
-        return;
-    }
-    // A real vault may legitimately have no new links in the last 7d
-    // (the command prints "no new links in window" and exits 0).
-    ft().args(["--vault", REAL_VAULT, "notes", "pulse", "--since", "7d"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn real_vault_review_json_is_valid_json() {
-    if !gated() {
-        return;
-    }
-    let out = ft()
-        .args([
-            "--vault", REAL_VAULT, "notes", "pulse", "--since", "30d", "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    // Must parse as a JSON array of row objects.
-    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
-    assert!(v.is_array(), "ft review --json must emit a JSON array");
-}
+// ── ft synth against the real vault ────────────────────────────────────────
 
 #[test]
 fn real_vault_synth_verify_all_runs() {

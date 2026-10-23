@@ -26,10 +26,9 @@ so just running `ft tui` from any directory inside a vault works.
 
 ## The tabs
 
-Across the top: **Graph**, **Notes**, **Pulse**, **Recent**, and
-**Search** — the note-flow in tab order (browse, then resurface in
-sweep-to-pull order). Each has its own keymap; the active tab decides
-which chords are bound. The Graph tab is the most powerful — most
+Across the top: **Graph**, **Notes**, and **Search** — the note-flow
+in tab order (browse, then resurface). Each has its own keymap; the
+active tab decides which chords are bound. The Graph tab is the most powerful — most
 "what's related to what" workflows start there.
 
 Two more tabs, **Tasks** and **Timeblocks**, are adjacent features and
@@ -45,11 +44,9 @@ timeblocks_tab = true
 |-------|------------|--------------------------------------------------------------------------------|
 | `1`   | Graph      | Interactive DSL-driven tree of notes, directories, and link / embed edges.     |
 | `2`   | Notes      | Fuzzy note picker, section operations, template creation, quick capture.       |
-| `3`   | Pulse      | Windowed mention ranking; hand picks off to the Search tab for synthesis.      |
-| `4`   | Recent     | Whole-vault feed of recently-edited paragraphs (windowed, default 7d).         |
-| `5`   | Search     | Paragraph search across the vault; send results into a synth note.             |
-| `6`   | Tasks      | Live task triage (opt-in). CLI presets become sidebar views.                   |
-| `7`   | Timeblocks | Day-planner editor with split today + tomorrow view (opt-in).                  |
+| `3`   | Search     | Paragraph search across the vault; send results into a synth note.             |
+| `4`   | Tasks      | Live task triage (opt-in). CLI presets become sidebar views.                   |
+| `5`   | Timeblocks | Day-planner editor with split today + tomorrow view (opt-in).                  |
 
 ## Global chords
 

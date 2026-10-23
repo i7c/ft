@@ -434,7 +434,7 @@ mod tests {
         assert!(reg.lookup("timeblocks.reload").is_some());
         assert!(reg.lookup("graph.search-mentions").is_some());
         assert!(reg.lookup("graph.search-mentions-multi").is_some());
-        assert!(reg.lookup("pulse.handoff-to-search").is_some());
+        assert!(reg.lookup("search.reload").is_some());
         // Modal commands
         assert!(reg.lookup("create.confirm").is_some());
         assert!(reg.lookup("query-bar.apply").is_some());

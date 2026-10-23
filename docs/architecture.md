@@ -14,16 +14,15 @@ ft/
 ├── ft/                         # binary crate (thin)
 │   ├── src/main.rs             # clap dispatch only
 │   ├── src/cmd/                # one file per subcommand: tasks, notes,
-│   │                           #   graph, timeblocks, pulse, synth, git,
-│   │                           #   vault, do, find, commands, completions, man
+│   │                           #   graph, timeblocks, synth, git, vault, do,
+│   │                           #   find, commands, completions, man
 │   ├── src/output/             # table/json/markdown/ndjson (Format variants)
 │   │                           #   + links.rs, graph.rs (command renderers)
 │   ├── src/tui/                # the TUI: app.rs (event loop + shared graph
 │   │   │                       #   snapshot), snapshot.rs, event.rs, jobs.rs,
 │   │   │                       #   tab.rs, modal.rs, command.rs, keymap.rs,
 │   │   │                       #   help.rs, ui.rs, palette.rs, editor.rs
-│   │   ├── tabs/               # graph, tasks/, notes/, timeblocks/,
-│   │   │                       #   pulse, recent, search
+│   │   ├── tabs/               # graph, tasks/, notes/, timeblocks/, search
 │   │   ├── notes_actions/      # create/append/section-move/reslice flows
 │   │   └── widgets/            # picker, completion, edit buffer
 │   └── tests/                  # integration tests with assert_cmd
@@ -37,11 +36,10 @@ ft/
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
         ├── git.rs              # discover_repo + status + sync + blame
-        ├── blame_cache.rs      # msgpack blame cache (recent, --sort date)
+        ├── blame_cache.rs      # msgpack blame cache (--sort date)
         ├── graph/              # mod (Graph/NodeKind/EdgeKind/NodeKey),
         │                       #   parser, resolve, query (unified DSL),
         │                       #   preset, rename, delete
-        ├── pulse.rs            # git-log wikilink scan (synthesis)
         ├── synth/              # scaffold, verify, repair, reslice, callout
         ├── notes.rs + notes/   # note ops, append, templates
         ├── markdown.rs         # heading/paragraph extractors, line utils
@@ -227,14 +225,13 @@ flags (`--sort`, `--limit`), not DSL clauses. See
 `docs/migrating-task-queries.md` for the predicate translation table
 from the removed standalone task DSL.
 
-### Synthesis (`pulse` + `search` + `synth`)
+### Synthesis (`search` + `synth`)
 
 Synthesis is the "post-connecting" workflow for the
 quick-capture style note-taking the user-guide philosophy chapter
-describes: pulse recently-mentioned `[[wikilinks]]`, search the
-cross-vault context for a chosen subset, and produce synth notes whose
-quoted excerpts are pinned to verifiable git provenance. It runs
-through three composable layers:
+describes: search the cross-vault context around the concepts you
+choose, and produce synth notes whose quoted excerpts are pinned to
+verifiable git provenance. It runs through these composable layers:
 
 ```rust
 // Engine 3: scan-derived paragraph search index + query DSL.
@@ -245,21 +242,6 @@ pub struct ft_core::search::SearchIndex;
 pub fn ft_core::search::parse_query(input: &str, any: bool) -> SearchQuery;
 pub fn ft_core::search::search(index: &SearchIndex, query: &SearchQuery)
     -> Vec<SearchResult>;
-
-// Engine 2: git log diff scan + paragraph-frequency dedup.
-pub fn ft_core::pulse::compute_pulse(
-    graph: &Graph, vault: &Vault, repo: &Path,
-    window: &WindowRange, cfg: &Synth,
-) -> Result<Pulse>;
-
-// Engine 1: the untargeted, time-shaped feed — every vault paragraph
-// edited within a window, recency-ordered. Selects by window-edit
-// (pulse added-lines overlap) instead of by link target. Drives
-// `ft notes recent` + the Recent tab.
-pub fn ft_core::recent::build_recent(
-    graph: &Graph, vault: &Vault, window: &WindowRange,
-    cfg: &Synth, opts: &RecentOptions, cache: &mut BlameCache,
-) -> Result<RecentReport>;
 
 // Plan/apply for synth-note scaffolding.
 pub fn ft_core::synth::scaffold::plan_synth_scaffold(...)
@@ -300,12 +282,12 @@ body and compares against the git blob slice at the pinned commit,
 reporting `Ok` / `Drifted` / `SourceMissing` / `Malformed` per section.
 
 A synth note is identified by an `ft.synth.enabled: true` frontmatter marker.
-This lets the pulse skip wikilinks quoted inside `[!ft-source]`
-callouts of a synth note (recycled material doesn't double-count on
-the next pulse) while still counting links the user wrote in their
-own prose between callouts.
+The search index skips paragraphs quoted inside `[!ft-source]` callouts
+of a synth note (a synth note cannot pin itself, and recycled material
+doesn't come back as a fresh result) while still indexing the links the
+user wrote in their own prose between callouts.
 
-CLI surface lives in `ft/src/cmd/{pulse.rs, search.rs, synth.rs}`
+CLI surface lives in `ft/src/cmd/{search.rs, synth.rs}`
 (plus the read-only plumbing commands `ft notes quote` in
 `ft/src/cmd/quote.rs`, which emits the canonical callout for a
 file+range to stdout, and its inverse `ft notes export` in
@@ -313,24 +295,21 @@ file+range to stdout, and its inverse `ft notes export` in
 CommonMark or Slack mrkdwn (`--format`)). `ft notes search` is the
 sourcing front-end: a scan-derived paragraph index, the query DSL
 (`search::query::parse`), and relevance / blame-date sorts; it feeds
-`ft notes synth scaffold --search "<query>"`, the Pulse handoff, and
-ghost promotion.
+`ft notes synth scaffold --search "<query>"` and ghost promotion.
 
-The TUI exposes the flow through the `Pulse` tab
-(`ft/src/tui/tabs/pulse.rs`) that hands selected links off to the
-`Search` tab (`ft/src/tui/tabs/search.rs`) via
-`AppRequest::SearchWithQuery` — the links become `[[…]]` clauses in
-any-mode. The Search tab's query box (`/` to edit) re-queries the shared
-snapshot's index (`GraphSnapshot::search`) synchronously on every
-keystroke; `a` toggles all/any, `o` cycles relevance ↔ date, `Space`
-multi-selects, and `s`/`S` send the selection (or all results) to a
-synth note through the shared send-to-synth flow
-(`ft/src/tui/synth_send.rs`, also used by the Recent tab).
+The TUI exposes the flow through the `Search` tab
+(`ft/src/tui/tabs/search.rs`). Its query box (`/` to edit) re-queries
+the shared snapshot's index (`GraphSnapshot::search`) synchronously on
+every keystroke; `a` toggles all/any, `o` cycles relevance ↔ date,
+`Space` multi-selects, and `s`/`S` send the selection (or all results)
+to a synth note through the shared send-to-synth flow
+(`ft/src/tui/synth_send.rs`). The Graph tab's `J` / `Ctrl+J` seed the
+query from a note's mentions via `AppRequest::SearchWithQuery`.
 
-Config: a new `[synth]` table with `folder` (default `"Synthesis/"`)
-and `exclude_prefixes` (default empty; users typically add their
-periodic-notes folder) — `exclude_prefixes` applies to both pulse and
-search.
+Config: a `[synth]` table with `folder` (default `"Synthesis/"`) and
+`exclude_prefixes` (default empty; users typically add their
+periodic-notes folder) — `exclude_prefixes` applies to the search
+index.
 
 ### Accrete: dedup-on-append
 
@@ -353,8 +332,8 @@ frontmatter) were removed with the gather feed:
 
 CLI: `ft notes synth scaffold <target.md> --search "<query>"
 [--any] [--sort relevance|date] [--from path:line] [--no-edit]`.
-TUI: `s`/`S` on the Search and Recent tabs ship results through the
-shared send-to-synth flow; the planner's dedup applies for free.
+TUI: `s`/`S` on the Search tab ship results through the shared
+send-to-synth flow; the planner's dedup applies for free.
 
 ## Adding things
 
@@ -368,13 +347,11 @@ shared send-to-synth flow; the planner's dedup applies for free.
 
 ### A new TUI tab
 
-The TUI ships the note-flow tabs — Graph, Notes, Pulse, Recent, Search —
-plus opt-in Tasks and Timeblocks tabs (config `[tui]`, default off).
-Pulse drives the link-pick → Search handoff (see §"Synthesis"). Recent
-is the untargeted, time-shaped feed: it renders `build_recent`
-(recently-edited paragraphs, windowed, default 7d) and reuses the
-shared feed row renderer + send-to-synth overlay and the shared
-section-move modal (seeded via `section_move::begin_for_source`).
+The TUI ships the note-flow tabs — Graph, Notes, Search — plus opt-in
+Tasks and Timeblocks tabs (config `[tui]`, default off). Search is the
+paragraph feed (see §"Synthesis"); it reuses the shared feed renderer,
+the send-to-synth overlay, and the shared section-move modal (seeded
+via `section_move::begin_for_source`).
 
 1. Implement [`Tab`](#) on your struct and add it to the `tabs` vec in
    `App::new`. `Tab::kind() -> TabKind` is required — it's the typed

@@ -1,4 +1,3 @@
-pub mod feed;
 pub mod graph;
 pub mod json;
 pub mod links;

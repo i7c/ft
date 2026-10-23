@@ -36,7 +36,7 @@ fn read(dir: &TempDir, rel: &str) -> String {
 
 fn loaded_app(vault: Vault) -> Result<App> {
     let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.pump_graph_rebuild_for_test();
     Ok(app)
 }

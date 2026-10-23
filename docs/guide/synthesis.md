@@ -1,26 +1,29 @@
 # Synthesis
 
-`ft` has a three-step consolidation flow designed for quick-capture
+`ft` has a two-step consolidation flow designed for quick-capture
 note-taking: write freely with `[[wikilinks]]`, file nothing, then —
 when the accumulated material warrants it — sit down and connect dots.
 The session is deferrable without penalty: the links were captured
 with the thoughts, so nothing rots while you wait. The steps:
 
-1. **Pulse** — see which `[[wikilinks]]` have been on your mind
-   recently (`ft notes pulse`, or the Pulse tab).
-2. **Aggregate** — pull every paragraph matching a chosen subset of
-   those links into one search feed (`ft notes search "[[a]] [[b]]"`,
-   or the Search tab).
-3. **Synthesize** — turn that feed into a new note (or append to an
+1. **Aggregate** — pull every paragraph matching the concepts you
+   want to connect into one search feed (`ft notes search "[[a]]
+   [[b]]"`, or the Search tab). Sorting that feed by date is the
+   sweep: the newest end of a topic first.
+2. **Synthesize** — turn that feed into a new note (or append to an
    existing one) with verifiable excerpts pinned to the git commits
    they came from.
 
-The whole thing assumes your vault is a git repository — without
-history, "what's been on my mind recently" can't be computed.
+Not sure which concepts are worth a session? `ft notes ghosts` ranks
+the unresolved `[[links]]` you keep mentioning — the concepts that
+have earned a note — and the TUI Graph tab shows the same counts.
+
+Step 2 assumes your vault is a git repository: excerpts pin to
+commits, and `--sort date` reads `git blame`.
 
 ## Why plain text with provenance, not live embeds
 
-Step 3 — synthesis — compiles a new, focused note from gathered
+Step 2 — synthesis — compiles a new, focused note from gathered
 material. Obsidian and Roam suggest doing that with **block links and
 block embeds**: a dynamic mechanism where editing a source block
 updates every note that embeds it. `ft` deliberately does not.
@@ -38,47 +41,7 @@ read as-is *and* pass to a machine as-is: no resolution step, no
 rendering required, and `ft notes synth verify` confirms each excerpt still
 matches its pinned source.
 
-## Step 1: the pulse window
-
-`ft notes pulse` scans every wikilink added between two commits and ranks
-them by how many *distinct paragraphs* mention each target.
-
-```sh
-ft notes pulse --since 7d
-# (3) [[Eigen-decomposition]]
-# (2) [[Memoization]]
-# (1) [[Curry-Howard]]?
-```
-
-The `?` suffix marks ghosts — wikilinks whose target note doesn't
-exist yet. Those are often the ripest candidates: a concept you keep
-referring to but haven't given its own page.
-
-Other window shapes:
-
-```sh
-ft notes pulse --since 24h         # last day
-ft notes pulse --since 2w          # last fortnight
-ft notes pulse --range main~10..HEAD   # explicit commit range
-ft notes pulse --json              # array of { count, target, is_ghost, source_paths }
-```
-
-Paragraph-level dedup: mentioning `[[Foo]]` three times in one
-paragraph counts once; in three separate paragraphs, three times.
-Wikilinks inside fenced code blocks are skipped. So are wikilinks
-quoted inside `[!ft-source]` callouts in a synth note (more on those
-below) — recycled material doesn't double-count in the next pulse.
-
-Add a `[synth].exclude_prefixes` line to your config to filter out
-folders that produce noise. The conventional choice is your periodic
-notes folder, since daily notes mention the same recurring topics:
-
-```toml
-[synth]
-exclude_prefixes = ["journal/"]
-```
-
-## Step 2: the search feed
+## Step 1: the search feed
 
 Once you know which links you want to revisit, search the whole vault
 for the material. `ft notes search` queries every paragraph with a fast
@@ -87,6 +50,7 @@ scan-derived index — no graph walk, no git needed (except for
 
 ```sh
 ft notes search "[[Eigen-decomposition]] [[Memoization]] --any"
+ft notes search "[[Eigen-decomposition]]" --sort date   # newest first
 ```
 
 The query DSL: a plain term is a case-insensitive **substring** (so
@@ -118,7 +82,7 @@ signal you want when synthesizing a bridge note. The `-` exclude form
 lets you subtract noise ("eigen -matrix" if one eigen thread is
 uninteresting).
 
-## Step 3: synthesis
+## Step 2: synthesis
 
 A **synth note** is a regular `.md` file with `ft.synth.enabled: true` in its
 frontmatter. It contains **protected sections** — quoted source
@@ -161,11 +125,11 @@ needing the git blob. If you edit inside a protected section, verify
 will tell you it drifted.
 
 Synth notes live wherever you want them in the vault. They participate
-in the link graph normally — backlinks work, the regular `[[wikilinks]]`
-you write in the prose between callouts count toward the next
-pulse. The pulse just knows to skip the quoted material in
-`[!ft-source]` blocks so it doesn't show you yesterday's synthesis
-back as today's recent thoughts.
+in the link graph normally — backlinks work, and the regular
+`[[wikilinks]]` you write in the prose between callouts count toward
+`ft notes ghosts`. Search skips the quoted material in `[!ft-source]`
+blocks, so re-sourcing a synth note into itself isn't possible and
+yesterday's synthesis doesn't come back as today's results.
 
 ### Creating from the CLI
 
@@ -212,29 +176,8 @@ Other flags:
 
 ### Creating from the TUI
 
-The TUI version is the friendlier flow. Press a digit (or `Tab`) to
-reach the **Pulse** tab.
-
-```
-┌ Pulse — since 7d (3 links, 2 selected) ───────────────────────────┐
-│[*] (3) [[Eigen-decomposition]]                                    │
-│[*] (2) [[Memoization]]                                            │
-│    (1) [[Curry-Howard]]?                                          │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-Keymap:
-
-| Key | Action |
-|-|-|
-| `j` / `k` (or `↓` / `↑`) | move cursor |
-| `Space` | toggle multi-select on the current row |
-| `[` / `]` | halve / double the window (since-style only) |
-| `Enter` | hand off selected (or cursor) links to the Search tab |
-| `R` | reload |
-
-Pressing `Enter` switches to the **Search** tab with the selected
-links prefilled as `[[Foo]] [[Bar]]` in any-mode. From there:
+The TUI version is the friendlier flow. Press `3` (or `Tab`) to reach
+the **Search** tab, then `/` and type the query — results update live:
 
 ```
 ┌ Search ────────────────────────────────────────────────────────────┐
@@ -452,9 +395,8 @@ A single `[synth]` table in `config.toml`:
 folder = "Synthesis/"
 
 # Files whose vault-relative path starts with any of these prefixes
-# are excluded from `ft notes pulse` and `ft notes search`. Useful for
-# filtering out periodic notes that mention the same recurring topics
-# every day.
+# are excluded from `ft notes search`. Useful for filtering out
+# periodic notes that mention the same recurring topics every day.
 exclude_prefixes = ["journal/"]
 ```
 
@@ -468,20 +410,17 @@ note-taking:
 
 ```sh
 # 1. What's been on my mind?
-ft tui                  # open the TUI
-# Tab to the Pulse tab. Window defaults to 7 days.
-# Browse the list, Space on 2–3 links that catch my eye.
-# Enter.
-
-# 2. In the Search tab now, the links prefilled in any-mode.
-# / to refine the query if needed. Space on the results I actually
-# want to pull together. Shift+s to create a new synth note.
+ft notes ghosts         # the concepts I keep mentioning, ranked
+ft tui                  # open the TUI, Tab to the Search tab
+# / then the 2–3 concepts that catch my eye, or `o` to sort by date.
+# Space on the results I actually want to pull together.
+# Shift+s to create a new synth note.
 # Pick a folder, type a title.
 # Editor opens at the bottom of the new file.
 
-# 3. Write prose between the quoted excerpts. Save. Exit editor.
+# 2. Write prose between the quoted excerpts. Save. Exit editor.
 
-# 4. Later, sanity-check.
+# 3. Later, sanity-check.
 ft notes synth verify --all
 ```
 

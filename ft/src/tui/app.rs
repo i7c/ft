@@ -33,8 +33,8 @@ use crate::tui::{
     snapshot::{build_graph_snapshot, GraphSnapshot},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
-        graph::GraphTab, notes::NotesTab, pulse::PulseTab, recent::RecentTab, search::SearchTab,
-        tasks::TasksTab, timeblocks::TimeblocksTab,
+        graph::GraphTab, notes::NotesTab, search::SearchTab, tasks::TasksTab,
+        timeblocks::TimeblocksTab,
     },
     ui::{self, Mode, SyncConflictInfo, SyncConflictKind},
     Tui,
@@ -1552,8 +1552,8 @@ fn build_tabs_with_overlays(
     use crate::tui::{
         keymap::KeymapOverlay,
         tabs::{
-            graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, pulse::PULSE_KEYMAP, recent::RECENT_KEYMAP,
-            search::SEARCH_KEYMAP, tasks::TASKS_KEYMAP, timeblocks::TIMEBLOCKS_KEYMAP,
+            graph::GRAPH_KEYMAP, notes::NOTES_KEYMAP, search::SEARCH_KEYMAP, tasks::TASKS_KEYMAP,
+            timeblocks::TIMEBLOCKS_KEYMAP,
         },
     };
 
@@ -1593,8 +1593,6 @@ fn build_tabs_with_overlays(
     let tasks_overlay = build_overlay("tab/tasks", &TASKS_KEYMAP);
     let notes_overlay = build_overlay("tab/notes", &NOTES_KEYMAP);
     let timeblocks_overlay = build_overlay("tab/timeblocks", &TIMEBLOCKS_KEYMAP);
-    let recent_overlay = build_overlay("tab/recent", &RECENT_KEYMAP);
-    let pulse_overlay = build_overlay("tab/pulse", &PULSE_KEYMAP);
     let search_overlay = build_overlay("tab/search", &SEARCH_KEYMAP);
 
     let per_modal_overlays: std::collections::HashMap<&'static str, KeymapOverlay> = [
@@ -1657,15 +1655,12 @@ fn build_tabs_with_overlays(
     .collect();
 
     // Tab order reads the workflow: browse (Graph, Notes) → resurface
-    // in sweep-to-pull order (Pulse, Recent, Search). The adjacent
-    // features (Tasks, Timeblocks) are opt-in via `[tui]`
-    // and append at the end; digits and cycling derive from the built
-    // list.
+    // (Search). The adjacent features (Tasks, Timeblocks) are opt-in via
+    // `[tui]` and append at the end; digits and cycling derive from the
+    // built list.
     let mut tabs: Vec<Box<dyn Tab>> = vec![
         Box::new(GraphTab::new().with_keymap_overlay(&graph_overlay)),
         Box::new(NotesTab::new().with_keymap_overlay(&notes_overlay)),
-        Box::new(PulseTab::new().with_keymap_overlay(&pulse_overlay)),
-        Box::new(RecentTab::new().with_keymap_overlay(&recent_overlay)),
         Box::new(SearchTab::new().with_keymap_overlay(&search_overlay)),
     ];
     if config.tui.tasks_tab {
@@ -1877,8 +1872,6 @@ impl App {
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
             Box::new(NotesTab::new()),
-            Box::new(PulseTab::new()),
-            Box::new(RecentTab::new()),
             Box::new(SearchTab::new()),
             Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),
@@ -1915,8 +1908,6 @@ impl App {
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(GraphTab::new()),
             Box::new(NotesTab::new()),
-            Box::new(PulseTab::new()),
-            Box::new(RecentTab::new()),
             Box::new(SearchTab::new()),
             Box::new(TasksTab::new()),
             Box::new(TimeblocksTab::with_clock(clock)),

@@ -67,10 +67,6 @@ pub enum NotesCommand {
     /// updating all vault-wide references.
     #[command(name = "mv")]
     Move(MoveArgs),
-    /// Reverse-chronological feed of every paragraph edited within a
-    /// time window, across the whole vault — the untargeted, time-shaped
-    /// sibling of a link-target mention feed. Dates come from `git blame`.
-    Recent(RecentArgs),
     /// Print the graph-derived co-occurrence suggestions for a note
     /// (or a `[[ghost]]` target) — the same scored concept list the
     /// `update-related` modal shows, as a read-only CLI surface.
@@ -80,10 +76,6 @@ pub enum NotesCommand {
     /// no backing note — by distinct-paragraph mentions. The concepts
     /// that have earned a note of their own. Pure graph; no git needed.
     Ghosts(GhostsArgs),
-    /// Rank the `[[wikilinks]]` most mentioned in a recent commit/date
-    /// window — the sweep trigger: "what's been on my mind?" Ghosts are
-    /// marked `?`. Dates come from git history.
-    Pulse(crate::cmd::pulse::PulseArgs),
     /// Search every paragraph in the vault with a fast index —
     /// substring (default), `=word`, `~fuzzy`, `"phrase"`, `[[link]]`,
     /// `-exclude`; AND by default, `--any` for OR; sorted by relevance
@@ -125,11 +117,9 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Links(a) => run_links(a, vault_flag, Direction::Forward),
         NotesCommand::Rename(a) => run_rename(a, vault_flag),
         NotesCommand::Move(a) => run_mv(a, vault_flag),
-        NotesCommand::Recent(a) => run_recent(a, vault_flag),
         NotesCommand::Related(a) => run_related(a, vault_flag),
         NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
         NotesCommand::Drift(a) => run_drift(a, vault_flag),
-        NotesCommand::Pulse(a) => crate::cmd::pulse::run(a, vault_flag),
         NotesCommand::Search(a) => crate::cmd::search::run(a, vault_flag),
         NotesCommand::Synth(c) => crate::cmd::synth::run_command(c, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
@@ -1544,164 +1534,7 @@ fn run_update_related(args: UpdateRelatedArgs, vault_flag: Option<PathBuf>) -> R
     Ok(ExitCode::SUCCESS)
 }
 
-/// Citation annotations for one feed entry, in the shared renderer's
-/// form. Empty when uncited.
-fn cited_in_of(
-    citations: &ft_core::synth::citations::CitationIndex,
-    source_path: &std::path::Path,
-    lines: (u32, u32),
-    body: &str,
-) -> Vec<crate::output::feed::CitedIn> {
-    let state = citations.lookup(source_path, lines, body);
-    let stale = state.is_stale();
-    state
-        .notes()
-        .iter()
-        .map(|n| crate::output::feed::CitedIn {
-            note: n.to_string_lossy().into_owned(),
-            stale,
-        })
-        .collect()
-}
-
-fn resolve_window(
-    since: &Option<String>,
-    range: &Option<String>,
-) -> Result<Option<ft_core::pulse::WindowRange>> {
-    use ft_core::pulse::WindowRange;
-    if let Some(s) = since {
-        let dur = WindowRange::parse_since(s)
-            .ok_or_else(|| anyhow!("invalid --since value `{s}` (try e.g. 7d, 24h, 2w, 1m)"))?;
-        return Ok(Some(WindowRange::Since(dur)));
-    }
-    if let Some(r) = range {
-        let (from, to) = r
-            .split_once("..")
-            .ok_or_else(|| anyhow!("invalid --range value `{r}` (expected `X..Y`)"))?;
-        if from.is_empty() || to.is_empty() {
-            return Err(anyhow!(
-                "invalid --range value `{r}` (both X and Y required)"
-            ));
-        }
-        return Ok(Some(WindowRange::Range {
-            from: from.to_string(),
-            to: to.to_string(),
-        }));
-    }
-    Ok(None)
-}
-
-// ── ft notes history ─────────────────────────────────────────────────────────
-
-#[derive(Args, Debug)]
-pub struct RecentArgs {
-    /// Duration window: `7d`, `24h`, `2w`, `1m`. Defaults to `7d`.
-    /// Mutually exclusive with `--range`.
-    #[arg(long, value_name = "DURATION", conflicts_with = "range")]
-    pub since: Option<String>,
-
-    /// Commit range `X..Y` for the window. Mutually exclusive with
-    /// `--since`.
-    #[arg(long, value_name = "X..Y", conflicts_with = "since")]
-    pub range: Option<String>,
-
-    /// Include paragraphs from synth notes (`ft.synth.enabled: true`), which are
-    /// excluded by default.
-    #[arg(long)]
-    pub include_synth: bool,
-
-    /// Output as a JSON array instead of the human-readable table form.
-    /// Each entry includes `date`, `source_title`, `source_path`,
-    /// `section`, and `cited_in`.
-    #[arg(long)]
-    pub json: bool,
-
-    /// Keep only entries not yet cited byte-identically in any synth
-    /// note. Entries whose paragraph was edited *after* being cited
-    /// (stale citations) are kept — they still need attention.
-    #[arg(long)]
-    pub uncited: bool,
-
-    /// Disable colored output (also honored: `NO_COLOR` env var).
-    #[arg(long)]
-    pub no_color: bool,
-}
-
-fn run_recent(args: RecentArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
-    let vault = crate::cmd::common::discover_vault(vault_flag)?;
-    let scan = vault.scan();
-    let graph = crate::cmd::common::build_graph(&scan)?;
-    // Blame runs from `vault.path`; `git -C <vault>` finds the enclosing
-    // repo whether the vault is the repo root or a subdir.
-    ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
-        anyhow!("the vault is not inside a git repository — `ft notes recent` needs git history for section dates")
-    })?;
-
-    // Default to a 7-day window when no window flag is given.
-    let window = resolve_window(&args.since, &args.range)?.unwrap_or(
-        ft_core::pulse::WindowRange::Since(chrono::Duration::days(7)),
-    );
-
-    let cfg = vault.config.config.synth.clone();
-    let opts = ft_core::recent::RecentOptions {
-        include_synth: args.include_synth,
-    };
-    let mut cache =
-        ft_core::blame_cache::BlameCache::load(&vault.path).context("loading blame cache")?;
-    let report =
-        ft_core::recent::build_recent(&graph, &vault, &window, &cfg, &opts, &mut cache, &scan)
-            .context("building history")?;
-    let _ = cache.save(&vault.path);
-
-    if !report.skipped_blame.is_empty() {
-        eprintln!(
-            "warning: dropped paragraphs from {} file(s) because `git blame` failed (untracked or path lookup failed):",
-            report.skipped_blame.len()
-        );
-        for p in report.skipped_blame.iter().take(5) {
-            eprintln!("  - {}", p.display());
-        }
-        if report.skipped_blame.len() > 5 {
-            eprintln!("  …and {} more", report.skipped_blame.len() - 5);
-        }
-    }
-
-    let citations = ft_core::synth::citations::CitationIndex::build(&vault.path, &scan);
-    let mut entries = report.entries;
-    if args.uncited {
-        entries.retain(|e| {
-            !citations
-                .lookup(&e.source_path, (e.line_start, e.line_end), &e.section_text)
-                .is_cited()
-        });
-    }
-
-    let rows: Vec<crate::output::feed::FeedRow> = entries
-        .iter()
-        .map(|e| crate::output::feed::FeedRow {
-            date: e.date.to_string(),
-            source_title: &e.source_title,
-            source_path: e.source_path.as_path(),
-            section: &e.section_text,
-            matched: Vec::new(),
-            cited_in: cited_in_of(
-                &citations,
-                &e.source_path,
-                (e.line_start, e.line_end),
-                &e.section_text,
-            ),
-        })
-        .collect();
-
-    if args.json {
-        crate::output::feed::render_json(&rows)?;
-    } else {
-        let use_color =
-            !args.no_color && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
-        crate::output::feed::render_table(&rows, use_color, "no history entries");
-    }
-    Ok(ExitCode::SUCCESS)
-}
+// ── Note resolution ──────────────────────────────────────────────────────────
 
 /// Resolve a `<note>` argument to a [`NoteId`] in the graph.
 ///

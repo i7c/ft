@@ -1,42 +1,9 @@
-//! Synthesis surfaces: capture presets, Pulse tab, graph → Search
+//! Synthesis surfaces: capture presets, graph → Search
 //! handoffs, send-to-synth (via the Search tab), synth reslice flow.
 
 use super::*;
 
 // ── Graph → Search handoffs ─────────────────────────────────────────
-
-/// Build a vault with one git commit so blame/pulse dates resolve.
-/// `Target.md` plus one note mentioning it — enough for the review-tab
-/// fixtures that need a git-backed vault without history semantics.
-fn git_backed_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(vault_path.join("Target.md"), "# Target\n").unwrap();
-    std::fs::write(vault_path.join("DailyA.md"), "Mentions [[Target]] today.\n").unwrap();
-
-    let run_git = |args: &[&str]| {
-        let out = StdCommand::new("git")
-            .current_dir(&vault_path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args(args)
-            .output()
-            .expect("git binary on PATH");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git(&["init", "-b", "main"]);
-    run_git(&["config", "user.name", "T"]);
-    run_git(&["config", "user.email", "t@e.com"]);
-    run_git(&["config", "commit.gpgsign", "false"]);
-    run_git(&["config", "maintenance.auto", "false"]);
-    run_git(&["add", "."]);
-    run_git(&["commit", "-m", "init"]);
-
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
 
 /// `J` on a Note row opens the Search tab prefilled with the note as a
 /// `[[…]]` clause (replacing the removed journal tab jump).
@@ -799,11 +766,11 @@ chord = "j"
 
     use crate::tui::keymap::KeyChord;
     use crossterm::event::{KeyCode, KeyModifiers};
-    let km = app.tab_keymap_for_test(5);
+    let km = app.tab_keymap_for_test(3);
     let chord = KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
     assert_eq!(km.lookup(chord).map(|c| c.name), Some("tasks.link"));
     // The Tasks view resolves keys through the overridden map too.
-    app.switch_to(5)?;
+    app.switch_to(3)?;
     app.pump_graph_rebuild_for_test();
     app.dispatch(key('j'))?;
     let frame = render(&mut app, 100, 14);
@@ -894,175 +861,6 @@ chord = "q"
     app.enter_help();
     let frame = render(&mut app, 80, 24);
     assert_tui_snapshot!("help_overlay_with_keymap_override_80x24", frame);
-}
-
-// ── Review tab + Journal multi-target ────────────────────────────────
-
-fn pulse_tab_idx() -> usize {
-    2
-}
-
-/// Vault with two commits: c1 (baseline, dated 2024-01-01 so a 7d
-/// window always finds a from-ref) and c2 (today, adds two notes with
-/// `[[Foo]]` / `[[Bar]]` as ghosts).
-fn pulse_test_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(vault_path.join("baseline.md"), "# Baseline\n").unwrap();
-
-    let run_git_at = |date: Option<&str>, args: &[&str]| {
-        let mut cmd = StdCommand::new("git");
-        cmd.current_dir(&vault_path).env("GIT_TERMINAL_PROMPT", "0");
-        if let Some(d) = date {
-            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
-        }
-        let out = cmd.args(args).output().expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git_at(None, &["init", "-b", "main"]);
-    run_git_at(None, &["config", "user.name", "T"]);
-    run_git_at(None, &["config", "user.email", "t@e.com"]);
-    run_git_at(None, &["config", "commit.gpgsign", "false"]);
-    run_git_at(None, &["config", "maintenance.auto", "false"]);
-    run_git_at(None, &["add", "."]);
-    run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
-
-    std::fs::write(
-        vault_path.join("note-a.md"),
-        "Para one mentions [[Foo]] and [[Bar]].\n\nPara two mentions [[Foo]] again.\n",
-    )
-    .unwrap();
-    std::fs::write(vault_path.join("note-b.md"), "Only [[Bar]] here.\n").unwrap();
-    run_git_at(None, &["add", "."]);
-    run_git_at(None, &["commit", "-m", "c2"]);
-
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
-
-#[test]
-fn review_tab_empty_window_shows_friendly_message() -> Result<()> {
-    let (_dir, vault) = git_backed_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(pulse_tab_idx())?;
-    // Default window is --since 7d; the fixture's commit is very recent.
-    // But fixed_clock = 2026-05-10 and commits are wall-clock today,
-    // which means commits are *in the future* relative to clock — git
-    // log --before=2026-05-03 returns nothing. Either way we should
-    // exercise the empty-state UI cleanly without panicking.
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("Pulse"),
-        "Review tab title missing from frame:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn review_tab_lists_rows_with_counts_and_ghost_suffix() -> Result<()> {
-    let (_dir, vault) = pulse_test_vault();
-    // Default --since 7d window resolves against pulse's own
-    // today (system clock, FT_TODAY honored if set). Commits in the
-    // fixture are made at wall-clock-now, so a 7d window includes them.
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(pulse_tab_idx())?;
-    let frame = render(&mut app, 80, 24);
-    assert!(
-        frame.contains("(2) [[Bar]]?"),
-        "Bar row missing or wrong count:\n{frame}"
-    );
-    assert!(
-        frame.contains("(2) [[Foo]]?"),
-        "Foo row missing or wrong count:\n{frame}"
-    );
-    Ok(())
-}
-
-/// Vault whose single recent commit mentions many distinct ghost
-/// links, so the pulse yields more rows than a 24-row viewport fits.
-/// Used to verify the list viewport auto-follows the cursor past the
-/// fold (the pre-split render never scrolled, leaving lower rows
-/// unreachable).
-fn pulse_overflow_vault() -> (TempDir, Vault) {
-    use std::process::Command as StdCommand;
-    let dir = TempDir::new().unwrap();
-    let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
-    std::fs::write(vault_path.join("baseline.md"), "# Baseline\n").unwrap();
-
-    let run_git_at = |date: Option<&str>, args: &[&str]| {
-        let mut cmd = StdCommand::new("git");
-        cmd.current_dir(&vault_path).env("GIT_TERMINAL_PROMPT", "0");
-        if let Some(d) = date {
-            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
-        }
-        let out = cmd.args(args).output().expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    };
-    run_git_at(None, &["init", "-b", "main"]);
-    run_git_at(None, &["config", "user.name", "T"]);
-    run_git_at(None, &["config", "user.email", "t@e.com"]);
-    run_git_at(None, &["config", "commit.gpgsign", "false"]);
-    run_git_at(None, &["config", "maintenance.auto", "false"]);
-    run_git_at(None, &["add", "."]);
-    run_git_at(Some("2024-01-01T00:00:00"), &["commit", "-m", "c1"]);
-
-    // 30 distinct ghost links → 30 pulse rows, more than a 24-row
-    // viewport can show at once.
-    let mut body = String::new();
-    for i in 0..30 {
-        body.push_str(&format!("Mentions [[Link{i}]] here.\n\n"));
-    }
-    std::fs::write(vault_path.join("many.md"), body).unwrap();
-    run_git_at(None, &["add", "."]);
-    run_git_at(None, &["commit", "-m", "c2"]);
-
-    let vault = Vault::discover(Some(vault_path)).unwrap();
-    (dir, vault)
-}
-
-#[test]
-fn review_tab_cursor_stays_visible_past_the_fold() -> Result<()> {
-    let (_dir, vault) = pulse_overflow_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(pulse_tab_idx())?;
-    // Sanity: the pulse produced many rows.
-    let initial = render(&mut app, 80, 24);
-    assert!(initial.contains("[[Link0]]"), "Link0 missing:\n{initial}");
-    // Move the cursor well past the first screen (30 rows, viewport ~20).
-    let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    for _ in 0..25 {
-        app.dispatch(down.clone())?;
-    }
-    let frame = render(&mut app, 80, 24);
-    // The cursor row (Link25) must be visible after scrolling; before
-    // the scroll-follow fix it was rendered off-screen and unreachable.
-    assert!(
-        frame.contains("[[Link25]]"),
-        "cursor row Link25 not visible after scrolling:\n{frame}"
-    );
-    Ok(())
-}
-
-#[test]
-fn review_tab_help_lists_keybindings() -> Result<()> {
-    let (_dir, vault) = git_backed_vault();
-    let mut app = App::for_test_with_clock(vault, fixed_clock);
-    app.switch_to(pulse_tab_idx())?;
-    let sections = app.active_tab_help_sections();
-    let merged: String = sections
-        .iter()
-        .flat_map(|s| s.entries.iter().map(|e| format!("{}={}\n", e.keys, e.desc)))
-        .collect();
-    for expected in ["Space", "Enter", "[", "]", "Shift+r"] {
-        assert!(
-            merged.contains(expected),
-            "Review help missing `{expected}`:\n{merged}"
-        );
-    }
-    Ok(())
 }
 
 /// Build a vault for the multi-target Journal test: two notes, one

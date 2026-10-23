@@ -19,7 +19,7 @@ fn key(c: char) -> Event {
 }
 
 fn search_tab_idx() -> usize {
-    4
+    2
 }
 
 fn unicode_vault() -> (TempDir, Vault) {

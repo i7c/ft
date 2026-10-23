@@ -47,9 +47,9 @@ Two properties make this cheap act load-bearing:
 
 - **The target doesn't need to exist.** Write `[[activation]]` even
   though there is no `activation.md`. `ft` tracks it as a *ghost*, and
-  ghosts participate in everything — backlinks, the search feed, the
-  pulse ranking. A concept accumulates weight before anyone decides
-  it deserves a page.
+  ghosts participate in everything — backlinks, the search feed, and
+  the `ft notes ghosts` mention ranking. A concept accumulates weight
+  before anyone decides it deserves a page.
 - **Completion keeps it frictionless.** If you write in Neovim,
   [ft.nvim](https://github.com/i7c/ft.nvim) pops up note titles from
   your vault when you type `[[` (and follows links with `gf`, and
@@ -99,8 +99,9 @@ being precise about this, because they feel different in use:
   `ft notes search "[[onboarding]]"` and `ft notes related` answer from a
   standing start.
 - **Sweep** — time-shaped. You want to know what accumulated:
-  `ft notes pulse --since 7d` ranks the concepts most mentioned in the
-  window; `ft notes recent` feeds back every paragraph edited in it.
+  `ft notes search <concept> --sort date` walks the paragraphs you
+  touched on that concept, newest first, so the recent end of a topic
+  is one command away.
 
 A sweep is periodic by nature — a window-shaped query implies you'll
 run it again. `ft` doesn't pretend otherwise, and it doesn't abolish
@@ -126,9 +127,9 @@ Three reasons, in increasing order of importance:
   you wrote it. No search over the words recovers that; similarity
   search recovers it probabilistically, sometimes.
 - **The operations need identity, not similarity.** Co-occurrence
-  scoring, the `matched:` badge, pulse's ranking, rename's vault-wide
-  rewrite, synthesis's excerpt gathering — all of these count and
-  transform *references to the same thing*. "Probably about the same
+  scoring, the `matched:` badge, the ghost mention ranking, rename's
+  vault-wide rewrite, synthesis's excerpt gathering — all of these
+  count and transform *references to the same thing*. "Probably about the same
   thing" isn't a unit you can count, rank, or rewrite.
 - **Determinism, locally, in plain text.** The link is right there in
   the file: greppable, diffable, versioned with the note, resolvable
@@ -168,7 +169,7 @@ names, and every tool that counts references undercounts by three.
 A concrete picture of the shape this produces. The capture surface is
 mostly the **daily note**: ad-hoc thought lands there as short
 sections, a few paragraphs each, named in the moment. The retrieval
-unit is the **paragraph** — search, recent, and pulse all
+unit is the **paragraph** — search and synthesis both
 operate at paragraph granularity, which is what makes a daily note of
 unrelated thoughts usable: each paragraph carries its own concepts and
 resurfaces independently. This is finer-grained than note-level
@@ -204,10 +205,9 @@ Practical consequences:
   and `ft` at the same time; changes from either land on disk and the
   other picks them up on the next read.
 - **No proprietary state.** No separate database, index, or sync log.
-  There's a small `git blame` cache so `ft notes recent` and
-  `ft notes search --sort date` don't re-shell-out, but it's
-  derivative — delete it and the only cost is the next run taking
-  longer.
+  There's a small `git blame` cache so `ft notes search --sort date`
+  doesn't re-shell-out, but it's derivative — delete it and the only
+  cost is the next run taking longer.
 - **Byte-compatible task writes.** A task rewritten by `ft` is
   byte-equivalent to what the Tasks plugin produces for the same
   fields, so the plugin keeps working over `ft`'s writes.

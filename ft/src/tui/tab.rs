@@ -198,9 +198,9 @@ pub enum AppRequest {
         message: Option<String>,
     },
     /// Switch to the Search tab and set its query (in the given
-    /// any-mode), re-running the search. Raised by the Pulse tab's
-    /// Enter handoff and the graph tab's `J` / `Ctrl+J` handoffs: the
-    /// selected links/notes become `[[…]]` clauses.
+    /// any-mode), re-running the search. Raised by the graph tab's
+    /// `J` / `Ctrl+J` handoffs: the selected notes become `[[…]]`
+    /// clauses.
     SearchWithQuery {
         query: String,
         any: bool,
@@ -387,7 +387,7 @@ impl TabCtx<'_> {
 
 /// Typed identity of a tab, used by the App to route cross-tab
 /// [`AppRequest`]s to their target (e.g. `Graph*` actions to the Graph
-/// tab, `Journal*` queues to the Journal tab) without matching on the
+/// tab, `Synth*` queues to the Search tab) without matching on the
 /// display string from [`Tab::title`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabKind {
@@ -395,8 +395,6 @@ pub enum TabKind {
     Tasks,
     Notes,
     Timeblocks,
-    Recent,
-    Pulse,
     Search,
 }
 

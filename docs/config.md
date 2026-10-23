@@ -26,7 +26,7 @@ silently default.
 | `[editor]`              | table                             | either        | How the TUI hands off to `$EDITOR` (inline / tmux popup / window / split). |
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
-| `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes pulse`. |
+| `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes search`. |
 | `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (all default off). |
 | `[drift]`               | table                             | either        | Exclude patterns for the `ft notes drift` report.      |
 
@@ -302,7 +302,7 @@ strict = false       # default: false; true → TUI startup fails on any error
 
 # Per-scope overrides: chord string → command name.
 # Valid scopes: global, tab/graph, tab/tasks, tab/notes, tab/timeblocks,
-#               tab/recent, tab/pulse, tab/search, modal/create, modal/append, modal/section-move,
+#               tab/search, modal/create, modal/append, modal/section-move,
 #               modal/capture-var, modal/periodic-leader, modal/query-bar,
 #               modal/rename, modal/search, modal/preset-picker,
 #               modal/capture-picker, modal/related, modal/move
@@ -395,8 +395,8 @@ The query syntax is documented in [graph-query-dsl.md](graph-query-dsl.md)
 ## `[tui]`
 
 The Tasks and Timeblocks tabs are adjacent features — the vault
-workflow lives in the note-flow tabs (Graph, Notes, Pulse, Recent,
-Search) — so they are opt-in and default to off:
+workflow lives in the note-flow tabs (Graph, Notes, Search) — so they
+are opt-in and default to off:
 
 ```toml
 [tui]
@@ -471,8 +471,7 @@ exclude = ["*.png", "*.pdf"]
 
 ## `[synth]`
 
-Settings for synthesis (`ft notes pulse`, `ft notes search`,
-`ft notes synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
+Settings for synthesis (`ft notes search`, `ft notes synth`). See [guide/synthesis.md](guide/synthesis.md) for the user
 walkthrough.
 
 ```toml
@@ -484,7 +483,7 @@ walkthrough.
 folder = "Synthesis/"
 
 # Files whose vault-relative path starts with any listed prefix are
-# excluded from `ft notes pulse`. Conventional use: filter out your
+# excluded from `ft notes search`. Conventional use: filter out your
 # periodic-notes folder so daily-note repetition doesn't drown out
 # real signal. Default: empty.
 #

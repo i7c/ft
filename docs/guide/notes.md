@@ -207,9 +207,8 @@ Output formats match `ft tasks list`: `table` (default), `json`,
 
 A ghost accumulating mentions is the vault telling you a note has
 earned its existence. `ft notes ghosts` ranks every ghost by how many
-*distinct paragraphs* mention it (the same dedup rule as `ft notes pulse`
-— three mentions in one paragraph count once), highest first. Pure
-graph: no git history needed.
+*distinct paragraphs* mention it (three mentions in one paragraph count
+once), highest first. Pure graph: no git history needed.
 
 ```sh
 ft notes ghosts                        # (N) [[ghost]] rows, ranked
@@ -225,7 +224,7 @@ Promotion — giving the concept its page — happens where the ghost is:
   `Shift+c` creates it from a template, and `Shift+p` **promotes with
   material** — the note is created as a synth note scaffolded with
   every paragraph that mentions the ghost, `ft.synth.targets` set,
-  editor open (needs git history for the seeded journal). Because the
+  editor open (it seeds from `ft notes search "[[ghost]]"`). Because the
   note takes the ghost's exact name, every existing link resolves
   without any rewriting.
 - **From the CLI**, the seeded equivalent is
@@ -291,40 +290,12 @@ meeting notes) that touched it. Multi-select results and `s` / `S`
 ship them into a synth note as protected `[!ft-source]` sections; see
 [synthesis.md](synthesis.md).
 
-The TUI's Search tab (press `5`) is the same engine with live
+The TUI's Search tab (press `3`) is the same engine with live
 as-you-type results — `/` edits the query, `a` toggles all/any, `o`
 cycles relevance/date, `u` filters to uncited paragraphs (those not
 yet pinned byte-identically in a synth note, stale counts as
 uncited), `s`/`S` send the selection to a synth note. See
 [tui.md](tui.md) and [synthesis.md](synthesis.md).
-
-## The Recent feed
-
-`ft notes recent` is *time-shaped*: a whole-vault,
-reverse-chronological feed of every paragraph edited within a window —
-"what did I actually write or change lately, everywhere?" It takes
-`--since` / `--range` window arguments (defaulting to `7d`) and needs
-a git-backed vault.
-
-```sh
-ft notes recent                      # last 7 days, human-readable
-ft notes recent --since 2w --json    # last two weeks, machine-readable
-ft notes recent --range v1.0..HEAD   # a commit range
-```
-
-Synth notes (`ft.synth.enabled: true`) are excluded by default; pass
-`--include-synth` to include them. Periodic/daily notes are included.
-
-Recent carries the same citation badges and `--uncited` filter as the
-search feed (`cited:` / `cited*:` lines, `cited_in` in `--json`), so a
-sweep can be incremental: `ft notes recent --since 7d --uncited`
-shows only the paragraphs from the window you haven't synthesized yet.
-
-The TUI's Recent tab (press `4`) renders the same feed and adds the
-synthesis actions: select one/several/all rows and `s` / `S` them into a
-synth note as protected `[!ft-source]` sections, or press `m` to move the
-selected row's section into another note (the section-move flow, seeded to
-that note). `u` toggles the uncited-only filter. See [tui.md](tui.md).
 
 ## Updating the Related section
 

@@ -92,14 +92,15 @@ artifact, and the archive note records the paired commit sha.
   `GraphCfg::presets`; quick-capture presets in `Config::capture_presets`
   (`CapturePreset`, drives the TUI `Q` flow) — three separate maps
   because the three consumers default to different profiles/shapes.
-- **Synthesis (`pulse` + `gather` + `synth`).** The
-  post-connecting workflow: `ft_core::pulse::compute_pulse`
-  (git-log wikilink scan), `ft_core::gather::build_gather` (multi-source
-  git-blame feed), and `ft_core::synth::{scaffold,verify,repair,reslice,callout}`
+- **Synthesis (`search` + `synth`).** The
+  post-connecting workflow: `ft_core::search` (scan-derived paragraph
+  index + query DSL, `--sort date` via the blame cache) feeds
+  `ft_core::synth::{scaffold,verify,repair,reslice,callout}`
   (plan/apply synth notes with `[!ft-source]` callouts pinned to git
-  provenance). Synth notes carry an `ft-synth: true` frontmatter marker;
-  callouts round-trip via `synth::callout::{serialize,parse,compute_section_hash}`.
-  CLI: `ft notes pulse`, `ft notes synth`, `ft notes gather --link`. See
+  provenance). Synth notes carry an `ft.synth.enabled: true` frontmatter
+  marker; callouts round-trip via
+  `synth::callout::{serialize,parse,compute_section_hash}`. CLI:
+  `ft notes search`, `ft notes synth`. See
   `docs/architecture.md` §"Synthesis".
 - **Signature changes on core APIs.** A new param to a widely-called
   function (e.g. `Graph::build`) ripples through every test file. Before
