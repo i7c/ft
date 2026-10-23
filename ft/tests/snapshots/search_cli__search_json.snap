@@ -1,0 +1,60 @@
+---
+source: ft/tests/search_cli.rs
+expression: out
+---
+[
+  {
+    "path": "notes/linear.md",
+    "line_start": 5,
+    "line_end": 5,
+    "body": "An eigenvalue scales its eigenvector.",
+    "matched": [
+      "eigenvalue"
+    ],
+    "score": 0.27714486775349134,
+    "title": "linear",
+    "heading_path": [
+      "Linear",
+      "Spectra"
+    ],
+    "highlights": [
+      [
+        3,
+        13
+      ]
+    ],
+    "reasons": [
+      {
+        "clause": "eigenvalue",
+        "field": "body"
+      }
+    ]
+  },
+  {
+    "path": "notes/linear.md",
+    "line_start": 7,
+    "line_end": 7,
+    "body": "Every eigenvalue of a symmetric matrix is real.",
+    "matched": [
+      "eigenvalue"
+    ],
+    "score": 0.21883646700535414,
+    "title": "linear",
+    "heading_path": [
+      "Linear",
+      "Spectra"
+    ],
+    "highlights": [
+      [
+        6,
+        16
+      ]
+    ],
+    "reasons": [
+      {
+        "clause": "eigenvalue",
+        "field": "body"
+      }
+    ]
+  }
+]

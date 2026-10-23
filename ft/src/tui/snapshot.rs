@@ -42,15 +42,13 @@ pub struct GraphSnapshot {
 /// `Clone` event channel.
 pub fn build_graph_snapshot(vault: &Vault, generation: u64) -> Result<Arc<GraphSnapshot>, String> {
     let scan = vault.scan();
-    let exclude = vault.config.config.synth.exclude_prefixes.clone();
-    let search = SearchIndex::build(&scan, &exclude);
-    match Graph::build(&scan) {
-        Ok(graph) => Ok(Arc::new(GraphSnapshot {
-            generation,
-            scan: Arc::new(scan),
-            graph,
-            search: Arc::new(search),
-        })),
-        Err(e) => Err(e.to_string()),
-    }
+    let graph = Graph::build(&scan).map_err(|e| e.to_string())?;
+    let cfg = &vault.config.config;
+    let search = SearchIndex::build_with(&scan, &cfg.synth.exclude_prefixes, &cfg.search);
+    Ok(Arc::new(GraphSnapshot {
+        generation,
+        scan: Arc::new(scan),
+        graph,
+        search: Arc::new(search),
+    }))
 }

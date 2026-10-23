@@ -71,8 +71,12 @@ fn preview_and_query_box_do_not_leak_stale_cells_across_frames() -> Result<()> {
     for c in "量".chars() {
         app.dispatch(key(c))?;
     }
-    // Leave the query editor so Down moves the result cursor.
+    // Leave the query editor so Down moves the result cursor; flat rows
+    // keep the list at two rows (no note header), and BM25 ranks the
+    // short paragraph first, so Down selects the long one.
     app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    app.dispatch(key('g'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
 
     let backend = TestBackend::new(90, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -91,11 +95,15 @@ fn preview_and_query_box_do_not_leak_stale_cells_across_frames() -> Result<()> {
 
     // Frame 1: the long CJK paragraph is selected; its wrapped body
     // fills the whole preview pane.
-    draw(&mut terminal, &mut app);
+    let frame1 = draw(&mut terminal, &mut app);
+    assert!(
+        frame1.contains("極"),
+        "frame 1 previews the long paragraph:\n{frame1}"
+    );
 
     // Frame 2: move to the short result. The preview pane shows a
     // one-line body; everything below it must be blank.
-    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)))?;
     let frame2 = draw(&mut terminal, &mut app);
 
     // Preview rows below the one-line body (rows 11..21 inside the tab

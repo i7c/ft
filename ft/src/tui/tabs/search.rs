@@ -8,13 +8,15 @@
 //! text inside. Below the box — whose bottom border is the solid
 //! separator — sits a feed-split: the result list in a compact top
 //! viewport (max 10 rows, scrolls past that; rows carry path · line
-//! range · matched labels, no body text), and the selected paragraph's
-//! body as wrapped text in a preview pane at the bottom.
-//! `Space` multi-selects paragraphs; `s`/`S` ship the selection (or all
-//! results) into a synth note via the shared send-to-synth flow; `a`
-//! toggles all/any; `o` cycles relevance ↔ date sort; `c` clears back
-//! to the fresh-tab empty state; `Enter` opens the source at the
-//! paragraph.
+//! range · heading path · matched labels, no body text; grouped under
+//! one header row per note by default, `g` toggles flat), and the
+//! focused paragraph's body as wrapped text in a preview pane at the
+//! bottom with the query's matches highlighted.
+//! `Space` multi-selects paragraphs (on a header: the whole note);
+//! `s`/`S` ship the selection (or all results) into a synth note via the
+//! shared send-to-synth flow; `a` toggles all/any; `o` cycles relevance
+//! ↔ date sort; `c` clears back to the fresh-tab empty state; `Enter`
+//! opens the source at the paragraph.
 //!
 //! The index lives in the shared snapshot (`GraphSnapshot::search`) and
 //! is rebuilt by the App's background worker on generation change — the
@@ -35,7 +37,9 @@ use ratatui::{
 };
 
 use ft_core::blame_cache::BlameCache;
-use ft_core::search::{parse_query, search, search_with_dates, SearchResult, Sort};
+use ft_core::search::{
+    fill_highlights, group, parse_query, search, search_with_dates, SearchCtx, SearchResult, Sort,
+};
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
 use crate::tui::event::Event;
@@ -73,6 +77,15 @@ pub(crate) static SEARCH_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "search.cycle-sort",
         description: "Cycle result sort between relevance and date (newest first)",
+        scope: CommandScope::Tab("search"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "search.toggle-grouping",
+        description: "Toggle results grouped by note vs one flat row per paragraph",
         scope: CommandScope::Tab("search"),
         group: "Query",
         args_schema: &[],
@@ -158,6 +171,7 @@ pub(crate) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("/", "search.edit-query")
         .bind("a", "search.toggle-any")
         .bind("o", "search.cycle-sort")
+        .bind("g", "search.toggle-grouping")
         .bind("Up", "search.result-up")
         .bind("k", "search.result-up")
         .bind("Down", "search.result-down")
@@ -182,9 +196,13 @@ pub struct SearchTab {
     sort: Sort,
     /// Current results, in the active sort order.
     results: Vec<SearchResult>,
-    /// 0-indexed cursor into `results`.
+    /// Group results under one header row per note.
+    grouped: bool,
+    /// The list rows derived from `results` and `grouped`.
+    rows: Vec<Row>,
+    /// 0-indexed cursor into `rows`.
     cursor: usize,
-    /// Multi-select indices into `results`.
+    /// Multi-select indices into `results` (stable across `g`).
     selected: HashSet<usize>,
     /// Lazy blame cache for the date sort (kept warm across queries).
     cache: Option<BlameCache>,
@@ -212,6 +230,8 @@ impl SearchTab {
             any: false,
             sort: Sort::Relevance,
             results: Vec::new(),
+            grouped: true,
+            rows: Vec::new(),
             cursor: 0,
             selected: HashSet::new(),
             cache: None,
@@ -241,9 +261,11 @@ impl SearchTab {
         self.last_error = None;
         let query = parse_query(&self.input.text, self.any);
         self.results.clear();
+        self.rows.clear();
         self.selected.clear();
         self.cursor = 0;
         if query.is_empty() {
+            self.last_query = None;
             return;
         }
         // The index is fetched on demand here (via TabCtx at the call
@@ -259,42 +281,96 @@ impl SearchTab {
             return;
         };
         let index = &snap.search;
-        match self.sort {
-            Sort::Relevance => {
-                self.results = search(index, &query);
-            }
-            Sort::Date => {
-                let mut cache = self.cache.take().unwrap_or_default();
-                match search_with_dates(index, &query, ctx.vault, &mut cache) {
-                    Ok(mut results) => {
-                        self.results.append(&mut results);
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("date sort failed: {e}"));
-                    }
-                }
-                self.cache = Some(cache);
+        let sctx = SearchCtx {
+            graph: Some(&snap.graph),
+            presets: Some(&ctx.vault.config.config.graph.presets),
+        };
+        let outcome = if self.sort == Sort::Date || query.has_date_filters() {
+            let mut cache = self.cache.take().unwrap_or_default();
+            let r = search_with_dates(index, &query, sctx, ctx.vault, &mut cache, self.sort)
+                .map(|d| d.results);
+            self.cache = Some(cache);
+            r
+        } else {
+            search(index, &query, sctx)
+        };
+        match outcome {
+            Ok(results) => self.results = results,
+            Err(e) => {
+                self.results.clear();
+                self.last_error = Some(e.to_string());
             }
         }
         self.selected.clear();
         self.cursor = 0;
+        self.rebuild_rows(false);
+    }
+
+    /// Derive the list rows from `results`. With `keep_focus` the cursor
+    /// follows the focused result into the new layout; otherwise it
+    /// returns to the top.
+    fn rebuild_rows(&mut self, keep_focus: bool) {
+        let focus = if keep_focus {
+            self.cursor_result()
+        } else {
+            None
+        };
+        self.rows.clear();
+        if self.grouped {
+            for g in group(&self.results) {
+                self.rows.push(Row::Header {
+                    path: g.path.display().to_string(),
+                    members: g.members.clone(),
+                });
+                self.rows.extend(g.members.into_iter().map(Row::Item));
+            }
+        } else {
+            self.rows.extend((0..self.results.len()).map(Row::Item));
+        }
+        self.cursor = focus
+            .and_then(|i| self.rows.iter().position(|r| *r == Row::Item(i)))
+            .unwrap_or(0);
+    }
+
+    /// The result the cursor stands for: the row's result, or a header's
+    /// first member.
+    fn cursor_result(&self) -> Option<usize> {
+        match self.rows.get(self.cursor)? {
+            Row::Item(i) => Some(*i),
+            Row::Header { members, .. } => members.first().copied(),
+        }
     }
 
     fn move_cursor(&mut self, delta: isize) {
-        if self.results.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
-        let len = self.results.len() as isize;
+        let len = self.rows.len() as isize;
         self.cursor = ((self.cursor as isize + delta).clamp(0, len - 1)) as usize;
     }
 
     fn toggle_selection(&mut self) {
-        if self.results.is_empty() {
-            return;
+        match self.rows.get(self.cursor) {
+            Some(Row::Item(i)) if !self.selected.remove(i) => {
+                self.selected.insert(*i);
+            }
+            Some(Row::Item(_)) => {}
+            Some(Row::Header { members, .. }) => {
+                if members.iter().all(|i| self.selected.contains(i)) {
+                    for i in members {
+                        self.selected.remove(i);
+                    }
+                } else {
+                    self.selected.extend(members.iter().copied());
+                }
+            }
+            None => {}
         }
-        if !self.selected.remove(&self.cursor) {
-            self.selected.insert(self.cursor);
-        }
+    }
+
+    fn toggle_grouping(&mut self) {
+        self.grouped = !self.grouped;
+        self.rebuild_rows(true);
     }
 
     fn toggle_any(&mut self) {
@@ -311,7 +387,7 @@ impl SearchTab {
     }
 
     fn open_selected(&self, ctx: &TabCtx) {
-        let Some(result) = self.results.get(self.cursor) else {
+        let Some(result) = self.cursor_result().and_then(|i| self.results.get(i)) else {
             return;
         };
         let abs = ctx.vault.path.join(&result.path);
@@ -404,6 +480,10 @@ impl Tab for SearchTab {
                 self.run_query(ctx);
                 CommandOutcome::Handled
             }
+            "search.toggle-grouping" => {
+                self.toggle_grouping();
+                CommandOutcome::Handled
+            }
             "search.result-up" => {
                 self.move_cursor(-1);
                 CommandOutcome::Handled
@@ -442,6 +522,7 @@ impl Tab for SearchTab {
                 self.any = false;
                 self.sort = Sort::Relevance;
                 self.results.clear();
+                self.rows.clear();
                 self.selected.clear();
                 self.cursor = 0;
                 self.last_query = None;
@@ -495,7 +576,7 @@ impl Tab for SearchTab {
         })
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {
         let block = Block::default().borders(Borders::ALL).title(" Search ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -505,12 +586,22 @@ impl Tab for SearchTab {
         // feed split below). Its title carries the parse state so the
         // status stays visually distinct from the query text inside.
         let (query_area, feed_area) = split_query_box(inner);
-        let status = match (self.any, self.sort) {
-            (false, Sort::Relevance) => "AND · sort: relevance",
-            (true, Sort::Relevance) => "ANY · sort: relevance",
-            (false, Sort::Date) => "AND · sort: date",
-            (true, Sort::Date) => "ANY · sort: date",
-        };
+        let mut status = format!(
+            "{} · sort: {} · {}",
+            if self.any { "ANY" } else { "AND" },
+            match self.sort {
+                Sort::Relevance => "relevance",
+                Sort::Date => "date",
+            },
+            if self.grouped { "grouped" } else { "flat" }
+        );
+        let filters = self.last_query.as_ref().map_or(0, |q| q.filters().count());
+        if filters > 0 {
+            status.push_str(&format!(
+                " · {filters} filter{}",
+                if filters == 1 { "" } else { "s" }
+            ));
+        }
         let qtitle = Line::from(Span::styled(
             format!(
                 " {status} ({} result{}, {} selected) ",
@@ -534,7 +625,7 @@ impl Tab for SearchTab {
                 buf: &self.input,
                 prefix: vec![Span::styled(prefix, Style::default().fg(palette::PRIMARY))],
                 placeholder: Some(Span::styled(
-                    "type a query — substring, =word, ~fuzzy, \"phrase\", [[link]], -exclude",
+                    "type a query — substring, =word, ~fuzzy, \"phrase\", [[link]], -exclude, path: tag: near:[[…]]",
                     Style::default().fg(palette::DIM),
                 )),
                 text_style: Style::default().fg(palette::WHITE),
@@ -575,53 +666,97 @@ impl Tab for SearchTab {
             return;
         }
 
-        // Compact list rows: `{mark}{path} L{start}-{end} {matched
-        // labels}` — no paragraph body (the preview pane below shows it)
-        // — padded to the full row width so a shorter row can't leave
-        // the previous frame's longer text behind.
-        let mut items: Vec<ListItem<'_>> = Vec::with_capacity(self.results.len());
-        for (i, row) in self.results.iter().enumerate() {
-            let mark = if self.selected.contains(&i) {
-                "[*] "
-            } else {
-                "    "
+        // Compact list rows — no paragraph body (the preview pane below
+        // shows it) — padded to the full row width so a shorter row can't
+        // leave the previous frame's longer text behind. Grouped: a header
+        // per note, then `L{start}-{end}  {heading path}  {labels}` rows;
+        // flat: the path leads every row.
+        let mut items: Vec<ListItem<'_>> = Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
+            let mut spans = match row {
+                Row::Header { path, members } => {
+                    let all = members.iter().all(|i| self.selected.contains(i));
+                    vec![
+                        Span::styled(
+                            if all { "[*] " } else { "    " },
+                            Style::default().fg(palette::DIM),
+                        ),
+                        Span::styled(
+                            format!("{path} ({})", members.len()),
+                            Style::default()
+                                .fg(palette::PRIMARY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]
+                }
+                Row::Item(i) => {
+                    let r = &self.results[*i];
+                    let mark = if self.selected.contains(i) {
+                        "[*] "
+                    } else {
+                        "    "
+                    };
+                    let loc = if self.grouped {
+                        format!("  L{}-{}", r.line_start, r.line_end)
+                    } else {
+                        format!("{} L{}-{}", r.path.display(), r.line_start, r.line_end)
+                    };
+                    let mut spans = vec![
+                        Span::styled(mark, Style::default().fg(palette::DIM)),
+                        Span::styled(loc, Style::default().fg(palette::PRIMARY)),
+                    ];
+                    if !r.heading_path.is_empty() {
+                        spans.push(Span::styled(
+                            format!("  {}", r.heading_path.join(" › ")),
+                            Style::default().fg(palette::SECONDARY),
+                        ));
+                    }
+                    if !r.matched.is_empty() {
+                        spans.push(Span::styled(
+                            format!("  {}", r.matched.join(" ")),
+                            Style::default().fg(palette::DIM),
+                        ));
+                    }
+                    spans
+                }
             };
-            let loc = format!(
-                "{} L{}-{}",
-                row.path.display(),
-                row.line_start,
-                row.line_end
-            );
-            let mut spans = vec![
-                Span::styled(mark, Style::default().fg(palette::DIM)),
-                Span::styled(loc, Style::default().fg(palette::PRIMARY)),
-            ];
-            if !row.matched.is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", row.matched.join(" ")),
-                    Style::default().fg(palette::DIM),
-                ));
-            }
-            let mut line = Line::from(spans);
-            let pad = (feed_area.width as usize).saturating_sub(line.width());
+            let width: usize = spans.iter().map(|s| s.width()).sum();
+            let pad = (feed_area.width as usize).saturating_sub(width);
             if pad > 0 {
-                line.push_span(Span::raw(" ".repeat(pad)));
+                spans.push(Span::raw(" ".repeat(pad)));
             }
-            items.push(ListItem::new(line));
+            items.push(ListItem::new(Line::from(spans)));
+        }
+
+        // Highlights are computed for the focused paragraph only (it is
+        // the one the preview shows).
+        let focus = self.cursor_result();
+        if let (Some(i), Some(snap), Some(query)) =
+            (focus, ctx.snapshot.as_ref(), self.last_query.as_ref())
+        {
+            fill_highlights(
+                &snap.search,
+                query,
+                std::slice::from_mut(&mut self.results[i]),
+            );
         }
 
         // Preview pane: a header band (path · lines · matched labels ·
-        // score, plus the blame date in date-sort mode) then the wrapped
-        // paragraph body with the shared inline markdown styling.
+        // score, plus the blame date when dated) then the wrapped
+        // paragraph body with the shared inline markdown styling and the
+        // query's matches highlighted.
         let mut preview_header: Vec<Line<'_>> = Vec::new();
         let mut preview_body: Vec<Line<'_>> = Vec::new();
-        if let Some(row) = self.results.get(self.cursor) {
+        if let Some(row) = focus.and_then(|i| self.results.get(i)) {
             let mut h = format!(
                 "{} · L{}–{}",
                 row.path.display(),
                 row.line_start,
                 row.line_end
             );
+            if !row.heading_path.is_empty() {
+                h.push_str(&format!(" · {}", row.heading_path.join(" › ")));
+            }
             if !row.matched.is_empty() {
                 h.push_str(&format!(" · {}", row.matched.join(" · ")));
             }
@@ -636,9 +771,17 @@ impl Tab for SearchTab {
                     .bg(palette::ENTRY_HEADER_BG)
                     .add_modifier(Modifier::BOLD),
             )));
+            let needles: Vec<&str> = row
+                .highlights
+                .iter()
+                .map(|h| &row.body[h.clone()])
+                .collect();
             for body_line in row.body.lines() {
                 for wrapped in wrap_line(body_line, feed_area.width as usize) {
-                    preview_body.push(Line::from(inline_markdown_spans(&wrapped)));
+                    preview_body.push(Line::from(highlight_spans(
+                        inline_markdown_spans(&wrapped),
+                        &needles,
+                    )));
                 }
             }
         }
@@ -648,7 +791,7 @@ impl Tab for SearchTab {
             feed_area,
             items,
             self.cursor,
-            &self.selected,
+            &HashSet::new(),
             &preview_header,
             &preview_body,
         );
@@ -664,13 +807,14 @@ impl Tab for SearchTab {
                     ("Esc / Enter", "leave the query editor"),
                     ("a", "toggle all-match (AND) ↔ any-match (OR)"),
                     ("o", "cycle sort: relevance ↔ date"),
+                    ("g", "toggle grouped by note ↔ flat"),
                 ],
             ),
             HelpSection::new(
                 "Results",
                 &[
-                    ("↑ / ↓ · j / k", "select prev / next result"),
-                    ("Space", "toggle multi-select"),
+                    ("↑ / ↓ · j / k", "select prev / next row"),
+                    ("Space", "toggle multi-select (on a note header: all of it)"),
                     ("Enter", "open the source note at the paragraph"),
                 ],
             ),
@@ -690,6 +834,54 @@ impl Tab for SearchTab {
             ),
         ]
     }
+}
+
+/// One list row: a note header (grouped mode) or one result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Row {
+    Header { path: String, members: Vec<usize> },
+    Item(usize),
+}
+
+/// Re-style every occurrence of a highlighted string inside `spans`
+/// (the preview's wrapped, markdown-styled lines no longer share byte
+/// offsets with the paragraph, so matches are found by text).
+fn highlight_spans(spans: Vec<Span<'static>>, needles: &[&str]) -> Vec<Span<'static>> {
+    if needles.is_empty() {
+        return spans;
+    }
+    let hl = Style::default()
+        .fg(palette::BLACK)
+        .bg(palette::SECONDARY)
+        .add_modifier(Modifier::BOLD);
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        let text = span.content.to_string();
+        let mut marks: Vec<(usize, usize)> = Vec::new();
+        for n in needles.iter().filter(|n| !n.is_empty()) {
+            marks.extend(text.match_indices(n).map(|(at, m)| (at, at + m.len())));
+        }
+        if marks.is_empty() {
+            out.push(span);
+            continue;
+        }
+        marks.sort_unstable();
+        let mut at = 0;
+        for (s, e) in marks {
+            if s < at {
+                continue;
+            }
+            if s > at {
+                out.push(Span::styled(text[at..s].to_string(), span.style));
+            }
+            out.push(Span::styled(text[s..e].to_string(), span.style.patch(hl)));
+            at = e;
+        }
+        if at < text.len() {
+            out.push(Span::styled(text[at..].to_string(), span.style));
+        }
+    }
+    out
 }
 
 /// Split the inner area into a 3-row query box and the feed split.

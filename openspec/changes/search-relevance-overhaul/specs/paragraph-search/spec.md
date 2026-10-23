@@ -18,9 +18,9 @@ index SHALL store, per field, a token dictionary with postings carrying term
 frequency, per-document field lengths, a trigram map over the dictionary for
 fuzzy candidates, and a stem map per configured stemmer. The index SHALL be
 immutable after build and SHALL be rebuilt whenever the scan changes (a new scan
-generation). The build SHALL accept an optional link graph built from the same
-scan, from which it derives per-note ranking priors; without a graph the priors
-SHALL be neutral.
+generation). The build SHALL derive per-note ranking priors and the undirected
+note-link adjacency from the scan's own links, resolved with the link graph's
+resolution rules (`graph::resolve`), without building the graph.
 
 #### Scenario: Index covers all paragraphs
 
@@ -29,8 +29,8 @@ SHALL be neutral.
 
 #### Scenario: Index needs no graph or git
 
-- **WHEN** the index is built in a vault with no git repository and no graph is supplied
-- **THEN** the build succeeds, every prior is neutral, and text-clause results are identical to a git-backed vault (dates excepted)
+- **WHEN** the index is built in a vault with no git repository
+- **THEN** the build succeeds without building the link graph, and text-clause results are identical to a git-backed vault (dates excepted)
 
 #### Scenario: Link tokens are extracted from paragraph text
 
@@ -182,10 +182,12 @@ best BM25F contribution among the dictionary tokens it resolved to in that
 paragraph, where BM25F combines per-field term frequencies with per-field
 weights and per-field length normalization, and uses an inverse document
 frequency over paragraphs. Phrase and multi-token substring clauses SHALL use
-their occurrence counts as term frequency. Mode weights SHALL rank exact intent
-above approximate (phrase ≥ word = link ≥ substring ≥ fuzzy). Field weights,
-`k1`, `b`, and mode weights SHALL be named constants tuned against the
-relevance evaluation harness. Ties SHALL break by vault-relative path ascending,
+their occurrence counts as term frequency. A clause that matches a paragraph only
+through context fields SHALL contribute a damped score, so a paragraph's own
+words outweigh text it merely inherits from its note. Mode weights SHALL rank
+exact intent above approximate (phrase ≥ word = link ≥ substring ≥ fuzzy). Field
+weights, `k1`, `b`, the context-only damping, and mode weights SHALL be named
+constants tuned against the relevance evaluation harness. Ties SHALL break by vault-relative path ascending,
 then line start ascending. The same query over the same index SHALL produce
 identical ordering across runs.
 
@@ -209,6 +211,11 @@ identical ordering across runs.
 - **WHEN** two paragraphs mention `eigen` equally in their bodies and only one sits in the note `Eigen.md`
 - **THEN** the paragraph in `Eigen.md` ranks first
 
+#### Scenario: Title-only matches do not flood the results
+
+- **WHEN** the note `Short-term-memory.md` has ten paragraphs none of which mention `memory`, and a paragraph in another note mentions `memory` once
+- **THEN** the paragraph that mentions `memory` ranks above every paragraph matched only through the title
+
 #### Scenario: Deterministic tiebreak
 
 - **WHEN** two paragraphs have equal scores
@@ -217,8 +224,9 @@ identical ordering across runs.
 ### Requirement: ft notes search command
 
 `ft notes search <query> [--any] [--sort relevance|date] [--limit N] [--flat] [--json]` SHALL be a subcommand of `ft notes`. The default sort SHALL be `relevance`.
-The command SHALL build the link graph from the same scan and supply it to the
-index, so CLI and TUI rank identically. The command SHALL respect
+The command SHALL build the index exactly as the TUI snapshot does, so CLI and
+TUI rank identically, and SHALL build the link graph only when the query has a
+`scope:` filter. The command SHALL respect
 `synth.exclude_prefixes` (files whose vault-relative path starts with a
 configured prefix SHALL NOT be searched). `--limit N` SHALL cap the number of
 paragraphs before grouping. Default text output SHALL group results by note:
@@ -266,7 +274,7 @@ print nothing and exit 0.
 
 ### Requirement: Search TUI tab
 
-The TUI SHALL register a `Search` tab in the default tab lineup with a `<TAB>_COMMANDS`/`<TAB>_KEYMAP` pair, a keymap overlay, a `help_sections()` entry, and a `TestBackend` snapshot. The tab SHALL show an inline input line and a live results list. The results SHALL re-query synchronously on every input change against the snapshot's search index (an `Arc<SearchIndex>` built with the snapshot's graph and rebuilt on graph generation change; the tab SHALL re-derive on `on_graph_ready` / `on_focus`, never by scanning the vault itself). A status bar SHALL render the live parse: term count, filter count, AND/ANY, sort mode, and grouping mode. Results SHALL be grouped by note by default, with one non-focusable-for-open header row per note; each paragraph row SHALL show its line range, heading path, and matched clause labels; the preview pane SHALL render the focused paragraph with every highlight range emphasized. Keys: `a` SHALL toggle all/any; `o` SHALL cycle sort relevance ↔ date; `g` SHALL toggle grouped ↔ flat; `Space` SHALL toggle multi-select on the focused row (on a group header: all of that note's rows); `Enter` SHALL open the source note in `$EDITOR` at the paragraph's line (on a group header: at the first member's line); `s` SHALL append selected (or all) results to an existing synth note; `S` SHALL create a new synth note from them; `R` SHALL re-run the query. Send-to-synth SHALL reuse the shared synth-send machinery and SHALL ship paragraphs in result order regardless of grouping. A query whose `scope:` names an unknown preset SHALL show the error in the status bar and an empty result list.
+The TUI SHALL register a `Search` tab in the default tab lineup with a `<TAB>_COMMANDS`/`<TAB>_KEYMAP` pair, a keymap overlay, a `help_sections()` entry, and a `TestBackend` snapshot. The tab SHALL show an inline input line and a live results list. The results SHALL re-query synchronously on every input change against the snapshot's search index (an `Arc<SearchIndex>` built from the snapshot's scan and rebuilt on graph generation change, with the snapshot's graph serving `scope:`; the tab SHALL re-derive on `on_graph_ready` / `on_focus`, never by scanning the vault itself). A status bar SHALL render the live parse: term count, filter count, AND/ANY, sort mode, and grouping mode. Results SHALL be grouped by note by default, with one non-focusable-for-open header row per note; each paragraph row SHALL show its line range, heading path, and matched clause labels; the preview pane SHALL render the focused paragraph with every highlight range emphasized. Keys: `a` SHALL toggle all/any; `o` SHALL cycle sort relevance ↔ date; `g` SHALL toggle grouped ↔ flat; `Space` SHALL toggle multi-select on the focused row (on a group header: all of that note's rows); `Enter` SHALL open the source note in `$EDITOR` at the paragraph's line (on a group header: at the first member's line); `s` SHALL append selected (or all) results to an existing synth note; `S` SHALL create a new synth note from them; `R` SHALL re-run the query. Send-to-synth SHALL reuse the shared synth-send machinery and SHALL ship paragraphs in result order regardless of grouping. A query whose `scope:` names an unknown preset SHALL show the error in the status bar and an empty result list.
 
 #### Scenario: Live results update per keystroke
 
@@ -301,8 +309,8 @@ The TUI SHALL register a `Search` tab in the default tab lineup with a `<TAB>_CO
 ### Requirement: Search performance budget
 
 Index build from a scan SHALL be a single pass over the captured paragraphs and
-frontmatter (no re-reads, no git); deriving priors from a supplied graph SHALL be
-linear in the number of notes. Under the `FT_PERF_TESTS=1` gate, a query over a
+frontmatter (no re-reads, no git, no graph build); deriving priors and adjacency
+SHALL be linear in the number of links. Under the `FT_PERF_TESTS=1` gate, a query over a
 5,000-paragraph vault SHALL complete in under 10 ms end-to-end (parse + match +
 rank + highlight + limit), excluding date filters and date sort (which blame
 lazily), and fuzzy queries SHALL examine only trigram-filtered candidates rather
@@ -380,11 +388,13 @@ them, ranked by prior then path then line.
 
 ### Requirement: Graph and recency priors
 
-When the index is built with a graph, each note SHALL carry a prior multiplier
-in `[1.0, 1.25]` combining (a) its in-degree in the link graph, log-scaled
-against the vault's maximum in-degree, and (b) its file recency, measured as the
+Each note SHALL carry a prior multiplier in `[1.0, 1.25]` combining (a) its
+in-degree — the number of distinct other scanned notes whose links resolve to it
+(links from files excluded from the index still count) — log-scaled against the
+vault's maximum in-degree, and (b) its file recency, measured in whole days as the
 age of its mtime relative to the newest mtime in the scan (not wall-clock
-"today", so copies of a vault rank identically) with exponential decay. A
+"today", so copies of a vault rank identically, and files saved moments apart
+tie) with exponential decay. A
 `near:[[Note]]` clause SHALL multiply the score of paragraphs by a boost that
 decreases with undirected link-graph distance from the resolved seed note —
 `1.5` for the seed itself, `1.3` at distance 1, `1.15` at distance 2, `1.0`

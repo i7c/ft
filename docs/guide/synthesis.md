@@ -53,15 +53,42 @@ ft notes search "[[Eigen-decomposition]] [[Memoization]] --any"
 ft notes search "[[Eigen-decomposition]]" --sort date   # newest first
 ```
 
-The query DSL: a plain term is a case-insensitive **substring** (so
-`eigen` matches *eigenvalue*); `=term` is a whole **word**; `~term` is
-**fuzzy** (levenshtein — `~memoizaton` finds *memoization*);
-`"a b"` is a **phrase**; `[[Link]]` matches paragraphs that link that
-target (spaces allowed inside the brackets); `-term` **excludes**.
-Space-separated terms **AND** by default — every term must appear in
-the *same paragraph*, which is the cross-reference query (eigen AND
+The query DSL: a plain term is a case- and accent-insensitive
+**substring** (so `eigen` matches *eigenvalue*, `onibus` matches
+*ônibus*); `=term` is a whole **word**, including inflections under the
+configured stemmers (`=memory` finds *memories*); `~term` is **fuzzy**
+(levenshtein — `~memoizaton` finds *memoization*); `"a b"` is a
+**phrase**; `[[Link]]` matches paragraphs that link that target
+(spaces allowed inside the brackets); `-term` **excludes**.
+Space-separated terms **AND** by default — every term must match the
+*same paragraph*, which is the cross-reference query (eigen AND
 memoization in one paragraph = co-occurrence). Add `--any` to OR
 them instead (OR over links, matching the old multi-link form).
+
+A paragraph also inherits its **note context**: the note's title,
+frontmatter `aliases` and `tags`, and the headings above it. A term
+matches if it appears in the paragraph *or* in that context, so
+`eigen memoization` finds the eigen paragraph inside `Memoization.md`.
+Context matches count for less than the paragraph's own words, and
+`-term` excludes on the paragraph's own words only.
+
+**Filters** narrow the result set without affecting the ranking (prefix
+any of them with `-` to invert it; quote values with spaces):
+
+| Filter | Keeps paragraphs… |
+|-|-|
+| `path:proj/` | in files under a vault-relative path prefix |
+| `tag:proj` | tagged `proj` or `proj/…` (frontmatter tags, or an inline `#tag` in the paragraph) |
+| `after:2026-01-01` / `before:-30d` | last edited (git blame) on/after or on/before a date — `YYYY-MM-DD`, `today`, `yesterday`, `±Nd`/`±Nw`/`±Nm` |
+| `scope:<preset>` | in notes a [graph preset](graph.md) selects (user presets shadow built-ins) |
+
+`near:[[Note]]` **boosts** paragraphs in that note and in notes up to
+two links away, without filtering anything out.
+
+**Ranking** is BM25F: rare terms outweigh common ones, a focused
+paragraph outranks a long list that repeats the term, and title or
+heading matches add weight. Well-linked and recently edited notes get a
+small, bounded boost on ties.
 
 ```sh
 ft notes search "eigen memoization"        # both terms, one paragraph
@@ -69,10 +96,22 @@ ft notes search "[[Foo]] [[Bar]]" --any    # links either → OR
 ft notes search "eigen -task"              # eigen, excluding task mentions
 ft notes search "~memoizaton"              # typo-tolerant
 ft notes search "eigen" --sort date        # newest edits first (git blame)
+ft notes search "cache path:proj/ -tag:archive"   # filtered
+ft notes search "cache after:-14d"         # touched in the last two weeks
+ft notes search "cache near:[[Caching]]"   # closer to [[Caching]] ranks higher
 ```
 
-`--json` gives structured rows (`path`, `line_start`, `line_end`,
-`body`, `matched`, `score`, and `date` with `--sort date`).
+Text output groups the paragraphs by note — a header line with the
+path, then one row per paragraph with its line range, heading path,
+matched terms, and a one-line snippet around the first match
+(highlighted on a terminal). `--flat` prints one line per paragraph
+with its full text instead. `--json` gives structured rows (`path`,
+`line_start`, `line_end`, `body`, `matched`, `score`, `title`,
+`heading_path`, `highlights` as `[start, end)` byte ranges into
+`body`, `reasons` as `{clause, field}` pairs, and `date` with
+`--sort date` or a date filter). An unknown `scope:` preset exits 2.
+A date filter without git history drops every paragraph and says so on
+stderr.
 
 ### Cross-reference and exclusion
 
@@ -163,7 +202,7 @@ ft notes synth scaffold Notes/connections.md \
 ```
 
 The `--search` flag accepts the full query DSL (`=word`, `~fuzzy`,
-`"phrase"`, `[[link]]`, `-exclude`; `--any` for OR). The deprecated
+`"phrase"`, `[[link]]`, `-exclude`, filters, `near:`; `--any` for OR). The deprecated
 `--link "[[X]]"` form still works as sugar for an any-mode
 `[[X]]` search.
 
@@ -181,23 +220,29 @@ the **Search** tab, then `/` and type the query — results update live:
 
 ```
 ┌ Search ────────────────────────────────────────────────────────────┐
-│┌ ANY · sort: relevance (14 results, 2 selected) ──────────────────┐│
+│┌ ANY · sort: relevance · grouped (14 results, 2 selected) ────────┐│
 ││> [[Eigen-decomposition]] [[Memoization]]                         ││
 │└──────────────────────────────────────────────────────────────────┘│
-│▶  notes/hessian.md L12-13  [[Eigen-decomposition]]                │
-│   notes/spectral.md L42-44  [[Eigen-decomposition]]               │
+│▶     notes/hessian.md (2)                                         │
+│        L12-13  Optimization  [[Eigen-decomposition]]              │
+│        L20-21  Optimization  [[Memoization]]                      │
+│      notes/spectral.md (1)                                        │
+│        L42-44  [[Eigen-decomposition]]                            │
 │────────────────────────────────────────────────────────────────────│
-│notes/hessian.md · L12–13 · [[Eigen-decomposition]] · score 2.10   │
+│notes/hessian.md · L12–13 · Optimization · [[Eigen-decomposition]] │
 │────────────────────────────────────────────────────────────────────│
 │The Hessian is the key matrix in second-order optimization.        │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 The query box's title carries the parse state (`AND/ANY · sort: … ·
-N results · M selected`); its bottom border is the separator from the
-result list. The list is capped at a 10-row viewport (it scrolls past
-that); rows show path · line range · matched terms only. The bottom
-pane previews the selected paragraph's full body.
+grouped/flat · N filters · N results · M selected`); its bottom border
+is the separator from the result list. Results are grouped under one
+header per note (`g` switches to one flat row per paragraph); rows show
+line range · heading path · matched terms only. The list is capped at a
+10-row viewport (it scrolls past that). The bottom pane previews the
+focused paragraph's full body with the query's matches highlighted. A
+query error (an unknown `scope:` preset) shows in place of the list.
 
 | Key | Action |
 |-|-|
@@ -205,8 +250,9 @@ pane previews the selected paragraph's full body.
 | `Esc` / `Enter` | leave the query editor |
 | `a` | toggle all-match (AND) ↔ any-match (OR) |
 | `o` | cycle sort: relevance ↔ date |
+| `g` | toggle grouped by note ↔ flat |
 | `c` | clear the query and results |
-| `Space` | toggle multi-select on the current result |
+| `Space` | toggle multi-select on the current result (on a note header: the whole note) |
 | `Enter` | open the source note at the paragraph |
 | `s` | append selected (or all) results to an **existing** note |
 | `Shift+s` | create a **new** synth note (folder picker → title prompt) |

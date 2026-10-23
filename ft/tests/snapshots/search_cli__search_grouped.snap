@@ -1,0 +1,7 @@
+---
+source: ft/tests/search_cli.rs
+expression: stdout
+---
+notes/linear.md
+  L5-5  Linear › Spectra  eigenvalue  An eigenvalue scales its eigenvector.
+  L7-7  Linear › Spectra  eigenvalue  Every eigenvalue of a symmetric matrix is real.

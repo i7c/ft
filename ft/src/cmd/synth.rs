@@ -28,9 +28,8 @@ use std::process::{Command as ProcCommand, ExitCode};
 use crate::cmd::search::SortArg;
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
-use ft_core::blame_cache::BlameCache;
 use ft_core::graph::{Graph, NodeKind};
-use ft_core::search::{parse_query, search, search_with_dates, SearchIndex};
+use ft_core::search::parse_query;
 use ft_core::synth::repair::{
     apply_synth_repair, plan_repair_all, plan_synth_repair, RepairAction, SynthRepairPlan,
 };
@@ -142,16 +141,16 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     if let Some(q) = query_text {
         let any = args.any || !args.link.is_empty();
         let query = parse_query(&q, any);
-        let exclude = vault.config.config.synth.exclude_prefixes.clone();
-        let index = SearchIndex::build(&scan, &exclude);
-        let results = match args.sort {
-            SortArg::Relevance => search(&index, &query),
-            SortArg::Date => {
-                let mut cache = BlameCache::load(&vault.path).context("loading blame cache")?;
-                let results = search_with_dates(&index, &query, &vault, &mut cache)
-                    .context("searching with dates")?;
-                let _ = cache.save(&vault.path);
-                results
+        let results = match crate::cmd::search::run_query(
+            &vault,
+            &scan,
+            &query,
+            ft_core::search::Sort::from(args.sort),
+        )? {
+            crate::cmd::search::QueryOutcome::Found(found) => found.results,
+            crate::cmd::search::QueryOutcome::Usage(msg) => {
+                eprintln!("{msg}");
+                return Ok(ExitCode::from(2));
             }
         };
         for r in results {

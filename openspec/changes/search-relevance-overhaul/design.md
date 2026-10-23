@@ -160,6 +160,15 @@ file order, so these ranges are contiguous.
   per-field-statistics form of BM25F, and it keeps a title word that
   appears in one note rare.
 
+**Context-only damping** (*added during implementation*). On the real
+vault, every paragraph of a scratchpad note titled `Short-term-memory`
+matched `memory` through its title and flooded the top ten (nDCG@10 for
+that case went from 0.515 to 0). A clause that matches a paragraph only
+through context fields is therefore multiplied by `CONTEXT_ONLY = 0.4`.
+A sweep over 1.0, 0.6, 0.4, 0.25 and 0.15 put 0.4 at the best real-vault
+score (0.763 → 0.833) for a 0.006 fixture cost. Title, alias and heading
+weights barely mattered once damping was in (sweep: 1.5–4.0).
+
 **Matching rule.** Positive clauses OR across fields. Excludes are
 body-only, because excluding by title would silently drop whole notes —
 `-task` would remove every paragraph of `Task Notes.md`. Link clauses
@@ -240,32 +249,37 @@ A filter-only query starts from all docs.
 
 ### 6. Priors are bounded, relative, and computed once per index build
 
-`SearchIndex::build_with_graph(scan, exclude, Some(&graph), &cfg)` is
-the new constructor. `build(scan, exclude)` remains as the no-graph form
-used by unit tests.
+*Revised during implementation.* The first cut built priors from the
+link graph (`build_with_graph`), which made every CLI search pay for
+`Graph::build`: 479 ms on the 2,047-note vault, not the estimated
+0.2 s. Priors and adjacency now come straight from the scan's links,
+resolved with the graph's own rules (`graph::resolve::ScanNoteIndex`
+plus `resolve_wiki` / `resolve_md`). The constructor is
+`SearchIndex::build_with(scan, exclude, &cfg)`, and `build(scan,
+exclude)` uses the default config. The CLI builds the graph only for
+`scope:` queries; the TUI already has it in the snapshot.
 
-- **In-degree:** `Graph::incoming(note).count()`, excluding
-  directory-containment edges if present.
+- **In-degree:** the number of distinct other scanned notes whose
+  links resolve to the note. Links from excluded files still count.
 - **Prior formula:**
   `prior = 1 + 0.15 · ln(1+in)/ln(1+max_in) + 0.10 · exp(−age_days/90)`.
   Each part is clamped to its share, so the total lies in `[1, 1.25]`.
-- **`age_days`** is measured as `newest_mtime − mtime`, not
-  `today − mtime`. Fixture copies all share one mtime, so recency is
+- **`age_days`** is measured in whole days as `newest_mtime − mtime`,
+  not `today − mtime`. Whole days keep files saved moments apart from
+  reordering ties (found when an insta JSON snapshot flaked). Fixture copies all share one mtime, so recency is
   neutral in tests, and `FT_TODAY` needs no special-casing. The cost is
   that a vault with nothing touched for a year still has a "newest"
   note. That is acceptable: recency is a tiebreaker, not a filter.
-- **`near:[[X]]`** resolves `X` through the graph's existing note-name
-  resolution, then runs a breadth-first search to depth 2 over
-  undirected edges at query time (cheap at depth 2). It returns
-  `note_id → boost`.
+- **`near:[[X]]`** resolves `X` by folded title or extension-less path
+  against the index's note names, then runs a breadth-first search to
+  depth 2 over the index's undirected note adjacency at query time
+  (cheap at depth 2). It returns `note_id → boost`.
 - **Bound:** the priors cap of 1.25 is below the 1/0.8 = 1.25 ratio in
   the "prior is bounded" scenario, so a 0.8× text match can tie with a
   maxed prior but never overtake a strong match. The harness tunes
   within this bound.
-- **The CLI now builds the graph** (about 0.2 s on 2k notes). The
-  alternative was a scan-only in-degree approximation, but name
-  resolution lives in `Graph::build`, and duplicating it would let the
-  CLI and TUI disagree.
+- **The CLI builds the graph only for `scope:`.** Scan-based resolution
+  reuses the graph's resolver, so the CLI and TUI cannot disagree.
 
 ### 7. Results carry presentation data; rendering stays in `ft`
 
@@ -328,9 +342,13 @@ empty results.
 - **[Ranking churn surprises users]** → This is the intended breaking
   change, measured by the harness. Date sort is unaffected, and
   `scaffold --search` ordering changes only for relevance.
-- **[CLI latency +0.2 s from the graph build]** → Acceptable for an
-  interactive command. If it bites, the follow-up persistent index will
-  absorb it. Measure before and after in the perf task.
+- **[CLI latency]** Measured: `ft notes search` went from 0.23 s to
+  0.34 s median on the 2,047-note vault (index build about 225 ms after
+  switching the hot maps to `foldhash` and deduplicating stems per token).
+  `scope:` queries take 0.82 s because they build the graph. → Acceptable
+  for an interactive command. The follow-up persistent index absorbs it.
+  Further gains would need a buffer-reusing tokenizer (tokenizing is
+  about 65 ms for 764k tokens).
 - **[Per-keystroke budget with fold, BM25F, and highlights]** →
   Highlights are computed only for the visible or limited results, the
   offset map is lazy, and dictionary scans are trigram-narrowed. The

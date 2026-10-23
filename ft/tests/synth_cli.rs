@@ -865,3 +865,25 @@ fn run_git_env(dir: &std::path::Path, args: &[&str], env: &[(String, String)]) {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+#[test]
+fn scaffold_search_unknown_scope_exits_two() {
+    use assert_fs::prelude::*;
+    let tmp = make_search_vault();
+    ft().args([
+        "--vault",
+        tmp.path().to_str().unwrap(),
+        "notes",
+        "synth",
+        "scaffold",
+        "Synthesis/topic.md",
+        "--search",
+        "[[Foo]] scope:nope",
+        "--no-edit",
+    ])
+    .assert()
+    .code(2)
+    .stderr(predicates::str::contains("unknown scope preset `nope`"));
+    tmp.child("Synthesis/topic.md")
+        .assert(predicates::path::missing());
+}

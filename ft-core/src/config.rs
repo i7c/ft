@@ -62,6 +62,9 @@ pub struct Config {
     /// Synthesis settings (search, synth notes). See [`Synth`].
     #[serde(default)]
     pub synth: Synth,
+    /// Paragraph-search settings. See [`SearchCfg`].
+    #[serde(default)]
+    pub search: SearchCfg,
     /// Task-creation settings. See [`Tasks`].
     #[serde(default)]
     pub tasks: Tasks,
@@ -392,6 +395,47 @@ pub struct Synth {
     pub exclude_prefixes: Vec<String>,
 }
 
+/// Paragraph-search configuration (`ft notes search`, the Search tab,
+/// `synth scaffold --search`).
+///
+/// `stemmers` lists the Snowball algorithms whose stems make `=word`
+/// clauses match inflected forms (`=memory` finds `memories`). A token
+/// matches when it shares a stem with the term under any listed
+/// algorithm; `[]` disables stemming. Names are validated at load.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchCfg {
+    #[serde(default = "default_stemmers")]
+    pub stemmers: Vec<String>,
+}
+
+impl Default for SearchCfg {
+    fn default() -> Self {
+        SearchCfg {
+            stemmers: default_stemmers(),
+        }
+    }
+}
+
+fn default_stemmers() -> Vec<String> {
+    vec!["english".to_string()]
+}
+
+impl SearchCfg {
+    /// Reject stemmer names that are not Snowball algorithms.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for name in &self.stemmers {
+            if crate::search::text::stemmer_algorithm(name).is_none() {
+                return Err(format!(
+                    "[search] stemmers: unknown algorithm `{name}` (valid: {})",
+                    crate::search::text::STEMMER_NAMES.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Drift-report configuration (`ft notes drift`).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -566,6 +610,13 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
             message,
         })?;
     }
+    config
+        .search
+        .validate()
+        .map_err(|message| Error::ConfigInvalid {
+            path: vault_config.display().to_string(),
+            message,
+        })?;
 
     Ok(LayeredConfig {
         config,
@@ -1502,6 +1553,24 @@ unknown_key = "oops"
         let vault = tmp.child("vault.toml");
         vault.write_str(body).unwrap();
         load(&tmp.path().join("no-user.toml"), vault.path())
+    }
+
+    #[test]
+    fn search_stemmers_default_and_override() {
+        let lc = load_vault_toml("").unwrap();
+        assert_eq!(lc.config.search.stemmers, vec!["english"]);
+        let lc = load_vault_toml("[search]\nstemmers = [\"english\", \"portuguese\"]\n").unwrap();
+        assert_eq!(lc.config.search.stemmers, vec!["english", "portuguese"]);
+        let lc = load_vault_toml("[search]\nstemmers = []\n").unwrap();
+        assert!(lc.config.search.stemmers.is_empty());
+    }
+
+    #[test]
+    fn unknown_stemmer_is_a_load_error() {
+        let err = load_vault_toml("[search]\nstemmers = [\"klingon\"]\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("klingon"), "{msg}");
+        assert!(msg.contains("portuguese"), "lists valid names: {msg}");
     }
 
     #[test]

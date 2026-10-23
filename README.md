@@ -42,6 +42,9 @@ they're about, the unsorted pile stays retrievable. Two directions:
 - *Pull* — you need everything on a topic, now, maybe minutes before a
   meeting: `ft notes search "[[topic]]"` returns every matching
   paragraph, ranked by relevance (or `--sort date` for newest first).
+  Filters (`path:`, `tag:`, `after:`, `scope:<graph-preset>`) narrow it
+  and `near:[[X]]` ranks what sits close to `X` higher — see the
+  [synthesis guide](docs/guide/synthesis.md#step-1-the-search-feed).
 - *Sweep* — you want to know what accumulated: `ft notes search
   --sort date` walks the paragraphs you touched, newest first, for
   whichever concept you suspect has been growing.
@@ -65,16 +68,12 @@ the system.
 ```
 $ ft notes search "[[onboarding]] [[analytics migration]]" --any \
       --sort date                  # sweep: everything on these, newest first
-notes/standup-2026-06-13.md L12-14  [[onboarding]] [[analytics migration]]
-More [[onboarding]] questions in standup — nobody can say what
-"done" means for the [[analytics migration]].
-notes/standup-2026-06-12.md L9-11   [[onboarding]] [[analytics migration]]
-Talked to Priya — the new [[onboarding]] flow doubles as a dogfood
-path for the [[analytics migration]] since every signup event now
-flows through the new pipeline.
-notes/marketing.md L4-4             [[onboarding]]
-The [[onboarding]] metrics she keeps asking for are really a proxy
-for activation, not setup completion.
+notes/standup-2026-06-13.md
+  L12-14  [[onboarding]] [[analytics migration]]  More [[onboarding]] questions in standup — nobody can say what "done" means…
+notes/standup-2026-06-12.md
+  L9-11  [[onboarding]] [[analytics migration]]  Talked to Priya — the new [[onboarding]] flow doubles as a dogfood path for…
+notes/marketing.md
+  L4-4  Activation  [[onboarding]]  The [[onboarding]] metrics she keeps asking for are really a proxy for activation…
 
 $ ft notes synth scaffold Synthesis/onboarding-and-analytics.md \
     --search "[[onboarding]] [[analytics migration]] --any"

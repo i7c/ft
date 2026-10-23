@@ -168,6 +168,72 @@ pub fn ft_synth_targets_in(fm: &str) -> Option<Vec<String>> {
     parse_sequence(&block)
 }
 
+/// Note aliases from the top-level `aliases:` / `alias:` key: a flow
+/// list, a block list (indented or not), or a single scalar. Unparseable
+/// values yield no aliases, never an error.
+pub fn aliases_in(fm: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["aliases", "alias"] {
+        out.extend(root_list(fm, key, false));
+    }
+    out
+}
+
+/// Note tags from the top-level `tags:` / `tag:` key, with any leading
+/// `#` stripped. A scalar value may hold several tags separated by
+/// commas or whitespace (tags cannot contain spaces).
+pub fn tags_in(fm: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["tags", "tag"] {
+        out.extend(
+            root_list(fm, key, true)
+                .into_iter()
+                .map(|t| t.trim_start_matches('#').to_string())
+                .filter(|t| !t.is_empty()),
+        );
+    }
+    out
+}
+
+/// A top-level string list. `split_scalar` splits a non-list inline
+/// value on commas and whitespace.
+fn root_list(fm: &str, key: &str, split_scalar: bool) -> Vec<String> {
+    let needle = format!("{key}:");
+    let lines: Vec<&str> = fm.lines().collect();
+    let Some(at) = lines
+        .iter()
+        .position(|l| leading_ws(l).is_empty() && l.starts_with(&needle))
+    else {
+        return Vec::new();
+    };
+    let inline = lines[at][needle.len()..].trim();
+    let items: Vec<String> = if let Some(rest) = inline.strip_prefix('[') {
+        match rest.rfind(']') {
+            Some(close) => parse_flow_seq_items(&rest[..close]),
+            None => Vec::new(),
+        }
+    } else if !inline.is_empty() {
+        if split_scalar {
+            inline
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .map(|t| strip_yaml_scalar_quotes(t.trim()).to_string())
+                .collect()
+        } else {
+            vec![strip_yaml_scalar_quotes(inline).to_string()]
+        }
+    } else {
+        // Block list: following `- item` lines, indented or not, until the
+        // next top-level key.
+        lines[at + 1..]
+            .iter()
+            .take_while(|l| l.trim().is_empty() || !leading_ws(l).is_empty() || l.starts_with('-'))
+            .filter_map(|l| l.trim_start().strip_prefix('-'))
+            .map(|v| strip_yaml_scalar_quotes(v.trim()).to_string())
+            .collect()
+    };
+    items.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
 // ── core extraction ──────────────────────────────────────────────────
 
 /// The raw frontmatter body text (between the opening and closing
@@ -642,6 +708,41 @@ fn parse_scalar(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn aliases_and_tags_forms() {
+        assert_eq!(
+            aliases_in("aliases: [memo cache, \"Memo\"]\n"),
+            vec!["memo cache", "Memo"]
+        );
+        assert_eq!(aliases_in("alias: Deep Focus\n"), vec!["Deep Focus"]);
+        assert_eq!(
+            aliases_in("aliases:\n  - one\n  - 'two'\ntitle: x\n"),
+            vec!["one", "two"]
+        );
+        assert_eq!(
+            aliases_in("aliases:\n- flat\n- list\ntags: [a]\n"),
+            vec!["flat", "list"]
+        );
+        assert_eq!(
+            tags_in("tags: [proj/busao, \"#idea\"]\n"),
+            vec!["proj/busao", "idea"]
+        );
+        assert_eq!(tags_in("tags: a, #b c\n"), vec!["a", "b", "c"]);
+        assert_eq!(
+            tags_in("tags:\n  - Canada\n  - Emigration\nother: 1\n"),
+            vec!["Canada", "Emigration"]
+        );
+        assert_eq!(tags_in("tag: solo\n"), vec!["solo"]);
+    }
+
+    #[test]
+    fn aliases_and_tags_absent_or_unparseable() {
+        assert!(aliases_in("title: x\n").is_empty());
+        assert!(tags_in("tags: [unterminated\n").is_empty());
+        assert!(tags_in("ft:\n  tags:\n    section: Tasks\n").is_empty());
+        assert!(tags_in("tags:\n").is_empty());
+    }
     use super::*;
 
     fn fm(body: &str) -> String {

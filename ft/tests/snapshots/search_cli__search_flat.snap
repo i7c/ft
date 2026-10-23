@@ -1,0 +1,6 @@
+---
+source: ft/tests/search_cli.rs
+expression: stdout
+---
+notes/linear.md L5-5  eigenvalue  An eigenvalue scales its eigenvector.
+notes/linear.md L7-7  eigenvalue  Every eigenvalue of a symmetric matrix is real.

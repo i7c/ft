@@ -24,6 +24,9 @@ minijinja = { workspace = true }
 petgraph = { workspace = true }
 rmp-serde = { workspace = true }
 blake3 = { workspace = true }
+foldhash = { workspace = true }
+rust-stemmers = { workspace = true }
+unicode-normalization = { workspace = true }
 ureq = { workspace = true }
 keyring = { workspace = true }
 base64 = { workspace = true }

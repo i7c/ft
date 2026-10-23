@@ -27,6 +27,7 @@ silently default.
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
 | `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes search`. |
+| `[search]`              | table                             | either        | Paragraph search: Snowball stemmers for `=word` clauses. |
 | `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (all default off). |
 | `[drift]`               | table                             | either        | Exclude patterns for the `ft notes drift` report.      |
 
@@ -467,6 +468,24 @@ drift report by pattern:
 # strings and, for notes, the filename stem and vault-relative path.
 # Default: empty (nothing excluded).
 exclude = ["*.png", "*.pdf"]
+```
+
+## `[search]`
+
+Settings for paragraph search (`ft notes search`, the Search tab,
+`ft notes synth scaffold --search`). See
+[guide/synthesis.md](guide/synthesis.md) for the query syntax.
+
+```toml
+[search]
+# Snowball stemmers for `=word` clauses: a token matches when it shares
+# a stem with the term under any listed algorithm, so `=memory` finds
+# `memories`. Substring, fuzzy, phrase, and link clauses are unaffected.
+# `[]` disables stemming. An unknown name is a load error that lists the
+# valid ones (arabic, danish, dutch, english, finnish, french, german,
+# greek, hungarian, italian, norwegian, portuguese, romanian, russian,
+# spanish, swedish, tamil, turkish). Default: ["english"].
+stemmers = ["english", "portuguese"]
 ```
 
 ## `[synth]`

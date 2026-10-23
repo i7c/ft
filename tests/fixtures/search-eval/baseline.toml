@@ -2,7 +2,9 @@
 # fails when a mean drops below these. Raise them (achieved − 0.01) when a
 # ranking change improves the scores; never lower them to make a test pass.
 #
-# Recorded from the pre-overhaul engine (additive clause weights, ASCII
-# tokens, no context fields): nDCG@10 0.379, MRR 0.409, recall@10 0.466.
-ndcg10 = 0.378
-mrr = 0.408
+# Pre-overhaul engine (additive clause weights, ASCII tokens, no context
+# fields): nDCG@10 0.379, MRR 0.409, recall@10 0.466.
+# search-relevance-overhaul (BM25F + context fields + folding/stemming +
+# filters + priors): nDCG@10 0.910, MRR 0.960, recall@10 1.000.
+ndcg10 = 0.900
+mrr = 0.950

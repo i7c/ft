@@ -94,7 +94,9 @@ artifact, and the archive note records the paired commit sha.
   because the three consumers default to different profiles/shapes.
 - **Synthesis (`search` + `synth`).** The
   post-connecting workflow: `ft_core::search` (scan-derived paragraph
-  index + query DSL, `--sort date` via the blame cache) feeds
+  index with BM25F over body + note context, query DSL with filters and
+  `near:`, `--sort date` via the blame cache; ranking changes are gated
+  by the eval ratchet in `ft-core/tests/search_eval.rs`) feeds
   `ft_core::synth::{scaffold,verify,repair,reslice,callout}`
   (plan/apply synth notes with `[!ft-source]` callouts pinned to git
   provenance). Synth notes carry an `ft.synth.enabled: true` frontmatter

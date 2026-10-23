@@ -66,8 +66,12 @@ fn live_typing_updates_results_and_snapshot() -> Result<()> {
     // every paragraph containing "eigen".
     assert!(frame.contains("eigen"), "query bar missing term:\n{frame}");
     assert!(
+        frame.contains("notes.md (2)"),
+        "grouped results carry a note header row:\n{frame}"
+    );
+    assert!(
         frame.contains("L5-5  eigen") && frame.contains("L1-1  eigen"),
-        "result list missing path/lines/matched-label rows:\n{frame}"
+        "result list missing lines/matched-label rows:\n{frame}"
     );
     assert!(
         frame.contains("(2 results"),
@@ -79,8 +83,10 @@ fn live_typing_updates_results_and_snapshot() -> Result<()> {
         frame.contains("· score "),
         "preview header missing relevance score:\n{frame}"
     );
+    // The cursor starts on the note header, which previews its best
+    // member: BM25 ranks the shorter single-mention paragraph first.
     assert!(
-        frame.contains("Eigen and memoization together in one paragraph."),
+        frame.contains("The eigen decomposition is central."),
         "preview pane missing selected paragraph body:\n{frame}"
     );
     assert_tui_snapshot!("search_live_typing_80x24", frame);
@@ -260,5 +266,112 @@ fn search_send_to_existing_dedups_already_pinned_entries() -> Result<()> {
         count, 2,
         "dedup should keep the existing section and add only the missing one:\n{body}"
     );
+    Ok(())
+}
+
+fn esc() -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+}
+
+fn type_query(app: &mut App, q: &str) -> Result<()> {
+    app.dispatch(key('/'))?;
+    for c in q.chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(esc())?;
+    Ok(())
+}
+
+/// `g` drops the note header rows for one row per paragraph and back.
+#[test]
+fn grouping_toggle_switches_to_flat_rows() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "eigen")?;
+    app.dispatch(key('g'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(frame.contains("· flat"), "status shows flat:\n{frame}");
+    assert!(!frame.contains("notes.md (2)"), "no header row:\n{frame}");
+    assert!(
+        frame.contains("notes.md L1-1  eigen") && frame.contains("notes.md L5-5  eigen"),
+        "flat rows lead with the path:\n{frame}"
+    );
+    assert_tui_snapshot!("search_flat_rows_90x24", frame);
+    app.dispatch(key('g'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(frame.contains("· grouped") && frame.contains("notes.md (2)"));
+    Ok(())
+}
+
+/// `Space` on a note header selects every paragraph of that note.
+#[test]
+fn space_on_header_selects_the_whole_note() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "eigen")?;
+    app.dispatch(key(' '))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("2 selected"),
+        "both members selected:\n{frame}"
+    );
+    app.dispatch(key(' '))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("0 selected"),
+        "second press clears:\n{frame}"
+    );
+    Ok(())
+}
+
+/// The preview pane styles every match of the query.
+#[test]
+fn preview_highlights_matches() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "eigen")?;
+    let backend = TestBackend::new(90, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render_to(f)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_to_string(&buf);
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("The eigen decomposition is central."))
+        .expect("preview body line");
+    let col = line.chars().position(|_| true).unwrap_or(0);
+    let x = line[..line.find("eigen").unwrap()].chars().count() + col;
+    let cell = &buf[(x as u16, y as u16)];
+    assert_eq!(
+        cell.style().bg,
+        Some(crate::tui::palette::SECONDARY),
+        "`eigen` is highlighted in the preview"
+    );
+    let plain = &buf[((x - 2) as u16, y as u16)];
+    assert_ne!(plain.style().bg, Some(crate::tui::palette::SECONDARY));
+    Ok(())
+}
+
+/// An unknown `scope:` preset reports in the tab instead of failing.
+#[test]
+fn unknown_scope_shows_error() -> Result<()> {
+    let (_dir, vault) = search_vault();
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "eigen scope:nope")?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("unknown scope preset `nope`"),
+        "error names the preset:\n{frame}"
+    );
+    assert!(
+        frame.contains("1 filter"),
+        "status counts the filter:\n{frame}"
+    );
+    assert_tui_snapshot!("search_unknown_scope_90x24", frame);
     Ok(())
 }

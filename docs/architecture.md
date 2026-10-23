@@ -235,13 +235,20 @@ verifiable git provenance. It runs through these composable layers:
 
 ```rust
 // Engine 3: scan-derived paragraph search index + query DSL.
-// Substring default, `=word`, `~fuzzy`, `"phrase"`, `[[link]]`,
-// `-exclude`; AND by default, `--any` for OR; relevance or blame-date
-// sort. Sourcing engine for scaffold.
-pub struct ft_core::search::SearchIndex;
+// Substring default, `=word` (+ Snowball stems), `~fuzzy`, `"phrase"`,
+// `[[link]]`, `-exclude`; filters `path:` `tag:` `after:` `before:`
+// `scope:<graph-preset>`; `near:[[Note]]` boost; AND by default, `--any`
+// for OR. BM25F over the body plus inherited note context (title,
+// aliases, heading path, tags), times bounded per-note priors (in-degree
+// + recency from the scan's links). Sourcing engine for scaffold.
+pub struct ft_core::search::SearchIndex;           // build / build_with(scan, exclude, &SearchCfg)
 pub fn ft_core::search::parse_query(input: &str, any: bool) -> SearchQuery;
-pub fn ft_core::search::search(index: &SearchIndex, query: &SearchQuery)
-    -> Vec<SearchResult>;
+pub fn ft_core::search::search(index: &SearchIndex, query: &SearchQuery, ctx: SearchCtx)
+    -> Result<Vec<SearchResult>, SearchError>;     // ctx: graph + presets for `scope:`
+pub fn ft_core::search::search_with_dates(.., vault, cache, sort)
+    -> Result<DatedSearch, SearchError>;           // date sort / date filters
+pub fn ft_core::search::fill_highlights(index, query, results: &mut [SearchResult]);
+pub fn ft_core::search::group(results: &[SearchResult]) -> Vec<NoteGroup>;
 
 // Plan/apply for synth-note scaffolding.
 pub fn ft_core::synth::scaffold::plan_synth_scaffold(...)
@@ -295,7 +302,13 @@ file+range to stdout, and its inverse `ft notes export` in
 CommonMark or Slack mrkdwn (`--format`)). `ft notes search` is the
 sourcing front-end: a scan-derived paragraph index, the query DSL
 (`search::query::parse`), and relevance / blame-date sorts; it feeds
-`ft notes synth scaffold --search "<query>"` and ghost promotion.
+`ft notes synth scaffold --search "<query>"` and ghost promotion. Both
+CLI paths share `cmd::search::run_query`, which builds the same index the
+TUI snapshot holds (so CLI and TUI rank identically) and builds the link
+graph only for `scope:` queries. Text is folded (case + diacritics) and
+tokenized by `search::text`; relevance is measured by the eval harness in
+`ft-core/tests/search_eval.rs` against `tests/fixtures/search-eval/`, whose
+`baseline.toml` ratchet fails the build on a regression.
 
 The TUI exposes the flow through the `Search` tab
 (`ft/src/tui/tabs/search.rs`). Its query box (`/` to edit) re-queries

@@ -135,7 +135,7 @@ fn real_vault_synth_verify_all_runs() {
 
 #[test]
 fn real_vault_search_index_builds() {
-    use ft_core::search::{parse_query, search, SearchIndex};
+    use ft_core::search::{parse_query, search, SearchCtx, SearchIndex};
     use ft_core::vault::Vault;
 
     if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
@@ -151,7 +151,7 @@ fn real_vault_search_index_builds() {
     // and fuzzy querying must both stay on char boundaries.
     let index = SearchIndex::build(&scan, &[]);
     for term in ["~memoization", "~móveis", "~óé", "=the", "[[Topic]]"] {
-        let _ = search(&index, &parse_query(term, false));
+        let _ = search(&index, &parse_query(term, false), SearchCtx::default());
     }
     println!(
         "real_vault_search_index: {} paragraphs indexed",

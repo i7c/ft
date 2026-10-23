@@ -411,10 +411,14 @@ impl Vault {
 pub mod engine;
 pub mod index;
 pub mod query;
+pub mod text;
 
-pub use engine::{search, search_with_dates, SearchResult, Sort};
-pub use index::SearchIndex;
-pub use query::{parse as parse_query, Clause, Mode, SearchQuery};
+pub use engine::{
+    fill_highlights, group, search, search_with_dates, DatedSearch, MatchReason, NoteGroup,
+    SearchCtx, SearchError, SearchResult, Sort,
+};
+pub use index::{Field, SearchIndex};
+pub use query::{parse as parse_query, Clause, Filter, Mode, SearchQuery};
 
 // ── tests ────────────────────────────────────────────────────────────────────
 

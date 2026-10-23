@@ -812,7 +812,10 @@ impl GraphTab {
         // Every paragraph mentioning the ghost becomes a source via the
         // shared search index (the search path replaced the gather feed).
         let query = ft_core::search::parse_query(&format!("[[{raw}]]"), true);
-        let results = ft_core::search::search(&snap.search, &query);
+        // A bare link query has no scope or date clause, so it cannot fail.
+        let results =
+            ft_core::search::search(&snap.search, &query, ft_core::search::SearchCtx::default())
+                .unwrap_or_default();
         if results.is_empty() {
             queue_toast(
                 ctx,

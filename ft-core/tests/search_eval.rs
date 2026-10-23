@@ -15,10 +15,16 @@
 //!   FT_SEARCH_EVAL_JUDGMENTS=~/judgments.toml \
 //!   cargo test -p ft-core --test search_eval -- --nocapture
 //! ```
+//!
+//! `FT_SEARCH_EVAL_SHOW=1` also prints each case's top ten hits with
+//! their grade and score.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ft_core::search::{parse_query, search, SearchIndex};
+use ft_core::config::SearchCfg;
+use ft_core::graph::Graph;
+use ft_core::search::{parse_query, search, SearchCtx, SearchIndex};
 use serde::Deserialize;
 
 const CUTOFF: usize = 10;
@@ -116,6 +122,7 @@ struct Hit {
     path: PathBuf,
     line_start: u32,
     line_end: u32,
+    score: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -189,24 +196,40 @@ fn score(hits: &[Hit], relevant: &[Judged]) -> Scores {
 /// The engine under evaluation, built once per vault.
 struct Engine {
     index: SearchIndex,
+    graph: Graph,
+    presets: HashMap<String, String>,
 }
 
 impl Engine {
-    fn build(vault: &Path, exclude: &[String]) -> Engine {
+    fn build(
+        vault: &Path,
+        exclude: &[String],
+        cfg: &SearchCfg,
+        presets: HashMap<String, String>,
+    ) -> Engine {
         let scan = ft_core::scan::scan_vault(vault, &[]);
+        let graph = Graph::build(&scan).unwrap();
         Engine {
-            index: SearchIndex::build(&scan, exclude),
+            index: SearchIndex::build_with(&scan, exclude, cfg),
+            graph,
+            presets,
         }
     }
 
     fn run(&self, case: &Case) -> Vec<Hit> {
         let query = parse_query(&case.query, case.any);
-        search(&self.index, &query)
+        let ctx = SearchCtx {
+            graph: Some(&self.graph),
+            presets: Some(&self.presets),
+        };
+        search(&self.index, &query, ctx)
+            .unwrap_or_else(|e| panic!("query {:?}: {e}", case.query))
             .into_iter()
             .map(|r| Hit {
                 path: r.path,
                 line_start: r.line_start,
                 line_end: r.line_end,
+                score: r.score,
             })
             .collect()
     }
@@ -219,8 +242,10 @@ fn evaluate(engine: &Engine, cases: &[Case]) -> Scores {
         "{:<36} {:>8} {:>6} {:>9}  probe",
         "query", "nDCG@10", "MRR", "recall@10"
     );
+    let show = std::env::var_os("FT_SEARCH_EVAL_SHOW").is_some();
     for case in cases {
-        let s = score(&engine.run(case), &case.relevant);
+        let hits = engine.run(case);
+        let s = score(&hits, &case.relevant);
         let q = if case.any {
             format!("{} (any)", case.query)
         } else {
@@ -230,6 +255,18 @@ fn evaluate(engine: &Engine, cases: &[Case]) -> Scores {
             "{:<36} {:>8.3} {:>6.3} {:>9.3}  {}",
             q, s.ndcg, s.mrr, s.recall, case.note
         );
+        if show {
+            let g = gains(&hits, &case.relevant);
+            for (h, grade) in hits.iter().zip(&g).take(CUTOFF) {
+                println!(
+                    "    [{grade}] {:>7.3}  {} L{}-{}",
+                    h.score,
+                    h.path.display(),
+                    h.line_start,
+                    h.line_end
+                );
+            }
+        }
         sum.ndcg += s.ndcg;
         sum.mrr += s.mrr;
         sum.recall += s.recall;
@@ -269,7 +306,12 @@ fn fixture_relevance_ratchet() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(cases.len() >= 25, "the fixture needs at least 25 cases");
 
-    let engine = Engine::build(&dir.join("vault"), &[]);
+    let presets: HashMap<String, String> = [(
+        "know-notes".to_string(),
+        r#"node where path starts_with "know/";"#.to_string(),
+    )]
+    .into();
+    let engine = Engine::build(&dir.join("vault"), &[], &SearchCfg::default(), presets);
     let mean = evaluate(&engine, &cases);
 
     let baseline: Baseline =
@@ -334,7 +376,13 @@ fn real_vault_relevance_report() {
     let vault = ft_core::vault::Vault::discover(Some(PathBuf::from(vault))).unwrap();
     let cases = parse_judgments(&std::fs::read_to_string(judgments).unwrap())
         .unwrap_or_else(|e| panic!("{e}"));
-    let engine = Engine::build(&vault.path, &vault.config.config.synth.exclude_prefixes);
+    let cfg = &vault.config.config;
+    let engine = Engine::build(
+        &vault.path,
+        &cfg.synth.exclude_prefixes,
+        &cfg.search,
+        cfg.graph.presets.clone(),
+    );
     evaluate(&engine, &cases);
 }
 
@@ -345,6 +393,7 @@ fn hit(path: &str, a: u32, b: u32) -> Hit {
         path: PathBuf::from(path),
         line_start: a,
         line_end: b,
+        score: 0.0,
     }
 }
 
