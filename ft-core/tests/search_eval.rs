@@ -17,14 +17,17 @@
 //! ```
 //!
 //! `FT_SEARCH_EVAL_SHOW=1` also prints each case's top ten hits with
-//! their grade and score.
+//! their grade and score. The real-vault run reports twice — recency
+//! from file mtimes, then from the vault's blame cache;
+//! `FT_SEARCH_EVAL_WARM=1` blames every uncached file first.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use ft_core::blame_cache::{BlameCache, BlameValidity};
 use ft_core::config::SearchCfg;
 use ft_core::graph::Graph;
-use ft_core::search::{parse_query, search, SearchCtx, SearchIndex};
+use ft_core::search::{parse_query, search, warm_blame, RecencyTable, SearchCtx, SearchIndex};
 use serde::Deserialize;
 
 const CUTOFF: usize = 10;
@@ -198,6 +201,9 @@ struct Engine {
     index: SearchIndex,
     graph: Graph,
     presets: HashMap<String, String>,
+    /// Paragraph blame recency; `None` ranks by file mtime (the fixture
+    /// always runs without, so its in-repo commit times never leak in).
+    recency: Option<RecencyTable>,
 }
 
 impl Engine {
@@ -213,6 +219,7 @@ impl Engine {
             index: SearchIndex::build_with(&scan, exclude, cfg),
             graph,
             presets,
+            recency: None,
         }
     }
 
@@ -221,7 +228,7 @@ impl Engine {
         let ctx = SearchCtx {
             graph: Some(&self.graph),
             presets: Some(&self.presets),
-            ..Default::default()
+            recency: self.recency.as_ref(),
         };
         search(&self.index, &query, ctx)
             .unwrap_or_else(|e| panic!("query {:?}: {e}", case.query))
@@ -378,13 +385,39 @@ fn real_vault_relevance_report() {
     let cases = parse_judgments(&std::fs::read_to_string(judgments).unwrap())
         .unwrap_or_else(|e| panic!("{e}"));
     let cfg = &vault.config.config;
-    let engine = Engine::build(
+    let mut engine = Engine::build(
         &vault.path,
         &cfg.synth.exclude_prefixes,
         &cfg.search,
         cfg.graph.presets.clone(),
     );
+    println!("── recency from file mtimes");
     evaluate(&engine, &cases);
+
+    // Blame recency from the vault's cache; `FT_SEARCH_EVAL_WARM=1`
+    // blames every uncached file first (writes `.ft/cache/blame.msgpack`).
+    if let Some(validity) = BlameValidity::snapshot(&vault.path).unwrap() {
+        let mut cache = BlameCache::load(&vault.path).unwrap();
+        if std::env::var("FT_SEARCH_EVAL_WARM").as_deref() == Ok("1") {
+            let n = warm_blame(
+                &engine.index,
+                &vault.path,
+                &validity,
+                &mut cache,
+                || true,
+                |_, _| {},
+            );
+            println!("── warmed {n} files");
+        }
+        let table = RecencyTable::build(&engine.index, &cache, &validity);
+        println!(
+            "── recency from blame ({} of {} paragraphs covered)",
+            table.covered(),
+            engine.index.paragraph_count()
+        );
+        engine.recency = Some(table);
+        evaluate(&engine, &cases);
+    }
 }
 
 // ── Metric unit tests ────────────────────────────────────────────────

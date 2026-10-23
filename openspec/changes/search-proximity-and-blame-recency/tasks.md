@@ -13,7 +13,7 @@
 - [x] 2.2 New `search/recency.rs`: `RecencyTable::build(index, cache, validity)` (per-doc blame day, `doc_count`, newest day); `SearchCtx::recency`; a stale table (doc-count mismatch) is ignored
 - [x] 2.3 `search/engine.rs`: paragraph recency part `0.10 · exp(−age/90)` over whole days, blame day else mtime day; total prior ≤ 1.25
 - [x] 2.4 Tests: fresh paragraph in an old note (temp git repo with two commit dates), uncached file falls back to mtime, prior stays bounded, no table equals mtime-only ranking
-- [ ] 2.5 Fixture eval unchanged (no table); record the real-vault report with a warm cache in the change notes
+- [x] 2.5 Fixture eval unchanged (no table); record the real-vault report with a warm cache in the change notes
 
 ## 3. CLI
 
@@ -36,5 +36,5 @@
 
 ## 6. Docs and finish
 
-- [ ] 6.1 `docs/guide/synthesis.md` (recency from git, `N` / `n`), `docs/architecture.md` §Synthesis (recency table, blame-warm worker), `docs/guide/graph.md` (the `N` key)
-- [ ] 6.2 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`
+- [x] 6.1 `docs/guide/synthesis.md` (recency from git, `N` / `n`), `docs/architecture.md` §Synthesis (recency table, blame-warm worker), `docs/guide/graph.md` (the `N` key)
+- [x] 6.2 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`

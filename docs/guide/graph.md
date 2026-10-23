@@ -179,6 +179,7 @@ each with their own cursor and expansion state.
 | `r`       | rename the selected note (or move the multi-selection)           |
 | `R`       | open the Related panel for the selected note                     |
 | `J`       | open Search for the selected note's mentions                     |
+| `N`       | open Search ranked by proximity to the selected note (type the query) |
 | `Ctrl+r`  | refresh the graph from disk                                      |
 
 ### Periodic notes

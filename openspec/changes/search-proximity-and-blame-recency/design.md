@@ -131,10 +131,12 @@ which blame does not need.
 
 ### 4. CLI loads the table and never blames for relevance
 
-`cmd::search::run_query` loads the cache plus validity (about 40 ms), builds
-the table, and passes it in `SearchCtx`. With `--sort date` or a date filter,
-the existing lazy blame of survivors runs first and also feeds the table. A
-vault outside git gets no table, and mtime applies.
+`cmd::search::run_query` loads the cache plus validity, builds the table,
+and passes it in `SearchCtx`. With `--sort date` or a date filter, the lazy
+blame of survivors runs after ranking (results are re-sorted by date anyway)
+and is saved, so the *next* search uses it. A vault outside git gets no table,
+and mtime applies. Measured: +70 ms per search on the 2,047-note vault with a
+warm 4.6 MB cache (0.34 s → 0.41 s).
 
 ### 5. `N` and `n` reuse the `near:` clause
 

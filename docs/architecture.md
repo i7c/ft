@@ -305,7 +305,17 @@ sourcing front-end: a scan-derived paragraph index, the query DSL
 `ft notes synth scaffold --search "<query>"` and ghost promotion. Both
 CLI paths share `cmd::search::run_query`, which builds the same index the
 TUI snapshot holds (so CLI and TUI rank identically) and builds the link
-graph only for `scope:` queries. Text is folded (case + diacritics) and
+graph only for `scope:` queries. Paragraph recency is query-time data:
+`search::recency::RecencyTable` maps each doc to its blame day from the
+blob-keyed `BlameCache` (valid while the file's `HEAD` blob is unchanged
+and the file is clean, judged by one `BlameValidity` snapshot of
+`git ls-tree` + `git status`) and rides in `SearchCtx`, so new blame
+re-ranks without rebuilding the index. The CLI builds it from the cache
+and never blames for relevance; the TUI's blame warm-up worker (spawned
+per snapshot install, cancelled by a newer generation through an
+`AtomicU64`) posts `BgEvent::RecencyReady` / `BlameWarmProgress`, the App
+keeps the table in `TabCtx::recency`, and the Search tab re-ranks via
+`Tab::on_recency_ready`. Text is folded (case + diacritics) and
 tokenized by `search::text`; relevance is measured by the eval harness in
 `ft-core/tests/search_eval.rs` against `tests/fixtures/search-eval/`, whose
 `baseline.toml` ratchet fails the build on a regression.

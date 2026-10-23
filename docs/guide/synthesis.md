@@ -83,12 +83,21 @@ any of them with `-` to invert it; quote values with spaces):
 | `scope:<preset>` | in notes a [graph preset](graph.md) selects (user presets shadow built-ins) |
 
 `near:[[Note]]` **boosts** paragraphs in that note and in notes up to
-two links away, without filtering anything out.
+two links away, without filtering anything out. You rarely type it: `N`
+on a note in the Graph tab opens Search with `near:[[Note]] ` filled in
+(just type what you are looking for), and `n` on the Search tab re-ranks
+around the focused result's note.
 
 **Ranking** is BM25F: rare terms outweigh common ones, a focused
 paragraph outranks a long list that repeats the term, and title or
-heading matches add weight. Well-linked and recently edited notes get a
-small, bounded boost on ties.
+heading matches add weight. Well-linked notes and recently edited
+*paragraphs* get a small, bounded boost on ties. Recency comes from git
+blame — when the paragraph's lines last changed, not when the file was
+saved — once ft has blamed the file. The TUI warms that blame cache in
+the background (progress shows as `blame d/t` on the Search tab); a
+plain CLI search never blames and uses whatever is cached, falling back
+to the file's modification time. `--sort date` and date filters blame
+the files they need and cache them for next time.
 
 ```sh
 ft notes search "eigen memoization"        # both terms, one paragraph
@@ -251,6 +260,7 @@ query error (an unknown `scope:` preset) shows in place of the list.
 | `a` | toggle all-match (AND) ↔ any-match (OR) |
 | `o` | cycle sort: relevance ↔ date |
 | `g` | toggle grouped by note ↔ flat |
+| `n` | rank near the focused result's note (sets `near:[[…]]`) |
 | `c` | clear the query and results |
 | `Space` | toggle multi-select on the current result (on a note header: the whole note) |
 | `Enter` | open the source note at the paragraph |
