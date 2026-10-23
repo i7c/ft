@@ -3,11 +3,19 @@
 ### Requirement: Optional build feature
 
 Semantic search SHALL be compiled behind a Cargo feature `semantic` on `ft-core`
-and `ft`, enabled by default, depending on `model2vec-rs` with `local-only` and
-`fancy-regex` (no Hugging Face hub client). A build without the feature SHALL
+and `ft`, enabled by default, depending on `model2vec-rs` with only `local-only`
+(no Hugging Face hub client) and on `tokenizers` with only its `fancy-regex`
+backend. The feature SHALL NOT require a C++ toolchain: the dependency graph
+SHALL NOT enable `onig` or `esaxx-rs/cpp`, and it SHALL add no native compile
+steps beyond those ft already has (`blake3`, `ring`). A build without the feature SHALL
 compile and behave exactly like lexical search; with `[search.semantic] enabled =
 true` it SHALL print one warning that semantic search is not compiled in and
 continue lexically.
+
+#### Scenario: No C++ toolchain needed
+
+- **WHEN** `cargo tree -p ft -e features -i esaxx-rs` runs on the default feature set
+- **THEN** the `cpp` feature of `esaxx-rs` is not enabled and no `onig` crate is in the graph
 
 #### Scenario: Build without the feature
 

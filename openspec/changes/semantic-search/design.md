@@ -20,12 +20,20 @@ A spike on 2026-10-23 (`model2vec-rs` 0.3.0, a scratch crate on top of
 
 Build cost:
 
-- `model2vec-rs` with `local-only` + `fancy-regex` adds 55 crates (179 →
-  234 for `ft-core`).
+- `model2vec-rs` with `local-only`, plus `tokenizers` with only
+  `fancy-regex`, adds 50 crates (179 → 229 for `ft-core`).
 - The default features would add 89, including `hf-hub` and `ureq` 2
   alongside ft's `ureq` 3.
 - A clean build of the spike took 40 s wall.
-- `tokenizers`' `esaxx_fast` compiles C++.
+- **No C++ toolchain.** Both `model2vec-rs` backend features (`onig`,
+  `fancy-regex`) also enable `tokenizers/esaxx_fast`, which compiles a C++
+  suffix array that only tokenizer training uses. Enabling the backend on
+  `tokenizers` directly avoids it. A clean `-vv` build showed no C++
+  compiler invocation and produced identical embeddings (same similarity
+  scores, same 1.03 s for the real vault). The only native compiles left
+  are `blake3` and `ring`, which ft already has. Checked on Linux only;
+  macOS has the same crate graph and needs only the C compiler Xcode's
+  command-line tools already provide for Rust linking.
 
 The conclusion: semantic recall is real but noisy. It belongs as an opt-in,
 fused second retriever, not a replacement.
@@ -60,7 +68,12 @@ fused second retriever, not a replacement.
 ### 2. `local-only` + ft-owned download
 
 The crate is compiled with `default-features = false, features =
-["fancy-regex", "local-only"]`.
+["local-only"]`, next to a direct `tokenizers = { version = "0.21",
+default-features = false, features = ["fancy-regex"] }`. The tokenizer
+backend is selected there rather than through `model2vec-rs`'s own
+`fancy-regex` / `onig` features, because those also enable
+`tokenizers/esaxx_fast` (C++). `fancy-regex` is pure Rust; `onig` would
+need a C build of Oniguruma.
 
 `ft notes embed fetch` downloads the three files (`config.json`,
 `tokenizer.json`, `model.safetensors`) from
@@ -196,9 +209,12 @@ CI never needs the model. Unit tests use `HashEmbedder`.
 - **[With semantic on, AND stops bounding the results]** → This is the point
   of recall. It is documented, marked, and switches off per query with
   `--no-semantic` / `m`.
-- **[Build adds a C++ compile (`esaxx_fast`) and 55 crates]** → The feature
-  can be disabled. Measure release binary growth in the tasks and document
-  it.
+- **[A future `model2vec-rs` / `tokenizers` release re-enables
+  `esaxx_fast` or `onig` transitively]** → A build-invariant check
+  (`cargo tree -e features`) fails CI when either appears.
+- **[Adds 50 crates]** → The feature can be disabled. Measure release
+  binary growth in the tasks and document it. The spike binary was
+  7.8 MB including `ft-core`.
 - **[English model on a mixed English/Portuguese vault]** →
   `potion-multilingual-128M` is configurable. The default stays small. The
   real-vault report decides whether to recommend it.
@@ -218,6 +234,6 @@ deleted.
 - **Default model:** `potion-base-8M` (smaller, 256-dim) vs
   `potion-retrieval-32M` (retrieval-tuned, 512-dim). The semantic eval
   decides. `base-8M` is the provisional default.
-- **Should `semantic` be a default Cargo feature?** Proposed yes (it stays
-  off at runtime). It could flip to opt-in if the build cost bothers
-  packagers.
+- **Should `semantic` be a default Cargo feature?** Proposed yes. With no
+  C++ requirement, the remaining cost is 50 crates of compile time, and it
+  stays off at runtime.

@@ -24,11 +24,18 @@ BM25F ranking, opt-in, and gated by the relevance harness.
 ## What Changes
 
 - **Optional Cargo feature `semantic`** (default on) in `ft-core` and `ft`,
-  using `model2vec-rs` with `local-only` + `fancy-regex`.
+  using `model2vec-rs` with only `local-only`, plus a direct `tokenizers`
+  dependency with only its pure-Rust `fancy-regex` backend.
   - No `hf-hub` / `ureq` 2: ft fetches model files with its existing
     `ureq` 3.
-  - About 55 extra crates. `tokenizers`' `esaxx_fast` needs a C++
-    compiler.
+  - About 50 extra crates and **no C++ toolchain**. Both of
+    `model2vec-rs`'s backend features (`onig`, `fancy-regex`) also switch
+    on `tokenizers/esaxx_fast`, a C++ suffix array that only tokenizer
+    *training* uses. Selecting the backend on `tokenizers` directly keeps
+    it off; `esaxx-rs` then builds as pure Rust. Verified by a clean
+    build: no C++ compiler invocation, identical embeddings. The only
+    native compiles left are `blake3` and `ring`, which ft already
+    builds today.
 - **`[search.semantic]` config**, off by default:
   - `enabled` (false);
   - `model`, a Hugging Face model id or a local directory, default

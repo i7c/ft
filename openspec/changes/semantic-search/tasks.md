@@ -17,7 +17,8 @@
 
 ## 3. Model and config
 
-- [ ] 3.1 `Cargo.toml`: optional `model2vec-rs = { default-features = false, features = ["fancy-regex", "local-only"] }` behind feature `semantic` (default on) in `ft-core` and `ft`; CI and `--no-default-features` build stays green
+- [ ] 3.1 `Cargo.toml`: optional `model2vec-rs = { default-features = false, features = ["local-only"] }` and `tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }` behind feature `semantic` (default on) in `ft-core` and `ft`; do NOT enable `model2vec-rs`'s `fancy-regex` / `onig` features (they turn on the C++ `esaxx_fast`); CI and `--no-default-features` build stays green
+- [ ] 3.1a No-C++ guard: a check (script or test) failing when `cargo tree -p ft -e features -i esaxx-rs` shows `cpp`, or when any `onig` crate is in the graph; wire it into the build invariants
 - [ ] 3.2 `Model2VecEmbedder` (load from a local dir via `StaticModel::from_pretrained`)
 - [ ] 3.3 `SearchCfg::semantic` (`enabled`, `model`, `candidates`, `min_similarity`) with validation and config tests; the "not compiled in" warning path
 - [ ] 3.4 Model resolution: local dir as-is, else `dirs::cache_dir()/ft/models/<id>/`
@@ -39,5 +40,5 @@
 - [ ] 6.1 Run the gated semantic eval with `potion-base-8M` and `potion-retrieval-32M`; choose the default model, `candidates` and `min_similarity`; record them in the change notes
 - [ ] 6.2 Real-vault report: lexical vs hybrid on the private judgments plus a few concept queries; note whether `potion-multilingual-128M` is worth recommending for mixed-language vaults
 - [ ] 6.3 `FT_PERF_TESTS` semantic gate (20k paragraphs, < 15 ms per query; cache load < 100 ms); measure release binary size growth and clean-build time; record them
-- [ ] 6.4 Docs: `docs/guide/synthesis.md` (semantic search, `embed` commands, `≈`, more like this), `docs/config.md` (`[search.semantic]`), `docs/architecture.md` §Synthesis, README pointer, `docs/guide/install.md` (feature flag, C++ toolchain note)
-- [ ] 6.5 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`, plus `cargo build --no-default-features --features <non-semantic set>`
+- [ ] 6.4 Docs: `docs/guide/synthesis.md` (semantic search, `embed` commands, `≈`, more like this), `docs/config.md` (`[search.semantic]`), `docs/architecture.md` §Synthesis, README pointer, `docs/guide/install.md` (the `semantic` feature; no extra toolchain needed)
+- [ ] 6.5 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`, plus `cargo build --no-default-features --features <non-semantic set>` and the no-C++ guard
