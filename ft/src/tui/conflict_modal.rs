@@ -82,10 +82,8 @@ impl Modal for ConflictResolveModal {
             return ModalOutcome::NotHandled;
         };
         match k.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                if self.selected + 1 < self.rows.len() {
-                    self.selected += 1;
-                }
+            KeyCode::Char('j') | KeyCode::Down if self.selected + 1 < self.rows.len() => {
+                self.selected += 1;
             }
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Char('l') => self.choose(Some(Take::Local)),
