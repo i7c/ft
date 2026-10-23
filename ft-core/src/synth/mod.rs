@@ -20,7 +20,6 @@
 
 pub mod accrete;
 pub mod callout;
-pub mod citations;
 pub mod repair;
 pub mod reslice;
 pub mod scaffold;

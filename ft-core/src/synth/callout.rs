@@ -215,28 +215,6 @@ pub fn header_regex() -> &'static Regex {
     })
 }
 
-/// Check if a path-and-line falls inside any parsed callout's body.
-/// Returns `true` when `line` (1-indexed) is in the line range
-/// `header_line+1..=header_line+body_line_count` of any callout in
-/// `callouts`.
-///
-/// This is the predicate the link-review uses to skip wikilinks that
-/// were quoted from elsewhere (so they don't double-count in the next pulse).
-pub fn line_is_inside_callout(line: u32, callouts: &[ParsedCallout]) -> bool {
-    callouts.iter().any(|c| {
-        // Number of body lines = number of `\n`-separated chunks in body.
-        // An empty body string still counts as zero body lines.
-        let body_line_count = if c.body.is_empty() {
-            0
-        } else {
-            c.body.split('\n').count() as u32
-        };
-        let body_first = c.header_line + 1;
-        let body_last = c.header_line + body_line_count;
-        body_first <= line && line <= body_last
-    })
-}
-
 /// Detect whether a `.md` file's content marks it as a synth note —
 /// `ft.synth.enabled: true` in the nested `ft:` YAML frontmatter map.
 ///
@@ -729,25 +707,6 @@ after text
         assert_ne!(h1, h3);
         assert_eq!(h1.len(), CONTENT_HASH_PREFIX_LEN);
         assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn line_is_inside_callout_detects_body_lines() {
-        let text = "\
-some intro
-
-> [!ft-source] \"a.md\" L1-1 @aaaaaaa #aaaaaa
-> body line 1
-> body line 2
-
-after
-";
-        let callouts = parse(text);
-        // Header is at line 3; body lines at 4, 5.
-        assert!(!line_is_inside_callout(3, &callouts));
-        assert!(line_is_inside_callout(4, &callouts));
-        assert!(line_is_inside_callout(5, &callouts));
-        assert!(!line_is_inside_callout(6, &callouts));
     }
 
     #[test]

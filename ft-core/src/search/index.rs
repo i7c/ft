@@ -61,8 +61,8 @@ pub struct SearchIndex {
 
 impl SearchIndex {
     /// Build the index from a scan, skipping files whose vault-relative
-    /// path starts with any `exclude_prefixes` entry (the same
-    /// `synth.exclude_prefixes` filter pulse uses).
+    /// path starts with any `exclude_prefixes` entry (the
+    /// `synth.exclude_prefixes` filter).
     pub fn build(scan: &Scan, exclude_prefixes: &[String]) -> SearchIndex {
         let mut index = SearchIndex::default();
         for pf in &scan.files {
@@ -73,7 +73,7 @@ impl SearchIndex {
                 // Quoted material inside `[!ft-source]` protected
                 // sections is not searchable: it is a copy of another
                 // note's prose, and re-sourcing it would let a synth
-                // note pin itself (pulse's recycling exclusion).
+                // note pin itself.
                 if is_protected_callout(&p.text) {
                     continue;
                 }

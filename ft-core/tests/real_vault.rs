@@ -103,43 +103,6 @@ fn real_vault_round_trip() {
 // ── ft-core synthesis against the real vault ────────────────────────────
 
 #[test]
-fn real_vault_link_review_runs() {
-    use chrono::Duration;
-    use ft_core::pulse::{compute_pulse, WindowRange};
-    use ft_core::vault::Vault;
-
-    if std::env::var("FT_REAL_VAULT_TESTS").as_deref() != Ok("1") {
-        return;
-    }
-    let vault_path = PathBuf::from("/Users/cmw/git/fortytwo");
-    let vault = match Vault::discover(Some(vault_path.clone())) {
-        Ok(v) => v,
-        Err(_) => return, // vault not present on this machine
-    };
-    if ft_core::git::discover_repo(&vault.path).is_none() {
-        return;
-    }
-    let scan = vault.scan();
-    let graph = ft_core::graph::Graph::build(&scan).expect("build graph");
-    let cfg = vault.config.config.synth.clone();
-    let window = WindowRange::Since(Duration::days(7));
-    let review =
-        compute_pulse(&graph, &vault, &window, &cfg, &scan).expect("compute_pulse on real vault");
-    // Sanity: rows are sorted by count desc, alphabetical tiebreak.
-    for w in review.rows.windows(2) {
-        assert!(
-            w[0].count > w[1].count || (w[0].count == w[1].count && w[0].target <= w[1].target),
-            "rows must be sorted by count desc, target asc"
-        );
-    }
-    println!(
-        "real_vault_link_review: {} rows ({} ghosts) over since-7d",
-        review.rows.len(),
-        review.rows.iter().filter(|r| r.is_ghost).count()
-    );
-}
-
-#[test]
 fn real_vault_synth_verify_all_runs() {
     use ft_core::synth::verify::verify_all;
     use ft_core::vault::Vault;

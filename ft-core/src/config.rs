@@ -59,8 +59,7 @@ pub struct Config {
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
     pub keymap: Option<KeymapConfig>,
-    /// Synthesis settings (pulse, search,
-    /// synth notes). See [`Synth`].
+    /// Synthesis settings (search, synth notes). See [`Synth`].
     #[serde(default)]
     pub synth: Synth,
     /// Task-creation settings. See [`Tasks`].
@@ -372,18 +371,18 @@ pub struct PeriodicPeriod {
     pub week_start: WeekStart,
 }
 
-/// Synthesis configuration. Governs the `ft notes pulse` /
-/// multi-source journal / `ft synth` flow.
+/// Synthesis configuration. Governs `ft notes search` and the
+/// `ft notes synth` flow.
 ///
 /// `folder` is the convenience default location for new synth notes
 /// created via `ft synth <name>` without a path-bearing target. It is
 /// NOT enforcement: any `.md` anywhere in the vault marked with
 /// `ft.synth.enabled: true` in frontmatter is treated as a synth note.
 ///
-/// `exclude_prefixes` filters the link-review (`ft review`): added
-/// `[[wikilinks]]` whose source file's vault-relative path starts with
-/// any listed prefix are dropped from the count. Defaults to empty;
-/// users typically add their periodic-notes folder here.
+/// `exclude_prefixes` filters the paragraph-search index: files whose
+/// vault-relative path starts with any listed prefix are skipped.
+/// Defaults to empty; users typically add their periodic-notes folder
+/// here.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Synth {
