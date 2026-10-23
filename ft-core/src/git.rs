@@ -32,6 +32,7 @@
 //! TUI cannot service.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -316,6 +317,39 @@ pub fn head_hash(repo: &Path) -> Result<String> {
         return Err(cmd_err("rev-parse HEAD", &out.stderr));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Blob ids of every file in the `HEAD` tree, keyed by repo-relative
+/// path (`git ls-tree -r -z HEAD`). An unborn `HEAD` (no commits yet)
+/// yields an empty map.
+pub fn ls_tree_blobs(repo: &Path) -> Result<HashMap<PathBuf, String>> {
+    let out = git(repo)
+        .args(["ls-tree", "-r", "-z", "HEAD"])
+        .output()
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        // `HEAD` does not resolve before the first commit.
+        if head_hash(repo).is_err() {
+            return Ok(HashMap::new());
+        }
+        return Err(cmd_err("ls-tree -r -z HEAD", &out.stderr));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut blobs = HashMap::new();
+    // Records: `<mode> SP <type> SP <oid> TAB <path> NUL`.
+    for record in text.split('\0').filter(|r| !r.is_empty()) {
+        let Some((meta, path)) = record.split_once('\t') else {
+            continue;
+        };
+        let mut fields = meta.split(' ');
+        let (_mode, kind, oid) = (fields.next(), fields.next(), fields.next());
+        if kind == Some("blob") {
+            if let Some(oid) = oid {
+                blobs.insert(PathBuf::from(path), oid.to_string());
+            }
+        }
+    }
+    Ok(blobs)
 }
 
 /// Number of hex chars used for short commit SHAs (git's default
@@ -1050,6 +1084,29 @@ mod tests {
     }
 
     // ── blame_file ──────────────────────────────────────────────────
+
+    #[test]
+    fn ls_tree_blobs_lists_committed_files() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        assert!(ls_tree_blobs(tmp.path()).unwrap().is_empty(), "unborn HEAD");
+        fs::create_dir_all(tmp.path().join("dir with space")).unwrap();
+        fs::write(tmp.path().join("a.md"), "one\n").unwrap();
+        fs::write(tmp.path().join("dir with space/b ô.md"), "two\n").unwrap();
+        run_git(tmp.path(), &["add", "."]);
+        run_git(tmp.path(), &["commit", "-m", "init"]);
+        let blobs = ls_tree_blobs(tmp.path()).unwrap();
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(blobs[Path::new("a.md")].len(), 40);
+        assert!(blobs.contains_key(Path::new("dir with space/b ô.md")));
+        let before = blobs[Path::new("a.md")].clone();
+        fs::write(tmp.path().join("a.md"), "changed\n").unwrap();
+        run_git(tmp.path(), &["commit", "-am", "edit"]);
+        assert_ne!(
+            ls_tree_blobs(tmp.path()).unwrap()[Path::new("a.md")],
+            before
+        );
+    }
 
     #[test]
     fn blame_file_single_commit() {

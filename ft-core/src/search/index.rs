@@ -122,6 +122,8 @@ pub(crate) struct NoteCtx {
     /// Ranking prior in `[1.0, 1.25]`.
     pub(crate) prior: f64,
     pub(crate) mtime: SystemTime,
+    /// Lines in the file (huge files are never blamed).
+    pub(crate) line_count: u32,
 }
 
 /// A run of consecutive paragraphs sharing one heading path.
@@ -548,6 +550,7 @@ impl Builder {
             tag_len,
             prior: 1.0,
             mtime: pf.mtime,
+            line_count: pf.line_count,
         });
     }
 

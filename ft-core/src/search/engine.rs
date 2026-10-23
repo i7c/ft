@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
-use crate::blame_cache::{paragraph_date, BlameCache};
+use crate::blame_cache::{paragraph_date, BlameCache, BlameValidity};
 use crate::git;
 use crate::graph::query::{Profile, WalkNode, WalkOptions};
 use crate::graph::{Graph, NodeKind};
@@ -196,26 +196,28 @@ pub fn search_with_dates(
         });
     }
 
-    if let Ok(repo) = git::RepoMap::discover(&vault.path) {
-        let head = git::head_hash(repo.root())?;
+    if let Some(validity) = BlameValidity::snapshot(&vault.path)? {
         // Per-file blame, loaded once per file; per-paragraph dates
-        // derived from the cached blame (line ranges differ in a file).
-        let mut blame_by_path: HashMap<String, Option<Vec<git::LineBlame>>> = HashMap::new();
+        // derived from it (line ranges differ within a file).
+        let mut blame_by_path: HashMap<PathBuf, Option<Vec<git::LineBlame>>> = HashMap::new();
+        let mut blamed = false;
         for r in results.iter_mut() {
-            let path_str = r.path.to_string_lossy().into_owned();
-            let blame = blame_by_path.entry(path_str.clone()).or_insert_with(|| {
-                if cache.get(&path_str, &head).is_none() {
-                    if let Ok(blame) = git::blame_file(repo.root(), &repo.to_repo(&r.path)) {
-                        cache.insert(path_str.clone(), head.clone(), blame);
-                    }
-                }
-                cache.get(&path_str, &head).cloned()
+            let blame = blame_by_path.entry(r.path.clone()).or_insert_with(|| {
+                let lines = index
+                    .note_by_path
+                    .get(&r.path)
+                    .map_or(0, |&n| index.notes[n as usize].line_count);
+                let (blame, ran) = cache.ensure(&r.path, lines, &validity);
+                blamed |= ran;
+                blame
             });
             r.date = blame
                 .as_deref()
                 .and_then(|b| paragraph_date(b, r.line_start, r.line_end));
         }
-        let _ = cache.save(&vault.path);
+        if blamed {
+            let _ = cache.save(&vault.path);
+        }
     }
 
     let mut undated_dropped = 0;

@@ -2,10 +2,10 @@
 
 ## 1. Blame cache keyed on blob id
 
-- [ ] 1.1 `git.rs`: `ls_tree_blobs(repo) -> HashMap<PathBuf, String>` and `dirty_paths(repo) -> HashSet<PathBuf>` (untracked included), with unit tests on a temp repo
-- [ ] 1.2 `blame_cache.rs`: `BlameValidity` (built through `RepoMap` for vault-in-subdirectory repos), `CacheFile { version: 2, entries }`, `get(path, &validity)`, `insert(path, blob, blame)`; v1 and corrupt files load empty
-- [ ] 1.3 Tests: round-trip, old schema loads empty, an unrelated commit keeps the entry, a changed file misses, a dirty file misses
-- [ ] 1.4 `search_with_dates` and its callers move to the validity API; skip blaming files over 5,000 lines
+- [x] 1.1 `git.rs`: `ls_tree_blobs(repo) -> HashMap<PathBuf, String>` and `dirty_paths(repo) -> HashSet<PathBuf>` (untracked included), with unit tests on a temp repo
+- [x] 1.2 `blame_cache.rs`: `BlameValidity` (built through `RepoMap` for vault-in-subdirectory repos), `CacheFile { version: 2, entries }`, `get(path, &validity)`, `insert(path, blob, blame)`; v1 and corrupt files load empty
+- [x] 1.3 Tests: round-trip, old schema loads empty, an unrelated commit keeps the entry, a changed file misses, a dirty file misses
+- [x] 1.4 `search_with_dates` and its callers move to the validity API; skip blaming files over 5,000 lines
 
 ## 2. Query-time recency
 
