@@ -4,7 +4,7 @@ expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Search  │  4 Tasks  │  5 Timeblocks                           
 ┌ Search ────────────────────────────────────────────────────────────────────────────────┐
-│┌ AND · sort: relevance · grouped · 1 filter (0 results, 0 selected) ──────────────────┐│
+│┌ AND · sort: relevance · grouped · 1 filter · ≈ off (0 results, 0 selected) ──────────┐│
 ││/ eigen scope:nope                                                                    ││
 │└──────────────────────────────────────────────────────────────────────────────────────┘│
 │error: unknown scope preset `nope` (available: fs, ghosts, links, tasks-in-fs, tree)    │

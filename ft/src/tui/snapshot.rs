@@ -52,3 +52,35 @@ pub fn build_graph_snapshot(vault: &Vault, generation: u64) -> Result<Arc<GraphS
         search: Arc::new(search),
     }))
 }
+
+/// Paragraph embeddings for one snapshot plus the model that embeds
+/// queries — what the Search tab needs for hybrid retrieval.
+pub struct SemanticReady {
+    pub index: ft_core::search::semantic::SemanticIndex,
+    pub embedder: Arc<dyn ft_core::search::semantic::Embedder>,
+}
+
+impl std::fmt::Debug for SemanticReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticReady")
+            .field("model", &self.embedder.id())
+            .field("embedded", &self.index.embedded())
+            .finish()
+    }
+}
+
+/// Where hybrid retrieval stands for the installed snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SemanticState {
+    /// No embeddings worker has reported yet.
+    #[default]
+    Pending,
+    /// Built without the `semantic` feature.
+    NotCompiled,
+    /// The configured model has not been fetched.
+    NoModel,
+    /// Embedding paragraphs: `(done, total)` of the ones missing.
+    Building(usize, usize),
+    /// Embeddings for the installed snapshot are available.
+    Ready,
+}

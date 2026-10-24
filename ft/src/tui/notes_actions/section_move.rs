@@ -1732,6 +1732,8 @@ mod tests {
             snapshot: None,
             recency: None,
             blame_progress: None,
+            semantic: None,
+            semantic_state: Default::default(),
             graph_refresh: &graph_refresh,
         };
 
@@ -1783,6 +1785,8 @@ mod tests {
             snapshot: None,
             recency: None,
             blame_progress: None,
+            semantic: None,
+            semantic_state: Default::default(),
             graph_refresh: &graph_refresh,
         };
         assert!(begin_for_source(&ctx, PathBuf::from("Flat.md")).is_none());

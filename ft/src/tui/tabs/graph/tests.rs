@@ -684,6 +684,8 @@ mod view_tests {
             snapshot: None,
             recency: None,
             blame_progress: None,
+            semantic: None,
+            semantic_state: Default::default(),
             graph_refresh: &graph_refresh,
         };
 

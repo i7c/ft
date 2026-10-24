@@ -30,7 +30,7 @@ use crate::tui::{
     keymap::KeyChord,
     modal::{ActiveModal, Modal, ModalOutcome},
     modal_commands,
-    snapshot::{build_graph_snapshot, GraphSnapshot},
+    snapshot::{build_graph_snapshot, GraphSnapshot, SemanticState},
     tab::{AppRequest, EventOutcome, Tab, TabCtx, TabKind, ToastStyle},
     tabs::{
         graph::GraphTab, notes::NotesTab, search::SearchTab, tasks::TasksTab,
@@ -134,6 +134,12 @@ pub struct App {
     /// Generation the blame warm-up should serve; a worker for an older
     /// generation stops at its next file.
     warm_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Embeddings for the installed snapshot and the worker's state.
+    semantic: Option<Arc<crate::tui::snapshot::SemanticReady>>,
+    semantic_state: crate::tui::snapshot::SemanticState,
+    /// The embedding model, loaded at most once per App (a failed load
+    /// is retried on the next snapshot, e.g. after `embed fetch`).
+    embedder: Arc<std::sync::Mutex<Option<Arc<dyn ft_core::search::semantic::Embedder>>>>,
     /// Clone of the event-loop sender, installed by `run()`. `None`
     /// outside a live event loop (tests, pre-run) — then rebuild
     /// requests set `graph_job.dirty` and the synchronous test pump
@@ -228,6 +234,9 @@ impl App {
             recency: None,
             blame_progress: None,
             warm_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            semantic: None,
+            semantic_state: Default::default(),
+            embedder: Arc::new(std::sync::Mutex::new(None)),
             bg_tx: None,
             graph_refresh: Cell::new(false),
             source_schedule: Default::default(),
@@ -315,6 +324,8 @@ impl App {
                 snapshot: self.graph_snapshot.clone(),
                 recency: self.recency.clone(),
                 blame_progress: self.blame_progress,
+                semantic: self.semantic.clone(),
+                semantic_state: self.semantic_state,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
@@ -371,6 +382,8 @@ impl App {
             snapshot: self.graph_snapshot.clone(),
             recency: self.recency.clone(),
             blame_progress: self.blame_progress,
+            semantic: self.semantic.clone(),
+            semantic_state: self.semantic_state,
             graph_refresh: &self.graph_refresh,
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
@@ -591,6 +604,8 @@ impl App {
                     snapshot: self.graph_snapshot.clone(),
                     recency: self.recency.clone(),
                     blame_progress: self.blame_progress,
+                    semantic: self.semantic.clone(),
+                    semantic_state: self.semantic_state,
                     graph_refresh: &self.graph_refresh,
                 };
                 Some(modal.handle_event(ev.clone(), &ctx))
@@ -628,6 +643,8 @@ impl App {
                 snapshot: self.graph_snapshot.clone(),
                 recency: self.recency.clone(),
                 blame_progress: self.blame_progress,
+                semantic: self.semantic.clone(),
+                semantic_state: self.semantic_state,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
@@ -728,6 +745,8 @@ impl App {
             snapshot: self.graph_snapshot.clone(),
             recency: self.recency.clone(),
             blame_progress: self.blame_progress,
+            semantic: self.semantic.clone(),
+            semantic_state: self.semantic_state,
             graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
@@ -770,6 +789,8 @@ impl App {
             snapshot: self.graph_snapshot.clone(),
             recency: self.recency.clone(),
             blame_progress: self.blame_progress,
+            semantic: self.semantic.clone(),
+            semantic_state: self.semantic_state,
             graph_refresh: &self.graph_refresh,
         };
         f(&mut self.tabs[idx], &mut ctx);
@@ -907,6 +928,14 @@ impl App {
             BgEvent::GraphReady(result) => self.apply_graph_result(result),
             BgEvent::RecencyReady { generation, table } => {
                 self.apply_recency(generation, Some(table), None);
+                Ok(())
+            }
+            BgEvent::EmbeddingsReady { generation, ready } => {
+                self.apply_semantic(generation, Some(ready), SemanticState::Ready);
+                Ok(())
+            }
+            BgEvent::EmbeddingsState { generation, state } => {
+                self.apply_semantic(generation, None, state);
                 Ok(())
             }
             BgEvent::BlameWarmProgress {
@@ -1204,13 +1233,16 @@ impl App {
             Ok(snapshot) => {
                 let generation = snapshot.generation;
                 self.graph_snapshot = Some(snapshot);
-                // The old table indexes the old snapshot's docs.
+                // The old table and embeddings index the old snapshot's docs.
                 self.recency = None;
                 self.blame_progress = None;
+                self.semantic = None;
+                self.semantic_state = SemanticState::Pending;
                 self.warm_generation
                     .store(generation, std::sync::atomic::Ordering::SeqCst);
                 if let Some(tx) = self.bg_tx.clone() {
-                    self.spawn_blame_warm(generation, tx);
+                    self.spawn_blame_warm(generation, tx.clone());
+                    self.spawn_embeddings(generation, tx);
                 }
                 let mut ctx = TabCtx {
                     vault: &self.vault,
@@ -1223,6 +1255,8 @@ impl App {
                     snapshot: self.graph_snapshot.clone(),
                     recency: self.recency.clone(),
                     blame_progress: self.blame_progress,
+                    semantic: self.semantic.clone(),
+                    semantic_state: self.semantic_state,
                     graph_refresh: &self.graph_refresh,
                 };
                 self.tabs[self.active].on_graph_ready(&mut ctx);
@@ -1257,6 +1291,79 @@ impl App {
                 })
             }));
         });
+    }
+
+    /// Embed the installed snapshot's paragraphs on a worker thread
+    /// (incremental through the vault's embedding cache; cancelled by a
+    /// newer snapshot) and post the result.
+    fn spawn_embeddings(&self, generation: u64, tx: std::sync::mpsc::Sender<Event>) {
+        let Some(snapshot) = self.graph_snapshot.clone() else {
+            return;
+        };
+        let vault_path = self.vault.path.clone();
+        let model = self.vault.config.config.search.semantic.model.clone();
+        let current = Arc::clone(&self.warm_generation);
+        let slot = Arc::clone(&self.embedder);
+        std::thread::spawn(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_embeddings(
+                    &vault_path,
+                    &model,
+                    &snapshot,
+                    generation,
+                    &current,
+                    &slot,
+                    |ev| {
+                        let _ = tx.send(Event::Background(ev));
+                    },
+                )
+            }));
+        });
+    }
+
+    /// Install embeddings and/or worker state for `generation` (stale
+    /// generations are dropped) and let the Search tab re-run.
+    fn apply_semantic(
+        &mut self,
+        generation: u64,
+        ready: Option<Arc<crate::tui::snapshot::SemanticReady>>,
+        state: SemanticState,
+    ) {
+        let current = self.graph_snapshot.as_ref().map(|s| s.generation);
+        if current != Some(generation) {
+            return;
+        }
+        if ready.is_some() {
+            self.semantic = ready;
+        }
+        self.semantic_state = state;
+        self.with_tab(TabKind::Search, |tab, ctx| tab.on_semantic_ready(ctx));
+    }
+
+    /// Run the embeddings worker synchronously for the installed snapshot
+    /// and apply its events — the test counterpart of
+    /// [`Self::spawn_embeddings`].
+    #[cfg(test)]
+    pub fn pump_embeddings_for_test(&mut self) {
+        let Some(snapshot) = self.graph_snapshot.clone() else {
+            return;
+        };
+        let generation = snapshot.generation;
+        self.warm_generation
+            .store(generation, std::sync::atomic::Ordering::SeqCst);
+        let mut events = Vec::new();
+        run_embeddings(
+            &self.vault.path.clone(),
+            &self.vault.config.config.search.semantic.model.clone(),
+            &snapshot,
+            generation,
+            &Arc::clone(&self.warm_generation),
+            &Arc::clone(&self.embedder),
+            |ev| events.push(ev),
+        );
+        for ev in events {
+            let _ = self.handle_event(Event::Background(ev));
+        }
     }
 
     /// Install a recency table and/or warm-up progress for `generation`
@@ -1352,6 +1459,8 @@ impl App {
                 snapshot: self.graph_snapshot.clone(),
                 recency: self.recency.clone(),
                 blame_progress: self.blame_progress,
+                semantic: self.semantic.clone(),
+                semantic_state: self.semantic_state,
                 graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
@@ -1457,6 +1566,8 @@ impl App {
                 snapshot: self.graph_snapshot.clone(),
                 recency: self.recency.clone(),
                 blame_progress: self.blame_progress,
+                semantic: self.semantic.clone(),
+                semantic_state: self.semantic_state,
                 graph_refresh: &self.graph_refresh,
             };
             let _ = self.tabs[self.active].refresh(&mut ctx);
@@ -1578,6 +1689,8 @@ impl App {
                 snapshot: self.graph_snapshot.clone(),
                 recency: self.recency.clone(),
                 blame_progress: self.blame_progress,
+                semantic: self.semantic.clone(),
+                semantic_state: self.semantic_state,
                 graph_refresh: &self.graph_refresh,
             };
             self.tabs[self.active].refresh(&mut ctx)?;
@@ -1885,6 +1998,65 @@ fn run_commit_job(
 /// and posts exactly one [`BgEvent::GraphReady`] back into the main
 /// loop. Panics are caught and converted into `Err` payloads so a bug
 /// doesn't strand the in-flight flag forever.
+/// The embeddings worker body shared by the worker and the test pump:
+/// load the model once (per App), embed the snapshot's missing
+/// paragraphs (progress events), save the cache, post the embeddings.
+fn run_embeddings(
+    vault_path: &std::path::Path,
+    model: &str,
+    snapshot: &GraphSnapshot,
+    generation: u64,
+    current: &std::sync::atomic::AtomicU64,
+    slot: &std::sync::Mutex<Option<Arc<dyn ft_core::search::semantic::Embedder>>>,
+    mut post: impl FnMut(BgEvent),
+) {
+    use ft_core::search::semantic::{
+        cache::EmbeddingCache, load_embedder, SemanticIndex, COMPILED,
+    };
+    let embedder = {
+        let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = load_embedder(model).ok().flatten().map(Arc::from);
+        }
+        guard.clone()
+    };
+    let Some(embedder) = embedder else {
+        let state = if COMPILED {
+            SemanticState::NoModel
+        } else {
+            SemanticState::NotCompiled
+        };
+        post(BgEvent::EmbeddingsState { generation, state });
+        return;
+    };
+    let mut cache = EmbeddingCache::load(vault_path, embedder.id(), embedder.dim());
+    let mut last_report = std::time::Instant::now();
+    let (index, stats) = SemanticIndex::build_with_progress(
+        &snapshot.search,
+        embedder.as_ref(),
+        &mut cache,
+        |done, total| {
+            if done == total || last_report.elapsed() >= std::time::Duration::from_millis(250) {
+                last_report = std::time::Instant::now();
+                post(BgEvent::EmbeddingsState {
+                    generation,
+                    state: SemanticState::Building(done, total),
+                });
+            }
+        },
+    );
+    if current.load(std::sync::atomic::Ordering::SeqCst) != generation {
+        return;
+    }
+    if stats.embedded > 0 || stats.pruned > 0 {
+        let _ = cache.save(vault_path);
+    }
+    post(BgEvent::EmbeddingsReady {
+        generation,
+        ready: Arc::new(crate::tui::snapshot::SemanticReady { index, embedder }),
+    });
+}
+
 /// The blame warm-up body shared by the worker and the test pump:
 /// post the table from the cache, warm the cache (progress events,
 /// cancelled when `current` moves past `generation`), post the final
@@ -2154,6 +2326,8 @@ impl App {
             snapshot: self.graph_snapshot.clone(),
             recency: self.recency.clone(),
             blame_progress: self.blame_progress,
+            semantic: self.semantic.clone(),
+            semantic_state: self.semantic_state,
             graph_refresh: &self.graph_refresh,
         };
         self.tabs[self.active].on_focus(&mut ctx)?;

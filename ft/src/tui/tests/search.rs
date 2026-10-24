@@ -481,3 +481,114 @@ fn n_sets_near_to_the_focused_result() -> Result<()> {
     assert!(frame.contains("(2 results"), "{frame}");
     Ok(())
 }
+
+// ── Semantic (hybrid) search ────────────────────────────────────────
+
+/// Serializes the tests that set `FT_SEMANTIC_TEST_EMBEDDER`: the
+/// variable is process-wide and the no-model test needs it unset.
+static SEMANTIC_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn semantic_vault(config: &str) -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("a.md"), "alpha beta gamma.\n").unwrap();
+    std::fs::write(vault_path.join("b.md"), "alpha delta epsilon.\n").unwrap();
+    std::fs::write(vault_path.join("c.md"), "unrelated zeta words.\n").unwrap();
+    if !config.is_empty() {
+        std::fs::create_dir_all(vault_path.join(".ft")).unwrap();
+        std::fs::write(vault_path.join(".ft/config.toml"), config).unwrap();
+    }
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Pump the embeddings worker with the hash test embedder.
+fn pump_hashed(app: &mut App) {
+    std::env::set_var("FT_SEMANTIC_TEST_EMBEDDER", "hash");
+    app.pump_embeddings_for_test();
+    std::env::remove_var("FT_SEMANTIC_TEST_EMBEDDER");
+}
+
+/// `m` turns hybrid retrieval on: the status reads `≈ building` until the
+/// embeddings arrive, then `≈ on`, and a meaning-only row (≈) joins.
+#[test]
+fn semantic_toggle_adds_meaning_only_rows() -> Result<()> {
+    let _env = SEMANTIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let (_dir, vault) = semantic_vault("");
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "alpha beta")?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("≈ off") && frame.contains("(1 result"),
+        "{frame}"
+    );
+
+    app.dispatch(key('m'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(frame.contains("≈ building"), "{frame}");
+
+    pump_hashed(&mut app);
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("≈ on") && frame.contains("(2 results"),
+        "{frame}"
+    );
+    assert!(
+        frame.contains("L1-1  ≈"),
+        "meaning-only row is marked:\n{frame}"
+    );
+    assert_tui_snapshot!("search_semantic_rows_90x24", frame);
+
+    app.dispatch(key('m'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("≈ off") && frame.contains("(1 result"),
+        "{frame}"
+    );
+    Ok(())
+}
+
+/// Without a model the status says so and results stay lexical.
+#[test]
+fn semantic_without_a_model_says_no_model() -> Result<()> {
+    let _env = SEMANTIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let (_dir, vault) =
+        semantic_vault("[search.semantic]\nenabled = true\nmodel = \"none/absent-model\"\n");
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    type_query(&mut app, "alpha beta")?;
+    app.pump_embeddings_for_test();
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        frame.contains("≈ no model") && frame.contains("(1 result"),
+        "{frame}"
+    );
+    Ok(())
+}
+
+/// `M` lists paragraphs like the focused result and shows the source as
+/// a `like:` prefix; editing the query drops it.
+#[test]
+fn more_like_this_from_the_focused_result() -> Result<()> {
+    let _env = SEMANTIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let (_dir, vault) = semantic_vault("");
+    let mut app = App::for_test(vault);
+    app.switch_to(search_tab_idx())?;
+    pump_hashed(&mut app);
+    type_query(&mut app, "gamma")?;
+    app.dispatch(key('M'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(frame.contains("like:a.md:1"), "{frame}");
+    assert!(frame.contains("b.md (1)"), "b.md is like a.md:\n{frame}");
+
+    app.dispatch(key('/'))?;
+    app.dispatch(key('x'))?;
+    let frame = render(&mut app, 90, 24);
+    assert!(
+        !frame.contains("like:a.md:1"),
+        "editing drops the like source:\n{frame}"
+    );
+    Ok(())
+}

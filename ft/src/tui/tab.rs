@@ -373,6 +373,10 @@ pub struct TabCtx<'a> {
     pub recency: Option<std::sync::Arc<ft_core::search::RecencyTable>>,
     /// Background blame warm-up progress `(done, total)` while running.
     pub blame_progress: Option<(usize, usize)>,
+    /// Embeddings for the installed snapshot, once the worker is done.
+    pub semantic: Option<std::sync::Arc<crate::tui::snapshot::SemanticReady>>,
+    /// Embeddings worker state, for status display.
+    pub semantic_state: crate::tui::snapshot::SemanticState,
     /// Set via [`TabCtx::request_graph_refresh`] after a vault mutation.
     /// The App consumes it at its drain points and kicks one background
     /// rebuild. A `Cell` flag rather than an [`AppRequest`] because
@@ -430,6 +434,9 @@ pub trait Tab {
     /// A new recency table (or warm-up progress) arrived for the
     /// installed snapshot. Tabs that rank by recency re-derive.
     fn on_recency_ready(&mut self, _ctx: &mut TabCtx) {}
+
+    /// Embeddings (or their state) changed for the installed snapshot.
+    fn on_semantic_ready(&mut self, _ctx: &mut TabCtx) {}
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome>;
 

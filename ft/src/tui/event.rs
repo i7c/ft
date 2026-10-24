@@ -47,6 +47,16 @@ pub enum BgEvent {
         generation: u64,
         table: std::sync::Arc<ft_core::search::RecencyTable>,
     },
+    /// Paragraph embeddings for the snapshot of `generation`.
+    EmbeddingsReady {
+        generation: u64,
+        ready: std::sync::Arc<crate::tui::snapshot::SemanticReady>,
+    },
+    /// Embeddings worker state (progress, or why there are none).
+    EmbeddingsState {
+        generation: u64,
+        state: crate::tui::snapshot::SemanticState,
+    },
     /// Blame warm-up progress for the snapshot of `generation`.
     BlameWarmProgress {
         generation: u64,

@@ -4,7 +4,7 @@ expression: frame
 ---
   1 Graph  │  2 Notes  │  3 Search  │  4 Tasks  │  5 Timeblocks                           
 ┌ Search ────────────────────────────────────────────────────────────────────────────────┐
-│┌ AND · sort: relevance · grouped (2 results, 0 selected) ─────────────────────────────┐│
+│┌ AND · sort: relevance · grouped · ≈ off (2 results, 0 selected) ─────────────────────┐│
 ││> eigen│                                                                              ││
 │└──────────────────────────────────────────────────────────────────────────────────────┘│
 │▶     notes.md (2)                                                                      │

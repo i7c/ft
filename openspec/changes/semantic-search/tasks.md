@@ -31,9 +31,9 @@
 
 ## 5. TUI
 
-- [ ] 5.1 Embeddings worker (load the model once per App, embed missing paragraphs in batches, save, post `EmbeddingsReady { generation, Arc<SemanticIndex> }` and progress); cancel on a newer generation
-- [ ] 5.2 Search tab: `m` toggle (`search.toggle-semantic`), `M` more-like-this (`search.more-like-this`) with the `like:` prefix, status `≈ off / no model / building N% / on`, `≈` row marker, re-run on readiness
-- [ ] 5.3 `COMMANDS` / `KEYMAP` / help rows; regenerate `docs/keybindings.md`; `TestBackend` snapshots (hybrid rows, building status, like prefix)
+- [x] 5.1 Embeddings worker (load the model once per App, embed missing paragraphs in batches, save, post `EmbeddingsReady { generation, Arc<SemanticIndex> }` and progress); cancel on a newer generation
+- [x] 5.2 Search tab: `m` toggle (`search.toggle-semantic`), `M` more-like-this (`search.more-like-this`) with the `like:` prefix, status `≈ off / no model / building N% / on`, `≈` row marker, re-run on readiness
+- [x] 5.3 `COMMANDS` / `KEYMAP` / help rows; regenerate `docs/keybindings.md`; `TestBackend` snapshots (hybrid rows, building status, like prefix)
 
 ## 6. Tune, measure, document
 

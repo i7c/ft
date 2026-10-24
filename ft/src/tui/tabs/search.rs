@@ -37,8 +37,10 @@ use ratatui::{
 };
 
 use ft_core::blame_cache::BlameCache;
+use ft_core::search::semantic::SemanticQuery;
 use ft_core::search::{
-    fill_highlights, group, parse_query, search, search_with_dates, SearchCtx, SearchResult, Sort,
+    fill_highlights, group, parse_query, search, search_with_dates, Field, SearchCtx, SearchResult,
+    Sort, SEMANTIC_LABEL,
 };
 
 use crate::tui::command::{Command, CommandDef, CommandOutcome, CommandScope};
@@ -86,6 +88,24 @@ pub(crate) static SEARCH_COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "search.toggle-grouping",
         description: "Toggle results grouped by note vs one flat row per paragraph",
+        scope: CommandScope::Tab("search"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "search.toggle-semantic",
+        description: "Toggle meaning-based (embedding) matches for this session",
+        scope: CommandScope::Tab("search"),
+        group: "Query",
+        args_schema: &[],
+        opens_modal: false,
+        is_primary: false,
+    },
+    CommandDef {
+        name: "search.more-like-this",
+        description: "List paragraphs similar in meaning to the focused result",
         scope: CommandScope::Tab("search"),
         group: "Query",
         args_schema: &[],
@@ -182,6 +202,8 @@ pub(crate) static SEARCH_KEYMAP: LazyLock<KeyMap> = LazyLock::new(|| {
         .bind("o", "search.cycle-sort")
         .bind("g", "search.toggle-grouping")
         .bind("n", "search.near-focused")
+        .bind("m", "search.toggle-semantic")
+        .bind("M", "search.more-like-this")
         .bind("Up", "search.result-up")
         .bind("k", "search.result-up")
         .bind("Down", "search.result-down")
@@ -221,6 +243,11 @@ pub struct SearchTab {
     last_query: Option<ft_core::search::SearchQuery>,
     /// Last query error, if any.
     last_error: Option<String>,
+    /// Session override of `[search.semantic] enabled` (`m`).
+    semantic_on: Option<bool>,
+    /// More-like-this source `(path, line_start)` (`M`); cleared when the
+    /// query is edited or cleared.
+    like: Option<(std::path::PathBuf, u32)>,
     /// Shared send-to-synth state machine.
     synth_send: SynthSendFlow,
     keymap: KeyMap,
@@ -247,6 +274,8 @@ impl SearchTab {
             cache: None,
             last_query: None,
             last_error: None,
+            semantic_on: None,
+            like: None,
             synth_send: SynthSendFlow::new(),
             keymap: SEARCH_KEYMAP.clone(),
         }
@@ -274,7 +303,7 @@ impl SearchTab {
         self.rows.clear();
         self.selected.clear();
         self.cursor = 0;
-        if query.is_empty() {
+        if query.is_empty() && self.like.is_none() {
             self.last_query = None;
             return;
         }
@@ -291,11 +320,23 @@ impl SearchTab {
             return;
         };
         let index = &snap.search;
+        let sem_cfg = &ctx.vault.config.config.search.semantic;
+        let semantic = ctx
+            .semantic
+            .as_deref()
+            .filter(|_| self.semantic_effective(ctx))
+            .map(|r| SemanticQuery {
+                index: &r.index,
+                embedder: r.embedder.as_ref(),
+                candidates: sem_cfg.candidates,
+                min_similarity: sem_cfg.min_similarity,
+            });
         let sctx = SearchCtx {
             graph: Some(&snap.graph),
             presets: Some(&ctx.vault.config.config.graph.presets),
             recency: ctx.recency.as_deref(),
-            ..Default::default()
+            semantic,
+            like: self.like.as_ref().map(|(p, l)| (p.as_path(), *l)),
         };
         let outcome = if self.sort == Sort::Date || query.has_date_filters() {
             let mut cache = self.cache.take().unwrap_or_default();
@@ -327,6 +368,48 @@ impl SearchTab {
         self.selected.clear();
         self.cursor = 0;
         self.rebuild_rows(false);
+    }
+
+    /// Whether hybrid retrieval is on for this session: the `m` override,
+    /// else the config.
+    fn semantic_effective(&self, ctx: &TabCtx) -> bool {
+        self.semantic_on
+            .unwrap_or(ctx.vault.config.config.search.semantic.enabled)
+    }
+
+    /// The `≈ …` status segment.
+    fn semantic_status(&self, ctx: &TabCtx) -> String {
+        use crate::tui::snapshot::SemanticState;
+        if !self.semantic_effective(ctx) {
+            return "≈ off".to_string();
+        }
+        match ctx.semantic_state {
+            SemanticState::Ready => "≈ on".to_string(),
+            SemanticState::NoModel => "≈ no model".to_string(),
+            SemanticState::NotCompiled => "≈ n/a".to_string(),
+            SemanticState::Building(done, total) if total > 0 => {
+                format!("≈ building {}%", done * 100 / total)
+            }
+            SemanticState::Building(..) | SemanticState::Pending => "≈ building".to_string(),
+        }
+    }
+
+    /// Rank paragraphs by similarity to the focused result (`M`).
+    fn more_like_this(&mut self, ctx: &TabCtx) {
+        let Some(r) = self.cursor_result().and_then(|i| self.results.get(i)) else {
+            return;
+        };
+        if ctx.semantic.is_none() {
+            self.last_error = Some(format!(
+                "more like this needs embeddings ({})",
+                self.semantic_status(ctx).trim_start_matches("≈ ")
+            ));
+            return;
+        }
+        self.like = Some((r.path.clone(), r.line_start));
+        self.semantic_on = Some(true);
+        self.requery();
+        self.run_query(ctx);
     }
 
     /// Replace the query's `near:` clauses with one for the focused
@@ -541,6 +624,12 @@ impl Tab for SearchTab {
         }
     }
 
+    fn on_semantic_ready(&mut self, ctx: &mut TabCtx) {
+        if self.last_query.is_some() && self.semantic_effective(ctx) {
+            self.rerun_preserving(ctx);
+        }
+    }
+
     fn commands(&self) -> &'static [CommandDef] {
         SEARCH_COMMANDS
     }
@@ -563,6 +652,17 @@ impl Tab for SearchTab {
             "search.cycle-sort" => {
                 self.cycle_sort();
                 self.run_query(ctx);
+                CommandOutcome::Handled
+            }
+            "search.toggle-semantic" => {
+                self.semantic_on = Some(!self.semantic_effective(ctx));
+                if self.last_query.is_some() {
+                    self.rerun_preserving(ctx);
+                }
+                CommandOutcome::Handled
+            }
+            "search.more-like-this" => {
+                self.more_like_this(ctx);
                 CommandOutcome::Handled
             }
             "search.near-focused" => {
@@ -616,6 +716,7 @@ impl Tab for SearchTab {
                 self.cursor = 0;
                 self.last_query = None;
                 self.last_error = None;
+                self.like = None;
                 CommandOutcome::Handled
             }
             _ => CommandOutcome::NotHandled,
@@ -647,6 +748,7 @@ impl Tab for SearchTab {
                     let before = self.input.text.clone();
                     let _ = self.input.handle_event(k);
                     if self.input.text != before {
+                        self.like = None;
                         self.requery();
                         self.run_query(ctx);
                     }
@@ -694,6 +796,7 @@ impl Tab for SearchTab {
         if let Some((done, total)) = ctx.blame_progress {
             status.push_str(&format!(" · blame {done}/{total}"));
         }
+        status.push_str(&format!(" · {}", self.semantic_status(ctx)));
         let qtitle = Line::from(Span::styled(
             format!(
                 " {status} ({} result{}, {} selected) ",
@@ -710,12 +813,19 @@ impl Tab for SearchTab {
         // the previous frame's longer text behind.
         frame.render_widget(Clear, qinner);
         let prefix = if self.editing { "> " } else { "/ " };
+        let mut prefix_spans = vec![Span::styled(prefix, Style::default().fg(palette::PRIMARY))];
+        if let Some((path, line)) = &self.like {
+            prefix_spans.push(Span::styled(
+                format!("like:{}:{line} ", path.display()),
+                Style::default().fg(palette::DIM),
+            ));
+        }
         render_inline_input(
             frame,
             qinner,
             InlineInput {
                 buf: &self.input,
-                prefix: vec![Span::styled(prefix, Style::default().fg(palette::PRIMARY))],
+                prefix: prefix_spans,
                 placeholder: Some(Span::styled(
                     "type a query — substring, =word, ~fuzzy, \"phrase\", [[link]], -exclude, path: tag: near:[[…]]",
                     Style::default().fg(palette::DIM),
@@ -809,9 +919,10 @@ impl Tab for SearchTab {
                             Style::default().fg(palette::SECONDARY),
                         ));
                     }
-                    if !r.matched.is_empty() {
+                    let labels = labels_of(r);
+                    if !labels.is_empty() {
                         spans.push(Span::styled(
-                            format!("  {}", r.matched.join(" ")),
+                            format!("  {labels}"),
                             Style::default().fg(palette::DIM),
                         ));
                     }
@@ -855,7 +966,9 @@ impl Tab for SearchTab {
             if !row.heading_path.is_empty() {
                 h.push_str(&format!(" · {}", row.heading_path.join(" › ")));
             }
-            if !row.matched.is_empty() {
+            if row.matched.is_empty() && is_semantic_only(row) {
+                h.push_str(&format!(" · {SEMANTIC_LABEL}"));
+            } else if !row.matched.is_empty() {
                 h.push_str(&format!(" · {}", row.matched.join(" · ")));
             }
             h.push_str(&format!(" · score {:.2}", row.score));
@@ -907,6 +1020,8 @@ impl Tab for SearchTab {
                     ("o", "cycle sort: relevance ↔ date"),
                     ("g", "toggle grouped by note ↔ flat"),
                     ("n", "rank near the focused result's note (near:[[…]])"),
+                    ("m", "toggle meaning-based matches (≈)"),
+                    ("M", "more like the focused result (by meaning)"),
                 ],
             ),
             HelpSection::new(
@@ -932,6 +1047,20 @@ impl Tab for SearchTab {
                 ],
             ),
         ]
+    }
+}
+
+/// Found by meaning only (no clause matched its text).
+fn is_semantic_only(r: &SearchResult) -> bool {
+    r.matched.is_empty() && r.reasons.iter().any(|m| m.field == Field::Semantic)
+}
+
+/// Row labels: the matched clauses, or `≈` for a meaning-only match.
+fn labels_of(r: &SearchResult) -> String {
+    if is_semantic_only(r) {
+        SEMANTIC_LABEL.to_string()
+    } else {
+        r.matched.join(" ")
     }
 }
 
