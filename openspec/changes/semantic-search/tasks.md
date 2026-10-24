@@ -3,7 +3,7 @@
 ## 1. Evaluation first
 
 - [x] 1.1 Write `tests/fixtures/search-eval/semantic.toml`: about 12 concept queries over the existing fixture vault whose targets share no words with the query (extend `generate.py` with any notes they need, keeping the lexical judgments valid)
-- [ ] 1.2 Harness: a `--hybrid` path gated by `FT_SEMANTIC_TESTS=1` + model present; report lexical vs hybrid on both judgment files; assert the lexical judgments do not drop more than 0.02 nDCG@10
+- [x] 1.2 Harness: a `--hybrid` path gated by `FT_SEMANTIC_TESTS=1` + model present; report lexical vs hybrid on both judgment files; assert the lexical judgments do not drop more than 0.02 nDCG@10
 - [x] 1.3 Record lexical-only scores on `semantic.toml` (the expected low baseline) in the change notes
 
 ## 2. Core seam (no model yet)
@@ -19,7 +19,7 @@
 
 - [x] 3.1 `Cargo.toml`: optional `model2vec-rs = { default-features = false, features = ["local-only"] }` and `tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }` behind feature `semantic` (default on) in `ft-core` and `ft`; do NOT enable `model2vec-rs`'s `fancy-regex` / `onig` features (they turn on the C++ `esaxx_fast`); CI and `--no-default-features` build stays green
 - [x] 3.1a No-C++ guard: a check (script or test) failing when `cargo tree -p ft -e features -i esaxx-rs` shows `cpp`, or when any `onig` crate is in the graph; wire it into the build invariants
-- [ ] 3.2 `Model2VecEmbedder` (load from a local dir via `StaticModel::from_pretrained`)
+- [x] 3.2 `Model2VecEmbedder` (load from a local dir via `StaticModel::from_pretrained`)
 - [x] 3.3 `SearchCfg::semantic` (`enabled`, `model`, `candidates`, `min_similarity`) with validation and config tests; the "not compiled in" warning path
 - [x] 3.4 Model resolution: local dir as-is, else `dirs::cache_dir()/ft/models/<id>/`
 
@@ -37,8 +37,8 @@
 
 ## 6. Tune, measure, document
 
-- [ ] 6.1 Run the gated semantic eval with `potion-base-8M` and `potion-retrieval-32M`; choose the default model, `candidates` and `min_similarity`; record them in the change notes
-- [ ] 6.2 Real-vault report: lexical vs hybrid on the private judgments plus a few concept queries; note whether `potion-multilingual-128M` is worth recommending for mixed-language vaults
+- [x] 6.1 Run the gated semantic eval with `potion-base-8M` and `potion-retrieval-32M`; choose the default model, `candidates` and `min_similarity`; record them in the change notes
+- [x] 6.2 Real-vault report: lexical vs hybrid on the private judgments plus a few concept queries; note whether `potion-multilingual-128M` is worth recommending for mixed-language vaults
 - [ ] 6.3 `FT_PERF_TESTS` semantic gate (20k paragraphs, < 15 ms per query; cache load < 100 ms); measure release binary size growth and clean-build time; record them
 - [ ] 6.4 Docs: `docs/guide/synthesis.md` (semantic search, `embed` commands, `≈`, more like this), `docs/config.md` (`[search.semantic]`), `docs/architecture.md` §Synthesis, README pointer, `docs/guide/install.md` (the `semantic` feature; no extra toolchain needed)
 - [ ] 6.5 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`, plus `cargo build --no-default-features --features <non-semantic set>` and the no-C++ guard

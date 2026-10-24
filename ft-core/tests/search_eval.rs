@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 use ft_core::blame_cache::{BlameCache, BlameValidity};
 use ft_core::config::SearchCfg;
 use ft_core::graph::Graph;
+use ft_core::search::semantic::cache::EmbeddingCache;
+use ft_core::search::semantic::{Embedder, SemanticIndex, SemanticQuery};
 use ft_core::search::{parse_query, search, warm_blame, RecencyTable, SearchCtx, SearchIndex};
 use serde::Deserialize;
 
@@ -204,6 +206,15 @@ struct Engine {
     /// Paragraph blame recency; `None` ranks by file mtime (the fixture
     /// always runs without, so its in-repo commit times never leak in).
     recency: Option<RecencyTable>,
+    /// Hybrid retrieval: embeddings, model, candidates, similarity floor.
+    semantic: Option<Hybrid>,
+}
+
+struct Hybrid {
+    index: SemanticIndex,
+    embedder: Box<dyn Embedder>,
+    candidates: usize,
+    min_similarity: f32,
 }
 
 impl Engine {
@@ -220,7 +231,27 @@ impl Engine {
             graph,
             presets,
             recency: None,
+            semantic: None,
         }
+    }
+
+    /// Embed every paragraph with `embedder` (in-memory cache) and turn
+    /// hybrid retrieval on.
+    fn with_semantic(
+        mut self,
+        embedder: Box<dyn Embedder>,
+        candidates: usize,
+        min_similarity: f32,
+    ) -> Engine {
+        let mut cache = EmbeddingCache::new(embedder.id(), embedder.dim());
+        let (index, _) = SemanticIndex::build(&self.index, embedder.as_ref(), &mut cache);
+        self.semantic = Some(Hybrid {
+            index,
+            embedder,
+            candidates,
+            min_similarity,
+        });
+        self
     }
 
     fn run(&self, case: &Case) -> Vec<Hit> {
@@ -229,6 +260,12 @@ impl Engine {
             graph: Some(&self.graph),
             presets: Some(&self.presets),
             recency: self.recency.as_ref(),
+            semantic: self.semantic.as_ref().map(|h| SemanticQuery {
+                index: &h.index,
+                embedder: h.embedder.as_ref(),
+                candidates: h.candidates,
+                min_similarity: h.min_similarity,
+            }),
             ..Default::default()
         };
         search(&self.index, &query, ctx)
@@ -297,6 +334,15 @@ fn evaluate(engine: &Engine, cases: &[Case]) -> Scores {
     mean
 }
 
+/// Graph presets the fixture judgments use (`scope:know-notes`).
+fn fixture_presets() -> HashMap<String, String> {
+    [(
+        "know-notes".to_string(),
+        r#"node where path starts_with "know/";"#.to_string(),
+    )]
+    .into()
+}
+
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/search-eval")
 }
@@ -355,6 +401,96 @@ fn fixture_semantic_lexical_report() {
     );
     println!("── concept queries, lexical only");
     evaluate(&engine, &cases);
+}
+
+/// Hybrid (lexical + semantic) vs lexical on both judgment files, with
+/// the real model. Gated: `FT_SEMANTIC_TESTS=1` and the model present
+/// (`FT_SEMANTIC_MODEL_DIR`, else the default model's cache dir). Fails
+/// when hybrid lowers the lexical judgments' mean nDCG@10 by > 0.02.
+/// `FT_SEMANTIC_MIN` / `FT_SEMANTIC_K` override the floor and candidate
+/// count for tuning sweeps.
+#[cfg(feature = "semantic")]
+#[test]
+fn fixture_semantic_hybrid() {
+    use ft_core::search::semantic::{model::Model2VecEmbedder, model_dir, model_present};
+    if std::env::var("FT_SEMANTIC_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let defaults = SearchCfg::default().semantic;
+    let dir = std::env::var_os("FT_SEMANTIC_MODEL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| model_dir(&defaults.model));
+    assert!(model_present(&dir), "no model at {}", dir.display());
+    let min: f32 = std::env::var("FT_SEMANTIC_MIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(defaults.min_similarity);
+    let k: usize = std::env::var("FT_SEMANTIC_K")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(defaults.candidates);
+
+    std::env::set_var("FT_TODAY", "2026-10-23");
+    let fixture = fixture_dir();
+    let load = |name: &str| {
+        parse_judgments(&std::fs::read_to_string(fixture.join(name)).unwrap())
+            .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let (lexical_cases, concept_cases) = (load("judgments.toml"), load("semantic.toml"));
+    let presets = fixture_presets();
+    let build = || {
+        Engine::build(
+            &fixture.join("vault"),
+            &[],
+            &SearchCfg::default(),
+            presets.clone(),
+        )
+    };
+    let lexical = build();
+    let embedder = Model2VecEmbedder::load(&dir, &dir.display().to_string()).unwrap();
+    println!(
+        "model {} (dim {}), candidates {k}, min_similarity {min}",
+        dir.display(),
+        embedder.dim()
+    );
+    let hybrid = build().with_semantic(Box::new(embedder), k, min);
+
+    println!("── lexical judgments: lexical");
+    let lex_on_lex = evaluate(&lexical, &lexical_cases);
+    println!("── lexical judgments: hybrid");
+    let hyb_on_lex = evaluate(&hybrid, &lexical_cases);
+    println!("── concept judgments: lexical");
+    evaluate(&lexical, &concept_cases);
+    println!("── concept judgments: hybrid");
+    evaluate(&hybrid, &concept_cases);
+    assert!(
+        hyb_on_lex.ndcg + 0.02 + 1e-9 >= lex_on_lex.ndcg,
+        "hybrid lowered the lexical judgments' nDCG@10 from {:.3} to {:.3}",
+        lex_on_lex.ndcg,
+        hyb_on_lex.ndcg
+    );
+}
+
+#[test]
+fn hybrid_with_hash_embedder_runs_the_whole_path() {
+    let fixture = fixture_dir();
+    let cases =
+        parse_judgments(&std::fs::read_to_string(fixture.join("judgments.toml")).unwrap()).unwrap();
+    let engine = Engine::build(
+        &fixture.join("vault"),
+        &[],
+        &SearchCfg::default(),
+        fixture_presets(),
+    )
+    .with_semantic(
+        Box::new(ft_core::search::semantic::HashEmbedder::new(64)),
+        20,
+        0.2,
+    );
+    // No assertion on quality — the hash embedder knows no meaning; this
+    // exercises fusion end to end on the whole fixture.
+    let mean = evaluate(&engine, &cases);
+    assert!(mean.recall > 0.5);
 }
 
 #[test]
@@ -436,6 +572,28 @@ fn real_vault_relevance_report() {
         );
         engine.recency = Some(table);
         evaluate(&engine, &cases);
+    }
+
+    // Hybrid with the configured model (`FT_SEMANTIC_TESTS=1`).
+    #[cfg(feature = "semantic")]
+    if std::env::var("FT_SEMANTIC_TESTS").as_deref() == Ok("1") {
+        use ft_core::search::semantic::{model::Model2VecEmbedder, model_dir, model_present};
+        let sem = &cfg.search.semantic;
+        let dir = std::env::var_os("FT_SEMANTIC_MODEL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| model_dir(&sem.model));
+        if model_present(&dir) {
+            let embedder = Model2VecEmbedder::load(&dir, &sem.model).unwrap();
+            let start = std::time::Instant::now();
+            let engine =
+                engine.with_semantic(Box::new(embedder), sem.candidates, sem.min_similarity);
+            println!(
+                "── hybrid ({} embedded in {:?})",
+                engine.index.paragraph_count(),
+                start.elapsed()
+            );
+            evaluate(&engine, &cases);
+        }
     }
 }
 

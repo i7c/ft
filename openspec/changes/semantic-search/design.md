@@ -131,8 +131,17 @@ takes these steps:
 3. Keep the top `candidates` with similarity ≥ `min_similarity`.
 4. Apply filters and excludes.
 
-The union is ordered by `rrf = Σ_lists 1/(60 + rank)`, then multiplied by the
-note prior, paragraph recency and the `near:` boost. Ties break as today.
+The union is ordered by weighted RRF, `1/(60 + lexical rank) + 0.5/(60 +
+semantic rank)`, then multiplied by the note prior, paragraph recency and the
+`near:` boost. Ties break as today.
+
+*Revised during implementation.* Equal weights let the noisy static-embedding
+list reorder confident lexical results: the fixture's lexical judgments fell
+from nDCG@10 0.910 to 0.873, which failed the 0.02 no-regression gate, and no
+`candidates` / `min_similarity` setting fixed it (the best was 0.873). The
+semantic weight was swept over 1.0, 0.7, 0.5, 0.35 and 0.25. At 0.5 the
+lexical judgments *improve* to 0.927 (MRR 0.983), and the concept judgments go
+from 0.066 to 0.632. Weights below 0.5 change nothing further.
 
 - **Why RRF:** BM25F scores and cosine similarities live on incomparable
   scales. RRF needs no calibration, is the standard in hybrid search (used
@@ -231,9 +240,11 @@ deleted.
 
 ## Open Questions
 
-- **Default model:** `potion-base-8M` (smaller, 256-dim) vs
-  `potion-retrieval-32M` (retrieval-tuned, 512-dim). The semantic eval
-  decides. `base-8M` is the provisional default.
+- **Default model:** resolved. `potion-base-8M` at `min_similarity` 0.2
+  (lexical 0.927, concept 0.632). `potion-retrieval-32M`'s best setting
+  (0.15) was comparable (0.933 / 0.630) at four times the size and twice the
+  dimension. The similarity floor is model-specific, so a user switching
+  models should re-tune it.
 - **Should `semantic` be a default Cargo feature?** Proposed yes. With no
   C++ requirement, the remaining cost is 50 crates of compile time, and it
   stays off at runtime.

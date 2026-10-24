@@ -46,6 +46,11 @@ const FIELD_WEIGHT: [f64; 5] = [1.0, 3.0, 2.5, 2.0, 2.0];
 const FIELD_B: [f64; 5] = [0.75, 0.0, 0.0, 0.3, 0.0];
 /// Reciprocal Rank Fusion constant: `1 / (RRF_K + rank)`.
 const RRF_K: f64 = 60.0;
+/// Weight of the semantic ranking in the fusion. Equal weight (1.0) let
+/// a noisy static-embedding list reorder good lexical results (fixture
+/// nDCG@10 0.910 → 0.873); 0.5 keeps lexical order where it is confident
+/// and still surfaces meaning-only hits (0.927 lexical, 0.632 concept).
+const SEMANTIC_WEIGHT: f64 = 0.5;
 /// Damping for a clause that matches a paragraph only through context
 /// fields: inherited title/alias/heading/tag text is weaker evidence than
 /// the paragraph's own words, and without it every paragraph of a note
@@ -447,7 +452,7 @@ fn run(
                 *scores.entry(*doc).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
             }
             for (rank, doc) in sem.iter().enumerate() {
-                *scores.entry(*doc).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+                *scores.entry(*doc).or_default() += SEMANTIC_WEIGHT / (RRF_K + rank as f64 + 1.0);
                 cands.entry(*doc).or_default();
             }
             fused = Some(scores);
@@ -1758,14 +1763,15 @@ mod tests {
                 "Memoization keeps results of pure calls in a cache.\n",
             ),
             ("Garden.md", "results: tomatoes, homegrown produce.\n"),
+            // One mention diluted by filler: 3rd lexically, no semantic match.
             (
                 "Note.md",
-                "results and more results in a longer paragraph with many words.\n",
+                "results appear once in a long note full of the words and phrases of a paragraph here.\n",
             ),
         ]);
         let sem = semantic_of(&index);
         let lexical = paths(&run_q(&index, "results"));
-        assert_eq!(lexical[0], "Garden.md");
+        assert_eq!(lexical, vec!["Garden.md", "Memo.md", "Note.md"]);
         let got = paths(&hybrid(&index, &sem, "results"));
         assert_eq!(got[0], "Memo.md", "lexical {lexical:?} → hybrid {got:?}");
     }

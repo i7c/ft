@@ -462,7 +462,7 @@ fn default_semantic_candidates() -> usize {
 
 /// Tuned against the semantic eval (`tests/fixtures/search-eval/semantic.toml`).
 fn default_min_similarity() -> f32 {
-    0.3
+    0.2
 }
 
 fn default_stemmers() -> Vec<String> {

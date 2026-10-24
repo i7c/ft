@@ -99,10 +99,11 @@ embedded from its positive text clauses (terms, phrase text, and link targets,
 joined by spaces) and compared by cosine similarity against every indexed
 paragraph. The top `candidates` paragraphs with similarity ≥ `min_similarity`
 SHALL join the lexical result set; filter clauses and exclude clauses SHALL
-apply to them exactly as to lexical results. The final order SHALL be Reciprocal
-Rank Fusion over the lexical ranking and the semantic ranking
-(`Σ 1 / (60 + rank)`), multiplied by the priors and `near:` boost, with the
-existing deterministic tiebreak. A paragraph found only semantically SHALL carry
+apply to them exactly as to lexical results. The final order SHALL be weighted
+Reciprocal Rank Fusion over the lexical ranking and the semantic ranking
+(`1 / (60 + lexical rank) + w / (60 + semantic rank)`, with the semantic weight
+`w` a named constant below 1 tuned against the evaluation harness), multiplied
+by the priors and `near:` boost, with the existing deterministic tiebreak. A paragraph found only semantically SHALL carry
 no matched clause labels and a `semantic` match reason; the CLI SHALL mark such
 rows with `≈` and JSON SHALL include `{"clause": "≈", "field": "semantic"}` in
 `reasons`. With semantic search inactive, results SHALL be identical to lexical
