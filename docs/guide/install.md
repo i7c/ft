@@ -16,6 +16,11 @@ This drops `ft` into `~/.cargo/bin/` (or whatever your
 `CARGO_INSTALL_ROOT` points at). Make sure that directory is on your
 `PATH`.
 
+Semantic search is compiled in by default (Cargo feature `semantic`;
+pure Rust — no C++ toolchain, about 6 s more build time and 2.5 MB more
+binary). To build without it:
+`cargo install --path ft --no-default-features`.
+
 Verify the install:
 
 ```sh

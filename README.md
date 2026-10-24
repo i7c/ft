@@ -43,7 +43,9 @@ they're about, the unsorted pile stays retrievable. Two directions:
   meeting: `ft notes search "[[topic]]"` returns every matching
   paragraph, ranked by relevance (or `--sort date` for newest first).
   Filters (`path:`, `tag:`, `after:`, `scope:<graph-preset>`) narrow it
-  and `near:[[X]]` ranks what sits close to `X` higher — see the
+  and `near:[[X]]` ranks what sits close to `X` higher; opt-in
+  semantic search (`--semantic`, a small local model) also finds
+  paragraphs that mean the same thing in other words — see the
   [synthesis guide](docs/guide/synthesis.md#step-1-the-search-feed).
 - *Sweep* — you want to know what accumulated: `ft notes search
   --sort date` walks the paragraphs you touched, newest first, for

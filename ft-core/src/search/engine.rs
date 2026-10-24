@@ -2049,6 +2049,105 @@ mod tests {
         (index, graph)
     }
 
+    /// 20,000 paragraphs, 256-dim hash embeddings (release builds only —
+    /// the budget is specified for release): query embedding + scoring
+    /// under 15 ms, a whole hybrid query on a realistic vocabulary under
+    /// 15 ms, cache load under 100 ms.
+    #[test]
+    fn semantic_perf_budget_holds() {
+        if !perf_enabled() || cfg!(debug_assertions) {
+            return;
+        }
+        use crate::markdown::Paragraph;
+        use crate::scan::ParsedFile;
+        use crate::search::semantic::{
+            cache::EmbeddingCache, Embedder, HashEmbedder, SemanticIndex,
+        };
+        // 2,000-word vocabulary: a term matches a few percent of the
+        // paragraphs, as in a real vault.
+        let word = |i: usize| format!("w{}", (i * 7919) % 2000);
+        let mut files = Vec::new();
+        for f in 0..2000usize {
+            let paragraphs = (0..10u32)
+                .map(|p| Paragraph {
+                    line_start: p * 2 + 1,
+                    line_end: p * 2 + 1,
+                    text: (0..12)
+                        .map(|w| word(f * 131 + p as usize * 17 + w))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                })
+                .collect();
+            files.push(ParsedFile {
+                rel: PathBuf::from(format!("n/{f:05}.md")),
+                links: Vec::new(),
+                self_block_refs: Vec::new(),
+                paragraphs,
+                headings: Vec::new(),
+                frontmatter: None,
+                mtime: std::time::UNIX_EPOCH,
+                line_count: 20,
+            });
+        }
+        let scan = crate::scan::Scan {
+            files,
+            ..Default::default()
+        };
+        let index = SearchIndex::build(&scan, &[]);
+        assert_eq!(index.paragraph_count(), 20_000);
+        let e = HashEmbedder::new(256);
+        let mut cache = EmbeddingCache::new(e.id(), e.dim());
+        let (sem, _) = SemanticIndex::build(&index, &e, &mut cache);
+
+        let tmp = assert_fs::TempDir::new().unwrap();
+        cache.save(tmp.path()).unwrap();
+        let start = std::time::Instant::now();
+        let loaded = EmbeddingCache::load(tmp.path(), e.id(), e.dim());
+        let load_ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(loaded.len(), cache.len());
+        assert!(
+            load_ms < 100.0,
+            "cache load took {load_ms:.1}ms (budget 100ms)"
+        );
+
+        let sq = SemanticQuery {
+            index: &sem,
+            embedder: &e,
+            candidates: 50,
+            min_similarity: 0.2,
+        };
+        let start = std::time::Instant::now();
+        let hits = sem.top_k(&sq.embed_query("w10 w20 w30"), 50, -1.0, None);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(hits.len(), 50);
+        assert!(
+            ms < 15.0,
+            "query embedding + scoring took {ms:.2}ms (budget 15ms)"
+        );
+
+        let ctx = SearchCtx {
+            semantic: Some(sq),
+            ..Default::default()
+        };
+        // The hybrid overhead over the same lexical query (fusion of up to
+        // `candidates` semantic hits) stays within the same budget.
+        for q in ["w10", "=w10 =w20", "w5 -w6"] {
+            let q = parse(q, false);
+            let start = std::time::Instant::now();
+            let lexical = search(&index, &q, SearchCtx::default()).unwrap();
+            let lex_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = std::time::Instant::now();
+            let results = search(&index, &q, ctx).unwrap();
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            assert!(results.len() >= lexical.len());
+            assert!(
+                ms - lex_ms < 15.0,
+                "hybrid added {:.2}ms over lexical {lex_ms:.2}ms (budget 15ms)",
+                ms - lex_ms
+            );
+        }
+    }
+
     #[test]
     fn perf_budget_holds() {
         if !perf_enabled() {

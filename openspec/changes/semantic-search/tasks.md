@@ -39,6 +39,6 @@
 
 - [x] 6.1 Run the gated semantic eval with `potion-base-8M` and `potion-retrieval-32M`; choose the default model, `candidates` and `min_similarity`; record them in the change notes
 - [x] 6.2 Real-vault report: lexical vs hybrid on the private judgments plus a few concept queries; note whether `potion-multilingual-128M` is worth recommending for mixed-language vaults
-- [ ] 6.3 `FT_PERF_TESTS` semantic gate (20k paragraphs, < 15 ms per query; cache load < 100 ms); measure release binary size growth and clean-build time; record them
-- [ ] 6.4 Docs: `docs/guide/synthesis.md` (semantic search, `embed` commands, `≈`, more like this), `docs/config.md` (`[search.semantic]`), `docs/architecture.md` §Synthesis, README pointer, `docs/guide/install.md` (the `semantic` feature; no extra toolchain needed)
-- [ ] 6.5 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`, plus `cargo build --no-default-features --features <non-semantic set>` and the no-C++ guard
+- [x] 6.3 `FT_PERF_TESTS` semantic gate (20k paragraphs, < 15 ms per query; cache load < 100 ms); measure release binary size growth and clean-build time; record them
+- [x] 6.4 Docs: `docs/guide/synthesis.md` (semantic search, `embed` commands, `≈`, more like this), `docs/config.md` (`[search.semantic]`), `docs/architecture.md` §Synthesis, README pointer, `docs/guide/install.md` (the `semantic` feature; no extra toolchain needed)
+- [x] 6.5 Build invariants: `cargo build --release`, `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, `cargo run --release -q -- commands docs --check`, plus `cargo build --no-default-features --features <non-semantic set>` and the no-C++ guard

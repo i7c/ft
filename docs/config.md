@@ -27,7 +27,7 @@ silently default.
 | `[git]`                 | table                             | either        | `ft git sync` settings (pull strategy).                |
 | `[presets]`             | table of `name = "query"` entries | either        | Named [query DSL](graph-query-dsl.md) presets.               |
 | `[synth]`               | table                             | either        | Synthesis: default folder for new synth notes; path-prefix exclude filter for `ft notes search`. |
-| `[search]`              | table                             | either        | Paragraph search: Snowball stemmers for `=word` clauses. |
+| `[search]`              | table                             | either        | Paragraph search: Snowball stemmers for `=word` clauses; `[search.semantic]` hybrid retrieval. |
 | `[tui]`                 | table                             | either        | Opt-in Tasks/Timeblocks tabs (all default off). |
 | `[drift]`               | table                             | either        | Exclude patterns for the `ft notes drift` report.      |
 
@@ -486,7 +486,27 @@ Settings for paragraph search (`ft notes search`, the Search tab,
 # greek, hungarian, italian, norwegian, portuguese, romanian, russian,
 # spanish, swedish, tamil, turkish). Default: ["english"].
 stemmers = ["english", "portuguese"]
+
+[search.semantic]
+# Hybrid retrieval: paragraphs similar in meaning join the lexical
+# results (marked ≈). Off by default; `--semantic` / `--no-semantic` and
+# the Search tab's `m` override it per call or session.
+enabled = false
+# A Hugging Face model id (fetched once with `ft notes embed fetch` into
+# the user cache dir, e.g. ~/.cache/ft/models/) or a local directory with
+# config.json, tokenizer.json, model.safetensors. Default:
+# "minishlab/potion-base-8M".
+model = "minishlab/potion-base-8M"
+# Meaning-based candidates per query (≥ 1). Default: 50.
+candidates = 50
+# Cosine-similarity floor for candidates, in -1..1. Tuned for the default
+# model; re-tune when switching models. Default: 0.2.
+min_similarity = 0.2
 ```
+
+Embeddings are cached per model in `<vault>/.ft/cache/embeddings/` and
+rebuilt incrementally (`ft notes embed build`, or automatically by the
+TUI and by `--semantic` searches).
 
 ## `[synth]`
 

@@ -46,3 +46,15 @@ Each cell is nDCG@10 / MRR.
 - **`embed build`:** 16,304 paragraphs in 0.9 s, giving an 8.4 MB cache.
   The first cut stored f16 values as msgpack integer arrays (12.7 MB);
   keys and vectors are now `bin` blobs, which is schema v2.
+
+## Build and performance
+
+- **Build cost of the feature:** clean release build 43 s → 49 s, binary
+  23.9 MB → 26.5 MB. No C++ toolchain is needed (`scripts/check-no-cpp.sh`).
+- **`FT_PERF_TESTS` gate** (release only, as specified), 20,000 paragraphs
+  at 256 dimensions: query embedding plus scoring under 15 ms; cache load
+  under 100 ms; hybrid overhead over the same lexical query under 15 ms.
+  - Debug builds skip the gate: cache load there took 225 ms.
+  - The first version of the test used a 14-word vocabulary, where 15,000
+    of the 20,000 paragraphs matched lexically (43 ms of lexical work alone).
+    It now uses a 2,000-word vocabulary.

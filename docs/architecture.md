@@ -315,7 +315,16 @@ and never blames for relevance; the TUI's blame warm-up worker (spawned
 per snapshot install, cancelled by a newer generation through an
 `AtomicU64`) posts `BgEvent::RecencyReady` / `BlameWarmProgress`, the App
 keeps the table in `TabCtx::recency`, and the Search tab re-ranks via
-`Tab::on_recency_ready`. Text is folded (case + diacritics) and
+`Tab::on_recency_ready`. Hybrid retrieval lives in
+`search::semantic` behind the `semantic` feature: an `Embedder` trait
+(`Model2VecEmbedder`, local-only; `HashEmbedder` for tests;
+`FT_SEMANTIC_TEST_EMBEDDER=hash` swaps it in), a `SemanticIndex` of
+normalized paragraph vectors (title + heading path + body) built
+incrementally through the f16 `EmbeddingCache`, and fusion in the engine
+— `SearchCtx::semantic` adds top-k cosine candidates, filters/excludes
+bound them, and lexical and semantic ranks fuse by weighted RRF
+(semantic weight 0.5). The TUI's embeddings worker posts
+`BgEvent::EmbeddingsReady` per snapshot. Text is folded (case + diacritics) and
 tokenized by `search::text`; relevance is measured by the eval harness in
 `ft-core/tests/search_eval.rs` against `tests/fixtures/search-eval/`, whose
 `baseline.toml` ratchet fails the build on a regression.

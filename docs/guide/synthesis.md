@@ -130,6 +130,35 @@ signal you want when synthesizing a bridge note. The `-` exclude form
 lets you subtract noise ("eigen -matrix" if one eigen thread is
 uninteresting).
 
+### Meaning-based search (≈)
+
+Lexical search finds the words you remember. Turn on **semantic
+search** and it also finds paragraphs that *mean* the same thing:
+"concentrating without interruptions" surfaces your *Deep Work*
+routine even though it never says either word. Each paragraph is
+embedded with a small local model (Model2Vec `potion-base-8M`, 30 MB,
+CPU only) together with its note title and headings. The model's
+candidates join the lexical results, filters and excludes still apply,
+and the two rankings are fused, with lexical agreement weighted higher.
+Results found only by meaning are marked `≈`.
+
+```sh
+ft notes embed fetch           # once: download the model (the only network access)
+ft notes embed build           # embed the vault (16k paragraphs ≈ 1 s; incremental)
+ft notes embed status          # model location, coverage
+ft notes search "how to stay focused" --semantic
+ft notes search --like know/Memoization.md:6          # paragraphs like this one
+ft notes search --like know/Memoization.md:6 "path:proj/"
+```
+
+Set `[search.semantic] enabled = true` to make it the default (and
+`--no-semantic` to skip it once). On the Search tab, `m` toggles it for
+the session — the status shows `≈ off`, `≈ building N%`, `≈ on`, or
+`≈ no model` — and `M` lists paragraphs like the focused result (shown
+as a `like:<path>:<line>` prefix until you edit or clear the query).
+With semantic search on, results can include paragraphs that match none
+of your terms; that is the point, and `≈` tells them apart.
+
 ## Step 2: synthesis
 
 A **synth note** is a regular `.md` file with `ft.synth.enabled: true` in its
