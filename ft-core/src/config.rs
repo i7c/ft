@@ -407,14 +407,62 @@ pub struct Synth {
 pub struct SearchCfg {
     #[serde(default = "default_stemmers")]
     pub stemmers: Vec<String>,
+    /// Meaning-based (embedding) retrieval. See [`SemanticCfg`].
+    #[serde(default)]
+    pub semantic: SemanticCfg,
 }
 
 impl Default for SearchCfg {
     fn default() -> Self {
         SearchCfg {
             stemmers: default_stemmers(),
+            semantic: SemanticCfg::default(),
         }
     }
+}
+
+/// `[search.semantic]`: hybrid retrieval with Model2Vec embeddings.
+///
+/// Off by default. `model` is a Hugging Face model id (fetched once with
+/// `ft notes embed fetch` into the user cache dir) or a local directory
+/// holding `config.json`, `tokenizer.json`, and `model.safetensors`.
+/// `candidates` paragraphs with cosine similarity ≥ `min_similarity`
+/// join the lexical results, fused by Reciprocal Rank Fusion.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_semantic_model")]
+    pub model: String,
+    #[serde(default = "default_semantic_candidates")]
+    pub candidates: usize,
+    #[serde(default = "default_min_similarity")]
+    pub min_similarity: f32,
+}
+
+impl Default for SemanticCfg {
+    fn default() -> Self {
+        SemanticCfg {
+            enabled: false,
+            model: default_semantic_model(),
+            candidates: default_semantic_candidates(),
+            min_similarity: default_min_similarity(),
+        }
+    }
+}
+
+fn default_semantic_model() -> String {
+    "minishlab/potion-base-8M".to_string()
+}
+
+fn default_semantic_candidates() -> usize {
+    50
+}
+
+/// Tuned against the semantic eval (`tests/fixtures/search-eval/semantic.toml`).
+fn default_min_similarity() -> f32 {
+    0.3
 }
 
 fn default_stemmers() -> Vec<String> {
@@ -422,8 +470,18 @@ fn default_stemmers() -> Vec<String> {
 }
 
 impl SearchCfg {
-    /// Reject stemmer names that are not Snowball algorithms.
+    /// Reject stemmer names that are not Snowball algorithms and
+    /// out-of-range semantic settings.
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.semantic.candidates == 0 {
+            return Err("[search.semantic] candidates must be at least 1".to_string());
+        }
+        if !(-1.0..=1.0).contains(&self.semantic.min_similarity) {
+            return Err(format!(
+                "[search.semantic] min_similarity must be within -1..1 (got {})",
+                self.semantic.min_similarity
+            ));
+        }
         for name in &self.stemmers {
             if crate::search::text::stemmer_algorithm(name).is_none() {
                 return Err(format!(
@@ -1563,6 +1621,24 @@ unknown_key = "oops"
         assert_eq!(lc.config.search.stemmers, vec!["english", "portuguese"]);
         let lc = load_vault_toml("[search]\nstemmers = []\n").unwrap();
         assert!(lc.config.search.stemmers.is_empty());
+    }
+
+    #[test]
+    fn semantic_defaults_and_validation() {
+        let lc = load_vault_toml("").unwrap();
+        let s = &lc.config.search.semantic;
+        assert!(!s.enabled);
+        assert_eq!(s.model, "minishlab/potion-base-8M");
+        assert_eq!(s.candidates, 50);
+        let lc =
+            load_vault_toml("[search.semantic]\nenabled = true\nmodel = \"/opt/m\"\n").unwrap();
+        assert!(lc.config.search.semantic.enabled);
+        assert_eq!(lc.config.search.semantic.model, "/opt/m");
+        let err = load_vault_toml("[search.semantic]\ncandidates = 0\n").unwrap_err();
+        assert!(err.to_string().contains("candidates"), "{err}");
+        let err = load_vault_toml("[search.semantic]\nmin_similarity = 2.0\n").unwrap_err();
+        assert!(err.to_string().contains("min_similarity"), "{err}");
+        assert!(load_vault_toml("[search.semantic]\nbogus = 1\n").is_err());
     }
 
     #[test]

@@ -33,6 +33,7 @@ use crate::graph::{Graph, NodeKind};
 use crate::search::index::{FastMap, Field, SearchIndex, FIELDS};
 use crate::search::query::{Clause, Filter, Mode, SearchQuery};
 use crate::search::recency::{recency_part, RecencyTable};
+use crate::search::semantic::SemanticQuery;
 use crate::search::text::{self, TokenKind};
 use crate::vault::Vault;
 
@@ -43,6 +44,8 @@ const K1: f64 = 1.2;
 const FIELD_WEIGHT: [f64; 5] = [1.0, 3.0, 2.5, 2.0, 2.0];
 /// Per-field length normalization strength.
 const FIELD_B: [f64; 5] = [0.75, 0.0, 0.0, 0.3, 0.0];
+/// Reciprocal Rank Fusion constant: `1 / (RRF_K + rank)`.
+const RRF_K: f64 = 60.0;
 /// Damping for a clause that matches a paragraph only through context
 /// fields: inherited title/alias/heading/tag text is weaker evidence than
 /// the paragraph's own words, and without it every paragraph of a note
@@ -128,6 +131,11 @@ pub struct SearchCtx<'a> {
     pub presets: Option<&'a HashMap<String, String>>,
     /// Paragraph blame days; without it recency uses file mtimes.
     pub recency: Option<&'a RecencyTable>,
+    /// Embeddings and model for hybrid retrieval; `None` is lexical only.
+    pub semantic: Option<SemanticQuery<'a>>,
+    /// More-like-this source: the paragraph at `(path, line_start)`.
+    /// Needs `semantic`.
+    pub like: Option<(&'a std::path::Path, u32)>,
 }
 
 /// Errors a query can raise at search time.
@@ -144,6 +152,10 @@ pub enum SearchError {
     NoGraph,
     #[error("`after:` / `before:` need blame dates (search_with_dates)")]
     NeedsDates,
+    #[error("more-like-this needs paragraph embeddings (run `ft notes embed fetch` and `ft notes embed build`)")]
+    NeedsEmbeddings,
+    #[error("no indexed paragraph starts at {path}:{line}")]
+    NoSuchParagraph { path: String, line: u32 },
     #[error(transparent)]
     Core(#[from] crate::error::Error),
 }
@@ -293,7 +305,24 @@ fn run(
 ) -> Result<Vec<SearchResult>, SearchError> {
     let positives: Vec<&Clause> = query.positives().collect();
     let has_filters = query.filters().next().is_some();
-    if positives.is_empty() && !has_filters {
+    let semantic = ctx.semantic.filter(|s| s.index.fits(index.docs.len()));
+    let like = match ctx.like {
+        None => None,
+        Some((path, line)) => {
+            if semantic.is_none() {
+                return Err(SearchError::NeedsEmbeddings);
+            }
+            Some(
+                index
+                    .doc_at(path, line)
+                    .ok_or_else(|| SearchError::NoSuchParagraph {
+                        path: path.display().to_string(),
+                        line,
+                    })?,
+            )
+        }
+    };
+    if positives.is_empty() && !has_filters && like.is_none() {
         return Ok(Vec::new());
     }
 
@@ -309,8 +338,11 @@ fn run(
     // Candidate docs with per-clause hits (`(clause index, score, mask)`).
     let mut cands: FastMap<u32, Vec<(usize, f64, u8)>> = FastMap::default();
     if positives.is_empty() {
-        for d in 0..index.docs.len() as u32 {
-            cands.insert(d, Vec::new());
+        // Filter-only: every paragraph; more-like-this: semantic only.
+        if like.is_none() {
+            for d in 0..index.docs.len() as u32 {
+                cands.insert(d, Vec::new());
+            }
         }
     } else {
         let hits: Vec<Hits> = positives
@@ -340,16 +372,14 @@ fn run(
         }
     }
 
+    let mut excluded: HashSet<u32> = HashSet::new();
     for c in query.excludes() {
-        if cands.is_empty() {
-            break;
-        }
-        for doc in match_clause(index, c, false).keys() {
-            cands.remove(doc);
-        }
+        excluded.extend(match_clause(index, c, false).keys());
     }
-
-    cands.retain(|&doc, _| {
+    let passes = |doc: u32| {
+        if excluded.contains(&doc) {
+            return false;
+        }
         let d = &index.docs[doc as usize];
         let note = &index.notes[d.note as usize];
         query.filters().all(|c| {
@@ -369,20 +399,74 @@ fn run(
             };
             pass != c.negated
         })
-    });
+    };
+    cands.retain(|&doc, _| passes(doc));
+
+    let base_of = |per: &[(usize, f64, u8)]| -> f64 {
+        if positives.is_empty() {
+            1.0
+        } else {
+            per.iter()
+                .map(|&(i, s, _)| mode_weight(positives[i].mode) * s)
+                .sum()
+        }
+    };
+
+    // Semantic candidates join the set; both rankings fuse by RRF.
+    let mut fused: Option<FastMap<u32, f64>> = None;
+    if let Some(sq) = semantic {
+        let qv = match like {
+            Some(doc) => sq.index.vector(doc).map(<[f32]>::to_vec),
+            None if !positives.is_empty() => Some(sq.embed_query(&semantic_text(&positives))),
+            None => None,
+        };
+        if let Some(qv) = qv {
+            let sem: Vec<u32> = sq
+                .index
+                .top_k(&qv, sq.candidates, sq.min_similarity, like)
+                .into_iter()
+                .map(|(doc, _)| doc)
+                .filter(|&doc| passes(doc))
+                .collect();
+            let mut lexical: Vec<(u32, f64)> = cands
+                .iter()
+                .filter(|(_, per)| !per.is_empty())
+                .map(|(&doc, per)| (doc, base_of(per)))
+                .collect();
+            lexical.sort_by(|a, b| {
+                b.1.total_cmp(&a.1)
+                    .then_with(|| {
+                        index.docs[a.0 as usize]
+                            .path
+                            .cmp(&index.docs[b.0 as usize].path)
+                    })
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            let mut scores: FastMap<u32, f64> = FastMap::default();
+            for (rank, (doc, _)) in lexical.iter().enumerate() {
+                *scores.entry(*doc).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+            }
+            for (rank, doc) in sem.iter().enumerate() {
+                *scores.entry(*doc).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+                cands.entry(*doc).or_default();
+            }
+            fused = Some(scores);
+        }
+    }
+    if like.is_some() && fused.is_none() {
+        // The source paragraph has no vector yet.
+        return Err(SearchError::NeedsEmbeddings);
+    }
 
     let near = near_boosts(index, query);
     let results = cands
         .into_iter()
-        .map(|(doc, per)| {
+        .filter_map(|(doc, per)| {
             let d = &index.docs[doc as usize];
             let note = &index.notes[d.note as usize];
-            let base = if positives.is_empty() {
-                1.0
-            } else {
-                per.iter()
-                    .map(|&(i, s, _)| mode_weight(positives[i].mode) * s)
-                    .sum()
+            let base = match &fused {
+                Some(scores) => *scores.get(&doc)?,
+                None => base_of(&per),
             };
             let boost = near.get(&d.note).copied().unwrap_or(1.0);
             let mut reasons = Vec::new();
@@ -396,9 +480,15 @@ fn run(
                     }
                 }
             }
+            if per.is_empty() && fused.is_some() {
+                reasons.push(MatchReason {
+                    clause: SEMANTIC_LABEL.to_string(),
+                    field: Field::Semantic,
+                });
+            }
             let mut matched_idx: Vec<usize> = per.iter().map(|&(i, _, _)| i).collect();
             matched_idx.sort_unstable();
-            SearchResult {
+            Some(SearchResult {
                 path: d.path.clone(),
                 line_start: d.line_start,
                 line_end: d.line_end,
@@ -413,10 +503,31 @@ fn run(
                 heading_path: index.sections[d.section as usize].heading_path.clone(),
                 highlights: Vec::new(),
                 reasons,
-            }
+            })
         })
         .collect();
     Ok(results)
+}
+
+/// Clause label for results found only by meaning.
+pub const SEMANTIC_LABEL: &str = "≈";
+
+/// The text a query is embedded as: its positive text clauses as typed,
+/// without DSL markup.
+fn semantic_text(positives: &[&Clause]) -> String {
+    positives
+        .iter()
+        .map(|c| {
+            let raw = c.raw.as_str();
+            match c.mode {
+                Mode::Word | Mode::Fuzzy => raw.get(1..).unwrap_or(raw),
+                Mode::Phrase => raw.trim_matches('"'),
+                Mode::Link => raw.trim_start_matches("[[").trim_end_matches("]]"),
+                _ => raw,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `tag:x` keeps `x` and its descendants `x/…`.
@@ -615,7 +726,7 @@ fn bm25f(index: &SearchIndex, doc: u32, tf: &[u32; 5], idfs: &[f64; 5]) -> (f64,
             continue;
         }
         let unit = match f {
-            Field::Body => doc,
+            Field::Body | Field::Semantic => doc,
             Field::Heading => d.section,
             Field::Title | Field::Alias | Field::Tag => d.note,
         };
@@ -897,6 +1008,7 @@ mod tests {
         let (_tmp, scan) = scan_of(files);
         let cfg = SearchCfg {
             stemmers: stemmers.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
         };
         SearchIndex::build_with(&scan, &[], &cfg)
     }
@@ -1510,6 +1622,215 @@ mod tests {
         let without = search(&other, &q, SearchCtx::default()).unwrap();
         assert_eq!(paths(&with), paths(&without));
         assert_eq!(with[0].score, without[0].score);
+    }
+
+    // ── Hybrid (semantic) retrieval ──────────────────────────────────
+
+    /// Maps words to concept axes so synonyms embed alike: a
+    /// deterministic stand-in for a real model in fusion tests.
+    struct ConceptEmbedder;
+
+    impl crate::search::semantic::Embedder for ConceptEmbedder {
+        fn id(&self) -> &str {
+            "test/concepts"
+        }
+        fn dim(&self) -> usize {
+            4
+        }
+        fn embed(&self, texts: &[String]) -> Vec<Vec<f32>> {
+            const AXES: [&[&str]; 4] = [
+                &[
+                    "focus",
+                    "concentrating",
+                    "interruptions",
+                    "notifications",
+                    "attention",
+                ],
+                &[
+                    "memoization",
+                    "remembering",
+                    "cache",
+                    "computations",
+                    "results",
+                ],
+                &["garden", "tomatoes", "homegrown", "produce"],
+                &["the", "a", "and", "of", "here", "note"],
+            ];
+            texts
+                .iter()
+                .map(|t| {
+                    let mut v = vec![0.0f32; 4];
+                    for w in crate::search::text::word_texts(t) {
+                        for (i, axis) in AXES.iter().enumerate() {
+                            if axis.contains(&w.as_str()) {
+                                v[i] += 1.0;
+                            }
+                        }
+                    }
+                    v
+                })
+                .collect()
+        }
+    }
+
+    fn semantic_of(index: &SearchIndex) -> crate::search::semantic::SemanticIndex {
+        let e = ConceptEmbedder;
+        let mut cache = crate::search::semantic::cache::EmbeddingCache::new("test/concepts", 4);
+        crate::search::semantic::SemanticIndex::build(index, &e, &mut cache).0
+    }
+
+    fn hybrid(
+        index: &SearchIndex,
+        sem: &crate::search::semantic::SemanticIndex,
+        q: &str,
+    ) -> Vec<SearchResult> {
+        let ctx = SearchCtx {
+            semantic: Some(SemanticQuery {
+                index: sem,
+                embedder: &ConceptEmbedder,
+                candidates: 10,
+                min_similarity: 0.5,
+            }),
+            ..Default::default()
+        };
+        search(index, &parse(q, false), ctx).unwrap()
+    }
+
+    fn concept_vault() -> SearchIndex {
+        idx(&[
+            (
+                "Deep Work.md",
+                "Notifications off, attention on one goal.\n",
+            ),
+            ("Garden.md", "Tomatoes everywhere this summer.\n"),
+            ("archive/Old.md", "Attention notes, archived.\n"),
+            ("Memo.md", "Memoization keeps results of pure calls.\n"),
+        ])
+    }
+
+    #[test]
+    fn concept_query_finds_paragraph_without_shared_words() {
+        let index = concept_vault();
+        let sem = semantic_of(&index);
+        assert!(
+            run_q(&index, "concentrating interruptions").is_empty(),
+            "lexically nothing"
+        );
+        let got = hybrid(&index, &sem, "concentrating interruptions");
+        assert_eq!(got[0].path, PathBuf::from("Deep Work.md"));
+        assert!(got[0].matched.is_empty());
+        assert_eq!(
+            got[0].reasons,
+            vec![MatchReason {
+                clause: SEMANTIC_LABEL.to_string(),
+                field: Field::Semantic
+            }]
+        );
+        assert!(
+            !got.iter().any(|r| r.path == *"Garden.md"),
+            "below the floor"
+        );
+    }
+
+    #[test]
+    fn filters_and_excludes_bound_semantic_candidates() {
+        let index = concept_vault();
+        let sem = semantic_of(&index);
+        let got = hybrid(&index, &sem, "concentrating -path:archive/");
+        assert!(!got.iter().any(|r| r.path.starts_with("archive")));
+        let got = hybrid(&index, &sem, "concentrating path:archive/");
+        assert_eq!(paths(&got), vec!["archive/Old.md"]);
+        let got = hybrid(&index, &sem, "concentrating -attention");
+        assert!(
+            got.is_empty(),
+            "the exclude applies to semantic hits too: {:?}",
+            paths(&got)
+        );
+    }
+
+    #[test]
+    fn agreement_between_rankings_ranks_first() {
+        // `results` matches Garden best lexically (short paragraph), but its
+        // meaning is gardening; Memo is 2nd lexically and 1st by meaning.
+        let index = idx(&[
+            (
+                "Memo.md",
+                "Memoization keeps results of pure calls in a cache.\n",
+            ),
+            ("Garden.md", "results: tomatoes, homegrown produce.\n"),
+            (
+                "Note.md",
+                "results and more results in a longer paragraph with many words.\n",
+            ),
+        ]);
+        let sem = semantic_of(&index);
+        let lexical = paths(&run_q(&index, "results"));
+        assert_eq!(lexical[0], "Garden.md");
+        let got = paths(&hybrid(&index, &sem, "results"));
+        assert_eq!(got[0], "Memo.md", "lexical {lexical:?} → hybrid {got:?}");
+    }
+
+    #[test]
+    fn stale_semantic_index_is_ignored() {
+        let index = concept_vault();
+        let other = idx(&[("x.md", "attention.\n")]);
+        let sem = semantic_of(&other);
+        assert_eq!(
+            paths(&hybrid(&index, &sem, "attention")),
+            paths(&run_q(&index, "attention")),
+            "a semantic index for another doc set is lexical-only"
+        );
+    }
+
+    #[test]
+    fn more_like_this() {
+        let index = concept_vault();
+        let sem = semantic_of(&index);
+        let ctx = SearchCtx {
+            semantic: Some(SemanticQuery {
+                index: &sem,
+                embedder: &ConceptEmbedder,
+                candidates: 10,
+                min_similarity: 0.5,
+            }),
+            like: Some((Path::new("Deep Work.md"), 1)),
+            ..Default::default()
+        };
+        let got = search(&index, &parse("", false), ctx).unwrap();
+        assert_eq!(
+            paths(&got),
+            vec!["archive/Old.md"],
+            "similar, source excluded"
+        );
+        let got = search(&index, &parse("-path:archive/", false), ctx).unwrap();
+        assert!(got.is_empty());
+
+        let no_sem = SearchCtx {
+            like: Some((Path::new("Deep Work.md"), 1)),
+            ..Default::default()
+        };
+        assert!(matches!(
+            search(&index, &parse("", false), no_sem),
+            Err(SearchError::NeedsEmbeddings)
+        ));
+        let missing = SearchCtx {
+            like: Some((Path::new("Deep Work.md"), 99)),
+            ..ctx
+        };
+        assert!(matches!(
+            search(&index, &parse("", false), missing),
+            Err(SearchError::NoSuchParagraph { .. })
+        ));
+    }
+
+    #[test]
+    fn semantic_text_strips_markup() {
+        let q = parse(
+            "=word ~fuzz \"two words\" [[Link Target]] plain -gone",
+            false,
+        );
+        let pos: Vec<&Clause> = q.positives().collect();
+        assert_eq!(semantic_text(&pos), "word fuzz two words Link Target plain");
     }
 
     // ── Priors and near ──────────────────────────────────────────────

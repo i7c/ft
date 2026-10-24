@@ -121,6 +121,7 @@ pub(crate) fn run_query(
         graph: graph.as_ref(),
         presets: Some(&cfg.graph.presets),
         recency: recency.as_ref(),
+        ..Default::default()
     };
     match search_with_dates(
         &index,

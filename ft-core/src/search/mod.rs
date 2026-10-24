@@ -412,6 +412,7 @@ pub mod engine;
 pub mod index;
 pub mod query;
 pub mod recency;
+pub mod semantic;
 pub mod text;
 
 pub use engine::{

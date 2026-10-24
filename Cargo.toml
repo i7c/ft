@@ -29,6 +29,12 @@ petgraph = { version = "0.6", default-features = false, features = ["stable_grap
 rmp-serde = "1"
 blake3 = "1"
 foldhash = "0.1"
+half = "2"
+# Semantic search: select the tokenizer backend on `tokenizers` directly.
+# `model2vec-rs`'s own backend features also enable `tokenizers/esaxx_fast`,
+# which compiles C++ (used only for tokenizer training).
+model2vec-rs = { version = "0.3", default-features = false, features = ["local-only"] }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 rust-stemmers = "1.2"
 unicode-normalization = "0.1"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier", "json", "gzip"] }

@@ -8,8 +8,12 @@ rust-version.workspace = true
 name = "ft"
 path = "src/main.rs"
 
+[features]
+default = ["semantic"]
+semantic = ["ft-core/semantic"]
+
 [dependencies]
-ft-core = { path = "../ft-core" }
+ft-core = { path = "../ft-core", default-features = false }
 clap = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }

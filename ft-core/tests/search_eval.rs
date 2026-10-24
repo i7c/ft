@@ -229,6 +229,7 @@ impl Engine {
             graph: Some(&self.graph),
             presets: Some(&self.presets),
             recency: self.recency.as_ref(),
+            ..Default::default()
         };
         search(&self.index, &query, ctx)
             .unwrap_or_else(|e| panic!("query {:?}: {e}", case.query))

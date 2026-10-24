@@ -55,6 +55,8 @@ pub enum Field {
     Heading = 3,
     /// The note's frontmatter tags.
     Tag = 4,
+    /// Found by meaning (embedding similarity), not by any field's text.
+    Semantic = 5,
 }
 
 pub(crate) const FIELDS: [Field; 5] = [
@@ -73,6 +75,7 @@ impl Field {
             Field::Alias => "alias",
             Field::Heading => "heading",
             Field::Tag => "tag",
+            Field::Semantic => "semantic",
         }
     }
 
@@ -228,7 +231,8 @@ impl SearchIndex {
     /// Length of `unit` in `field`, in word tokens.
     pub(crate) fn unit_len(&self, field: Field, unit: u32) -> u32 {
         match field {
-            Field::Body => self.docs[unit as usize].len,
+            // Semantic is a match reason, never a postings field.
+            Field::Body | Field::Semantic => self.docs[unit as usize].len,
             Field::Title => self.notes[unit as usize].title_len,
             Field::Alias => self.notes[unit as usize].alias_len,
             Field::Tag => self.notes[unit as usize].tag_len,
@@ -239,7 +243,7 @@ impl SearchIndex {
     /// The docs a unit of `field` covers.
     pub(crate) fn unit_docs(&self, field: Field, unit: u32) -> Range<u32> {
         match field {
-            Field::Body => unit..unit + 1,
+            Field::Body | Field::Semantic => unit..unit + 1,
             Field::Title | Field::Alias | Field::Tag => self.notes[unit as usize].docs.clone(),
             Field::Heading => self.sections[unit as usize].docs.clone(),
         }

@@ -8,20 +8,20 @@
 
 ## 2. Core seam (no model yet)
 
-- [ ] 2.1 `search/semantic/mod.rs`: `Embedder` trait, `HashEmbedder` (deterministic hashed bag of words, configurable dim), `SemanticIndex` (dense normalized `f32` rows aligned to doc ids, `doc_count`)
-- [ ] 2.2 Embedded text = title + heading path + body; `blake3` key; incremental build from `SearchIndex` + cache + embedder
-- [ ] 2.3 `search/semantic/cache.rs`: versioned msgpack of f16 vectors at `.ft/cache/embeddings/<model-slug>.bin`; model/dim mismatch ignored; prune on save; atomic write; tests (round-trip, incremental reuse, prune, model change)
-- [ ] 2.4 `search/semantic/fusion.rs`: query text from positive text clauses; cosine top-k ≥ `min_similarity`; filters and excludes applied to candidates; RRF (k = 60) then prior × recency × near; `Field::Semantic` reason; tests with `HashEmbedder` for every "Hybrid retrieval and fusion" scenario
-- [ ] 2.5 `SearchCtx::{semantic, like}`; with semantic absent, results are byte-identical to today (regression test over the fixture)
-- [ ] 2.6 More-like-this ranking (excludes the source paragraph, fuses with QUERY's lexical ranking when present)
+- [x] 2.1 `search/semantic/mod.rs`: `Embedder` trait, `HashEmbedder` (deterministic hashed bag of words, configurable dim), `SemanticIndex` (dense normalized `f32` rows aligned to doc ids, `doc_count`)
+- [x] 2.2 Embedded text = title + heading path + body; `blake3` key; incremental build from `SearchIndex` + cache + embedder
+- [x] 2.3 `search/semantic/cache.rs`: versioned msgpack of f16 vectors at `.ft/cache/embeddings/<model-slug>.bin`; model/dim mismatch ignored; prune on save; atomic write; tests (round-trip, incremental reuse, prune, model change)
+- [x] 2.4 `search/semantic/fusion.rs`: query text from positive text clauses; cosine top-k ≥ `min_similarity`; filters and excludes applied to candidates; RRF (k = 60) then prior × recency × near; `Field::Semantic` reason; tests with `HashEmbedder` for every "Hybrid retrieval and fusion" scenario
+- [x] 2.5 `SearchCtx::{semantic, like}`; with semantic absent, results are byte-identical to today (regression test over the fixture)
+- [x] 2.6 More-like-this ranking (excludes the source paragraph, fuses with QUERY's lexical ranking when present)
 
 ## 3. Model and config
 
-- [ ] 3.1 `Cargo.toml`: optional `model2vec-rs = { default-features = false, features = ["local-only"] }` and `tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }` behind feature `semantic` (default on) in `ft-core` and `ft`; do NOT enable `model2vec-rs`'s `fancy-regex` / `onig` features (they turn on the C++ `esaxx_fast`); CI and `--no-default-features` build stays green
-- [ ] 3.1a No-C++ guard: a check (script or test) failing when `cargo tree -p ft -e features -i esaxx-rs` shows `cpp`, or when any `onig` crate is in the graph; wire it into the build invariants
+- [x] 3.1 `Cargo.toml`: optional `model2vec-rs = { default-features = false, features = ["local-only"] }` and `tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }` behind feature `semantic` (default on) in `ft-core` and `ft`; do NOT enable `model2vec-rs`'s `fancy-regex` / `onig` features (they turn on the C++ `esaxx_fast`); CI and `--no-default-features` build stays green
+- [x] 3.1a No-C++ guard: a check (script or test) failing when `cargo tree -p ft -e features -i esaxx-rs` shows `cpp`, or when any `onig` crate is in the graph; wire it into the build invariants
 - [ ] 3.2 `Model2VecEmbedder` (load from a local dir via `StaticModel::from_pretrained`)
-- [ ] 3.3 `SearchCfg::semantic` (`enabled`, `model`, `candidates`, `min_similarity`) with validation and config tests; the "not compiled in" warning path
-- [ ] 3.4 Model resolution: local dir as-is, else `dirs::cache_dir()/ft/models/<id>/`
+- [x] 3.3 `SearchCfg::semantic` (`enabled`, `model`, `candidates`, `min_similarity`) with validation and config tests; the "not compiled in" warning path
+- [x] 3.4 Model resolution: local dir as-is, else `dirs::cache_dir()/ft/models/<id>/`
 
 ## 4. CLI
 

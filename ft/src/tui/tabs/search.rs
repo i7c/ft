@@ -295,6 +295,7 @@ impl SearchTab {
             graph: Some(&snap.graph),
             presets: Some(&ctx.vault.config.config.graph.presets),
             recency: ctx.recency.as_deref(),
+            ..Default::default()
         };
         let outcome = if self.sort == Sort::Date || query.has_date_filters() {
             let mut cache = self.cache.take().unwrap_or_default();

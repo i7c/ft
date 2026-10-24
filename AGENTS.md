@@ -129,7 +129,7 @@ artifact, and the archive note records the paired commit sha.
 
 ## Build invariants
 
-Every change must keep all five clean:
+Every change must keep all six clean:
 
 ```sh
 cargo build --release
@@ -137,6 +137,7 @@ cargo test --workspace
 cargo clippy --workspace --tests -- -D warnings
 cargo fmt --check
 cargo run --release -q -- commands docs --check   # keybindings.md in sync with the registry
+scripts/check-no-cpp.sh                           # semantic deps stay pure Rust (no C++)
 ```
 
 After touching any `CommandDef` slice or keymap, regenerate the
