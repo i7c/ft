@@ -81,6 +81,10 @@ pub enum NotesCommand {
     /// `-exclude`; AND by default, `--any` for OR; sorted by relevance
     /// or blame date.
     Search(crate::cmd::search::SearchArgs),
+    /// Semantic search setup: fetch the embedding model, show status,
+    /// embed new or changed paragraphs.
+    #[command(subcommand)]
+    Embed(crate::cmd::embed::EmbedCommand),
     /// Synth notes: scaffold, verify, repair, or reslice
     /// provenance-pinned syntheses compiled from search results.
     #[command(subcommand)]
@@ -121,6 +125,7 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Ghosts(a) => run_ghosts(a, vault_flag),
         NotesCommand::Drift(a) => run_drift(a, vault_flag),
         NotesCommand::Search(a) => crate::cmd::search::run(a, vault_flag),
+        NotesCommand::Embed(c) => crate::cmd::embed::run(c, vault_flag),
         NotesCommand::Synth(c) => crate::cmd::synth::run_command(c, vault_flag),
         NotesCommand::UpdateRelated(a) => run_update_related(a, vault_flag),
         NotesCommand::Append(a) => run_append(a, vault_flag),

@@ -32,3 +32,17 @@ Each cell is nDCG@10 / MRR.
   cold cache).
 - `potion-multilingual-128M` was not measured. Recommending it for
   mixed-language vaults needs a Portuguese judgment set first.
+
+## CLI (2,047-note vault, release, median of 7)
+
+| Query | Lexical | `--semantic` |
+|---|---|---|
+| `memory` | 0.410 s | 0.525 s |
+| `eigen memoization` | 0.406 s | 0.499 s |
+
+- **Breakdown:** about 70 ms of the semantic overhead is loading the model;
+  the rest is loading the cache and hashing the embedded texts.
+- **`embed fetch`:** 29.5 MB in 1.7 s.
+- **`embed build`:** 16,304 paragraphs in 0.9 s, giving an 8.4 MB cache.
+  The first cut stored f16 values as msgpack integer arrays (12.7 MB);
+  keys and vectors are now `bin` blobs, which is schema v2.

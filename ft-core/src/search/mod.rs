@@ -417,7 +417,7 @@ pub mod text;
 
 pub use engine::{
     fill_highlights, group, search, search_with_dates, DatedSearch, MatchReason, NoteGroup,
-    SearchCtx, SearchError, SearchResult, Sort,
+    SearchCtx, SearchError, SearchResult, Sort, SEMANTIC_LABEL,
 };
 pub use index::{Field, SearchIndex};
 pub use query::{parse as parse_query, Clause, Filter, Mode, SearchQuery};

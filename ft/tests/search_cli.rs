@@ -430,3 +430,167 @@ fn plain_search_never_blames_but_date_sort_fills_the_cache() {
     stdout_of(&tmp, &["eigenvalue", "--flat"]);
     assert_eq!(std::fs::read(&cache).unwrap(), first);
 }
+
+// ── Semantic (hybrid) search ────────────────────────────────────────
+
+/// Vault for hybrid tests. `b.md` shares only `alpha` with the query
+/// `alpha beta`, so AND excludes it lexically while the (hash) embedding
+/// still finds it similar.
+fn make_semantic_vault(config: &str) -> assert_fs::TempDir {
+    let tmp = assert_fs::TempDir::new().unwrap();
+    tmp.child(".obsidian").create_dir_all().unwrap();
+    tmp.child("a.md").write_str("alpha beta gamma.\n").unwrap();
+    tmp.child("b.md")
+        .write_str("alpha delta epsilon.\n")
+        .unwrap();
+    tmp.child("c.md")
+        .write_str("unrelated zeta words.\n")
+        .unwrap();
+    if !config.is_empty() {
+        tmp.child(".ft/config.toml").write_str(config).unwrap();
+    }
+    tmp
+}
+
+fn hashed(tmp: &assert_fs::TempDir, args: &[&str]) -> assert_cmd::assert::Assert {
+    ft().env("FT_SEMANTIC_TEST_EMBEDDER", "hash")
+        .args(["--vault"])
+        .arg(tmp.path())
+        .args(args)
+        .assert()
+}
+
+#[test]
+fn semantic_flag_adds_meaning_only_matches() {
+    let tmp = make_semantic_vault("");
+    let out = hashed(&tmp, &["notes", "search", "alpha beta", "--flat"]).success();
+    let lexical = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert_eq!(lexical.lines().count(), 1, "AND: only a.md\n{lexical}");
+
+    let out = hashed(
+        &tmp,
+        &["notes", "search", "alpha beta", "--semantic", "--flat"],
+    )
+    .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!("search_semantic_flat", stdout);
+    assert!(
+        stdout.lines().next().unwrap().starts_with("a.md"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.starts_with("b.md L1-1  ≈  ")),
+        "b.md joins as a meaning-only match:\n{stdout}"
+    );
+    assert!(!stdout.contains("c.md"));
+    assert!(
+        tmp.child(".ft/cache/embeddings/test-hash.bin")
+            .path()
+            .exists(),
+        "embeddings are cached"
+    );
+}
+
+#[test]
+fn semantic_json_reason_and_no_semantic_override() {
+    let tmp = make_semantic_vault("[search.semantic]\nenabled = true\n");
+    let out = hashed(&tmp, &["notes", "search", "alpha beta", "--json"]).success();
+    let v: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let b = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["path"] == "b.md")
+        .expect("enabled in config");
+    assert_eq!(b["matched"].as_array().unwrap().len(), 0);
+    assert!(b["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["clause"] == "≈" && r["field"] == "semantic"));
+
+    let out = hashed(
+        &tmp,
+        &["notes", "search", "alpha beta", "--no-semantic", "--flat"],
+    )
+    .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert_eq!(stdout.lines().count(), 1, "--no-semantic wins:\n{stdout}");
+}
+
+#[test]
+fn like_ranks_by_similarity_and_excludes_the_source() {
+    let tmp = make_semantic_vault("");
+    let out = hashed(&tmp, &["notes", "search", "--like", "a.md:1", "--flat"]).success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.starts_with("b.md"), "{stdout}");
+    assert!(!stdout.contains("a.md"), "source excluded:\n{stdout}");
+    hashed(&tmp, &["notes", "search", "--like", "a.md:7"])
+        .code(2)
+        .stderr(predicate::str::contains(
+            "no indexed paragraph starts at a.md:7",
+        ));
+}
+
+#[test]
+fn missing_model_degrades_or_exits_two() {
+    let tmp = make_semantic_vault("[search.semantic]\nmodel = \"none/absent-model\"\n");
+    ft().args([
+        "notes",
+        "search",
+        "alpha beta",
+        "--semantic",
+        "--flat",
+        "--vault",
+    ])
+    .arg(tmp.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("a.md"))
+    .stderr(predicate::str::contains("ft notes embed fetch"));
+    ft().args(["notes", "search", "--like", "a.md:1", "--vault"])
+        .arg(tmp.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("ft notes embed fetch"));
+}
+
+#[test]
+fn embed_build_and_status() {
+    let tmp = make_semantic_vault("");
+    hashed(&tmp, &["notes", "embed", "build"])
+        .success()
+        .stdout(predicate::str::starts_with(
+            "embedded 3, reused 0, pruned 0",
+        ));
+    hashed(&tmp, &["notes", "embed", "build"])
+        .success()
+        .stdout(predicate::str::starts_with(
+            "embedded 0, reused 3, pruned 0",
+        ));
+    tmp.child("b.md")
+        .write_str("alpha changed text.\n")
+        .unwrap();
+    hashed(&tmp, &["notes", "embed", "build"])
+        .success()
+        .stdout(predicate::str::starts_with(
+            "embedded 1, reused 2, pruned 1",
+        ));
+    hashed(&tmp, &["notes", "embed", "status"])
+        .success()
+        .stdout(predicate::str::contains("embedded: 3 / 3 paragraphs"));
+}
+
+#[test]
+fn embed_fetch_of_a_local_directory_is_a_no_op() {
+    let tmp = make_semantic_vault("");
+    let dir = tmp.child("models/local");
+    dir.create_dir_all().unwrap();
+    ft().args(["notes", "embed", "fetch", "--model"])
+        .arg(dir.path())
+        .args(["--vault"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to fetch"));
+}

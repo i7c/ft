@@ -1,7 +1,9 @@
 //! On-disk paragraph embeddings: `<vault>/.ft/cache/embeddings/<model>.bin`.
 //!
 //! A versioned msgpack file of f16 vectors keyed by the first 16 bytes of
-//! the blake3 hash of the embedded text. Loading a file written for
+//! the blake3 hash of the embedded text. Keys and vectors are stored as
+//! two flat byte blobs (msgpack `bin`), so loading is a copy rather than a
+//! per-number parse. Loading a file written for
 //! another model or dimension (or an older schema, or a corrupt file)
 //! yields an empty cache, so the next build re-embeds.
 
@@ -14,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 
 const DIR_REL: &str = ".ft/cache/embeddings";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 /// Cache key: truncated blake3 of the embedded text.
 pub type Key = [u8; 16];
@@ -31,8 +33,38 @@ struct CacheFile {
     version: u32,
     model: String,
     dim: usize,
-    /// `(key, f16 bits)` pairs.
-    entries: Vec<(Key, Vec<u16>)>,
+    /// `n × 16` key bytes.
+    keys: Bytes,
+    /// `n × dim` little-endian f16 values, row per key.
+    vectors: Bytes,
+}
+
+/// A byte blob serialized as msgpack `bin` (not an array of integers).
+struct Bytes(Vec<u8>);
+
+impl Serialize for Bytes {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Bytes {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Bytes;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a byte blob")
+            }
+            fn visit_bytes<E>(self, v: &[u8]) -> std::result::Result<Bytes, E> {
+                Ok(Bytes(v.to_vec()))
+            }
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> std::result::Result<Bytes, E> {
+                Ok(Bytes(v))
+            }
+        }
+        d.deserialize_byte_buf(V)
+    }
 }
 
 /// Paragraph vectors for one model.
@@ -66,26 +98,53 @@ impl EmbeddingCache {
         let Ok(bytes) = std::fs::read(Self::path(vault_root, model)) else {
             return empty;
         };
-        match rmp_serde::from_slice::<CacheFile>(&bytes) {
-            Ok(f) if f.version == SCHEMA_VERSION && f.model == model && f.dim == dim => Self {
-                model: f.model,
-                dim,
-                entries: f.entries.into_iter().collect(),
-            },
-            _ => empty,
+        let f = match rmp_serde::from_slice::<CacheFile>(&bytes) {
+            Ok(f) if f.version == SCHEMA_VERSION && f.model == model && f.dim == dim => f,
+            _ => return empty,
+        };
+        let n = f.keys.0.len() / 16;
+        if f.keys.0.len() != n * 16 || f.vectors.0.len() != n * dim * 2 {
+            return empty;
+        }
+        let entries = f
+            .keys
+            .0
+            .chunks_exact(16)
+            .zip(f.vectors.0.chunks_exact(dim * 2))
+            .map(|(k, v)| {
+                let key: Key = k.try_into().expect("16-byte chunk");
+                let vals = v
+                    .chunks_exact(2)
+                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                (key, vals)
+            })
+            .collect();
+        Self {
+            model: f.model,
+            dim,
+            entries,
         }
     }
 
     /// Write atomically to [`Self::path`].
     pub fn save(&self, vault_root: &Path) -> Result<()> {
-        let mut entries: Vec<(Key, Vec<u16>)> =
-            self.entries.iter().map(|(k, v)| (*k, v.clone())).collect();
-        entries.sort_by_key(|e| e.0);
+        let mut keys: Vec<&Key> = self.entries.keys().collect();
+        keys.sort();
+        let mut key_bytes = Vec::with_capacity(keys.len() * 16);
+        let mut vec_bytes = Vec::with_capacity(keys.len() * self.dim * 2);
+        for k in keys {
+            key_bytes.extend_from_slice(k);
+            for v in &self.entries[k] {
+                vec_bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
         let file = CacheFile {
             version: SCHEMA_VERSION,
             model: self.model.clone(),
             dim: self.dim,
-            entries,
+            keys: Bytes(key_bytes),
+            vectors: Bytes(vec_bytes),
         };
         let bytes = rmp_serde::to_vec(&file)
             .map_err(|e| crate::error::Error::Notes(format!("serialize embeddings: {e}")))?;

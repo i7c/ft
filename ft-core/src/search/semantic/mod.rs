@@ -43,6 +43,67 @@ pub fn model_dir(model: &str) -> std::path::PathBuf {
         .join(model)
 }
 
+/// Whether semantic search is compiled in (the `semantic` feature).
+pub const COMPILED: bool = cfg!(feature = "semantic");
+
+/// Testing seam: `FT_SEMANTIC_TEST_EMBEDDER=hash` makes
+/// [`load_embedder`] return a [`HashEmbedder`] instead of loading a model,
+/// so CLI and TUI tests exercise hybrid search without model files.
+const TEST_EMBEDDER_ENV: &str = "FT_SEMANTIC_TEST_EMBEDDER";
+
+/// Load the configured model. `Ok(None)` when its files are missing or
+/// semantic search is not compiled in; never downloads.
+pub fn load_embedder(model: &str) -> crate::error::Result<Option<Box<dyn Embedder>>> {
+    if std::env::var(TEST_EMBEDDER_ENV).as_deref() == Ok("hash") {
+        return Ok(Some(Box::new(HashEmbedder::new(64))));
+    }
+    #[cfg(feature = "semantic")]
+    {
+        let dir = model_dir(model);
+        if !model_present(&dir) {
+            return Ok(None);
+        }
+        Ok(Some(Box::new(model::Model2VecEmbedder::load(&dir, model)?)))
+    }
+    #[cfg(not(feature = "semantic"))]
+    {
+        let _ = model;
+        Ok(None)
+    }
+}
+
+/// Download `model`'s [`MODEL_FILES`] from the Hugging Face hub into
+/// [`model_dir`], each written atomically. Returns the bytes written, or
+/// `Ok(None)` when `model` names a local directory (nothing to fetch).
+pub fn fetch_model(model: &str) -> crate::error::Result<Option<u64>> {
+    if std::path::Path::new(model).is_dir() {
+        return Ok(None);
+    }
+    let dir = model_dir(model);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .user_agent(format!("ft/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into();
+    let mut total = 0u64;
+    for file in MODEL_FILES {
+        let url = format!("https://huggingface.co/{model}/resolve/main/{file}");
+        let err = |e: &dyn std::fmt::Display| {
+            crate::error::Error::Notes(format!("downloading {url}: {e}"))
+        };
+        let mut resp = agent.get(&url).call().map_err(|e| err(&e))?;
+        let bytes = resp
+            .body_mut()
+            .with_config()
+            .limit(u64::MAX)
+            .read_to_vec()
+            .map_err(|e| err(&e))?;
+        crate::fs::write_atomic_bytes(&dir.join(file), &bytes)?;
+        total += bytes.len() as u64;
+    }
+    Ok(Some(total))
+}
+
 /// Whether `dir` holds every [`MODEL_FILES`] entry.
 pub fn model_present(dir: &std::path::Path) -> bool {
     MODEL_FILES.iter().all(|f| dir.join(f).is_file())

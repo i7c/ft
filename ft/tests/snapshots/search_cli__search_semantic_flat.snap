@@ -1,0 +1,6 @@
+---
+source: ft/tests/search_cli.rs
+expression: stdout
+---
+a.md L1-1  alpha beta  alpha beta gamma.
+b.md L1-1  ≈  alpha delta epsilon.

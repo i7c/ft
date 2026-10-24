@@ -25,9 +25,9 @@
 
 ## 4. CLI
 
-- [ ] 4.1 `ft notes embed fetch [--model]` (`ureq` 3, three files, atomic writes, size report), `status` (location, presence, dim, coverage), `build` (embedded / reused / pruned counts)
-- [ ] 4.2 `ft notes search --semantic/--no-semantic/--like <path>:<line>`; `≈` row marker (grouped and flat); JSON `semantic` reason; missing-model hint; `--like` without a model exits 2
-- [ ] 4.3 `assert_cmd` tests with a tiny local test model directory or `HashEmbedder` via a test-only env hook; snapshots for `≈` rows
+- [x] 4.1 `ft notes embed fetch [--model]` (`ureq` 3, three files, atomic writes, size report), `status` (location, presence, dim, coverage), `build` (embedded / reused / pruned counts)
+- [x] 4.2 `ft notes search --semantic/--no-semantic/--like <path>:<line>`; `≈` row marker (grouped and flat); JSON `semantic` reason; missing-model hint; `--like` without a model exits 2
+- [x] 4.3 `assert_cmd` tests with a tiny local test model directory or `HashEmbedder` via a test-only env hook; snapshots for `≈` rows
 
 ## 5. TUI
 

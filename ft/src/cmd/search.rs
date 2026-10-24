@@ -16,9 +16,12 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use ft_core::blame_cache::{BlameCache, BlameValidity};
 use ft_core::scan::Scan;
+use ft_core::search::semantic::{
+    cache::EmbeddingCache, load_embedder, Embedder, SemanticIndex, SemanticQuery, COMPILED,
+};
 use ft_core::search::{
-    fill_highlights, group, parse_query, search_with_dates, DatedSearch, RecencyTable, SearchCtx,
-    SearchError, SearchIndex, SearchQuery, SearchResult, Sort,
+    fill_highlights, group, parse_query, search_with_dates, DatedSearch, Field, RecencyTable,
+    SearchCtx, SearchError, SearchIndex, SearchQuery, SearchResult, Sort, SEMANTIC_LABEL,
 };
 use ft_core::vault::Vault;
 use serde::Serialize;
@@ -29,7 +32,7 @@ pub struct SearchArgs {
     /// phrase, `[[Link]]`, `=word`, `~fuzzy`, `-exclude`), filters
     /// (`path:`, `tag:`, `after:`, `before:`, `scope:<preset>`), and
     /// `near:[[Note]]`.
-    #[arg(value_name = "QUERY", required = true, num_args = 1..)]
+    #[arg(value_name = "QUERY", required_unless_present = "like", num_args = 1..)]
     pub query: Vec<String>,
 
     /// Any-mode: a paragraph matching ANY text clause qualifies (default:
@@ -53,6 +56,29 @@ pub struct SearchArgs {
     /// JSON output instead of the default text rows.
     #[arg(long)]
     pub json: bool,
+
+    /// Add meaning-based (embedding) matches for this query, overriding
+    /// `[search.semantic] enabled`. Needs `ft notes embed fetch` once.
+    #[arg(long, conflicts_with = "no_semantic")]
+    pub semantic: bool,
+
+    /// Lexical matches only, overriding `[search.semantic] enabled`.
+    #[arg(long)]
+    pub no_semantic: bool,
+
+    /// Rank paragraphs by similarity to the paragraph at `<path>:<line>`
+    /// (the query, if any, adds terms and filters). Implies semantic.
+    #[arg(long, value_name = "PATH:LINE", conflicts_with = "no_semantic")]
+    pub like: Option<String>,
+}
+
+/// Per-call semantic overrides.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct SemanticOpts {
+    /// `Some(true)` = `--semantic`, `Some(false)` = `--no-semantic`.
+    pub force: Option<bool>,
+    /// More-like-this source.
+    pub like: Option<(PathBuf, u32)>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -88,6 +114,7 @@ pub(crate) fn run_query(
     scan: &Scan,
     query: &SearchQuery,
     sort: Sort,
+    semantic: &SemanticOpts,
 ) -> Result<QueryOutcome> {
     if sort == Sort::Date {
         ft_core::git::discover_repo(&vault.path).ok_or_else(|| {
@@ -117,11 +144,21 @@ pub(crate) fn run_query(
     let recency = validity
         .as_ref()
         .map(|v| RecencyTable::build(&index, &cache, v));
+    let hybrid = match load_hybrid(vault, &index, semantic)? {
+        Ok(h) => h,
+        Err(msg) => return Ok(QueryOutcome::Usage(msg)),
+    };
     let ctx = SearchCtx {
         graph: graph.as_ref(),
         presets: Some(&cfg.graph.presets),
         recency: recency.as_ref(),
-        ..Default::default()
+        semantic: hybrid.as_ref().map(|(index, embedder)| SemanticQuery {
+            index,
+            embedder: embedder.as_ref(),
+            candidates: cfg.search.semantic.candidates,
+            min_similarity: cfg.search.semantic.min_similarity,
+        }),
+        like: semantic.like.as_ref().map(|(p, l)| (p.as_path(), *l)),
     };
     match search_with_dates(
         &index,
@@ -142,11 +179,70 @@ pub(crate) fn run_query(
             fill_highlights(&index, query, &mut found.results);
             Ok(QueryOutcome::Found(found))
         }
-        Err(e @ (SearchError::UnknownScope { .. } | SearchError::InvalidScope { .. })) => {
-            Ok(QueryOutcome::Usage(e.to_string()))
-        }
+        Err(
+            e @ (SearchError::UnknownScope { .. }
+            | SearchError::InvalidScope { .. }
+            | SearchError::NeedsEmbeddings
+            | SearchError::NoSuchParagraph { .. }),
+        ) => Ok(QueryOutcome::Usage(e.to_string())),
         Err(e) => Err(anyhow::Error::new(e).context("searching")),
     }
+}
+
+/// The embeddings and model for a hybrid query, when semantic search is
+/// on for this call. `Ok(Err(msg))` is a usage error (`--like` without a
+/// model). A missing model or a build without the feature degrades to
+/// lexical search with one hint on stderr.
+#[allow(clippy::type_complexity)]
+fn load_hybrid(
+    vault: &Vault,
+    index: &SearchIndex,
+    opts: &SemanticOpts,
+) -> Result<std::result::Result<Option<(SemanticIndex, Box<dyn Embedder>)>, String>> {
+    let cfg = &vault.config.config.search.semantic;
+    let on = opts.like.is_some() || opts.force.unwrap_or(cfg.enabled);
+    if !on {
+        return Ok(Ok(None));
+    }
+    if !COMPILED {
+        eprintln!(
+            "warning: semantic search is not compiled into this ft build — lexical results only"
+        );
+        return Ok(match opts.like {
+            Some(_) => Err("--like needs semantic search, which is not compiled in".to_string()),
+            None => Ok(None),
+        });
+    }
+    let Some(embedder) = load_embedder(&cfg.model)? else {
+        let hint = format!(
+            "the embedding model {} is not available — run `ft notes embed fetch`",
+            cfg.model
+        );
+        if opts.like.is_some() {
+            return Ok(Err(hint));
+        }
+        eprintln!("hint: {hint} (lexical results only)");
+        return Ok(Ok(None));
+    };
+    let mut cache = EmbeddingCache::load(&vault.path, embedder.id(), embedder.dim());
+    let (sem, stats) = SemanticIndex::build(index, embedder.as_ref(), &mut cache);
+    if stats.embedded > 0 || stats.pruned > 0 {
+        cache
+            .save(&vault.path)
+            .context("saving the embedding cache")?;
+    }
+    Ok(Ok(Some((sem, embedder))))
+}
+
+/// Parse `--like <path>:<line>`.
+fn parse_like(spec: &str) -> Result<(PathBuf, u32)> {
+    let (path, line) = spec
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("--like expects <path>:<line>, got {spec:?}"))?;
+    let line: u32 = line
+        .parse()
+        .map_err(|_| anyhow!("--like expects <path>:<line>, got {spec:?}"))?;
+    Ok((PathBuf::from(path), line))
 }
 
 pub fn run(args: SearchArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -154,8 +250,16 @@ pub fn run(args: SearchArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     let query = parse_query(&args.query.join(" "), args.any);
     let sort = Sort::from(args.sort);
     let scan = vault.scan();
+    let semantic = SemanticOpts {
+        force: match (args.semantic, args.no_semantic) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
+        like: args.like.as_deref().map(parse_like).transpose()?,
+    };
 
-    let mut results = match run_query(&vault, &scan, &query, sort)? {
+    let mut results = match run_query(&vault, &scan, &query, sort, &semantic)? {
         QueryOutcome::Found(found) => found.results,
         QueryOutcome::Usage(msg) => {
             eprintln!("{msg}");
@@ -188,7 +292,7 @@ fn render_flat(results: &[SearchResult], use_color: bool) {
             r.path.display(),
             r.line_start,
             r.line_end,
-            r.matched.join(" "),
+            labels_of(r),
             r.body.replace('\n', " ")
         );
         if use_color {
@@ -197,6 +301,15 @@ fn render_flat(results: &[SearchResult], use_color: bool) {
         } else {
             println!("{line}");
         }
+    }
+}
+
+/// The matched clause labels, or `≈` for a meaning-only match.
+fn labels_of(r: &SearchResult) -> String {
+    if r.matched.is_empty() && r.reasons.iter().any(|m| m.field == Field::Semantic) {
+        SEMANTIC_LABEL.to_string()
+    } else {
+        r.matched.join(" ")
     }
 }
 
@@ -231,7 +344,7 @@ fn render_grouped(results: &[SearchResult], use_color: bool) {
                     row.push_str(&format!("  {path}"));
                 }
             }
-            let labels = r.matched.join(" ");
+            let labels = labels_of(r);
             if use_color {
                 row.push_str(&format!("  {}  ", labels.dimmed()));
             } else {

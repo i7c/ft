@@ -3,6 +3,7 @@ pub mod common;
 pub mod completions;
 #[path = "do.rs"]
 pub mod do_cmd;
+pub mod embed;
 pub mod export;
 pub mod find;
 pub mod git;

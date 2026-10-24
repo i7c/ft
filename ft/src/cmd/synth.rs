@@ -146,6 +146,7 @@ fn run_scaffold(args: ScaffoldArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
             &scan,
             &query,
             ft_core::search::Sort::from(args.sort),
+            &crate::cmd::search::SemanticOpts::default(),
         )? {
             crate::cmd::search::QueryOutcome::Found(found) => found.results,
             crate::cmd::search::QueryOutcome::Usage(msg) => {
