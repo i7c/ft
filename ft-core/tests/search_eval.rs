@@ -338,6 +338,24 @@ fn fixture_relevance_ratchet() {
     );
 }
 
+/// Lexical-only scores on the concept queries: the low baseline the
+/// semantic (hybrid) run is measured against. Report-only.
+#[test]
+fn fixture_semantic_lexical_report() {
+    std::env::set_var("FT_TODAY", "2026-10-23");
+    let dir = fixture_dir();
+    let cases = parse_judgments(&std::fs::read_to_string(dir.join("semantic.toml")).unwrap())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let engine = Engine::build(
+        &dir.join("vault"),
+        &[],
+        &SearchCfg::default(),
+        HashMap::new(),
+    );
+    println!("── concept queries, lexical only");
+    evaluate(&engine, &cases);
+}
+
 #[test]
 fn fixture_covers_every_probe_class() {
     let cases =

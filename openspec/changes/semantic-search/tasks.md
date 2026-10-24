@@ -2,9 +2,9 @@
 
 ## 1. Evaluation first
 
-- [ ] 1.1 Write `tests/fixtures/search-eval/semantic.toml`: about 12 concept queries over the existing fixture vault whose targets share no words with the query (extend `generate.py` with any notes they need, keeping the lexical judgments valid)
+- [x] 1.1 Write `tests/fixtures/search-eval/semantic.toml`: about 12 concept queries over the existing fixture vault whose targets share no words with the query (extend `generate.py` with any notes they need, keeping the lexical judgments valid)
 - [ ] 1.2 Harness: a `--hybrid` path gated by `FT_SEMANTIC_TESTS=1` + model present; report lexical vs hybrid on both judgment files; assert the lexical judgments do not drop more than 0.02 nDCG@10
-- [ ] 1.3 Record lexical-only scores on `semantic.toml` (the expected low baseline) in the change notes
+- [x] 1.3 Record lexical-only scores on `semantic.toml` (the expected low baseline) in the change notes
 
 ## 2. Core seam (no model yet)
 
