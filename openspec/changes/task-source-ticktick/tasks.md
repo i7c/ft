@@ -1,6 +1,6 @@
 ## 1. Config and shared plumbing
 
-- [ ] 1.1 Add `chrono-tz` to the workspace deps and ft-core. Confirm `scripts/check-no-cpp.sh` stays clean and note the release binary size delta here.
+- [x] 1.1 Add `chrono-tz` to the workspace deps and ft-core. Confirm `scripts/check-no-cpp.sh` stays clean and note the release binary size delta here. Result: no-C++ check clean; release binary 26,468,992 → 28,507,360 bytes (+2.0 MB, mostly the tz database).
 - [x] 1.2 Add `SourceKind::Ticktick` (`kind = "ticktick"`).
 - [x] 1.3 Make `SourceCfg::comments` an `Option<usize>` with `effective_comments()` (jira and github 5, ticktick 0), and update the 3 call sites in `sources/sync.rs`.
 - [x] 1.4 Give ticktick an empty default `mine` query in `effective_queries`.
@@ -30,7 +30,7 @@
 
 ## 3. Live verification (needs the user's OK for writes)
 
-- [ ] 3.1 Read-only: run `ft tasks sync --source ticktick --dry-run` against the real account and check the notes, dates, columns and parents. Record the outcome here, without task content.
+- [x] 3.1 Read-only: run `ft tasks sync --source ticktick --dry-run` against the real account and check the notes, dates, columns and parents. Record the outcome here, without task content. Result (2026-11-06, `--no-push` into a scratch vault): 13 notes from 2 lists + empty inbox, all anchors well-formed with project-carrying URLs; rerun 0 new / 0 updated; 2 subtasks nest under their parent in `tasks list remote --tree`; 9 open tasks carry a kanban column as status name; the one all-day due date (São Paulo) lands on the right day.
 - [ ] 3.2 Confirm the web-app task URL format in a browser, and adjust the URL builder and parser if it differs.
 - [ ] 3.3 With consent, on a throwaway task in a scratch list:
   - (a) set `status` -1 and then 0 via update;
@@ -42,7 +42,7 @@
 
 ## 4. Integration, docs, invariants
 
-- [ ] 4.1 CLI integration tests (`ft/tests/tasks_sync.rs` style) for a TickTick source against the stub server: sync creates `ticktick/tt-<id>.md`, reruns are idempotent, and push completes.
-- [ ] 4.2 `ft sources list` / `login` show the ticktick kind and default base URL. Update the snapshots, if any.
-- [ ] 4.3 `docs/config.md`: TickTick section covering the personal API token location, the query syntax, the column → `status_map` example, the `comments` default, and the Dida365 `base_url`.
-- [ ] 4.4 All six build invariants clean (build, test, clippy `-D warnings`, fmt, `commands docs --check`, `check-no-cpp.sh`).
+- [x] 4.1 CLI integration tests (`ft/tests/tasks_sync.rs` style) for a TickTick source against the stub server: sync creates `ticktick/tt-<id>.md`, reruns are idempotent, and push completes.
+- [x] 4.2 `ft sources list` / `login` show the ticktick kind and default base URL. Update the snapshots, if any.
+- [x] 4.3 `docs/config.md`: TickTick section covering the personal API token location, the query syntax, the column → `status_map` example, the `comments` default, and the Dida365 `base_url`.
+- [x] 4.4 All six build invariants clean (build, test, clippy `-D warnings`, fmt, `commands docs --check`, `check-no-cpp.sh`).

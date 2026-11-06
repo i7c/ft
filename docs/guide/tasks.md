@@ -337,8 +337,8 @@ Restructuring keeps references consistent:
 
 ## Remote sources
 
-ft can pull the Jira tickets (or GitHub issues) assigned to you into the
-vault, one note per issue. The note is a normal markdown note, so you add
+ft can pull the Jira tickets (or GitHub issues) assigned to you, or your
+TickTick tasks, into the vault, one note per issue. The note is a normal markdown note, so you add
 local subtasks to a ticket like to any other task. They work offline,
 show in Obsidian, and are tracked by git.
 
@@ -394,6 +394,8 @@ What sync does:
     A cancel is only pushed through a configured `transitions.Cancelled`.
   - **GitHub:** done and cancelled close the issue (completed / not
     planned); open and in progress reopen it.
+  - **TickTick:** done completes the task, cancelled marks it Won't Do,
+    open and in progress reopen it.
   - **Failed pushes** (no matching transition, no permission) stay
     pending and are retried. They show in the sync output and in `ft
     tasks check`, and the TUI toasts each new failure once.
@@ -434,7 +436,8 @@ ft tasks promote "write regression test"     # TUI: `I` on the task
 
 - **What's created:** a Jira **sub-task** of the parent ticket (or a
   **Task** when the parent is an epic), assigned to you. On GitHub it's
-  a sub-issue in the parent's repository.
+  a sub-issue in the parent's repository; on TickTick, a subtask in the
+  parent's list.
 - **Fields:** the summary is the task text without links and tags; due
   date and priority carry over. A task already in progress is moved to
   In Progress right away.

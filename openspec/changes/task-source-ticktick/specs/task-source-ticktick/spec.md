@@ -72,7 +72,7 @@ The source SHALL map each TickTick task to a `RemoteIssue` as follows:
 | parent | `tt-<parentId>` when `parentId` is non-empty |
 | updated | `modifiedTime`, verbatim, or `etag` when `modifiedTime` is absent |
 | description | `content`. For `kind = "CHECKLIST"`: `desc`, then one `- [ ] <title>` / `- [x] <title>` line per checklist item, in `sortOrder` (the planner neutralises these to `☐` / `☑`) |
-| comments | from `GET /project/{p}/task/{t}/comments`, only when `comments > 0`. The author is empty (TickTick comments carry none), `created` is `createdTime`, the body is `title` |
+| comments | from `GET /project/{p}/task/{t}/comments`, only when `comments > 0`. The author is `comment` (TickTick comments carry none), `created` is `createdTime`, the body is `title` |
 
 Recurrence (`repeatFlag`), reminders, start dates and tags SHALL NOT be mapped to the anchor line. The anchor line keeps its local fields under the existing sync rules.
 

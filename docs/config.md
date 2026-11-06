@@ -411,8 +411,8 @@ enabled); tab digits and `Tab`-cycling follow the built list. The headless CLI
 
 ## `[sources.*]`
 
-Remote task sources: Jira Cloud or GitHub issues synced into one issue
-note per issue (see [guide/tasks.md](guide/tasks.md#remote-sources)).
+Remote task sources: Jira Cloud, GitHub issues or TickTick tasks synced
+into one issue note per issue (see [guide/tasks.md](guide/tasks.md#remote-sources)).
 Put sources in the **vault** config (`.ft/config.toml`), so every machine
 that syncs the vault shares them. Machines without credentials just skip
 syncing.
@@ -432,19 +432,28 @@ team = "project = TEAM AND sprint in openSprints()"
 
 [sources.gh]
 kind = "github"                 # token from `gh auth token` or the keychain
+
+[sources.ticktick]
+kind = "ticktick"               # default: every open task in every list + inbox
+
+[sources.ticktick.queries]      # optional; narrows the default
+work = "list:Work -list:Shopping tag:ft priority:high"
+
+[sources.ticktick.status_map]   # optional; open tasks use their kanban column
+"Doing" = "InProgress"
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `jira` or `github` |
-| `base_url` | jira: required; github: `https://api.github.com` | Must be `https://` (plain `http://` only for localhost) |
+| `kind` | required | `jira`, `github` or `ticktick` |
+| `base_url` | jira: required; github: `https://api.github.com`; ticktick: `https://api.ticktick.com` (Dida365: `https://api.dida365.com`) | Must be `https://` (plain `http://` only for localhost) |
 | `email` | jira: required | Atlassian account email (basic-auth user) |
-| `queries` | assigned to me, open | Named JQL / GitHub search queries; their union is "in scope" |
+| `queries` | jira, github: assigned to me, open; ticktick: all open tasks | Named JQL / GitHub search / TickTick queries; their union is "in scope" |
 | `folder` | the source name | Folder for new issue notes |
 | `template` | none | Template for the user part of new issue notes; `vars.key`, `vars.title`, `vars.url`, `vars.source` are available |
 | `interval_minutes` | `10` | TUI background sync interval; `0` = only at startup and on `g r` |
 | `fetch_parents` | `true` | Also fetch parents / epics (as `state: context` notes) |
-| `comments` | `5` | Most recent comments kept in the note; `0` drops the section |
+| `comments` | `5`; ticktick: `0` | Most recent comments kept in the note; `0` drops the section. TickTick fetches comments with one request per task |
 | `description` | `true` | Keep the managed Description section |
 | `status_map` | `{}` | Remote status name → `Open` / `InProgress` / `Done` / `Cancelled` |
 | `push` | `true` | Push local status changes on every sync, and allow `ft tasks promote`. `false` makes the source read-only |
@@ -453,6 +462,34 @@ kind = "github"                 # token from `gh auth token` or the keychain
 Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then
 `gh auth token` (GitHub sources only), then the OS keychain entry stored
 by `ft sources login <name>`.
+
+### TickTick
+
+`ft sources login ticktick` takes a personal API token: TickTick web app →
+avatar → Settings → Account → API Token. Each task becomes
+`<folder>/tt-<taskId>.md`; TickTick subtasks become parents.
+
+TickTick has no query language, so ft defines one. Terms are separated by
+whitespace; quote values with spaces (`list:"Side projects"`):
+
+| Term | Meaning |
+|------|---------|
+| `list:<name>` | Only these lists (repeatable). `inbox` is the inbox. Names match case-insensitively; list ids work too |
+| `-list:<name>` | Leave this list out |
+| `tag:<tag>` | Only tasks with this tag (repeatable; all must match) |
+| `priority:<none\|low\|medium\|high>` | Only tasks with this priority (repeatable; any may match) |
+
+An empty query (the default) means every open task in every list and the
+inbox. An unknown list name or term fails that source's sync rather than
+silently emptying its scope.
+
+Status names are `open`, `completed` and `wont-do`; an open task in a
+kanban list uses its column name instead, so `status_map` can turn a
+column into `InProgress`. Due dates are read in each task's time zone.
+Pushing done completes the task; cancelled marks it Won't Do; reopening
+sets it back to open. For a recurring task, TickTick decides what
+completing does; the next sync records whatever status and due date it
+reports, without a conflict.
 
 ## `[drift]`
 
