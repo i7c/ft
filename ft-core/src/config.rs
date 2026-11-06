@@ -244,6 +244,11 @@ pub struct SourceCfg {
     /// category-based choice. `Cancelled` is only pushed when set here.
     #[serde(default)]
     pub transitions: std::collections::BTreeMap<crate::task::Status, String>,
+    /// Delete the note of an issue the remote no longer returns at all,
+    /// instead of cancelling it. Unset means the kind's default; see
+    /// [`SourceCfg::effective_delete_missing`].
+    #[serde(default)]
+    pub delete_missing: Option<bool>,
 }
 
 fn default_source_interval() -> u64 {
@@ -286,6 +291,14 @@ impl SourceCfg {
             SourceKind::Jira | SourceKind::Github => 5,
             SourceKind::Ticktick => 0,
         })
+    }
+
+    /// Whether notes of remotely deleted issues are deleted: the configured
+    /// value, else only for TickTick — a Jira or GitHub issue that stops
+    /// resolving may just be one the token can no longer see.
+    pub fn effective_delete_missing(&self) -> bool {
+        self.delete_missing
+            .unwrap_or(self.kind == SourceKind::Ticktick)
     }
 
     /// Folder for new issue notes.

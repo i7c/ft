@@ -38,6 +38,8 @@ pub struct SyncReport {
     pub conflict_notes: Vec<PathBuf>,
     /// Keys that moved out of scope this sync.
     pub out_of_scope: Vec<String>,
+    /// Keys whose note was deleted because the remote no longer has them.
+    pub deleted: Vec<String>,
     pub warnings: Vec<String>,
     /// Keys whose status was pushed before this sync's fetch.
     pub pushed: Vec<String>,
@@ -48,7 +50,15 @@ pub struct SyncReport {
 #[derive(Debug, Clone, Default)]
 pub struct SyncPlan {
     pub edits: Vec<FileEdit>,
+    /// Notes to delete, with the content they were planned against.
+    pub removals: Vec<FileRemoval>,
     pub report: SyncReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRemoval {
+    pub path: PathBuf,
+    pub original: String,
 }
 
 /// Whether the issue key is part of the anchor line and note heading.
@@ -63,6 +73,12 @@ pub fn apply_sync_plan(plan: &SyncPlan) -> crate::error::Result<()> {
         if e.original != e.new {
             crate::fs::write_atomic(&e.path, &e.new)?;
         }
+    }
+    for r in &plan.removals {
+        std::fs::remove_file(&r.path).map_err(|source| crate::error::Error::Io {
+            path: r.path.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -246,13 +262,117 @@ pub fn plan_sync(ctx: &SyncCtx<'_>, fetched: &FetchResult) -> SyncPlan {
         };
         edits.extend(edit);
     }
+    let mut removals = Vec::new();
     for key in &fetched.missing {
-        if let Some(k) = known.get(key) {
-            edits.extend(retire_note(ctx, k, &mut report));
+        let Some(k) = known.get(key) else {
+            continue;
+        };
+        if ctx.cfg.effective_delete_missing() {
+            match removable(ctx, k) {
+                Ok(original) => {
+                    report.deleted.push(key.clone());
+                    removals.push(FileRemoval {
+                        path: ctx.vault_root.join(&k.rel),
+                        original,
+                    });
+                    continue;
+                }
+                Err(why) => warnings.push(format!(
+                    "{key}: gone remotely, kept {} ({why})",
+                    k.rel.display()
+                )),
+            }
         }
+        edits.extend(retire_note(ctx, k, &mut report));
     }
     report.warnings = warnings;
-    SyncPlan { edits, report }
+    SyncPlan {
+        edits,
+        removals,
+        report,
+    }
+}
+
+/// A note of a remotely deleted issue may go only if nothing in it is the
+/// user's: no pending or conflicting status, no text beyond the heading,
+/// anchor, managed sections and template, and no links to it from other
+/// notes. `Ok` carries the content to delete; `Err` why it stays.
+fn removable(ctx: &SyncCtx<'_>, known: &Known) -> Result<String, String> {
+    let content = read(ctx, &known.rel).ok_or("unreadable")?;
+    if known.fm.conflict.is_some() {
+        return Err("unresolved conflict".into());
+    }
+    let lines: Vec<&str> = content.split('\n').collect();
+    let anchor = find_anchor(&content, &known.fm.key, ctx.format);
+    let synced = known
+        .fm
+        .synced_status
+        .as_deref()
+        .and_then(note::parse_status);
+    if let Some(t) = anchor.and_then(|i| note::parse(lines[i], ctx.format)) {
+        if synced.is_some_and(|s| s != t.status) {
+            return Err("local status change".into());
+        }
+    }
+
+    let title = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("# "))
+        .unwrap_or_default();
+    let issue = RemoteIssue {
+        key: known.fm.key.clone(),
+        title: title.to_string(),
+        url: known.fm.url.clone().unwrap_or_default(),
+        ..Default::default()
+    };
+    let mut ignored = Vec::new();
+    let (_, template) = render_template(ctx, &issue, title, &mut ignored);
+    let template: HashSet<&str> = template.lines().map(str::trim).collect();
+    let body_start = frontmatter::frontmatter_end_line(&content).map_or(0, |e| e as usize);
+    let managed: Vec<(String, String)> = [DESCRIPTION, COMMENTS].map(note::markers).into();
+    let mut heading_seen = false;
+    let mut inside: Option<&str> = None;
+    for (i, line) in lines.iter().enumerate().skip(body_start) {
+        let l = line.trim();
+        if let Some(close) = inside {
+            if l == close {
+                inside = None;
+            }
+            continue;
+        }
+        if let Some((_, close)) = managed.iter().find(|(open, _)| l == open) {
+            inside = Some(close);
+            continue;
+        }
+        if l.is_empty() || Some(i) == anchor || template.contains(l) {
+            continue;
+        }
+        if !heading_seen && l.starts_with("# ") {
+            heading_seen = true;
+            continue;
+        }
+        return Err("local edits".into());
+    }
+
+    let stem = known
+        .rel
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let linking = ctx.scan.files.iter().find(|f| {
+        f.rel != known.rel
+            && (f.links.iter().any(|l| {
+                let target = l.target_text.strip_suffix(".md").unwrap_or(&l.target_text);
+                target.rsplit('/').next() == Some(stem)
+            }) || f
+                .frontmatter
+                .as_deref()
+                .is_some_and(|fm| fm.contains(&format!("[[{stem}"))))
+    });
+    if let Some(f) = linking {
+        return Err(format!("linked from {}", f.rel.display()));
+    }
+    Ok(content)
 }
 
 fn read(ctx: &SyncCtx<'_>, rel: &Path) -> Option<String> {
@@ -892,6 +1012,51 @@ looks good
         assert_eq!(r.pending, ["A-2"]);
         assert!(v.read("jira/A-1.md").contains("- [-] A-1"));
         assert!(v.read("jira/A-2.md").contains("- [x] A-2"));
+    }
+
+    #[test]
+    fn missing_issue_note_is_deleted_unless_the_user_touched_it() {
+        let mut v = V::new();
+        v.cfg.delete_missing = Some(true);
+        let keys = ["A-1", "A-2", "A-3", "A-4", "A-5"];
+        v.sync(&active(keys.iter().map(|k| issue(k)).collect()));
+        let note = v.read("jira/A-2.md");
+        v.write("jira/A-2.md", &format!("{note}\nmy own notes\n"));
+        let pending = v.read("jira/A-3.md").replace("- [/] A-3", "- [x] A-3");
+        v.write("jira/A-3.md", &pending);
+        v.write("daily.md", "see [[A-4]]\n");
+        let subtask = v
+            .read("jira/A-5.md")
+            .replace("🆔 A-5\n", "🆔 A-5\n    - [ ] call Amy\n");
+        v.write("jira/A-5.md", &subtask);
+
+        let r = v.sync(&FetchResult {
+            missing: keys.iter().map(|k| k.to_string()).collect(),
+            ..Default::default()
+        });
+        assert_eq!(r.deleted, ["A-1"]);
+        assert!(!v.dir.path().join("jira/A-1.md").exists());
+        assert_eq!(r.out_of_scope, ["A-2", "A-3", "A-4", "A-5"]);
+        assert_eq!(
+            r.warnings,
+            [
+                "A-2: gone remotely, kept jira/A-2.md (local edits)",
+                "A-3: gone remotely, kept jira/A-3.md (local status change)",
+                "A-4: gone remotely, kept jira/A-4.md (linked from daily.md)",
+                "A-5: gone remotely, kept jira/A-5.md (local edits)",
+            ]
+        );
+        assert!(v.read("jira/A-2.md").contains("- [-] A-2"));
+    }
+
+    #[test]
+    fn delete_missing_defaults_on_for_ticktick_only() {
+        let mut c = cfg();
+        assert!(!c.effective_delete_missing());
+        c.kind = crate::config::SourceKind::Ticktick;
+        assert!(c.effective_delete_missing());
+        c.delete_missing = Some(false);
+        assert!(!c.effective_delete_missing());
     }
 
     #[test]

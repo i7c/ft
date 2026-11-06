@@ -42,6 +42,7 @@ pub struct TicktickSource {
 struct Project {
     id: String,
     name: String,
+    closed: bool,
 }
 
 /// A parsed TickTick query; see [`parse_query`].
@@ -162,7 +163,7 @@ impl TicktickSource {
 
     /// Verify a token by listing projects.
     pub fn whoami(&self) -> Result<String, SourceError> {
-        let n = self.projects()?.len();
+        let n = self.projects()?.iter().filter(|p| !p.closed).count();
         Ok(format!("a TickTick account with {n} lists"))
     }
 
@@ -179,11 +180,11 @@ impl TicktickSource {
             .ok_or_else(|| SourceError::Parse("project list is not an array".into()))?;
         let projects: Vec<Project> = arr
             .iter()
-            .filter(|p| !p["closed"].as_bool().unwrap_or(false))
             .filter_map(|p| {
                 Some(Project {
                     id: p["id"].as_str()?.to_string(),
                     name: p["name"].as_str().unwrap_or("").to_string(),
+                    closed: p["closed"].as_bool().unwrap_or(false),
                 })
             })
             .collect();
@@ -191,12 +192,13 @@ impl TicktickSource {
         Ok(projects)
     }
 
-    /// A list id for a query value: `inbox`, a project name
-    /// (case-insensitive), or a project id.
+    /// A list id for a query value: `inbox`, an open project's name
+    /// (case-insensitive), or its id.
     fn resolve_list(&self, projects: &[Project], name: &str) -> Result<String, SourceError> {
         if name.eq_ignore_ascii_case(INBOX) {
             return Ok(INBOX.to_string());
         }
+        let projects: Vec<&Project> = projects.iter().filter(|p| !p.closed).collect();
         projects
             .iter()
             .find(|p| p.id == name)
@@ -249,6 +251,12 @@ impl TicktickSource {
         let id = r.key.strip_prefix(KEY_PREFIX)?.to_string();
         let project = self.project_of.borrow().get(&r.key).cloned()?;
         Some((project, id))
+    }
+
+    /// Whether `project` is the inbox or one of the account's lists, open
+    /// or closed.
+    fn list_exists(&self, project: &str) -> Result<bool, SourceError> {
+        Ok(project.starts_with(INBOX) || self.projects()?.iter().any(|p| p.id == project))
     }
 
     fn get_task(&self, project: &str, task: &str) -> Result<Option<Value>, SourceError> {
@@ -309,6 +317,7 @@ impl TaskSource for TicktickSource {
         let mut selected: Vec<String> = if q.lists.is_empty() {
             projects
                 .iter()
+                .filter(|p| !p.closed)
                 .map(|p| p.id.clone())
                 .chain([INBOX.to_string()])
                 .collect()
@@ -347,6 +356,10 @@ impl TaskSource for TicktickSource {
                     let Some((project, task)) = self.locate(r) else {
                         continue;
                     };
+                    // A task of a deleted list answers 500, not 404.
+                    if !self.list_exists(&project)? {
+                        continue;
+                    }
                     match self.get_task(&project, &task)? {
                         Some(raw) => {
                             self.remember(&raw);
@@ -865,6 +878,18 @@ mod tests {
         let reqs = h.join().unwrap();
         assert!(reqs[2].starts_with(&format!("GET /open/v1/project/{P_WORK}/task/dad ")));
         assert!(reqs[3].starts_with(&format!("GET /open/v1/project/{P_HOME}/task/done ")));
+    }
+
+    #[test]
+    fn fetch_keys_skips_tasks_of_deleted_lists() {
+        // Only the project list is served: no task request may follow.
+        let (url, h) = serve(vec![ok_json(&projects())]);
+        let refs = [IssueRef {
+            key: "tt-w1".into(),
+            url: Some(url_of("6aec746604183a21c6cf0009", "w1")),
+        }];
+        assert!(src(&url).fetch_keys(&refs).unwrap().is_empty());
+        assert_eq!(h.join().unwrap().len(), 1);
     }
 
     #[test]

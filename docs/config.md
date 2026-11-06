@@ -457,6 +457,7 @@ work = "list:Work -list:Shopping tag:ft priority:high"
 | `description` | `true` | Keep the managed Description section |
 | `status_map` | `{}` | Remote status name → `Open` / `InProgress` / `Done` / `Cancelled` |
 | `push` | `true` | Push local status changes on every sync, and allow `ft tasks promote`. `false` makes the source read-only |
+| `delete_missing` | `false`; ticktick: `true` | Delete the note of an issue the remote no longer has (deleted, or in a deleted TickTick list) instead of cancelling it. A note with anything of yours in it — local text or subtasks, an unpushed status change, a conflict, or links from other notes — is kept, cancelled, and named in a warning. Off for Jira and GitHub because there a vanished issue may only be one the token can no longer see |
 | `transitions` | `{}` | Jira only: local status → workflow transition name, overriding the automatic choice. `Cancelled` is only pushed when set here (e.g. `Cancelled = "Won't Do"`) |
 
 Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then the

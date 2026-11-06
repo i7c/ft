@@ -202,7 +202,8 @@ pub fn run_sync(
                 }
                 rows.push(serde_json::json!({
                     "source": name, "status": f.status(), "created": 0, "updated": 0,
-                    "pending": 0, "conflicts": 0, "out_of_scope": 0, "message": f.message(name),
+                    "pending": 0, "conflicts": 0, "out_of_scope": 0, "deleted": 0,
+                    "message": f.message(name),
                 }));
                 continue;
             }
@@ -226,6 +227,9 @@ pub fn run_sync(
             for e in plan.edits.iter().filter(|e| e.original != e.new) {
                 super::tasks::print_diff(&vault.relativize(&e.path), &e.original, &e.new);
             }
+            for r in &plan.removals {
+                super::tasks::print_diff(&vault.relativize(&r.path), &r.original, "");
+            }
         } else if !dry_run {
             sync::apply_sync_plan(&plan).with_context(|| format!("writing {name} notes"))?;
         }
@@ -240,6 +244,9 @@ pub fn run_sync(
             );
             if !r.out_of_scope.is_empty() {
                 line.push_str(&format!(" · {} out of scope", r.out_of_scope.len()));
+            }
+            if !r.deleted.is_empty() {
+                line.push_str(&format!(" · {} deleted", r.deleted.len()));
             }
             if !r.pushed.is_empty() {
                 line.push_str(&format!(" · {} pushed", r.pushed.len()));
@@ -264,6 +271,7 @@ pub fn run_sync(
             "created": r.created.len(), "updated": r.updated.len(),
             "pending": r.pending.len(), "conflicts": r.conflicts.len(),
             "out_of_scope": r.out_of_scope.len(),
+            "deleted": r.deleted.len(),
             "pushed": r.pushed.len(),
             "push_failures": r.push_failures.iter()
                 .map(|(k, reason)| serde_json::json!({"key": k, "reason": reason}))

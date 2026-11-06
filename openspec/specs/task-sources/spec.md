@@ -23,6 +23,7 @@ policy and offline classification, `ft sources login/logout/list`, and the
 | `comments` | int | jira, github: 5; ticktick: 0 | Most recent comments kept in the note; `0` disables the section |
 | `description` | bool | true | Keep the managed `Description` section |
 | `status_map` | map remote status name → `Open`\|`InProgress`\|`Done`\|`Cancelled` | `{}` | Overrides the default category mapping |
+| `delete_missing` | bool | jira, github: false; ticktick: true | Delete untouched notes of issues the remote no longer returns at all; see task-source-sync |
 
 The section SHALL normally live in the vault config (`.ft/config.toml`) so every machine syncing the vault shares it. User config may override it, following the existing layered merge.
 

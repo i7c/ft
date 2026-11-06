@@ -119,9 +119,9 @@ impl Schedule {
     }
 }
 
-/// Apply a planned sync: write each edit whose file still holds the
-/// planned original. Returns the number of edits skipped because the file
-/// changed meanwhile.
+/// Apply a planned sync: write each edit, and delete each removal, whose
+/// file still holds the planned original. Returns the number skipped
+/// because the file changed meanwhile.
 pub fn apply_plan(plan: &SyncPlan) -> Result<usize, String> {
     let mut skipped = 0;
     for e in plan.edits.iter().filter(|e| e.original != e.new) {
@@ -131,6 +131,13 @@ pub fn apply_plan(plan: &SyncPlan) -> Result<usize, String> {
             continue;
         }
         ft_core::fs::write_atomic(&e.path, &e.new).map_err(|err| err.to_string())?;
+    }
+    for r in &plan.removals {
+        if std::fs::read_to_string(&r.path).ok().as_ref() != Some(&r.original) {
+            skipped += 1;
+            continue;
+        }
+        std::fs::remove_file(&r.path).map_err(|err| err.to_string())?;
     }
     Ok(skipped)
 }
@@ -150,7 +157,7 @@ pub fn summary(
         match &run.outcome {
             Ok(plan) => {
                 let r = &plan.report;
-                let changed = r.created.len() + r.updated.len();
+                let changed = r.created.len() + r.updated.len() + r.deleted.len();
                 let mut s = if changed == 0 {
                     format!("{}: no changes", run.name)
                 } else {
@@ -161,6 +168,9 @@ pub fn summary(
                         r.updated.len()
                     )
                 };
+                if !r.deleted.is_empty() {
+                    s.push_str(&format!(" · {} deleted", r.deleted.len()));
+                }
                 if !r.pushed.is_empty() {
                     s.push_str(&format!(" · {} pushed", r.pushed.len()));
                     noteworthy = true;

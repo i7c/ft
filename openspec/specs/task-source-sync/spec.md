@@ -88,10 +88,10 @@ Each issue note's `ft.source.state` SHALL follow these rules:
   - if the remote status maps to `Done` or `Cancelled`, write it per the status rules and keep `state: out-of-scope`;
   - otherwise set the anchor to `Cancelled` (and `synced.status = Cancelled`).
   
-  Issues the remote no longer returns at all (deleted, or no permission) SHALL be treated the same as still open.
+  Issues the remote no longer returns at all (deleted, or no permission) SHALL be treated the same as still open — unless the source's `delete_missing` is on (the TickTick default) and the note holds nothing of the user's: no anchor status differing from `synced.status`, no stored conflict, no non-blank body line besides the first heading, the anchor, the managed sections and lines of the rendered template, and no link to it from another note. Such a note SHALL be deleted, and sync reports `N deleted`; any other note is retired as above with a warning naming why it was kept. A TickTick task whose list is not among the account's lists (nor the inbox) SHALL count as no longer returned, without requesting it.
 - An `out-of-scope` issue that becomes active again SHALL return to `active`, and its status syncs from the remote, with `Cancelled` treated as the base.
 
-Notes never fetched again SHALL never be deleted.
+Notes never fetched again SHALL never be deleted otherwise.
 
 #### Scenario: Reassigned issue
 - **WHEN** `ABC-123` is no longer returned by `mine` but is still `In Progress` remotely

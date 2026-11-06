@@ -1026,7 +1026,8 @@ impl App {
         for run in &result.runs {
             let status = match &run.outcome {
                 Ok(plan) => {
-                    wrote |= plan.edits.iter().any(|e| e.original != e.new);
+                    wrote |=
+                        plan.edits.iter().any(|e| e.original != e.new) || !plan.removals.is_empty();
                     applied.push((run.name.clone(), apply_plan(plan)));
                     let pushes = self
                         .vault
