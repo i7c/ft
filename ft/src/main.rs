@@ -50,7 +50,7 @@ enum Commands {
     Graph(cmd::graph::GraphArgs),
     /// Git operations: sync (commit + pull + push), commit (commit only)
     Git(cmd::git::GitArgs),
-    /// Remote task sources (Jira, GitHub): login, logout, list
+    /// Remote task sources (Jira, GitHub, TickTick): login, logout, list
     Sources(cmd::sources::SourcesArgs),
     /// Launch the interactive terminal UI
     Tui(cmd::tui::TuiArgs),

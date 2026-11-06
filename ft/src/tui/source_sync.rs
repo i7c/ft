@@ -1,4 +1,4 @@
-//! Background sync of remote task sources (Jira, GitHub).
+//! Background sync of remote task sources (Jira, GitHub, TickTick).
 //!
 //! The worker scans the vault, fetches each due source, and plans the note
 //! edits — all reads. The main thread applies only the edits whose files

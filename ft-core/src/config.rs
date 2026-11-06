@@ -51,7 +51,7 @@ pub struct Config {
     /// Quick-capture presets, keyed by preset name. See [`CapturePreset`].
     #[serde(default)]
     pub capture_presets: HashMap<String, CapturePreset>,
-    /// Remote task sources (Jira, GitHub), keyed by source name. See
+    /// Remote task sources (Jira, GitHub, TickTick), keyed by source name. See
     /// [`SourceCfg`].
     #[serde(default)]
     pub sources: std::collections::BTreeMap<String, SourceCfg>,

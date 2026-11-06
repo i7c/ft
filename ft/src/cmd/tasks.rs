@@ -61,7 +61,7 @@ pub enum TasksCommand {
     /// Report broken task structure: dangling, cyclic, ignored, and extra
     /// parent links. Exits 1 when any are found.
     Check(CheckArgs),
-    /// Pull remote issues (Jira, GitHub) into issue notes. Sources that are
+    /// Pull remote issues (Jira, GitHub, TickTick) into issue notes. Sources that are
     /// offline or have no credentials on this machine are skipped.
     Sync(SyncArgs),
     /// Turn a local subtask of a remote issue into a real remote issue

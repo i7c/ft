@@ -74,7 +74,7 @@ pub static APP_COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "app.sync-sources",
-        description: "Sync remote task sources (Jira, GitHub) now",
+        description: "Sync remote task sources (Jira, GitHub, TickTick) now",
         scope: CommandScope::Global,
         group: "App",
         args_schema: &[],
