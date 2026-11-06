@@ -178,14 +178,16 @@ pub fn local_tags(description: &str) -> Vec<String> {
     tags
 }
 
-/// The owned part of an anchor description: `[KEY](url) title`.
-pub fn owned_description(issue: &RemoteIssue) -> String {
-    format!(
-        "[{}]({}) {}",
-        issue.key,
-        issue.url,
-        clean_title(&issue.title)
-    )
+/// The owned part of an anchor description: `KEY title`, or just the
+/// title when `show_key` is off. No link: the URL lives in the
+/// frontmatter (`ft.source.url`), and `🆔` already carries the key.
+pub fn owned_description(issue: &RemoteIssue, show_key: bool) -> String {
+    let title = clean_title(&issue.title);
+    if show_key {
+        format!("{} {title}", issue.key)
+    } else {
+        title
+    }
 }
 
 /// Build the anchor task line for `issue`. `local` is the existing line's
@@ -197,13 +199,14 @@ pub fn anchor_line(
     local: Option<(&str, &Task)>,
     status: Status,
     status_date: Option<NaiveDate>,
+    show_key: bool,
     format: &dyn TaskFormat,
 ) -> String {
     let mut task = local.map(|(_, t)| t.clone()).unwrap_or_default();
     let tags = local
         .map(|(_, t)| local_tags(&t.description))
         .unwrap_or_default();
-    let mut description = owned_description(issue);
+    let mut description = owned_description(issue, show_key);
     for t in &tags {
         if !description.ends_with(t.as_str()) {
             description.push(' ');
@@ -333,23 +336,29 @@ mod tests {
     fn anchor_line_new_and_preserving_locals() {
         let i = issue();
         assert_eq!(
-            anchor_line(&i, None, Status::InProgress, None, &EmojiFormat),
-            "- [/] [ABC-123](https://x.test/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123"
+            anchor_line(&i, None, Status::InProgress, None, true, &EmojiFormat),
+            "- [/] ABC-123 Fix login ⏫ 📅 2026-10-30 🆔 ABC-123"
+        );
+        assert_eq!(
+            anchor_line(&i, None, Status::InProgress, None, false, &EmojiFormat),
+            "- [/] Fix login ⏫ 📅 2026-10-30 🆔 ABC-123"
         );
         let old = "  - [/] [ABC-123](https://x.test/browse/ABC-123) Old title #work #wait ⤴ p2m7rd ⏳ 2026-10-25 📅 2026-10-28 🆔 ABC-123 ^blk";
         let t = parse(old, &EmojiFormat).unwrap();
         let mut i2 = i.clone();
         i2.title = "Fix login on Safari".into();
         i2.due = None;
+        // An old linked line migrates on its next sync; locals survive.
         assert_eq!(
-            anchor_line(&i2, Some((old, &t)), Status::InProgress, None, &EmojiFormat),
-            "  - [/] [ABC-123](https://x.test/browse/ABC-123) Fix login on Safari #work #wait ⤴ p2m7rd ⏫ ⏳ 2026-10-25 🆔 ABC-123 ^blk"
+            anchor_line(&i2, Some((old, &t)), Status::InProgress, None, true, &EmojiFormat),
+            "  - [/] ABC-123 Fix login on Safari #work #wait ⤴ p2m7rd ⏫ ⏳ 2026-10-25 🆔 ABC-123 ^blk"
         );
         let done = anchor_line(
             &i2,
             Some((old, &t)),
             Status::Done,
             NaiveDate::from_ymd_opt(2026, 10, 20),
+            true,
             &EmojiFormat,
         );
         assert!(

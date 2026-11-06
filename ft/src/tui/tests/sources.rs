@@ -75,7 +75,7 @@ fn startup_sync_creates_anchor_visible_in_tasks_tab() -> Result<()> {
     app.pump_graph_rebuild_for_test();
     let frame = render(&mut app, 100, 14);
     assert!(
-        frame.contains("[ABC-123](https://example.test/browse/ABC-123) Fix login"),
+        frame.contains("ABC-123 Fix login") && !frame.contains("https://"),
         "{frame}"
     );
 
@@ -235,7 +235,7 @@ fn conflict_modal_opens_and_takes_remote() -> Result<()> {
     let next = fetcher(&mut app);
     app.tick_for_test()?;
     // Tick locally; the remote meanwhile cancelled the issue.
-    let ticked = note(&dir).replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+    let ticked = note(&dir).replace("- [/] ABC-123", "- [x] ABC-123");
     std::fs::write(dir.path().join("test-vault/jira/ABC-123.md"), ticked).unwrap();
     *next.lock().unwrap() = Ok(FetchResult {
         active: vec![issue(Status::Cancelled)],
@@ -263,7 +263,7 @@ fn conflict_modal_opens_and_takes_remote() -> Result<()> {
     assert_eq!(toast(&app), "resolved 1 conflict(s)");
     let n = note(&dir);
     assert!(
-        n.contains("- [-] [ABC-123]") && !n.contains("conflict:"),
+        n.contains("- [-] ABC-123") && !n.contains("conflict:"),
         "{n}"
     );
     Ok(())

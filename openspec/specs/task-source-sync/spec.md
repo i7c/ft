@@ -32,7 +32,9 @@ ft:
 
 The body SHALL contain exactly one anchor task line carrying `🆔 <key>`, in the form
 
-`- [<status char>] [<key>](<url>) <title> [<priority emoji>] [📅 <due>] [✅/❌ <date>] 🆔 <key>`
+`- [<status char>] <key> <title> [<priority emoji>] [📅 <due>] [✅/❌ <date>] 🆔 <key>`
+
+with no link: the URL is kept in `ft.source.url`. For TickTick, whose keys are opaque ids, both the leading `<key>` and the key in the note heading SHALL be omitted (`- [ ] <title> … 🆔 tt-<id>`, heading `# <title>`). An anchor line in an older linked form (`[<key>](<url>) <title>`) SHALL be rewritten to this form on its next sync, keeping its local fields.
 
 plus two managed sections, each delimited by HTML comments: `<!-- ft:source:description -->` … `<!-- /ft:source:description -->` (heading `## Description`), and `<!-- ft:source:comments -->` … `<!-- /ft:source:comments -->` (heading `## Comments`). Everything else in the note (other text, local subtasks, the user part of the template) belongs to the user, and sync SHALL NOT modify it.
 
@@ -40,7 +42,7 @@ Issue keys that aren't valid `🆔` / file-stem tokens SHALL be normalised by th
 
 #### Scenario: New Jira issue note
 - **WHEN** an in-scope issue `ABC-123` (status `In Review` → InProgress, priority High, due 2026-10-30, parent `EPIC-7`) has no note yet
-- **THEN** `jira/ABC-123.md` is created with the frontmatter above, a `# ABC-123 Fix login` heading, the anchor line `- [/] [ABC-123](https://example.atlassian.net/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123`, the rendered template body (if configured), and the two managed sections
+- **THEN** `jira/ABC-123.md` is created with the frontmatter above, a `# ABC-123 Fix login` heading, the anchor line `- [/] ABC-123 Fix login ⏫ 📅 2026-10-30 🆔 ABC-123`, the rendered template body (if configured), and the two managed sections
 
 #### Scenario: Note moved by the user
 - **WHEN** the user moves `jira/ABC-123.md` to `projects/login/ABC-123.md`
@@ -49,7 +51,7 @@ Issue keys that aren't valid `🆔` / file-stem tokens SHALL be normalised by th
 ### Requirement: Remote-owned and local fields
 
 On every sync of an existing issue note, the planner SHALL overwrite these remote-owned fields from the remote issue:
-- on the anchor line: the title part of the description (the `[key](url)` prefix and the title text), the priority, the due date (cleared when the remote has none), and the status, subject to the pending/conflict rules;
+- on the anchor line: the title part of the description (the key prefix, where the source shows one, and the title text), the priority, the due date (cleared when the remote has none), and the status, subject to the pending/conflict rules;
 - in the frontmatter: all `ft.source.*` keys except `state` (set by the scope rules) and `synced`, plus `ft.tasks.parent`;
 - the contents of both managed sections.
 
@@ -57,7 +59,7 @@ The planner SHALL preserve these local fields on the anchor line: hashtags in th
 
 #### Scenario: Title and due change remotely
 - **WHEN** the remote title becomes `Fix login on Safari`, the due date is removed, and the local anchor line has `#work ⏳ 2026-10-25`
-- **THEN** the anchor line becomes `- [/] [ABC-123](…) Fix login on Safari #work ⏳ 2026-10-25 🆔 ABC-123` and nothing else in the note changes
+- **THEN** the anchor line becomes `- [/] ABC-123 Fix login on Safari #work ⏳ 2026-10-25 🆔 ABC-123` and nothing else in the note changes
 
 ### Requirement: Status sync with pending and conflict detection
 

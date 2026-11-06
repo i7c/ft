@@ -51,6 +51,12 @@ pub struct SyncPlan {
     pub report: SyncReport,
 }
 
+/// Whether the issue key is part of the anchor line and note heading.
+/// Jira and GitHub keys are names people use; TickTick ids are not.
+fn shows_key(cfg: &SourceCfg) -> bool {
+    cfg.kind != crate::config::SourceKind::Ticktick
+}
+
 /// Write every changed file in `plan`.
 pub fn apply_sync_plan(plan: &SyncPlan) -> crate::error::Result<()> {
     for e in &plan.edits {
@@ -313,6 +319,7 @@ fn update_note(
         local.as_ref().map(|(i, t)| (lines[*i].as_str(), t)),
         status,
         issue.resolved.or(Some(ctx.today)),
+        shows_key(ctx.cfg),
         ctx.format,
     );
     match &local {
@@ -451,9 +458,14 @@ fn new_note(
         None,
         status,
         issue.resolved.or(Some(ctx.today)),
+        shows_key(ctx.cfg),
         ctx.format,
     );
-    let title = format!("{} {}", issue.key, note::clean_title(&issue.title));
+    let title = if shows_key(ctx.cfg) {
+        format!("{} {}", issue.key, note::clean_title(&issue.title))
+    } else {
+        note::clean_title(&issue.title)
+    };
     let (template_fm, template_body) = render_template(ctx, issue, &title, warnings);
     let mut parts = vec![format!("# {title}"), anchor];
     if !template_body.trim().is_empty() {
@@ -671,7 +683,7 @@ ft:
 ---
 # ABC-123 Fix login
 
-- [/] [ABC-123](https://x.test/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123
+- [/] ABC-123 Fix login ⏫ 📅 2026-10-30 🆔 ABC-123
 
 <!-- ft:source:description -->
 ## Description
@@ -757,7 +769,7 @@ looks good
         assert_eq!(r.updated, ["ABC-123"]);
         let after = v.read("jira/ABC-123.md");
         assert!(after.contains(
-            "- [/] [ABC-123](https://x.test/browse/ABC-123) Fix login on Safari #work ⏫ ⏳ 2026-10-25 🆔 ABC-123\n  - [ ] nested local\n"
+            "- [/] ABC-123 Fix login on Safari #work ⏫ ⏳ 2026-10-25 🆔 ABC-123\n  - [ ] nested local\n"
         ), "{after}");
         assert!(after.contains("    status: Code Review\n"));
         assert!(after.ends_with("## My notes\n\n- [ ] local subtask [[ABC-123]]\n"));
@@ -771,14 +783,14 @@ looks good
         v.sync(&active(vec![issue("ABC-123")]));
         let ticked = v
             .read("jira/ABC-123.md")
-            .replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+            .replace("- [/] ABC-123", "- [x] ABC-123");
         v.write("jira/ABC-123.md", &ticked);
         let r = v.sync_pushed(&active(vec![issue("ABC-123")]), &["ABC-123".to_string()]);
         assert!(r.pending.is_empty() && r.conflicts.is_empty(), "{r:?}");
         assert_eq!(r.pushed, ["ABC-123"]);
         let n = v.read("jira/ABC-123.md");
         assert!(
-            n.contains("- [/] [ABC-123]") && n.contains("      status: InProgress\n"),
+            n.contains("- [/] ABC-123") && n.contains("      status: InProgress\n"),
             "{n}"
         );
     }
@@ -789,11 +801,11 @@ looks good
         v.sync(&active(vec![issue("ABC-123")]));
         let ticked = v
             .read("jira/ABC-123.md")
-            .replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+            .replace("- [/] ABC-123", "- [x] ABC-123");
         v.write("jira/ABC-123.md", &ticked);
         let r = v.sync(&active(vec![issue("ABC-123")]));
         assert_eq!(r.pending, ["ABC-123"]);
-        assert!(v.read("jira/ABC-123.md").contains("- [x] [ABC-123]"));
+        assert!(v.read("jira/ABC-123.md").contains("- [x] ABC-123"));
         assert!(v
             .read("jira/ABC-123.md")
             .contains("      status: InProgress\n"));
@@ -805,7 +817,7 @@ looks good
             r.conflicts,
             [("ABC-123".to_string(), Status::Done, Status::Cancelled)]
         );
-        assert!(v.read("jira/ABC-123.md").contains("- [x] [ABC-123]"));
+        assert!(v.read("jira/ABC-123.md").contains("- [x] ABC-123"));
 
         let mut done = issue("ABC-123");
         done.status = Status::Done;
@@ -822,7 +834,9 @@ looks good
         done.status = Status::Done;
         done.resolved = NaiveDate::from_ymd_opt(2026, 10, 20);
         v.sync(&active(vec![done]));
-        assert!(v.read("jira/ABC-123.md").contains("- [x] [ABC-123](https://x.test/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 ✅ 2026-10-20 🆔 ABC-123"));
+        assert!(v
+            .read("jira/ABC-123.md")
+            .contains("- [x] ABC-123 Fix login ⏫ 📅 2026-10-30 ✅ 2026-10-20 🆔 ABC-123"));
     }
 
     #[test]
@@ -846,7 +860,7 @@ looks good
         assert_eq!(r.out_of_scope, ["A-1", "A-2"]);
         let a1 = v.read("jira/A-1.md");
         assert!(
-            a1.contains("- [-] [A-1]")
+            a1.contains("- [-] A-1")
                 && a1.contains("❌ 2026-10-21")
                 && a1.contains("state: out-of-scope"),
             "{a1}"
@@ -859,7 +873,7 @@ looks good
         assert_eq!(r.updated, ["A-1"]);
         let a1 = v.read("jira/A-1.md");
         assert!(
-            a1.contains("- [/] [A-1]") && !a1.contains("❌") && a1.contains("state: active"),
+            a1.contains("- [/] A-1") && !a1.contains("❌") && a1.contains("state: active"),
             "{a1}"
         );
     }
@@ -868,7 +882,7 @@ looks good
     fn missing_issue_is_retired_unless_pending() {
         let v = V::new();
         v.sync(&active(vec![issue("A-1"), issue("A-2")]));
-        let pending = v.read("jira/A-2.md").replace("- [/] [A-2]", "- [x] [A-2]");
+        let pending = v.read("jira/A-2.md").replace("- [/] A-2", "- [x] A-2");
         v.write("jira/A-2.md", &pending);
         let r = v.sync(&FetchResult {
             missing: vec!["A-1".into(), "A-2".into()],
@@ -876,8 +890,8 @@ looks good
         });
         assert_eq!(r.out_of_scope, ["A-1", "A-2"]);
         assert_eq!(r.pending, ["A-2"]);
-        assert!(v.read("jira/A-1.md").contains("- [-] [A-1]"));
-        assert!(v.read("jira/A-2.md").contains("- [x] [A-2]"));
+        assert!(v.read("jira/A-1.md").contains("- [-] A-1"));
+        assert!(v.read("jira/A-2.md").contains("- [x] A-2"));
     }
 
     #[test]
@@ -903,7 +917,7 @@ looks good
         assert_eq!(r.created, ["A-2"]);
         assert!(!v.dir.path().join("jira/A-1.md").exists());
         let a1 = v.read("projects/A-1.md");
-        assert!(a1.contains("# A-1 Fix login\n- [/] [A-1]"), "{a1}");
+        assert!(a1.contains("# A-1 Fix login\n- [/] A-1"), "{a1}");
         assert!(!a1.contains("ft:source:comments"));
         assert_eq!(v.read("jira/A-2.md"), "my own note\n");
         assert!(v.read("jira/A-2 (jira).md").contains("key: A-2"));
@@ -993,7 +1007,7 @@ looks good
         v.sync(&active(vec![issue("ABC-123")]));
         let ticked = v
             .read("jira/ABC-123.md")
-            .replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+            .replace("- [/] ABC-123", "- [x] ABC-123");
         v.write("jira/ABC-123.md", &ticked);
         let mut cancelled = issue("ABC-123");
         cancelled.status = Status::Cancelled;
@@ -1005,7 +1019,7 @@ looks good
         // Take local: synced re-based on remote, conflict gone → pending.
         let local = resolve_conflict(&n, Take::Local, today, &EmojiFormat).unwrap();
         assert!(local.contains("      status: Cancelled\n") && !local.contains("conflict:"));
-        assert!(local.contains("- [x] [ABC-123]"));
+        assert!(local.contains("- [x] ABC-123"));
         v.write("jira/ABC-123.md", &local);
         let r = v.sync(&active(vec![cancelled.clone()]));
         assert_eq!(r.pending, ["ABC-123"]);
@@ -1014,7 +1028,7 @@ looks good
         // Take remote on a fresh conflict.
         let remote = resolve_conflict(&n, Take::Remote, today, &EmojiFormat).unwrap();
         assert!(
-            remote.contains("- [-] [ABC-123]") && remote.contains("❌ 2026-10-22"),
+            remote.contains("- [-] ABC-123") && remote.contains("❌ 2026-10-22"),
             "{remote}"
         );
         assert!(remote.contains("      status: Cancelled\n") && !remote.contains("conflict:"));

@@ -368,7 +368,7 @@ ft:
 ---
 # ABC-123 Fix login
 
-- [/] [ABC-123](https://…/browse/ABC-123) Fix login ⏫ 📅 2026-10-30 🆔 ABC-123
+- [/] ABC-123 Fix login ⏫ 📅 2026-10-30 🆔 ABC-123
   - [ ] reproduce on staging        ← your subtasks: nest them here…
 
 (Description and Comments sections, kept up to date by sync)

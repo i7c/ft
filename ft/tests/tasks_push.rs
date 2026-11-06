@@ -251,8 +251,7 @@ fn read(dir: &assert_fs::TempDir, rel: &str) -> String {
 
 fn set_checkbox(dir: &assert_fs::TempDir, key: &str, from: char, to: char) {
     let rel = format!("jira/{key}.md");
-    let note =
-        read(dir, &rel).replace(&format!("- [{from}] [{key}]"), &format!("- [{to}] [{key}]"));
+    let note = read(dir, &rel).replace(&format!("- [{from}] {key} "), &format!("- [{to}] {key} "));
     std::fs::write(dir.path().join(rel), note).unwrap();
 }
 
@@ -272,7 +271,7 @@ fn ticked_anchor_is_pushed_via_transition() {
         .contains(&"POST /rest/api/3/issue/ABC-123/transitions".to_string()));
     let note = read(&dir, "jira/ABC-123.md");
     assert!(
-        note.contains("      status: Done\n") && note.contains("- [x] [ABC-123]"),
+        note.contains("      status: Done\n") && note.contains("- [x] ABC-123"),
         "{note}"
     );
     // Nothing pending any more.
@@ -349,7 +348,7 @@ fn forbidden_push_stays_pending_and_is_reported() {
         .unwrap()
         .iter()
         .any(|e| e["kind"] == "push-failed" && e["link"] == "forbidden (403)"));
-    assert!(read(&dir, "jira/ABC-123.md").contains("- [x] [ABC-123]"));
+    assert!(read(&dir, "jira/ABC-123.md").contains("- [x] ABC-123"));
 }
 
 #[test]
@@ -409,7 +408,7 @@ fn conflict_is_stored_and_resolved_offline_with_take() {
     .stdout(predicate::str::contains("ABC-123: took remote"));
     let note = read(&dir, "jira/ABC-123.md");
     assert!(
-        note.contains("- [-] [ABC-123]") && !note.contains("conflict:"),
+        note.contains("- [-] ABC-123") && !note.contains("conflict:"),
         "{note}"
     );
     ft(
@@ -458,7 +457,7 @@ fn promote_creates_subtask_and_restructures_vault() {
     assert_eq!(read(&dir, "journal.md"), "# Day\n- [ ] other\n");
     let n = read(&dir, "jira/ABC-124.md");
     assert!(
-        n.contains("- [/] [ABC-124](") && n.contains("🆔 ABC-124 ^wr1\n  - [ ] cover Safari\n"),
+        n.contains("- [/] ABC-124 ") && n.contains("🆔 ABC-124 ^wr1\n  - [ ] cover Safari\n"),
         "{n}"
     );
     assert_eq!(read(&dir, "notes.md"), "see [[ABC-124#^wr1]]\n");

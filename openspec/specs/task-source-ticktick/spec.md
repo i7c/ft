@@ -63,6 +63,10 @@ The issue key SHALL be `tt-<taskId>`, with the task id lower-cased; TickTick ids
 - **WHEN** task `6aec746604183a21c6cffe42` is synced by source `ticktick`
 - **THEN** its key is `tt-6aec746604183a21c6cffe42` and its note is `ticktick/tt-6aec746604183a21c6cffe42.md`
 
+#### Scenario: Key kept out of sight
+- **WHEN** task `Buy cable` (id `6aec746604183a21c6cffe42`) gets its note
+- **THEN** the heading is `# Buy cable`, the anchor line is `- [ ] Buy cable 🆔 tt-6aec746604183a21c6cffe42` with no link, and the web-app URL is only in `ft.source.url`
+
 ### Requirement: TickTick field mapping
 
 The source SHALL map each TickTick task to a `RemoteIssue` as follows:

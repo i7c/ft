@@ -439,7 +439,7 @@ mod tests {
 
     fn anchor_note(key: &str) -> String {
         format!(
-            "---\nft:\n  tasks:\n    anchor: {key}\n  source:\n    name: jira\n    key: {key}\n    url: https://x.test/browse/{key}\n    state: active\n    synced:\n      status: InProgress\n---\n# {key} Story\n\n- [/] [{key}](https://x.test/browse/{key}) Story 🆔 {key}\n"
+            "---\nft:\n  tasks:\n    anchor: {key}\n  source:\n    name: jira\n    key: {key}\n    url: https://x.test/browse/{key}\n    state: active\n    synced:\n      status: InProgress\n---\n# {key} Story\n\n- [/] {key} Story 🆔 {key}\n"
         )
     }
 
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(read("journal/2026-10-21.md"), "# Day\n- [ ] other\n");
         let n = read("jira/ABC-124.md");
         assert!(
-            n.contains("- [ ] [ABC-124](https://x.test/browse/ABC-124) write regression test ⤴ p2m7rd 📅 2026-10-28 🆔 ABC-124 ^wr1\n  - [ ] cover Safari\n    context note\n"),
+            n.contains("- [ ] ABC-124 write regression test ⤴ p2m7rd 📅 2026-10-28 🆔 ABC-124 ^wr1\n  - [ ] cover Safari\n    context note\n"),
             "{n}"
         );
         assert!(n.contains("    parent: ABC-123\n"), "{n}");

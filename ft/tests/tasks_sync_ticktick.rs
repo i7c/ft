@@ -209,9 +209,15 @@ fn sync_creates_task_notes_and_is_idempotent() {
     let note = read(&dir, &format!("ticktick/tt-{CHILD}.md"));
     assert!(
         note.contains(&format!(
-            "- [ ] [tt-{CHILD}]({url}/webapp/#p/{PROJECT}/tasks/{CHILD}) Task fe42 ⏫ 📅 2026-11-05 🆔 tt-{CHILD}"
+            "# Task fe42\n\n- [ ] Task fe42 ⏫ 📅 2026-11-05 🆔 tt-{CHILD}\n"
         )),
-        "{note}"
+        "heading and anchor without key or link: {note}"
+    );
+    assert!(
+        note.contains(&format!(
+            "    url: {url}/webapp/#p/{PROJECT}/tasks/{CHILD}\n"
+        )),
+        "the link lives in the frontmatter: {note}"
     );
     assert!(
         note.contains(&format!("    parent: tt-{PARENT}\n")),
@@ -232,10 +238,7 @@ fn ticked_anchor_completes_the_task() {
     let dir = vault(&url);
     ft(&dir, &["tasks", "sync"]).success();
     let rel = format!("ticktick/tt-{CHILD}.md");
-    let note = read(&dir, &rel).replace(
-        &format!("- [ ] [tt-{CHILD}]"),
-        &format!("- [x] [tt-{CHILD}]"),
-    );
+    let note = read(&dir, &rel).replace("- [ ] Task fe42", "- [x] Task fe42");
     std::fs::write(dir.path().join(&rel), note).unwrap();
     ft(&dir, &["tasks", "sync"])
         .success()
@@ -245,7 +248,7 @@ fn ticked_anchor_completes_the_task() {
     )));
     let note = read(&dir, &rel);
     assert!(
-        note.contains("      status: Done\n") && note.contains(&format!("- [x] [tt-{CHILD}]")),
+        note.contains("      status: Done\n") && note.contains("- [x] Task fe42"),
         "{note}"
     );
     ft(&dir, &["tasks", "sync"])
@@ -294,17 +297,14 @@ fn completing_a_recurring_task_reopens_with_the_next_due_date() {
     let dir = vault(&url);
     ft(&dir, &["tasks", "sync"]).success();
     let rel = format!("ticktick/tt-{RECURRING}.md");
-    let note = read(&dir, &rel).replace(
-        &format!("- [ ] [tt-{RECURRING}]"),
-        &format!("- [x] [tt-{RECURRING}]"),
-    );
+    let note = read(&dir, &rel).replace("- [ ] Task fe50", "- [x] Task fe50");
     std::fs::write(dir.path().join(&rel), note).unwrap();
     ft(&dir, &["tasks", "sync"]).success().stdout(
         predicate::str::contains("· 1 pushed").and(predicate::str::contains("0 conflicts")),
     );
     let note = read(&dir, &rel);
     assert!(
-        note.contains(&format!("- [ ] [tt-{RECURRING}]"))
+        note.contains("- [ ] Task fe50")
             && note.contains("📅 2026-11-07")
             && note.contains("      status: Open\n"),
         "{note}"

@@ -104,7 +104,7 @@ fn sync_creates_notes_and_tree_shows_epic_story_local() {
         .stdout("jira: 2 new · 0 updated · 0 pending push · 0 conflicts\n");
     let note = read(&dir, "jira/ABC-123.md");
     assert!(
-        note.contains("- [/] [ABC-123](") && note.contains("🆔 ABC-123"),
+        note.contains("- [/] ABC-123 Summary of ABC-123 ") && note.contains("🆔 ABC-123"),
         "{note}"
     );
     assert!(note.contains("- ☐ remote checklist item"));
@@ -190,7 +190,9 @@ fn dry_run_diffs_without_writing_and_json_summary() {
     let dir = vault(&url);
     ft(&dir, &["tasks", "sync", "--dry-run"], true)
         .success()
-        .stdout(predicate::str::contains("+- [ ] [ABC-123]("));
+        .stdout(predicate::str::contains(
+            "+- [ ] ABC-123 Summary of ABC-123 ",
+        ));
     assert!(!dir.path().join("jira").exists());
     let out = ft(&dir, &["tasks", "sync", "--format", "json"], true)
         .success()
