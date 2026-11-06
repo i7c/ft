@@ -97,7 +97,7 @@ Tokens SHALL never appear in logs, error messages or `--format json` output. The
 
 Credentials SHALL resolve in this order:
 1. the environment variable `FT_<NAME>_TOKEN` (the source name upper-cased, `-` → `_`);
-2. the source's `token_command` (an argv list, run without a shell, 30 s limit): the first line of its standard output, when it exits successfully. `token_command` SHALL be accepted only from the user config; a vault config that sets it SHALL fail to load with `sources.<name>.token_command is only allowed in the user config`. With `token_command` set, `ft sources login <name>` SHALL verify the command's token and store nothing;
+2. `[credentials.<name>] token_command` (an argv list, run without a shell, 30 s limit): the first line of its standard output, when it exits successfully. The `[credentials]` table SHALL be accepted only from the user config; a vault config that has it SHALL fail to load with `[credentials] is only allowed in the user config`. Entries for sources the vault doesn't define SHALL be ignored. With `token_command` set, `ft sources login <name>` SHALL verify the command's token and store nothing;
 3. for `kind = "github"`, the output of `gh auth token` when `gh` is installed and logged in;
 4. the OS keychain entry with service `ft` and account `<name>:<email>` (jira), `<name>:github` or `<name>:ticktick`, via `keyring`.
 
@@ -108,12 +108,16 @@ A source with no credentials SHALL be reported as `no-credentials` and skipped, 
 - **THEN** the output reports `jira: skipped (no credentials — run ft sources login jira)`, the exit code is 0, and no file is modified
 
 #### Scenario: Token from a password manager
-- **WHEN** the user config sets `[sources.ticktick]\ntoken_command = ["pass", "show", "ft/ticktick"]` and no env token is set
+- **WHEN** the user config sets `[credentials.ticktick]\ntoken_command = ["pass", "show", "ft/ticktick"]` and no env token is set
 - **THEN** the first line of `pass show ft/ticktick` is used as the token, and `ft sources list` shows `command`
 
 #### Scenario: Command in the vault config
-- **WHEN** the vault config sets `token_command` on a source
-- **THEN** config loading fails with `sources.<name>.token_command is only allowed in the user config`
+- **WHEN** the vault config has a `[credentials]` table
+- **THEN** config loading fails with `[credentials] is only allowed in the user config`
+
+#### Scenario: Credentials for another vault's source
+- **WHEN** the user config has `[credentials.ticktick]` and the current vault defines no `ticktick` source
+- **THEN** config loads normally and the entry is ignored
 
 #### Scenario: TickTick token from the keychain
 - **WHEN** source `ticktick` has no env token and the keychain holds `ft` / `ticktick:ticktick`

@@ -463,16 +463,17 @@ Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then the
 source's `token_command`, then `gh auth token` (GitHub sources only), then
 the OS keychain entry stored by `ft sources login <name>`.
 
-`token_command` reads the token from a password manager: ft runs the
-command (an argv list, no shell, 30 s limit) and uses the first line of
-its output. It is accepted **only in the user config**
-(`~/.config/ft/config.toml`), which layers over the vault's source
-section — a vault config is shared, and must not run commands on every
-machine that syncs it.
+`[credentials.<source>] token_command` reads the token from a password
+manager: ft runs the command (an argv list, no shell, 30 s limit) and
+uses the first line of its output. `[credentials]` is accepted **only in
+the user config** (`~/.config/ft/config.toml`) — a vault config is
+shared, and must not run commands on every machine that syncs it.
+Entries for sources the current vault doesn't define are ignored, so one
+user config can hold credentials for several vaults.
 
 ```toml
 # ~/.config/ft/config.toml
-[sources.ticktick]
+[credentials.ticktick]
 token_command = ["pass", "show", "ft/ticktick"]
 # or: ["gopass", "show", "-o", "ft/ticktick"], ["op", "read", "op://Private/TickTick/token"],
 #     ["secret-tool", "lookup", "service", "ticktick"]

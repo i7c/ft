@@ -321,7 +321,7 @@ fn token_command_from_user_config_authenticates() {
     // NOT VALID — test data only. `printf` stands in for `pass show`.
     dir.child(".xdg/ft/config.toml")
         .write_str(
-            "[sources.ticktick]\ntoken_command = [\"printf\", \"FAKE_TEST_cmd\\\\nsecond line\\\\n\"]\n",
+            "[credentials.ticktick]\ntoken_command = [\"printf\", \"FAKE_TEST_cmd\\\\nsecond line\\\\n\"]\n",
         )
         .unwrap();
     let out = ft_with(&dir, &["sources", "list", "--format", "json"], None)
@@ -352,11 +352,11 @@ fn token_command_in_vault_config_is_refused() {
     let (url, _state) = ticktick();
     let dir = vault(&url);
     let mut cfg = read(&dir, ".ft/config.toml");
-    cfg.push_str("token_command = [\"printf\", \"x\"]\n");
+    cfg.push_str("[credentials.ticktick]\ntoken_command = [\"printf\", \"x\"]\n");
     std::fs::write(dir.path().join(".ft/config.toml"), cfg).unwrap();
     ft_with(&dir, &["tasks", "sync"], None)
         .failure()
         .stderr(predicate::str::contains(
-            "sources.ticktick.token_command is only allowed in the user config",
+            "[credentials] is only allowed in the user config",
         ));
 }

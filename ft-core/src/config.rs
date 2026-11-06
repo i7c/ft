@@ -55,6 +55,10 @@ pub struct Config {
     /// [`SourceCfg`].
     #[serde(default)]
     pub sources: std::collections::BTreeMap<String, SourceCfg>,
+    /// Per-source credential settings, keyed by source name. User config
+    /// only; entries for sources this vault doesn't define are ignored.
+    #[serde(default)]
+    pub credentials: std::collections::BTreeMap<String, CredentialCfg>,
     /// User-defined key binding overrides. When `None`, defaults apply.
     /// Vault-level `[keymap]` replaces user-level `[keymap]` whole.
     #[serde(default)]
@@ -166,6 +170,16 @@ pub struct CapturePreset {
     pub folder: Option<String>,
 }
 
+/// `[credentials.<source>]`: how this machine gets a source's token.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialCfg {
+    /// Command (argv, no shell) whose first stdout line is the token, e.g.
+    /// `["pass", "show", "ft/ticktick"]`.
+    #[serde(default)]
+    pub token_command: Option<Vec<String>>,
+}
+
 /// Backend of a remote task source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -190,10 +204,9 @@ pub struct SourceCfg {
     /// Atlassian account email (Jira basic-auth user).
     #[serde(default)]
     pub email: Option<String>,
-    /// Command (argv, no shell) whose first stdout line is the token, e.g.
-    /// `["pass", "show", "ft/ticktick"]`. User config only: a vault config
-    /// that anyone with push access can edit must not run commands.
-    #[serde(default)]
+    /// Filled from `[credentials.<name>]` at load; never read from a
+    /// source section.
+    #[serde(skip)]
     pub token_command: Option<Vec<String>>,
     /// Named JQL / GitHub search / TickTick queries. Empty means the kind's
     /// default query; see [`SourceCfg::effective_queries`].
@@ -289,13 +302,6 @@ impl SourceCfg {
                     "sources.{name}.base_url must use https:// (got `{url}`)"
                 ));
             }
-        }
-        if self
-            .token_command
-            .as_ref()
-            .is_some_and(|c| c.first().is_none_or(|p| p.trim().is_empty()))
-        {
-            return Err(format!("sources.{name}.token_command must name a program"));
         }
         if self.kind != SourceKind::Jira && !self.transitions.is_empty() {
             return Err(format!("sources.{name}.transitions is only valid for jira"));
@@ -694,11 +700,26 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
     // determine which source (if any) defines [keymap] and use it exclusively.
     config.keymap = effective_keymap(user_config, vault_config);
 
-    if let Some(name) = vault_token_command(vault_config) {
+    // A vault config is shared: it must not make every machine that syncs
+    // it run commands.
+    if vault_has_table(vault_config, "credentials") {
         return Err(Error::ConfigInvalid {
             path: vault_config.display().to_string(),
-            message: format!("sources.{name}.token_command is only allowed in the user config"),
+            message: "[credentials] is only allowed in the user config".to_string(),
         });
+    }
+    for (name, cred) in &config.credentials {
+        if let Some(argv) = &cred.token_command {
+            if argv.first().is_none_or(|p| p.trim().is_empty()) {
+                return Err(Error::ConfigInvalid {
+                    path: user_config.display().to_string(),
+                    message: format!("credentials.{name}.token_command must name a program"),
+                });
+            }
+        }
+        if let Some(src) = config.sources.get_mut(name) {
+            src.token_command = cred.token_command.clone();
+        }
     }
     for (name, src) in &config.sources {
         src.validate(name).map_err(|message| Error::ConfigInvalid {
@@ -742,16 +763,12 @@ fn keymap_from_file(path: &Path) -> Option<KeymapConfig> {
     toml::Value::try_into(km_value.clone()).ok()
 }
 
-/// The first source whose `token_command` is set in the vault file itself.
-fn vault_token_command(vault_config: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(vault_config).ok()?;
-    let value: toml::Value = content.parse().ok()?;
-    value
-        .get("sources")?
-        .as_table()?
-        .iter()
-        .find(|(_, src)| src.get("token_command").is_some())
-        .map(|(name, _)| name.clone())
+/// Whether the vault file itself has a top-level `table`.
+fn vault_has_table(vault_config: &Path, table: &str) -> bool {
+    std::fs::read_to_string(vault_config)
+        .ok()
+        .and_then(|c| c.parse::<toml::Value>().ok())
+        .is_some_and(|v| v.get(table).is_some())
 }
 
 /// Vault replaces user whole: use vault's keymap if it defines one,
@@ -1739,32 +1756,43 @@ unknown_key = "oops"
         vault
             .write_str("[sources.ticktick]\nkind = \"ticktick\"\n")
             .unwrap();
+        // `other` isn't a source of this vault: ignored, not an error.
         user.write_str(
-            "[sources.ticktick]\ntoken_command = [\"pass\", \"show\", \"ft/ticktick\"]\n",
+            "[credentials.ticktick]\ntoken_command = [\"pass\", \"show\", \"ft/ticktick\"]\n[credentials.other]\ntoken_command = [\"pass\", \"show\", \"x\"]\n",
         )
         .unwrap();
         let lc = load(user.path(), vault.path()).unwrap();
-        let src = &lc.config.sources["ticktick"];
         assert_eq!(
-            src.kind,
-            SourceKind::Ticktick,
-            "merged over the vault section"
-        );
-        assert_eq!(
-            src.token_command.as_deref().unwrap(),
+            lc.config.sources["ticktick"]
+                .token_command
+                .as_deref()
+                .unwrap(),
             ["pass", "show", "ft/ticktick"]
         );
+        assert_eq!(lc.config.sources.len(), 1);
+        // A vault without sources loads fine with the same user config.
+        let plain = tmp.child("plain.toml");
+        plain.write_str("").unwrap();
+        assert!(load(user.path(), plain.path())
+            .unwrap()
+            .config
+            .sources
+            .is_empty());
 
-        let err = load_vault_toml(
-            "[sources.ticktick]\nkind = \"ticktick\"\ntoken_command = [\"sh\", \"-c\", \"x\"]\n",
-        )
-        .unwrap_err()
-        .to_string();
+        let err =
+            load_vault_toml("[credentials.ticktick]\ntoken_command = [\"sh\", \"-c\", \"x\"]\n")
+                .unwrap_err()
+                .to_string();
         assert!(
-            err.contains("sources.ticktick.token_command is only allowed in the user config"),
+            err.contains("[credentials] is only allowed in the user config"),
             "{err}"
         );
-        user.write_str("[sources.ticktick]\ntoken_command = []\n")
+        // Not settable through a source section either.
+        assert!(load_vault_toml(
+            "[sources.ticktick]\nkind = \"ticktick\"\ntoken_command = [\"sh\"]\n"
+        )
+        .is_err());
+        user.write_str("[credentials.ticktick]\ntoken_command = []\n")
             .unwrap();
         let err = load(user.path(), vault.path()).unwrap_err().to_string();
         assert!(err.contains("token_command must name a program"), "{err}");
