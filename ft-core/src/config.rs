@@ -190,6 +190,11 @@ pub struct SourceCfg {
     /// Atlassian account email (Jira basic-auth user).
     #[serde(default)]
     pub email: Option<String>,
+    /// Command (argv, no shell) whose first stdout line is the token, e.g.
+    /// `["pass", "show", "ft/ticktick"]`. User config only: a vault config
+    /// that anyone with push access can edit must not run commands.
+    #[serde(default)]
+    pub token_command: Option<Vec<String>>,
     /// Named JQL / GitHub search / TickTick queries. Empty means the kind's
     /// default query; see [`SourceCfg::effective_queries`].
     #[serde(default)]
@@ -284,6 +289,13 @@ impl SourceCfg {
                     "sources.{name}.base_url must use https:// (got `{url}`)"
                 ));
             }
+        }
+        if self
+            .token_command
+            .as_ref()
+            .is_some_and(|c| c.first().is_none_or(|p| p.trim().is_empty()))
+        {
+            return Err(format!("sources.{name}.token_command must name a program"));
         }
         if self.kind != SourceKind::Jira && !self.transitions.is_empty() {
             return Err(format!("sources.{name}.transitions is only valid for jira"));
@@ -682,6 +694,12 @@ pub fn load(user_config: &Path, vault_config: &Path) -> Result<LayeredConfig> {
     // determine which source (if any) defines [keymap] and use it exclusively.
     config.keymap = effective_keymap(user_config, vault_config);
 
+    if let Some(name) = vault_token_command(vault_config) {
+        return Err(Error::ConfigInvalid {
+            path: vault_config.display().to_string(),
+            message: format!("sources.{name}.token_command is only allowed in the user config"),
+        });
+    }
     for (name, src) in &config.sources {
         src.validate(name).map_err(|message| Error::ConfigInvalid {
             path: vault_config.display().to_string(),
@@ -722,6 +740,18 @@ fn keymap_from_file(path: &Path) -> Option<KeymapConfig> {
     let value: toml::Value = content.parse().ok()?;
     let km_value = value.get("keymap")?;
     toml::Value::try_into(km_value.clone()).ok()
+}
+
+/// The first source whose `token_command` is set in the vault file itself.
+fn vault_token_command(vault_config: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(vault_config).ok()?;
+    let value: toml::Value = content.parse().ok()?;
+    value
+        .get("sources")?
+        .as_table()?
+        .iter()
+        .find(|(_, src)| src.get("token_command").is_some())
+        .map(|(name, _)| name.clone())
 }
 
 /// Vault replaces user whole: use vault's keymap if it defines one,
@@ -1699,6 +1729,45 @@ unknown_key = "oops"
         assert_eq!(src.effective_base_url(), "https://api.ticktick.com");
         let lc = load_vault_toml("[sources.tt]\nkind = \"ticktick\"\ncomments = 3\n").unwrap();
         assert_eq!(lc.config.sources["tt"].effective_comments(), 3);
+    }
+
+    #[test]
+    fn token_command_only_in_user_config() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str("[sources.ticktick]\nkind = \"ticktick\"\n")
+            .unwrap();
+        user.write_str(
+            "[sources.ticktick]\ntoken_command = [\"pass\", \"show\", \"ft/ticktick\"]\n",
+        )
+        .unwrap();
+        let lc = load(user.path(), vault.path()).unwrap();
+        let src = &lc.config.sources["ticktick"];
+        assert_eq!(
+            src.kind,
+            SourceKind::Ticktick,
+            "merged over the vault section"
+        );
+        assert_eq!(
+            src.token_command.as_deref().unwrap(),
+            ["pass", "show", "ft/ticktick"]
+        );
+
+        let err = load_vault_toml(
+            "[sources.ticktick]\nkind = \"ticktick\"\ntoken_command = [\"sh\", \"-c\", \"x\"]\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("sources.ticktick.token_command is only allowed in the user config"),
+            "{err}"
+        );
+        user.write_str("[sources.ticktick]\ntoken_command = []\n")
+            .unwrap();
+        let err = load(user.path(), vault.path()).unwrap_err().to_string();
+        assert!(err.contains("token_command must name a program"), "{err}");
     }
 
     #[test]

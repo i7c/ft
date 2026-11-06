@@ -21,7 +21,8 @@ pub struct SourcesArgs {
 #[derive(Subcommand)]
 pub enum SourcesCommand {
     /// Store a source's API token in the OS keychain (verified first).
-    /// Reads the token from stdin when it isn't a terminal.
+    /// Reads the token from stdin when it isn't a terminal. With a
+    /// `token_command` configured, only verifies that command's token.
     Login {
         /// Source name (`[sources.<name>]`).
         name: String,
@@ -75,6 +76,16 @@ fn source_cfg<'a>(vault: &'a Vault, name: &str) -> Result<&'a SourceCfg> {
 
 fn login(vault: &Vault, name: &str) -> Result<ExitCode> {
     let cfg = source_cfg(vault, name)?;
+    if let Some(argv) = &cfg.token_command {
+        // The token lives in the command's store; only check that it works.
+        let token = credentials::token_command(argv)
+            .and_then(|out| out.lines().next().map(|l| l.trim().to_string()))
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| anyhow!("token_command for {name} (`{}`) produced no token", argv[0]))?;
+        let who = verify(cfg, name, &Secret::new(token))?;
+        println!("{name}: token_command works, authenticated as {who} (nothing stored)");
+        return Ok(ExitCode::SUCCESS);
+    }
     let token = if std::io::stdin().is_terminal() {
         dialoguer::Password::new()
             .with_prompt(format!("API token for {name}"))
@@ -91,17 +102,22 @@ fn login(vault: &Vault, name: &str) -> Result<ExitCode> {
     if token.expose().is_empty() {
         return Err(anyhow!("empty token"));
     }
+    let who = verify(cfg, name, &token)?;
+    credentials::keychain_store(name, cfg, &token).map_err(|e| anyhow!(e))?;
+    println!("Logged in to {name} as {who} (token stored in the keychain)");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Who `token` authenticates as, or why it doesn't.
+fn verify(cfg: &SourceCfg, name: &str, token: &Secret) -> Result<String> {
     let target = cfg.effective_base_url();
-    let who = run::verify_token(cfg, &token).map_err(|f| match f {
+    run::verify_token(cfg, token).map_err(|f| match f {
         run::FetchFailure::Unauthorized(code) => anyhow!("token rejected by {target} ({code})"),
         other => anyhow!(
             "could not verify the token against {target}: {}",
             other.message(name)
         ),
-    })?;
-    credentials::keychain_store(name, cfg, &token).map_err(|e| anyhow!(e))?;
-    println!("Logged in to {name} as {who} (token stored in the keychain)");
-    Ok(ExitCode::SUCCESS)
+    })
 }
 
 fn list(vault: &Vault, format: MoveFormat) -> Result<ExitCode> {

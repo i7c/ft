@@ -1,4 +1,5 @@
-//! Where a source's token comes from: `FT_<NAME>_TOKEN`, then (GitHub only)
+//! Where a source's token comes from: `FT_<NAME>_TOKEN`, then the source's
+//! `token_command` (user config; e.g. `pass show …`), then (GitHub only)
 //! `gh auth token`, then the OS keychain (service `ft`, account
 //! `<name>:<email>`, `<name>:github` or `<name>:ticktick`). No token is a normal state — the source is
 //! skipped.
@@ -14,6 +15,7 @@ const KEYCHAIN_SERVICE: &str = "ft";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredOrigin {
     Env,
+    Command,
     Gh,
     Keychain,
 }
@@ -22,6 +24,7 @@ impl CredOrigin {
     pub fn as_str(self) -> &'static str {
         match self {
             CredOrigin::Env => "env",
+            CredOrigin::Command => "command",
             CredOrigin::Gh => "gh",
             CredOrigin::Keychain => "keychain",
         }
@@ -49,6 +52,7 @@ pub fn resolve(name: &str, cfg: &SourceCfg) -> Option<(Secret, CredOrigin)> {
         name,
         cfg,
         |var| std::env::var(var).ok(),
+        token_command,
         gh_auth_token,
         keychain_get,
     )
@@ -59,12 +63,19 @@ pub fn resolve_with(
     name: &str,
     cfg: &SourceCfg,
     env: impl Fn(&str) -> Option<String>,
+    command: impl Fn(&[String]) -> Option<String>,
     gh: impl Fn() -> Option<String>,
     keychain: impl Fn(&str) -> Option<String>,
 ) -> Option<(Secret, CredOrigin)> {
     let non_empty = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_string());
     if let Some(t) = env(&env_var_name(name)).and_then(non_empty) {
         return Some((Secret::new(t), CredOrigin::Env));
+    }
+    if let Some(argv) = &cfg.token_command {
+        let first_line = |s: String| s.lines().next().map(str::to_string);
+        if let Some(t) = command(argv).and_then(first_line).and_then(non_empty) {
+            return Some((Secret::new(t), CredOrigin::Command));
+        }
     }
     if cfg.kind == SourceKind::Github {
         if let Some(t) = gh().and_then(non_empty) {
@@ -102,14 +113,34 @@ pub fn keychain_delete(name: &str, cfg: &SourceCfg) -> Result<(), String> {
 
 /// `gh auth token`, if `gh` is installed and logged in (5 s cap).
 fn gh_auth_token() -> Option<String> {
-    let mut child = Command::new("gh")
-        .args(["auth", "token"])
+    capture(
+        &["gh".to_string(), "auth".into(), "token".into()],
+        Duration::from_secs(5),
+    )
+}
+
+/// A source's `token_command`. The 30 s cap leaves room for a gpg pinentry
+/// prompt; failures are logged without the command's output.
+pub fn token_command(argv: &[String]) -> Option<String> {
+    let out = capture(argv, Duration::from_secs(30));
+    if out.is_none() {
+        tracing::warn!(program = %argv[0], "token_command failed or timed out");
+    }
+    out
+}
+
+/// Stdout of `argv` if it exits successfully within `limit`. No shell, and
+/// stderr is dropped so nothing leaks into the TUI.
+fn capture(argv: &[String], limit: Duration) -> Option<String> {
+    let (program, args) = argv.split_first()?;
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + limit;
     loop {
         match child.try_wait().ok()? {
             Some(status) if status.success() => break,
@@ -144,28 +175,79 @@ mod tests {
     }
 
     #[test]
-    fn precedence_env_then_gh_then_keychain() {
+    fn precedence_env_then_command_then_gh_then_keychain() {
         // NOT VALID — test data only.
         let env = |v: &str| (v == "FT_GH_TOKEN").then(|| "FAKE_TEST_env".to_string());
+        let no_cmd = |_: &[String]| None;
         let gh = || Some("FAKE_TEST_gh".to_string());
         let kc = |_: &str| Some("FAKE_TEST_kc".to_string());
-        let (s, o) = resolve_with("gh", &cfg("github"), env, gh, kc).unwrap();
+        let (s, o) = resolve_with("gh", &cfg("github"), env, no_cmd, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_env", CredOrigin::Env));
-        let (s, o) = resolve_with("gh", &cfg("github"), |_| None, gh, kc).unwrap();
+        let (s, o) = resolve_with("gh", &cfg("github"), |_| None, no_cmd, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_gh", CredOrigin::Gh));
         // Jira and TickTick never ask gh.
-        let (s, o) = resolve_with("jira", &cfg("jira"), |_| None, gh, kc).unwrap();
+        let (s, o) = resolve_with("jira", &cfg("jira"), |_| None, no_cmd, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_kc", CredOrigin::Keychain));
-        let (s, o) = resolve_with("tt", &cfg("ticktick"), |_| None, gh, kc).unwrap();
+        let (s, o) = resolve_with("tt", &cfg("ticktick"), |_| None, no_cmd, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_kc", CredOrigin::Keychain));
         assert!(resolve_with(
             "jira",
             &cfg("jira"),
             |_| Some("  ".into()),
+            no_cmd,
             || None,
             |_| None
         )
         .is_none());
+    }
+
+    #[test]
+    fn token_command_after_env_before_gh_and_keychain() {
+        // NOT VALID — test data only.
+        let mut c = cfg("github");
+        c.token_command = Some(vec!["pass".into(), "show".into(), "ft/gh".into()]);
+        let cmd = |argv: &[String]| {
+            assert_eq!(argv, ["pass", "show", "ft/gh"]);
+            Some("FAKE_TEST_cmd\nurl: https://example.test\n".to_string())
+        };
+        let gh = || Some("FAKE_TEST_gh".to_string());
+        let kc = |_: &str| Some("FAKE_TEST_kc".to_string());
+        let (s, o) = resolve_with("gh", &c, |_| None, cmd, gh, kc).unwrap();
+        assert_eq!(
+            (s.expose(), o),
+            ("FAKE_TEST_cmd", CredOrigin::Command),
+            "first line only"
+        );
+        let env = |_: &str| Some("FAKE_TEST_env".to_string());
+        let (_, o) = resolve_with("gh", &c, env, cmd, gh, kc).unwrap();
+        assert_eq!(o, CredOrigin::Env);
+        // A failing or empty command falls through.
+        let (_, o) = resolve_with("gh", &c, |_| None, |_| None, gh, kc).unwrap();
+        assert_eq!(o, CredOrigin::Gh);
+        let (_, o) = resolve_with("gh", &c, |_| None, |_| Some("\n".into()), || None, kc).unwrap();
+        assert_eq!(o, CredOrigin::Keychain);
+    }
+
+    #[test]
+    fn capture_runs_without_a_shell() {
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            capture(
+                &argv(&["printf", "%s\\n", "FAKE_TEST $HOME"]),
+                Duration::from_secs(5)
+            )
+            .as_deref(),
+            Some("FAKE_TEST $HOME\n")
+        );
+        assert_eq!(capture(&argv(&["false"]), Duration::from_secs(5)), None);
+        assert_eq!(
+            capture(&argv(&["ft-no-such-program-x"]), Duration::from_secs(5)),
+            None
+        );
+        assert_eq!(
+            capture(&argv(&["sleep", "5"]), Duration::from_millis(100)),
+            None
+        );
     }
 
     #[test]

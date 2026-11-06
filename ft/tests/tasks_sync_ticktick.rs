@@ -21,6 +21,8 @@ struct State {
     /// task id → due date (ISO day); recurring tasks advance on complete
     due: std::collections::HashMap<String, String>,
     log: Vec<String>,
+    /// `Authorization` header of every request
+    auth: Vec<String>,
 }
 
 fn task(id: &str, status: i64, parent: Option<&str>, due: &str) -> Value {
@@ -86,6 +88,21 @@ fn ticktick() -> (String, Arc<Mutex<State>>) {
             let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
             let mut s = shared.lock().unwrap();
             s.log.push(format!("{method} {path}"));
+            let auth = req
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    k.eq_ignore_ascii_case("authorization")
+                        .then(|| v.trim().to_string())
+                })
+                .unwrap_or_default();
+            s.auth.push(auth.clone());
+            if !auth.starts_with("Bearer FAKE_TEST_") {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 X\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                );
+                continue;
+            }
             let parent_of = |id: &str| (id == CHILD).then_some(PARENT);
             let body = match (method, path) {
                 ("GET", "/open/v1/project") => {
@@ -155,10 +172,24 @@ fn vault(base_url: &str) -> assert_fs::TempDir {
 }
 
 fn ft(dir: &assert_fs::TempDir, args: &[&str]) -> assert_cmd::assert::Assert {
-    let mut cmd = Command::cargo_bin("ft").unwrap();
     // NOT VALID — test data only.
+    ft_with(dir, args, Some("FAKE_TEST_token"))
+}
+
+/// `ft` with the user config under `<vault>/.xdg` (absent unless a test
+/// writes it), and `FT_TICKTICK_TOKEN` only when `env_token` is given.
+fn ft_with(
+    dir: &assert_fs::TempDir,
+    args: &[&str],
+    env_token: Option<&str>,
+) -> assert_cmd::assert::Assert {
+    let mut cmd = Command::cargo_bin("ft").unwrap();
     cmd.env("FT_TODAY", "2026-11-06")
-        .env("FT_TICKTICK_TOKEN", "FAKE_TEST_token");
+        .env("XDG_CONFIG_HOME", dir.path().join(".xdg"))
+        .env_remove("FT_TICKTICK_TOKEN");
+    if let Some(t) = env_token {
+        cmd.env("FT_TICKTICK_TOKEN", t);
+    }
     let mut full = vec!["--vault", dir.path().to_str().unwrap()];
     full.extend(args);
     cmd.args(&full).assert()
@@ -281,4 +312,51 @@ fn completing_a_recurring_task_reopens_with_the_next_due_date() {
     ft(&dir, &["tasks", "sync"])
         .success()
         .stdout("ticktick: 0 new · 0 updated · 0 pending push · 0 conflicts\n");
+}
+
+#[test]
+fn token_command_from_user_config_authenticates() {
+    let (url, state) = ticktick();
+    let dir = vault(&url);
+    // NOT VALID — test data only. `printf` stands in for `pass show`.
+    dir.child(".xdg/ft/config.toml")
+        .write_str(
+            "[sources.ticktick]\ntoken_command = [\"printf\", \"FAKE_TEST_cmd\\\\nsecond line\\\\n\"]\n",
+        )
+        .unwrap();
+    let out = ft_with(&dir, &["sources", "list", "--format", "json"], None)
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(rows[0]["credentials"], "command");
+    ft_with(&dir, &["sources", "login", "ticktick"], None)
+        .success()
+        .stdout(
+            predicate::str::contains("token_command works")
+                .and(predicate::str::contains("nothing stored")),
+        );
+    ft_with(&dir, &["tasks", "sync"], None)
+        .success()
+        .stdout(predicate::str::contains("ticktick: 2 new"));
+    let auth = &state.lock().unwrap().auth;
+    assert!(
+        !auth.is_empty() && auth.iter().all(|a| a == "Bearer FAKE_TEST_cmd"),
+        "{auth:?}"
+    );
+}
+
+#[test]
+fn token_command_in_vault_config_is_refused() {
+    let (url, _state) = ticktick();
+    let dir = vault(&url);
+    let mut cfg = read(&dir, ".ft/config.toml");
+    cfg.push_str("token_command = [\"printf\", \"x\"]\n");
+    std::fs::write(dir.path().join(".ft/config.toml"), cfg).unwrap();
+    ft_with(&dir, &["tasks", "sync"], None)
+        .failure()
+        .stderr(predicate::str::contains(
+            "sources.ticktick.token_command is only allowed in the user config",
+        ));
 }

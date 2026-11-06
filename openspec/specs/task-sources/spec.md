@@ -97,14 +97,23 @@ Tokens SHALL never appear in logs, error messages or `--format json` output. The
 
 Credentials SHALL resolve in this order:
 1. the environment variable `FT_<NAME>_TOKEN` (the source name upper-cased, `-` → `_`);
-2. for `kind = "github"`, the output of `gh auth token` when `gh` is installed and logged in;
-3. the OS keychain entry with service `ft` and account `<name>:<email>` (jira), `<name>:github` or `<name>:ticktick`, via `keyring`.
+2. the source's `token_command` (an argv list, run without a shell, 30 s limit): the first line of its standard output, when it exits successfully. `token_command` SHALL be accepted only from the user config; a vault config that sets it SHALL fail to load with `sources.<name>.token_command is only allowed in the user config`. With `token_command` set, `ft sources login <name>` SHALL verify the command's token and store nothing;
+3. for `kind = "github"`, the output of `gh auth token` when `gh` is installed and logged in;
+4. the OS keychain entry with service `ft` and account `<name>:<email>` (jira), `<name>:github` or `<name>:ticktick`, via `keyring`.
 
 A source with no credentials SHALL be reported as `no-credentials` and skipped, without error. This is the normal state on machines that cannot reach Jira.
 
 #### Scenario: Machine without Jira access
 - **WHEN** no token is configured for `jira` and the user runs `ft tasks sync`
 - **THEN** the output reports `jira: skipped (no credentials — run ft sources login jira)`, the exit code is 0, and no file is modified
+
+#### Scenario: Token from a password manager
+- **WHEN** the user config sets `[sources.ticktick]\ntoken_command = ["pass", "show", "ft/ticktick"]` and no env token is set
+- **THEN** the first line of `pass show ft/ticktick` is used as the token, and `ft sources list` shows `command`
+
+#### Scenario: Command in the vault config
+- **WHEN** the vault config sets `token_command` on a source
+- **THEN** config loading fails with `sources.<name>.token_command is only allowed in the user config`
 
 #### Scenario: TickTick token from the keychain
 - **WHEN** source `ticktick` has no env token and the keychain holds `ft` / `ticktick:ticktick`
@@ -115,7 +124,7 @@ A source with no credentials SHALL be reported as `no-credentials` and skipped, 
 The CLI SHALL provide:
 - `ft sources login <name>`: prompt for the token without echoing it, verify it with one authenticated request, then store it in the keychain. The request is the current-user endpoint for Jira and GitHub, and the project list (`GET /open/v1/project`) for TickTick. A failed verification stores nothing.
 - `ft sources logout <name>`: delete the keychain entry.
-- `ft sources list [--format json]`: per configured source, show name, kind, base URL, where the credentials come from (`env` / `gh` / `keychain` / `none`), and the last local sync time.
+- `ft sources list [--format json]`: per configured source, show name, kind, base URL, where the credentials come from (`env` / `command` / `gh` / `keychain` / `none`), and the last local sync time.
 
 Last sync times are informational, machine-local, and kept in `.ft/cache/sources.json`.
 

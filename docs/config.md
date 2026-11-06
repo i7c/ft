@@ -459,9 +459,30 @@ work = "list:Work -list:Shopping tag:ft priority:high"
 | `push` | `true` | Push local status changes on every sync, and allow `ft tasks promote`. `false` makes the source read-only |
 | `transitions` | `{}` | Jira only: local status → workflow transition name, overriding the automatic choice. `Cancelled` is only pushed when set here (e.g. `Cancelled = "Won't Do"`) |
 
-Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then
-`gh auth token` (GitHub sources only), then the OS keychain entry stored
-by `ft sources login <name>`.
+Credentials come from `FT_<NAME>_TOKEN` (e.g. `FT_JIRA_TOKEN`), then the
+source's `token_command`, then `gh auth token` (GitHub sources only), then
+the OS keychain entry stored by `ft sources login <name>`.
+
+`token_command` reads the token from a password manager: ft runs the
+command (an argv list, no shell, 30 s limit) and uses the first line of
+its output. It is accepted **only in the user config**
+(`~/.config/ft/config.toml`), which layers over the vault's source
+section — a vault config is shared, and must not run commands on every
+machine that syncs it.
+
+```toml
+# ~/.config/ft/config.toml
+[sources.ticktick]
+token_command = ["pass", "show", "ft/ticktick"]
+# or: ["gopass", "show", "-o", "ft/ticktick"], ["op", "read", "op://Private/TickTick/token"],
+#     ["secret-tool", "lookup", "service", "ticktick"]
+```
+
+With `token_command` set, `ft sources login <name>` only verifies the
+command's token; storing it is the password manager's job
+(`pass insert ft/ticktick`). This is also the way to go on Linux machines
+without a Secret Service provider (gnome-keyring, KeePassXC…), where the
+keychain is unavailable.
 
 ### TickTick
 
