@@ -32,13 +32,15 @@
 
 - [x] 3.1 Read-only: run `ft tasks sync --source ticktick --dry-run` against the real account and check the notes, dates, columns and parents. Record the outcome here, without task content. Result (2026-11-06, `--no-push` into a scratch vault): 13 notes from 2 lists + empty inbox, all anchors well-formed with project-carrying URLs; rerun 0 new / 0 updated; 2 subtasks nest under their parent in `tasks list remote --tree`; 9 open tasks carry a kanban column as status name; the one all-day due date (São Paulo) lands on the right day.
 - [ ] 3.2 Confirm the web-app task URL format in a browser, and adjust the URL builder and parser if it differs.
-- [ ] 3.3 With consent, on a throwaway task in a scratch list:
+- [x] 3.3 With consent, on a throwaway task in a scratch list:
   - (a) set `status` -1 and then 0 via update;
   - (b) create with `parentId`;
   - (c) complete a recurring task and observe the result;
   - delete the scratch task and list afterwards.
 
   Adjust push and promote (or downgrade them to `NotPushable`) per the result, and record the findings in design.md.
+
+  Result: (a), (b) and the `{}`-body complete all work as implemented. (c) advances the same id, which exposed a re-push loop, fixed via `SyncCtx::pushed` (remote wins for keys pushed this run). A reopened task keeps a stale `completedTime`, now ignored while open. Scratch list deleted and verified gone.
 
 ## 4. Integration, docs, invariants
 

@@ -67,9 +67,9 @@ impl SourcesJob {
                         cfg,
                         format: self.vault.task_format(),
                         today: self.today,
+                        pushed: &o.push.pushed,
                     };
                     let mut plan = sync::plan_sync(&ctx, &o.fetched);
-                    plan.report.pushed = o.push.pushed;
                     plan.report.push_failures = o.push.failures;
                     plan
                 });

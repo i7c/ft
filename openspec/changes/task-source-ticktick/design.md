@@ -39,13 +39,26 @@ What the probes verified, beyond the docs:
 - A 401 body echoes the submitted token verbatim
   (`"Invalid access token: <token>"`).
 
-Not verified (would need writes or a larger account):
+Write test (2026-11-06, a scratch list holding a throwaway and a recurring
+task, deleted afterwards):
 
-- status changes through the update endpoint;
-- `parentId` on create;
-- completing a recurring task via the API;
-- whether `exceed_query_limit` arrives as HTTP 500. That is
-  community-reported: about 200 requests/min per IP.
+- `POST /task/{id}` with the whole task and `status: -1` sets Won't Do;
+  `status: 0` reopens. Due date, tags and priority survive the update.
+- `POST …/complete` with a `{}` body completes the task. The response
+  body is empty.
+- A reopened task keeps its old `completedTime`, so the resolution date
+  is only read when `status != 0`.
+- `parentId` on create is honoured, and the parent's `childIds` updates.
+- Completing a recurring task keeps its id: the task stays `status: 0`
+  and its due and start dates move to the next occurrence. The completed
+  occurrence is a new task with a new id and no `repeatFlag`. Without a
+  rule for this, the planner would see local Done, base Open and remote
+  Open, mark the task pending, and re-complete it on every sync. So the
+  planner now lets the remote status win for keys pushed in the same run
+  (`SyncCtx::pushed`; see the `task-source-push` delta).
+
+Still unverified: whether `exceed_query_limit` arrives as HTTP 500. That is
+community-reported, at about 200 requests/min per IP.
 
 ## Goals / Non-Goals
 
@@ -142,17 +155,11 @@ dump.
 
 ## Risks / Trade-offs
 
-- [Status update via `POST /task/{id}` might ignore `status`] → An
-  implementation task verifies it against a scratch task (with the user's
-  consent). If it is ignored, Cancelled and reopen pushes become
-  `NotPushable` with a clear reason, and Done still works.
-- [`parentId` on create might be ignored] → Promote falls back to a
-  follow-up update, then fails cleanly. Verified in the same scratch-task
-  test.
-- [Recurring tasks: completing one advances it rather than closing it] →
-  The spec accepts the remote's answer on refresh. The anchor reopens with
-  the next due date, and no conflict is raised. Verify the API's behaviour
-  in the scratch test.
+- [Recurring tasks advance rather than close (verified)] → The planner
+  takes the remote's answer for keys pushed in the same run. The anchor
+  reopens with the next due date, with no conflict and no re-push. The
+  completed occurrence (a new id) never enters the vault, because only
+  open tasks are in scope.
 - [The web-app URL format is unverified] → The URL needs no special form
   for lookups, only parsing back. Pick the format the web app uses
   (`https://ticktick.com/webapp/#p/<projectId>/tasks/<taskId>`), confirm in

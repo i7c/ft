@@ -566,7 +566,10 @@ pub fn map_task(
             _ => None,
         },
         due: local_date(raw["dueDate"].as_str(), zone),
-        resolved: local_date(raw["completedTime"].as_str(), zone),
+        // A reopened task keeps its old `completedTime`.
+        resolved: (raw["status"].as_i64().unwrap_or(0) != 0)
+            .then(|| local_date(raw["completedTime"].as_str(), zone))
+            .flatten(),
         assignee: raw["assigneeUsername"]
             .as_str()
             .filter(|a| !a.is_empty())
@@ -749,6 +752,13 @@ mod tests {
         assert_eq!(i.due, NaiveDate::from_ymd_opt(2026, 11, 4), "UTC fallback");
         assert_eq!(i.updated, "x9");
         assert_eq!(i.status_name, "wont-do");
+        let reopened = task(
+            "r",
+            P_WORK,
+            json!({"completedTime": "2026-11-06T01:55:12.728+0000"}),
+        );
+        let reopened = map_task(&reopened, &BTreeMap::new(), &url_of).unwrap();
+        assert_eq!(reopened.resolved, None, "stale completedTime ignored");
         let open = map_task(&task("c", P_WORK, json!({})), &BTreeMap::new(), &url_of).unwrap();
         assert_eq!(
             (open.status_name.as_str(), open.status),

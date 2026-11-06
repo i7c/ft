@@ -71,6 +71,10 @@ pub struct SyncCtx<'a> {
     pub format: &'a dyn TaskFormat,
     /// Fallback date for `✅` / `❌` when the remote has none.
     pub today: NaiveDate,
+    /// Keys whose status was pushed just before this fetch. Their remote
+    /// status wins: the remote has seen the local change, and may have
+    /// answered differently (a recurring task advances instead of closing).
+    pub pushed: &'a [String],
 }
 
 /// An existing issue note of this source, from the scan.
@@ -177,7 +181,10 @@ fn target_status(issue: &RemoteIssue, state: &str) -> Status {
 /// Plan one source's sync.
 pub fn plan_sync(ctx: &SyncCtx<'_>, fetched: &FetchResult) -> SyncPlan {
     let (known, mut warnings) = index_notes(ctx.scan, ctx.source);
-    let mut report = SyncReport::default();
+    let mut report = SyncReport {
+        pushed: ctx.pushed.to_vec(),
+        ..Default::default()
+    };
     let folder = ctx.cfg.folder_or(ctx.source);
 
     let all: Vec<(&RemoteIssue, &str)> = fetched
@@ -282,7 +289,12 @@ fn update_note(
     };
     let remote = target_status(issue, state);
     let local_status = local.as_ref().map(|(_, t)| t.status);
-    let (status, synced, conflict) = match decide(local_status, base, remote) {
+    let decision = if ctx.pushed.contains(&issue.key) {
+        StatusDecision::Write(remote)
+    } else {
+        decide(local_status, base, remote)
+    };
+    let (status, synced, conflict) = match decision {
         StatusDecision::Write(s) => (s, s, None),
         StatusDecision::Keep { pending, conflict } => {
             let l = local_status.unwrap_or(remote);
@@ -613,6 +625,9 @@ mod tests {
             crate::scan::scan_vault(self.dir.path(), &[])
         }
         fn sync(&self, fetched: &FetchResult) -> SyncReport {
+            self.sync_pushed(fetched, &[])
+        }
+        fn sync_pushed(&self, fetched: &FetchResult, pushed: &[String]) -> SyncReport {
             let scan = self.scan();
             let tdir = self.dir.path().join("templates-ft");
             let ctx = SyncCtx {
@@ -623,6 +638,7 @@ mod tests {
                 cfg: &self.cfg,
                 format: &EmojiFormat,
                 today: NaiveDate::from_ymd_opt(2026, 10, 21).unwrap(),
+                pushed,
             };
             let plan = plan_sync(&ctx, fetched);
             apply_sync_plan(&plan).unwrap();
@@ -745,6 +761,26 @@ looks good
         ), "{after}");
         assert!(after.contains("    status: Code Review\n"));
         assert!(after.ends_with("## My notes\n\n- [ ] local subtask [[ABC-123]]\n"));
+    }
+
+    #[test]
+    fn pushed_key_takes_the_remote_answer() {
+        // A recurring task: completing it advances it, so the remote stays
+        // where it was. Without the pushed rule this re-pends forever.
+        let v = V::new();
+        v.sync(&active(vec![issue("ABC-123")]));
+        let ticked = v
+            .read("jira/ABC-123.md")
+            .replace("- [/] [ABC-123]", "- [x] [ABC-123]");
+        v.write("jira/ABC-123.md", &ticked);
+        let r = v.sync_pushed(&active(vec![issue("ABC-123")]), &["ABC-123".to_string()]);
+        assert!(r.pending.is_empty() && r.conflicts.is_empty(), "{r:?}");
+        assert_eq!(r.pushed, ["ABC-123"]);
+        let n = v.read("jira/ABC-123.md");
+        assert!(
+            n.contains("- [/] [ABC-123]") && n.contains("      status: InProgress\n"),
+            "{n}"
+        );
     }
 
     #[test]

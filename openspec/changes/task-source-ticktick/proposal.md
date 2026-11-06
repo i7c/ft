@@ -50,6 +50,10 @@ TickTick backend fits the existing source model without an OAuth flow.
   account. The HTTP policy gains `exceed_query_limit` → `RateLimited` and
   token scrubbing of error excerpts. `ft sources login` gains its TickTick
   verification request.
+- `task-source-push`: for an issue pushed in this sync, the refreshed
+  remote status wins, even when it differs from the target. A recurring
+  TickTick task advances on completion, and without this it would
+  re-push forever.
 
 ## Impact
 
@@ -58,8 +62,9 @@ TickTick backend fits the existing source model without an OAuth flow.
   - `ft-core/src/config.rs` (`SourceKind::Ticktick`, `comments` default,
     validation);
   - `ft-core/src/sources/{credentials,run,http}.rs`.
-  - No changes to the sync, push and promote planners or to the TUI; they
-    are backend-neutral already.
+  - `sources/sync.rs`: `SyncCtx::pushed`, so the remote wins for keys
+    pushed in this run; its four construction sites (CLI, TUI, promote,
+    tests) pass it. Otherwise the planners and the TUI are unchanged.
 - **Dependencies:** `chrono-tz` (pure Rust; keeps `scripts/check-no-cpp.sh`
   clean).
 - **Docs:** `docs/config.md` sources section.

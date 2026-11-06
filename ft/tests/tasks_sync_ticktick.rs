@@ -12,19 +12,23 @@ use serde_json::{json, Value};
 const PROJECT: &str = "6aec746604183a21c6cf0001";
 const PARENT: &str = "6aec746604183a21c6cffe41";
 const CHILD: &str = "6aec746604183a21c6cffe42";
+const RECURRING: &str = "6aec746604183a21c6cffe50";
 
 #[derive(Default)]
 struct State {
     /// task id → status code
     status: std::collections::HashMap<String, i64>,
+    /// task id → due date (ISO day); recurring tasks advance on complete
+    due: std::collections::HashMap<String, String>,
     log: Vec<String>,
 }
 
-fn task(id: &str, status: i64, parent: Option<&str>) -> Value {
+fn task(id: &str, status: i64, parent: Option<&str>, due: &str) -> Value {
     json!({
         "id": id, "projectId": PROJECT, "title": format!("Task {}", &id[20..]),
         "content": "", "timeZone": "America/Sao_Paulo", "isAllDay": true,
-        "dueDate": "2026-11-05T03:00:00.000+0000", "priority": 5, "status": status,
+        "dueDate": format!("{due}T03:00:00.000+0000"),
+        "repeatFlag": if id == RECURRING { "RRULE:FREQ=DAILY;INTERVAL=1" } else { "" }, "priority": 5, "status": status,
         "etag": "e1", "kind": "TEXT", "parentId": parent,
         "modifiedTime": "2026-11-05T12:19:57.000+0000",
     })
@@ -66,6 +70,9 @@ fn ticktick() -> (String, Arc<Mutex<State>>) {
         let mut s = state.lock().unwrap();
         s.status.insert(PARENT.into(), 0);
         s.status.insert(CHILD.into(), 0);
+        for id in [PARENT, CHILD] {
+            s.due.insert(id.into(), "2026-11-05".into());
+        }
     }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -86,19 +93,30 @@ fn ticktick() -> (String, Arc<Mutex<State>>) {
                 }
                 ("GET", "/open/v1/project/inbox/data") => Some(json!({"tasks": []})),
                 ("GET", p) if p == format!("/open/v1/project/{PROJECT}/data") => {
-                    let tasks: Vec<Value> = [PARENT, CHILD]
-                        .iter()
-                        .filter(|id| s.status[**id] == 0)
-                        .map(|id| task(id, 0, parent_of(id)))
+                    let mut ids: Vec<&String> = s.status.keys().collect();
+                    ids.sort();
+                    let tasks: Vec<Value> = ids
+                        .into_iter()
+                        .filter(|id| s.status[*id] == 0)
+                        .map(|id| task(id, 0, parent_of(id), &s.due[id]))
                         .collect();
                     Some(json!({"tasks": tasks}))
                 }
                 ("GET", p) => p
                     .strip_prefix(&format!("/open/v1/project/{PROJECT}/task/"))
-                    .and_then(|id| s.status.get(id).map(|st| task(id, *st, parent_of(id)))),
+                    .and_then(|id| {
+                        s.status
+                            .get(id)
+                            .map(|st| task(id, *st, parent_of(id), &s.due[id]))
+                    }),
                 ("POST", p) if p.ends_with("/complete") => {
                     let id = p.rsplit('/').nth(1).unwrap().to_string();
-                    s.status.insert(id, 2);
+                    if id == RECURRING {
+                        // Like the real API: same id, next occurrence.
+                        s.due.insert(id, "2026-11-07".into());
+                    } else {
+                        s.status.insert(id, 2);
+                    }
                     Some(Value::Null)
                 }
                 _ => None,
@@ -232,4 +250,35 @@ fn unknown_list_fails_the_source() {
     ft(&dir, &["tasks", "sync"])
         .code(1)
         .stdout("ticktick: error: unknown TickTick list \"Wrok\"\n");
+}
+
+#[test]
+fn completing_a_recurring_task_reopens_with_the_next_due_date() {
+    let (url, state) = ticktick();
+    {
+        let mut s = state.lock().unwrap();
+        s.status.insert(RECURRING.into(), 0);
+        s.due.insert(RECURRING.into(), "2026-11-06".into());
+    }
+    let dir = vault(&url);
+    ft(&dir, &["tasks", "sync"]).success();
+    let rel = format!("ticktick/tt-{RECURRING}.md");
+    let note = read(&dir, &rel).replace(
+        &format!("- [ ] [tt-{RECURRING}]"),
+        &format!("- [x] [tt-{RECURRING}]"),
+    );
+    std::fs::write(dir.path().join(&rel), note).unwrap();
+    ft(&dir, &["tasks", "sync"]).success().stdout(
+        predicate::str::contains("· 1 pushed").and(predicate::str::contains("0 conflicts")),
+    );
+    let note = read(&dir, &rel);
+    assert!(
+        note.contains(&format!("- [ ] [tt-{RECURRING}]"))
+            && note.contains("📅 2026-11-07")
+            && note.contains("      status: Open\n"),
+        "{note}"
+    );
+    ft(&dir, &["tasks", "sync"])
+        .success()
+        .stdout("ticktick: 0 new · 0 updated · 0 pending push · 0 conflicts\n");
 }

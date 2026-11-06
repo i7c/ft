@@ -215,6 +215,7 @@ pub fn plan_local(
         cfg,
         format,
         today,
+        pushed: &[],
     };
     let fetched = FetchResult {
         active: vec![created.clone()],

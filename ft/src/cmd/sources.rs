@@ -199,9 +199,9 @@ pub fn run_sync(
             cfg,
             format: vault.task_format(),
             today: ft_core::dates::today(),
+            pushed: &outcome.push.pushed,
         };
         let mut plan = sync::plan_sync(&ctx, &outcome.fetched);
-        plan.report.pushed = outcome.push.pushed.clone();
         plan.report.push_failures = outcome.push.failures.clone();
         if push && cfg.push {
             run::AttemptLog::record_push_failures(&vault.path, name, &outcome.push.failures);
