@@ -31,7 +31,7 @@
 ## 3. Live verification (needs the user's OK for writes)
 
 - [x] 3.1 Read-only: run `ft tasks sync --source ticktick --dry-run` against the real account and check the notes, dates, columns and parents. Record the outcome here, without task content. Result (2026-11-06, `--no-push` into a scratch vault): 13 notes from 2 lists + empty inbox, all anchors well-formed with project-carrying URLs; rerun 0 new / 0 updated; 2 subtasks nest under their parent in `tasks list remote --tree`; 9 open tasks carry a kanban column as status name; the one all-day due date (São Paulo) lands on the right day.
-- [ ] 3.2 Confirm the web-app task URL format in a browser, and adjust the URL builder and parser if it differs.
+- [x] 3.2 Confirm the web-app task URL format in a browser, and adjust the URL builder and parser if it differs. Result: confirmed by the user (2026-11-06); `https://ticktick.com/webapp/#p/<project>/tasks/<task>` opens the task.
 - [x] 3.3 With consent, on a throwaway task in a scratch list:
   - (a) set `status` -1 and then 0 via update;
   - (b) create with `parentId`;
