@@ -318,8 +318,8 @@ fn update_note(
             content = c;
         }
     }
-    if ctx.cfg.comments > 0 {
-        let body = note::comments_body(issue, ctx.cfg.comments);
+    if ctx.cfg.effective_comments() > 0 {
+        let body = note::comments_body(issue, ctx.cfg.effective_comments());
         if let Some(c) = note::replace_section(&content, COMMENTS, &body) {
             content = c;
         }
@@ -450,10 +450,10 @@ fn new_note(
     if ctx.cfg.description {
         parts.push(note::section(DESCRIPTION, &note::description_body(issue)));
     }
-    if ctx.cfg.comments > 0 {
+    if ctx.cfg.effective_comments() > 0 {
         parts.push(note::section(
             COMMENTS,
-            &note::comments_body(issue, ctx.cfg.comments),
+            &note::comments_body(issue, ctx.cfg.effective_comments()),
         ));
     }
     let body = parts.join("\n\n") + "\n";

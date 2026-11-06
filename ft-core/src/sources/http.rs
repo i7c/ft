@@ -154,13 +154,31 @@ impl Http {
                 }
                 _ => {
                     let text = resp.body_mut().read_to_string().unwrap_or_default();
-                    let excerpt: String = text.chars().take(300).collect();
+                    // TickTick's throttle: a 500, not a 429, and no Retry-After.
+                    if status == 500 && text.contains("exceed_query_limit") {
+                        return Err(SourceError::RateLimited);
+                    }
+                    let excerpt: String = scrub(&text, auth).chars().take(300).collect();
                     return Err(SourceError::Remote { status, excerpt });
                 }
             }
         }
         Err(SourceError::RateLimited)
     }
+}
+
+/// `text` with the credential of `authorization` (the header value, and the
+/// part after its scheme) replaced by `***` — some remotes echo it back.
+fn scrub(text: &str, authorization: &str) -> String {
+    let credential = authorization
+        .split_once(' ')
+        .map_or(authorization, |(_, c)| c)
+        .trim();
+    if credential.is_empty() {
+        return text.to_string();
+    }
+    text.replace(authorization, "***")
+        .replace(credential, "***")
 }
 
 /// Map a transport-level error. Everything that means "couldn't talk to
@@ -282,6 +300,42 @@ pub(crate) mod tests {
             http.get_json(&url, "application/json").unwrap_err(),
             SourceError::Remote { status: 500, .. }
         ));
+    }
+
+    fn status_body(code: u16, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {code} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn exceed_query_limit_is_rate_limited() {
+        let body =
+            r#"{"errorCode":"exceed_query_limit","errorMessage":"Query rate limit exceeded."}"#;
+        let (url, h) = serve(vec![status_body(500, body)]);
+        assert_eq!(
+            Http::new(fake_auth())
+                .get_json(&url, "application/json")
+                .unwrap_err(),
+            SourceError::RateLimited
+        );
+        assert_eq!(h.join().unwrap().len(), 1, "no retry");
+    }
+
+    #[test]
+    fn echoed_token_is_scrubbed_from_excerpts() {
+        let body = r#"{"error":"bad","error_description":"Invalid access token: FAKE_TEST_token"}"#;
+        let (url, _h) = serve(vec![status_body(400, body)]);
+        let err = Http::new(fake_auth())
+            .get_json(&url, "application/json")
+            .unwrap_err();
+        let SourceError::Remote { status, excerpt } = &err else {
+            panic!("{err:?}");
+        };
+        assert_eq!(*status, 400);
+        assert!(excerpt.contains("Invalid access token: ***"), "{excerpt}");
+        assert!(!format!("{err} {err:?}").contains("FAKE_TEST"));
     }
 
     #[test]

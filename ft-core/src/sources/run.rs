@@ -12,6 +12,7 @@ use super::credentials;
 use super::github::GithubSource;
 use super::http::Secret;
 use super::jira::JiraSource;
+use super::ticktick::TicktickSource;
 use super::{fetch_all, FetchResult, SourceError, TaskSource};
 use crate::config::{SourceCfg, SourceKind};
 
@@ -79,6 +80,12 @@ pub fn build_source(cfg: &SourceCfg, token: &Secret) -> Box<dyn TaskSource> {
             token,
             cfg.status_map.clone(),
         )),
+        SourceKind::Ticktick => Box::new(TicktickSource::new(
+            cfg.base_url.as_deref(),
+            token,
+            cfg.status_map.clone(),
+            cfg.effective_comments() > 0,
+        )),
     }
 }
 
@@ -94,6 +101,9 @@ pub fn verify_token(cfg: &SourceCfg, token: &Secret) -> Result<String, FetchFail
         .whoami(),
         SourceKind::Github => {
             GithubSource::new(cfg.base_url.as_deref(), token, BTreeMap::new()).whoami()
+        }
+        SourceKind::Ticktick => {
+            TicktickSource::new(cfg.base_url.as_deref(), token, BTreeMap::new(), false).whoami()
         }
     };
     who.map_err(FetchFailure::from)

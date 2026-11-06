@@ -172,6 +172,7 @@ pub struct CapturePreset {
 pub enum SourceKind {
     Jira,
     Github,
+    Ticktick,
 }
 
 /// A remote task source (`[sources.<name>]`). Lives in the vault config so
@@ -182,14 +183,15 @@ pub enum SourceKind {
 pub struct SourceCfg {
     pub kind: SourceKind,
     /// API base URL. Required for Jira (`https://<site>.atlassian.net`);
-    /// optional for GitHub (defaults to `https://api.github.com`).
+    /// optional for GitHub (defaults to `https://api.github.com`) and
+    /// TickTick (defaults to `https://api.ticktick.com`).
     #[serde(default)]
     pub base_url: Option<String>,
     /// Atlassian account email (Jira basic-auth user).
     #[serde(default)]
     pub email: Option<String>,
-    /// Named JQL / GitHub search queries. Empty means the kind's default
-    /// "assigned to me, open" query; see [`SourceCfg::effective_queries`].
+    /// Named JQL / GitHub search / TickTick queries. Empty means the kind's
+    /// default query; see [`SourceCfg::effective_queries`].
     #[serde(default)]
     pub queries: std::collections::BTreeMap<String, String>,
     /// Vault-relative folder for new issue notes. Defaults to the source name.
@@ -206,8 +208,9 @@ pub struct SourceCfg {
     #[serde(default = "default_true")]
     pub fetch_parents: bool,
     /// Most recent comments kept in the note; `0` disables the section.
-    #[serde(default = "default_source_comments")]
-    pub comments: usize,
+    /// Unset means the kind's default; see [`SourceCfg::effective_comments`].
+    #[serde(default)]
+    pub comments: Option<usize>,
     /// Keep the managed `Description` section.
     #[serde(default = "default_true")]
     pub description: bool,
@@ -229,10 +232,6 @@ fn default_source_interval() -> u64 {
     10
 }
 
-fn default_source_comments() -> usize {
-    5
-}
-
 fn default_true() -> bool {
     true
 }
@@ -246,8 +245,29 @@ impl SourceCfg {
         let q = match self.kind {
             SourceKind::Jira => "assignee = currentUser() AND statusCategory != Done",
             SourceKind::Github => "is:issue is:open assignee:@me",
+            // Every open task in every list and the inbox.
+            SourceKind::Ticktick => "",
         };
         [("mine".to_string(), q.to_string())].into_iter().collect()
+    }
+
+    /// The configured base URL, else the kind's public API (Jira has none:
+    /// `validate` requires one).
+    pub fn effective_base_url(&self) -> &str {
+        self.base_url.as_deref().unwrap_or(match self.kind {
+            SourceKind::Jira => "",
+            SourceKind::Github => "https://api.github.com",
+            SourceKind::Ticktick => "https://api.ticktick.com",
+        })
+    }
+
+    /// Comments kept per note: the configured count, else 5 — or 0 for
+    /// TickTick, whose comments cost a request per task and carry no author.
+    pub fn effective_comments(&self) -> usize {
+        self.comments.unwrap_or(match self.kind {
+            SourceKind::Jira | SourceKind::Github => 5,
+            SourceKind::Ticktick => 0,
+        })
     }
 
     /// Folder for new issue notes.
@@ -265,7 +285,7 @@ impl SourceCfg {
                 ));
             }
         }
-        if self.kind == SourceKind::Github && !self.transitions.is_empty() {
+        if self.kind != SourceKind::Jira && !self.transitions.is_empty() {
             return Err(format!("sources.{name}.transitions is only valid for jira"));
         }
         if self.kind == SourceKind::Jira {
@@ -1659,12 +1679,41 @@ unknown_key = "oops"
         assert_eq!(src.kind, SourceKind::Jira);
         assert_eq!(src.folder_or("jira"), "jira");
         assert_eq!(src.interval_minutes, 10);
-        assert_eq!(src.comments, 5);
+        assert_eq!(src.effective_comments(), 5);
         assert!(src.fetch_parents && src.description);
         assert_eq!(
             src.effective_queries()["mine"],
             "assignee = currentUser() AND statusCategory != Done"
         );
+    }
+
+    #[test]
+    fn minimal_ticktick_source_gets_defaults() {
+        let lc = load_vault_toml("[sources.ticktick]\nkind = \"ticktick\"\n").unwrap();
+        let src = &lc.config.sources["ticktick"];
+        assert_eq!(src.kind, SourceKind::Ticktick);
+        assert_eq!(src.folder_or("ticktick"), "ticktick");
+        assert_eq!(src.interval_minutes, 10);
+        assert_eq!(src.effective_comments(), 0);
+        assert_eq!(src.effective_queries()["mine"], "");
+        assert_eq!(src.effective_base_url(), "https://api.ticktick.com");
+        let lc = load_vault_toml("[sources.tt]\nkind = \"ticktick\"\ncomments = 3\n").unwrap();
+        assert_eq!(lc.config.sources["tt"].effective_comments(), 3);
+    }
+
+    #[test]
+    fn transitions_only_valid_for_jira() {
+        for kind in ["github", "ticktick"] {
+            let err = load_vault_toml(&format!(
+                "[sources.s]\nkind = \"{kind}\"\n[sources.s.transitions]\nDone = \"x\"\n"
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains("sources.s.transitions is only valid for jira"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

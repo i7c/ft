@@ -91,7 +91,7 @@ fn login(vault: &Vault, name: &str) -> Result<ExitCode> {
     if token.expose().is_empty() {
         return Err(anyhow!("empty token"));
     }
-    let target = cfg.base_url.as_deref().unwrap_or("https://api.github.com");
+    let target = cfg.effective_base_url();
     let who = run::verify_token(cfg, &token).map_err(|f| match f {
         run::FetchFailure::Unauthorized(code) => anyhow!("token rejected by {target} ({code})"),
         other => anyhow!(
@@ -117,7 +117,7 @@ fn list(vault: &Vault, format: MoveFormat) -> Result<ExitCode> {
             serde_json::json!({
                 "name": name,
                 "kind": format!("{:?}", cfg.kind).to_lowercase(),
-                "base_url": cfg.base_url,
+                "base_url": cfg.effective_base_url(),
                 "credentials": creds,
                 "last_attempt": attempt.and_then(|a| a.last_attempt.clone()),
                 "last_status": attempt.and_then(|a| a.last_status.clone()),

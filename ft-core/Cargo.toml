@@ -13,6 +13,7 @@ figment = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 chrono-english = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }

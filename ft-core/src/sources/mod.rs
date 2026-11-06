@@ -1,4 +1,4 @@
-//! Remote task sources (Jira, GitHub). Fetching is blocking and network
+//! Remote task sources (Jira, GitHub, TickTick). Fetching is blocking and network
 //! bound; planning the resulting note edits ([`sync`]) is pure and works on
 //! the fetched data, so the TUI can fetch off-thread and apply on the main
 //! thread. Nothing here runs during a vault scan.
@@ -13,6 +13,7 @@ pub mod promote;
 pub mod push;
 pub mod run;
 pub mod sync;
+pub mod ticktick;
 
 use std::collections::{BTreeMap, BTreeSet};
 

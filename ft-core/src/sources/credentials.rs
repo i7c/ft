@@ -1,6 +1,6 @@
 //! Where a source's token comes from: `FT_<NAME>_TOKEN`, then (GitHub only)
 //! `gh auth token`, then the OS keychain (service `ft`, account
-//! `<name>:<email or "github">`). No token is a normal state — the source is
+//! `<name>:<email>`, `<name>:github` or `<name>:ticktick`). No token is a normal state — the source is
 //! skipped.
 
 use std::process::{Command, Stdio};
@@ -38,6 +38,7 @@ pub fn keychain_account(name: &str, cfg: &SourceCfg) -> String {
     let account = match cfg.kind {
         SourceKind::Jira => cfg.email.as_deref().unwrap_or(""),
         SourceKind::Github => "github",
+        SourceKind::Ticktick => "ticktick",
     };
     format!("{name}:{account}")
 }
@@ -152,8 +153,10 @@ mod tests {
         assert_eq!((s.expose(), o), ("FAKE_TEST_env", CredOrigin::Env));
         let (s, o) = resolve_with("gh", &cfg("github"), |_| None, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_gh", CredOrigin::Gh));
-        // Jira never asks gh.
+        // Jira and TickTick never ask gh.
         let (s, o) = resolve_with("jira", &cfg("jira"), |_| None, gh, kc).unwrap();
+        assert_eq!((s.expose(), o), ("FAKE_TEST_kc", CredOrigin::Keychain));
+        let (s, o) = resolve_with("tt", &cfg("ticktick"), |_| None, gh, kc).unwrap();
         assert_eq!((s.expose(), o), ("FAKE_TEST_kc", CredOrigin::Keychain));
         assert!(resolve_with(
             "jira",
@@ -172,5 +175,9 @@ mod tests {
             "jira:fake-user@example.test"
         );
         assert_eq!(keychain_account("gh", &cfg("github")), "gh:github");
+        assert_eq!(
+            keychain_account("ticktick", &cfg("ticktick")),
+            "ticktick:ticktick"
+        );
     }
 }
