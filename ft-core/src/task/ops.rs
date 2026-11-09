@@ -667,6 +667,145 @@ pub fn retag_task(
     })
 }
 
+fn split_tag_words(description: &str) -> (Vec<&str>, Vec<&str>) {
+    description
+        .split_whitespace()
+        .partition(|w| !is_tag_word(w))
+}
+
+fn join_words<'a>(words: impl IntoIterator<Item = &'a str>) -> String {
+    words.into_iter().collect::<Vec<_>>().join(" ")
+}
+
+/// `description` with every tag word removed and `tags` (bare or `#`-led)
+/// appended. The rest of the text is kept, word for word. Tags live in the
+/// description (see [`retag_task`]), so this is how tags are set.
+pub fn with_tags(description: &str, tags: &[String]) -> String {
+    let (text, _) = split_tag_words(description);
+    let tags: Vec<String> = tags
+        .iter()
+        .map(|t| t.trim_start_matches('#'))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("#{t}"))
+        .collect();
+    join_words(text.into_iter().chain(tags.iter().map(String::as_str)))
+}
+
+/// `description` with its non-tag words replaced by `title`; its tag words
+/// follow the title.
+pub fn with_title(description: &str, title: &str) -> String {
+    let (_, tags) = split_tag_words(description);
+    join_words(title.split_whitespace().chain(tags))
+}
+
+// ── assign_ids ───────────────────────────────────────────────────────────────
+
+/// One `🆔` to give a task that has none.
+#[derive(Debug, Clone)]
+pub struct IdAssignment {
+    /// Absolute path and 1-indexed line.
+    pub path: PathBuf,
+    pub line: usize,
+    pub id: String,
+    /// The task as scanned; the line must still match it when applied.
+    pub expected: Task,
+}
+
+/// Fresh ids, unique against `taken` and each other, for every task in
+/// `tasks` without one. `tasks` carry vault-relative paths, as a scan has.
+pub fn plan_assign_ids(
+    vault_root: &Path,
+    tasks: &[&Task],
+    taken: &std::collections::HashSet<String>,
+) -> Vec<IdAssignment> {
+    let mut taken = taken.clone();
+    tasks
+        .iter()
+        .filter(|t| t.id.is_none())
+        .map(|t| {
+            let id =
+                super::links::new_task_id(&t.source_file, t.source_line, &t.description, &taken);
+            taken.insert(id.clone());
+            IdAssignment {
+                path: vault_root.join(&t.source_file),
+                line: t.source_line,
+                id,
+                expected: (*t).clone(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Default)]
+pub struct AssignOutcome {
+    pub applied: Vec<IdAssignment>,
+    /// Files left untouched, with why: a read or write failed, or a line no
+    /// longer held the task the plan expected.
+    pub skipped: Vec<UpdateError>,
+}
+
+/// Write a [`plan_assign_ids`] plan, one atomic write per file. A file with
+/// any stale line is skipped whole, so a file is either fully assigned or
+/// untouched; the other files still apply.
+pub fn apply_assign_ids(plan: Vec<IdAssignment>, format: &dyn TaskFormat) -> AssignOutcome {
+    let mut by_file: BTreeMap<PathBuf, Vec<IdAssignment>> = BTreeMap::new();
+    for a in plan {
+        by_file.entry(a.path.clone()).or_default().push(a);
+    }
+    let mut out = AssignOutcome::default();
+    for (path, assignments) in by_file {
+        match assign_in_file(&path, &assignments, format) {
+            Ok(()) => out.applied.extend(assignments),
+            Err(e) => out.skipped.push(e),
+        }
+    }
+    out
+}
+
+fn assign_in_file(
+    path: &Path,
+    assignments: &[IdAssignment],
+    format: &dyn TaskFormat,
+) -> Result<(), UpdateError> {
+    let content = std::fs::read_to_string(path).map_err(|e| UpdateError::Read {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut lines = crate::markdown::lines::split(&content);
+    for a in assignments {
+        let Some(raw) = lines.get(a.line.wrapping_sub(1)) else {
+            return Err(UpdateError::LineMissing {
+                path: path.to_path_buf(),
+                line: a.line,
+                file_lines: lines.len(),
+            });
+        };
+        let ctx = ParseContext {
+            source_file: path.to_path_buf(),
+            source_line: a.line,
+        };
+        let found = format
+            .parse_line(raw, ctx)
+            .ok_or_else(|| UpdateError::NotATask {
+                path: path.to_path_buf(),
+                line: a.line,
+            })?;
+        check_expected(format, &found, Some(&a.expected)).map_err(|(expected, found)| {
+            UpdateError::LineChanged {
+                path: path.to_path_buf(),
+                line: a.line,
+                expected,
+                found,
+            }
+        })?;
+        let rewritten = super::links::rewrite_task_line(raw, format, |t| t.id = Some(a.id.clone()))
+            .expect("the line parsed as a task above");
+        lines[a.line - 1] = rewritten;
+    }
+    write_atomic(path, &crate::markdown::lines::join_with_newline(&lines))?;
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum CancelError {
     #[error(transparent)]
@@ -3028,5 +3167,56 @@ mod tests {
         let out = std::fs::read_to_string(&p).unwrap();
         assert!(out.contains("- [x] [ABC-123](https://x.test/browse/ABC-123) Fix login #wait ⏫ 📅 2026-10-30 🆔 ABC-123"), "{out}");
         assert!(out.contains("- [ ] local sub\n"));
+    }
+
+    #[test]
+    fn with_tags_replaces_tag_words_and_keeps_text() {
+        let tags = vec!["work".to_string(), "#errand".to_string()];
+        assert_eq!(with_tags("Buy #home milk", &tags), "Buy milk #work #errand");
+        assert_eq!(with_tags("Buy milk #home", &[]), "Buy milk");
+        assert_eq!(with_tags("# heading-ish #a", &[]), "# heading-ish");
+    }
+
+    #[test]
+    fn with_title_keeps_tags() {
+        assert_eq!(
+            with_title("Buy milk #home #x", "Buy oat milk"),
+            "Buy oat milk #home #x"
+        );
+        assert_eq!(with_title("Buy milk", "Sell"), "Sell");
+    }
+
+    #[test]
+    fn assign_ids_gives_each_task_a_fresh_id_and_skips_stale_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("a.md"),
+            "- [ ] one\n\t- [ ] two #t\n- [ ] has 🆔 x1\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("b.md"), "- [ ] three\n").unwrap();
+        let scan = crate::scan::scan_vault(root, &[]);
+        let tasks: Vec<&Task> = scan.tasks.iter().collect();
+        let taken: std::collections::HashSet<String> =
+            scan.tasks.iter().filter_map(|t| t.id.clone()).collect();
+        let plan = plan_assign_ids(root, &tasks, &taken);
+        assert_eq!(plan.len(), 3);
+
+        std::fs::write(root.join("b.md"), "- [ ] three, edited\n").unwrap();
+        let out = apply_assign_ids(plan, &EmojiFormat);
+        assert_eq!(out.applied.len(), 2);
+        assert!(matches!(out.skipped[..], [UpdateError::LineChanged { .. }]));
+
+        let a = std::fs::read_to_string(root.join("a.md")).unwrap();
+        let ids: Vec<&str> = a.lines().filter_map(|l| l.split("🆔 ").nth(1)).collect();
+        assert_eq!(ids.len(), 3, "{a}");
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(ids[2], "x1");
+        assert!(a.contains("\t- [ ] two #t 🆔 "), "tab indent kept: {a}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.md")).unwrap(),
+            "- [ ] three, edited\n"
+        );
     }
 }

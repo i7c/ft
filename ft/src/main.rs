@@ -119,6 +119,8 @@ fn main() -> ExitCode {
             }
             if e.downcast_ref::<cmd::common::ChoiceError>().is_some() {
                 ExitCode::from(2)
+            } else if e.downcast_ref::<cmd::tasks::LineChangedError>().is_some() {
+                ExitCode::from(3)
             } else {
                 ExitCode::FAILURE
             }

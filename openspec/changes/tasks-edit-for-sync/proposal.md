@@ -49,8 +49,8 @@ a sync tool needs a few things from it that it lacks today:
 - **Code:** `ft/src/cmd/tasks.rs` (flags, output, exit code), a new
   `ops::assign_ids` planner in `ft-core/src/task/ops.rs` (plan/apply, through
   `write_atomic`). `update_task_line` is reused for every edit.
-- **Tests:** `ft/tests/tasks_edit.rs`, `tasks_complete.rs`,
-  `tasks_cancel.rs`, `tasks_list.rs`, and a new `tasks_assign_ids.rs`.
+- **Tests:** `ft/tests/tasks_edit_for_sync.rs`, plus unit tests for the
+  ft-core helpers.
 - **ft.nvim:** no change needed; nothing existing changes shape.
 - **Not changed:** completing a recurring task still leaves its `🆔` on both
   the done line and the next instance (`tasks_complete.rs` asserts it). A

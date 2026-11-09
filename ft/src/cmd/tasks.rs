@@ -16,6 +16,7 @@ use ft_core::{
     selector,
     task::resolve,
     task::{
+        format::{ParseContext, TaskFormat},
         links,
         ops::{
             self, CancelError, CompleteError, CompleteOptions, CreateError, CreateInput,
@@ -46,8 +47,10 @@ pub enum TasksCommand {
     Move(MoveArgs),
     /// Mark a task cancelled.
     Cancel(CancelArgs),
-    /// Edit a task's fields (due, scheduled, priority, tags, description).
+    /// Edit a task's fields (dates, priority, tags, title, status, id, dependencies).
     Edit(EditArgs),
+    /// Give a fresh `🆔` to every matching task that has none.
+    AssignIds(AssignIdsArgs),
     /// Nest a task (and its subtasks) under its previous sibling.
     Indent(IndentArgs),
     /// Lift a task (and its subtasks) to its parent's level, after the
@@ -194,6 +197,11 @@ pub struct ListArgs {
     #[arg(long)]
     pub path: Vec<String>,
 
+    /// Leave out tasks whose vault-relative path starts with this prefix
+    /// (repeatable), e.g. `--exclude-path templates/`.
+    #[arg(long, value_name = "PREFIX")]
+    pub exclude_path: Vec<String>,
+
     /// Only tasks due strictly before this date (YYYY-MM-DD).
     #[arg(long, value_name = "DATE")]
     pub due_before: Option<NaiveDate>,
@@ -261,6 +269,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         TasksCommand::Move(move_args) => run_move(move_args, vault_flag),
         TasksCommand::Cancel(cancel_args) => run_cancel(cancel_args, vault_flag),
         TasksCommand::Edit(edit_args) => run_edit(edit_args, vault_flag),
+        TasksCommand::AssignIds(a) => run_assign_ids(a, vault_flag),
         TasksCommand::Indent(a) => run_indent(a, vault_flag, IndentDir::In),
         TasksCommand::Outdent(a) => run_indent(a, vault_flag, IndentDir::Out),
         TasksCommand::Link(a) => run_link(a, vault_flag),
@@ -307,52 +316,19 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     // one source of truth for what predicates exist.
     let flag_dsl = lower_flags_to_dsl(&args);
 
-    let mut graph_queries: Vec<GraphQuery> = Vec::new();
-    let sctx = crate::cmd::common::sigil_ctx(&vault, today);
-    for src in [
+    let sources = [
         positional_dsl.as_deref(),
         args.query.as_deref(),
         flag_dsl.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let expanded = match ft_core::query::interpolate(src, sctx) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("invalid query `{src}`: {e}");
-                return Ok(ExitCode::from(2));
-            }
-        };
-        let q = match parse_query(&expanded, Profile::Tasks, today) {
-            Ok(q) => q,
-            Err(e) => {
-                eprintln!("invalid query `{src}`: {e}");
-                return Ok(ExitCode::from(2));
-            }
-        };
-        graph_queries.push(q);
-    }
-
-    // Build the graph once. The query evaluator runs against the graph and
-    // returns task NoteIds; we map those back to `&Task` for sort/render.
-    let graph = crate::cmd::common::build_graph(&scan)?;
-    let matched_task_keys: HashSet<TaskKey> = if graph_queries.is_empty() {
-        // No predicates at all — every task in the scan is admissible.
-        scan.tasks
-            .iter()
-            .map(|t| (t.source_file.clone(), t.source_line))
-            .collect()
-    } else {
-        // AND-compose: a task must match every graph query.
-        resolve::by_queries(&graph, &graph_queries)
+    ];
+    let mut matches = match select_tasks(&scan, &vault, today, &sources) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return Ok(ExitCode::from(2));
+        }
     };
-
-    let mut matches: Vec<&Task> = scan
-        .tasks
-        .iter()
-        .filter(|t| matched_task_keys.contains(&(t.source_file.clone(), t.source_line)))
-        .collect();
+    exclude_paths(&mut matches, &args.exclude_path);
 
     let cli_sort = parse_cli_sort_keys(&args.sort)?;
     sort_by_keys(&mut matches, &cli_sort);
@@ -503,6 +479,54 @@ fn lower_flags_to_dsl(args: &ListArgs) -> Option<String> {
     } else {
         Some(clauses.join(" and "))
     }
+}
+
+/// The scan's tasks matching every DSL source (AND-composed; `None`s are
+/// skipped, and no sources at all admits every task). `Err` is the message
+/// for an invalid query.
+fn select_tasks<'a>(
+    scan: &'a ft_core::scan::Scan,
+    vault: &Vault,
+    today: NaiveDate,
+    sources: &[Option<&str>],
+) -> Result<Vec<&'a Task>, String> {
+    let mut graph_queries: Vec<GraphQuery> = Vec::new();
+    let sctx = crate::cmd::common::sigil_ctx(vault, today);
+    for src in sources.iter().flatten() {
+        let expanded = ft_core::query::interpolate(src, sctx)
+            .map_err(|e| format!("invalid query `{src}`: {e}"))?;
+        let q = parse_query(&expanded, Profile::Tasks, today)
+            .map_err(|e| format!("invalid query `{src}`: {e}"))?;
+        graph_queries.push(q);
+    }
+
+    // Build the graph once. The query evaluator runs against the graph and
+    // returns task NoteIds; we map those back to `&Task` for sort/render.
+    let graph = crate::cmd::common::build_graph(scan).map_err(|e| format!("{e:#}"))?;
+    let matched_task_keys: HashSet<TaskKey> = if graph_queries.is_empty() {
+        // No predicates at all — every task in the scan is admissible.
+        scan.tasks
+            .iter()
+            .map(|t| (t.source_file.clone(), t.source_line))
+            .collect()
+    } else {
+        // AND-compose: a task must match every graph query.
+        resolve::by_queries(&graph, &graph_queries)
+    };
+
+    Ok(scan
+        .tasks
+        .iter()
+        .filter(|t| matched_task_keys.contains(&(t.source_file.clone(), t.source_line)))
+        .collect())
+}
+
+/// Drop tasks whose vault-relative path starts with one of `prefixes`.
+fn exclude_paths(tasks: &mut Vec<&Task>, prefixes: &[String]) {
+    tasks.retain(|t| {
+        let path = t.source_file.to_string_lossy();
+        !prefixes.iter().any(|p| path.starts_with(p.as_str()))
+    });
 }
 
 /// Parse `--sort` values: each value can be a comma-separated list of keys,
@@ -890,6 +914,9 @@ pub struct CompleteArgs {
     /// For `--query` bulk mode, `--yes` skips the confirmation prompt.
     #[arg(long)]
     pub yes: bool,
+
+    #[command(flatten)]
+    pub write: WriteOpts,
 }
 
 fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -909,6 +936,11 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     // Bulk mode: complete every task matched by the query (skipping those
     // already done). Mirrors `ft tasks move --query`.
     if let Some(q) = args.query.as_deref() {
+        if args.write.expect.is_some() || args.write.format == MoveFormat::Json {
+            return Err(anyhow!(
+                "--expect and --format json take a single task, not --query"
+            ));
+        }
         let expanded = crate::cmd::common::interpolate_query(q, &vault, today)?;
         let parsed = parse_query(&expanded, Profile::Tasks, today)
             .map_err(|e| anyhow!("invalid query `{q}`: {e}"))?;
@@ -954,16 +986,27 @@ fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitC
     }
 
     let chosen = pick_task(&args, &scan.tasks)?;
+    let expected = args.write.expected()?;
 
     let absolute_path = vault.path.join(&chosen.source_file);
     let outcome = ops::complete_task(
         &absolute_path,
         chosen.source_line,
         vault.task_format(),
-        Some(chosen),
+        Some(expected.as_ref().unwrap_or(chosen)),
         CompleteOptions { on },
     )
     .map_err(|e| translate_complete_error(e, &vault.path))?;
+
+    if args.write.format == MoveFormat::Json {
+        let row =
+            |line: usize, serialized: &str| as_row(vault.task_format(), serialized, chosen, line);
+        print_json(&serde_json::json!({
+            "completed": row(outcome.completed_line, &outcome.completed_serialized),
+            "next": outcome.next_instance.as_ref().and_then(|n| row(n.line, &n.serialized)),
+        }))?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let rel = vault.relativize(&absolute_path);
     println!(
@@ -1103,10 +1146,10 @@ fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> a
             found,
         } => {
             let rel = path.strip_prefix(vault_root).unwrap_or(&path);
-            anyhow!(
+            anyhow::Error::new(LineChangedError(format!(
                 "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
                 rel.display()
-            )
+            )))
         }
         other => anyhow!("{other}"),
     }
@@ -1451,10 +1494,10 @@ fn relativize_move_error(e: ops::MoveError, vault: &ft_core::vault::Vault) -> an
             line,
             expected,
             found,
-        } => anyhow!(
+        } => anyhow::Error::new(LineChangedError(format!(
             "target task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
             rel(&path)
-        ),
+        ))),
         other => other.into(),
     }
 }
@@ -1879,19 +1922,19 @@ fn relativize_link_error(e: links::LinkError, vault: &Vault) -> anyhow::Error {
             line,
             expected,
             found,
-        } => anyhow!(
+        } => anyhow::Error::new(LineChangedError(format!(
             "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
             rel(&path)
-        ),
+        ))),
         E::TargetChanged {
             path,
             line,
             expected,
             found,
-        } => anyhow!(
+        } => anyhow::Error::new(LineChangedError(format!(
             "target task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
             rel(&path)
-        ),
+        ))),
         other => other.into(),
     }
 }
@@ -1917,6 +1960,9 @@ pub struct CancelArgs {
     /// Skip the confirmation prompt for bulk cancels.
     #[arg(long)]
     pub yes: bool,
+
+    #[command(flatten)]
+    pub write: WriteOpts,
 }
 
 fn run_cancel(args: CancelArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -1940,15 +1986,33 @@ fn run_cancel(args: CancelArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode>
     )?;
 
     let bulk = targets.len() > 1;
+    if bulk && (args.write.expect.is_some() || args.write.format == MoveFormat::Json) {
+        return Err(anyhow!(
+            "--expect and --format json take a single task; {} matched",
+            targets.len()
+        ));
+    }
     if bulk && !args.yes {
         confirm_bulk("cancel", &targets, &vault.path)?;
     }
+    let expected = args.write.expected()?;
 
     let mut cancelled = 0usize;
     let mut skipped = 0usize;
     for t in &targets {
         let abs = vault.path.join(&t.source_file);
-        match ops::cancel_task(&abs, t.source_line, vault.task_format(), Some(t), on) {
+        let guard = expected.as_ref().unwrap_or(t);
+        match ops::cancel_task(&abs, t.source_line, vault.task_format(), Some(guard), on) {
+            Ok(written) if args.write.format == MoveFormat::Json => {
+                let format = vault.task_format();
+                print_json(&as_row(
+                    format,
+                    &format.serialize_line(&written),
+                    t,
+                    t.source_line,
+                ))?;
+                return Ok(ExitCode::SUCCESS);
+            }
             Ok(_) => cancelled += 1,
             Err(ops::CancelError::AlreadyCancelled { .. }) => skipped += 1,
             Err(e) => return Err(translate_cancel_error(e, &vault.path)),
@@ -2006,17 +2070,102 @@ pub struct EditArgs {
     #[arg(long, value_name = "DATE|none")]
     pub scheduled: Option<String>,
 
+    /// Set the start date. Pass `none` to clear.
+    #[arg(long, value_name = "DATE|none")]
+    pub start: Option<String>,
+
     /// Set the priority. Pass `none` to clear. Accepts highest/high/medium/low/lowest.
     #[arg(long, value_name = "PRIORITY|none")]
     pub priority: Option<String>,
 
-    /// Set tags (space-separated, leading `#` optional). Pass `none` to clear.
+    /// Set tags (space-separated, leading `#` optional), replacing every tag
+    /// in the description; they are appended after the text. Pass `none` to
+    /// clear.
     #[arg(long, value_name = "TAGS|none")]
     pub tags: Option<String>,
 
-    /// Set the description.
-    #[arg(long, value_name = "TEXT")]
+    /// Set the whole description, tags included.
+    #[arg(long, value_name = "TEXT", conflicts_with = "title")]
     pub description: Option<String>,
+
+    /// Set the description's text and keep its tags, appended after it.
+    #[arg(long, value_name = "TEXT")]
+    pub title: Option<String>,
+
+    /// Reopen the task or mark it in progress; clears its done and cancelled
+    /// dates. Use `complete` / `cancel` to close it.
+    #[arg(long, value_enum)]
+    pub status: Option<EditStatus>,
+
+    /// Give the task this `🆔`. Refused when the task has another id or
+    /// another task has this one.
+    #[arg(long, value_name = "ID")]
+    pub id: Option<String>,
+
+    /// Set the ids this task depends on (`⛔`), comma- or space-separated,
+    /// replacing the current set. Pass `none` to clear.
+    #[arg(long, value_name = "IDS|none")]
+    pub depends_on: Option<String>,
+
+    #[command(flatten)]
+    pub write: WriteOpts,
+}
+
+/// The status `ft tasks edit --status` can set.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditStatus {
+    Open,
+    InProgress,
+}
+
+/// Options shared by the single-task writes that scripts drive
+/// (`edit`, `complete`, `cancel`).
+#[derive(Args, Debug)]
+pub struct WriteOpts {
+    /// Write only if the task still looks like this: a task object as
+    /// `ft tasks list --format json` prints it. A mismatch exits with code 3.
+    #[arg(long, value_name = "JSON")]
+    pub expect: Option<String>,
+
+    /// Output format for the result. `json` prints the written task in the
+    /// `ft tasks list --format json` row shape.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+impl WriteOpts {
+    fn expected(&self) -> Result<Option<Task>> {
+        self.expect
+            .as_deref()
+            .map(|s| serde_json::from_str(s).context("--expect is not a task object"))
+            .transpose()
+    }
+}
+
+/// The line on disk is not the task the caller expected. Exits with code 3.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct LineChangedError(pub String);
+
+/// A task just written, in the `list --format json` row shape: re-parsed
+/// from its line (so derived fields like `tags` are current), with the
+/// vault-relative path and the scanned task's hierarchy, which field edits
+/// don't change.
+fn as_row(format: &dyn TaskFormat, line_text: &str, scanned: &Task, line: usize) -> Option<Task> {
+    let written = format.parse_line(line_text, ParseContext::default())?;
+    Some(Task {
+        source_file: scanned.source_file.clone(),
+        source_line: line,
+        indent_level: scanned.indent_level,
+        parent: scanned.parent,
+        parent_refs: scanned.parent_refs.clone(),
+        ..written
+    })
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
 }
 
 fn parse_priority_arg(s: &str) -> Result<Option<Priority>, String> {
@@ -2055,27 +2204,45 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     }
     let t = targets[0];
     let abs = vault.path.join(&t.source_file);
+    let expected = args.write.expected()?;
 
     // Parse the provided field overrides once.
     let due = parse_opt_date_field(args.due.as_deref(), today)?;
     let scheduled = parse_opt_date_field(args.scheduled.as_deref(), today)?;
+    let start = parse_opt_date_field(args.start.as_deref(), today)?;
     let tags_override = args.tags.as_deref().map(parse_tags_field).transpose()?;
+    let depends_on = args.depends_on.as_deref().map(parse_ids_field);
     let description = args.description.clone();
+    let title = args.title.clone();
+    let status = args.status.map(|s| match s {
+        EditStatus::Open => Status::Open,
+        EditStatus::InProgress => Status::InProgress,
+    });
     let priority = args
         .priority
         .as_deref()
         .map(parse_priority_arg)
         .transpose()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if let Some(id) = args.id.as_deref() {
+        check_new_id(id, t, &scan.tasks, &vault)?;
+    }
+    let id = args.id.clone();
 
     if due.is_none()
         && scheduled.is_none()
+        && start.is_none()
         && priority.is_none()
         && tags_override.is_none()
         && description.is_none()
+        && title.is_none()
+        && status.is_none()
+        && id.is_none()
+        && depends_on.is_none()
     {
         return Err(anyhow!(
-            "no fields given — pass --due / --scheduled / --priority / --tags / --description"
+            "no fields given — pass --due / --scheduled / --start / --priority / --tags / \
+             --description / --title / --status / --id / --depends-on"
         ));
     }
 
@@ -2083,7 +2250,7 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         &abs,
         t.source_line,
         vault.task_format(),
-        Some(t),
+        Some(expected.as_ref().unwrap_or(t)),
         move |task| {
             if let Some(d) = due {
                 task.due = d;
@@ -2091,19 +2258,46 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
             if let Some(s) = scheduled {
                 task.scheduled = s;
             }
+            if let Some(s) = start {
+                task.start = s;
+            }
             if let Some(p) = priority {
                 task.priority = p;
             }
-            if let Some(tags) = tags_override {
-                task.tags = tags;
-            }
             if let Some(desc) = description {
                 task.description = desc;
+            }
+            if let Some(title) = title {
+                task.description = ops::with_title(&task.description, &title);
+            }
+            if let Some(tags) = tags_override {
+                task.description = ops::with_tags(&task.description, &tags);
+            }
+            if let Some(s) = status {
+                task.status = s;
+                task.done = None;
+                task.cancelled = None;
+            }
+            if let Some(id) = id {
+                task.id = Some(id);
+            }
+            if let Some(ids) = depends_on {
+                task.depends_on = ids;
             }
         },
     )
     .map_err(|e| translate_update_error(e, &vault.path))?;
 
+    if args.write.format == MoveFormat::Json {
+        let format = vault.task_format();
+        print_json(&as_row(
+            format,
+            &format.serialize_line(&updated),
+            t,
+            t.source_line,
+        ))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let rel = vault.relativize(&abs);
     println!(
         "Edited {}:{}  {}",
@@ -2112,6 +2306,166 @@ fn run_edit(args: EditArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         updated.description
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// `--id` may only give an id to a task without one, and not one in use.
+fn check_new_id(id: &str, task: &Task, tasks: &[Task], vault: &Vault) -> Result<()> {
+    if !matches!(selector::parse(id), selector::Selector::Id(_)) {
+        return Err(anyhow!(
+            "id `{id}` must be letters, digits, `_` and `-` only"
+        ));
+    }
+    if let Some(own) = task.id.as_deref().filter(|own| *own != id) {
+        return Err(anyhow!("task already has 🆔 {own}"));
+    }
+    if let Some(other) = tasks.iter().find(|o| {
+        o.id.as_deref() == Some(id)
+            && (o.source_file != task.source_file || o.source_line != task.source_line)
+    }) {
+        let rel = vault.relativize(&vault.path.join(&other.source_file));
+        return Err(anyhow!(
+            "🆔 {id} is taken by {}:{}",
+            rel.display(),
+            other.source_line
+        ));
+    }
+    Ok(())
+}
+
+/// Parse `--depends-on`: ids separated by commas or whitespace; `none` clears.
+fn parse_ids_field(s: &str) -> Vec<String> {
+    if s.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    s.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+// ── ft tasks assign-ids ────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct AssignIdsArgs {
+    /// Preset name or query DSL, as for `ft tasks list`.
+    #[arg(value_name = "PRESET_OR_QUERY")]
+    pub preset_or_query: Option<String>,
+
+    /// Explicit query DSL, composed with the other filters.
+    #[arg(long, value_name = "DSL")]
+    pub query: Option<String>,
+
+    /// Only tasks with this status (repeatable).
+    #[arg(long, value_enum)]
+    pub status: Vec<StatusFlag>,
+
+    /// Substring filter on the source file path (repeatable; all must match).
+    #[arg(long)]
+    pub path: Vec<String>,
+
+    /// Leave out tasks whose vault-relative path starts with this prefix
+    /// (repeatable).
+    #[arg(long, value_name = "PREFIX")]
+    pub exclude_path: Vec<String>,
+
+    /// Print the ids that would be assigned without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format. `json` prints `[{source_file, source_line, id}]`.
+    #[arg(long, value_enum, default_value_t = MoveFormat::Text)]
+    pub format: MoveFormat,
+}
+
+#[derive(serde::Serialize)]
+struct AssignedRow {
+    source_file: PathBuf,
+    source_line: usize,
+    id: String,
+}
+
+fn run_assign_ids(args: AssignIdsArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = crate::cmd::common::discover_vault(vault_flag)?;
+    let today = dates::today();
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    let positional = args
+        .preset_or_query
+        .as_deref()
+        .map(|name| resolve_preset(name, &vault).unwrap_or_else(|| name.to_string()));
+    let mut clauses: Vec<String> = Vec::new();
+    if !args.status.is_empty() {
+        let set: Vec<&str> = args
+            .status
+            .iter()
+            .map(|s| Status::from(*s).as_str())
+            .collect();
+        clauses.push(format!("status in {{{}}}", set.join(", ")));
+    }
+    for path in &args.path {
+        clauses.push(format!("path includes {path:?}"));
+    }
+    let flags = (!clauses.is_empty()).then(|| clauses.join(" and "));
+    let sources = [
+        positional.as_deref(),
+        args.query.as_deref(),
+        flags.as_deref(),
+    ];
+    let mut tasks = select_tasks(&scan, &vault, today, &sources).map_err(|m| anyhow!(m))?;
+    exclude_paths(&mut tasks, &args.exclude_path);
+
+    let taken: HashSet<String> = scan.tasks.iter().filter_map(|t| t.id.clone()).collect();
+    let plan = ops::plan_assign_ids(&vault.path, &tasks, &taken);
+    let (applied, skipped) = if args.dry_run {
+        (plan, Vec::new())
+    } else {
+        let out = ops::apply_assign_ids(plan, vault.task_format());
+        (out.applied, out.skipped)
+    };
+
+    let rows: Vec<AssignedRow> = applied
+        .iter()
+        .map(|a| AssignedRow {
+            source_file: vault.relativize(&a.path),
+            source_line: a.line,
+            id: a.id.clone(),
+        })
+        .collect();
+    match args.format {
+        MoveFormat::Json => print_json(&rows)?,
+        MoveFormat::Text => {
+            let verb = if args.dry_run {
+                "Would assign"
+            } else {
+                "Assigned"
+            };
+            for r in &rows {
+                println!(
+                    "{verb} 🆔 {}  {}:{}",
+                    r.id,
+                    r.source_file.display(),
+                    r.source_line
+                );
+            }
+            println!("{verb} {} id(s)", rows.len());
+        }
+    }
+    let (mut changed, mut failed) = (false, false);
+    for e in skipped {
+        match e {
+            UpdateError::LineChanged { .. } => changed = true,
+            _ => failed = true,
+        }
+        eprintln!("skipped: {:#}", translate_update_error(e, &vault.path));
+    }
+    Ok(match (failed, changed) {
+        (true, _) => ExitCode::FAILURE,
+        (false, true) => ExitCode::from(3),
+        (false, false) => ExitCode::SUCCESS,
+    })
 }
 
 /// Parse an optional date field: `none` clears, otherwise a date form.
@@ -2165,10 +2519,10 @@ fn translate_update_error(e: UpdateError, vault_root: &std::path::Path) -> anyho
             found,
         } => {
             let rel = path.strip_prefix(vault_root).unwrap_or(&path);
-            anyhow!(
+            anyhow::Error::new(LineChangedError(format!(
                 "task at {}:{line} changed on disk — expected `{expected}`, found `{found}` (rescan and retry)",
                 rel.display()
-            )
+            )))
         }
         Write { source } => anyhow!("write failed: {source}"),
     }
