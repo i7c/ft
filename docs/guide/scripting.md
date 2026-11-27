@@ -49,6 +49,33 @@ if ft tasks list overdue --allow-empty --format ndjson | jq -e '.'; then
 fi
 ```
 
+## Where a task lives: list context
+
+`ft tasks list --format json|ndjson` (also with `--tree`) prints, next to
+every task field, where the task lives and what its note is about:
+
+```json
+"headings": [{ "text": "Projects", "level": 1, "line": 3 }],
+"mentions": [{ "target": "onboarding", "path": "Areas/onboarding.md" }],
+"line_mentions": [],
+"note": { "tags": ["meeting"], "date": "2026-11-20", "modified": "2026-11-21T09:14:03Z" }
+```
+
+- `headings`: the headings enclosing the task, outermost first; `[]`
+  above the first heading.
+- `mentions`: the wikilinks in the task's paragraph (what `mentions = …`
+  matches in a query), deduplicated in document order. `target` is the
+  note title (the raw text when unresolved, never the alias); `path` is
+  `null` when the link resolves to no note. A `[[note#heading]]` link
+  mentions its note.
+- `line_mentions`: the mentions written on the task's own line.
+- `note.tags`: the note's frontmatter tags. `note.date`: the first
+  `YYYY-MM-DD` in the file name, else frontmatter `date_created`, else
+  `null`. `note.modified`: the file's mtime, UTC.
+
+Only `list` prints these; the rows write commands print (`edit`,
+`complete`, …) are the task alone.
+
 ## `--json-errors`
 
 The top-level `--json-errors` flag wraps any error in a single JSON

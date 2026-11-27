@@ -321,7 +321,14 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         args.query.as_deref(),
         flag_dsl.as_deref(),
     ];
-    let mut matches = match select_tasks(&scan, &vault, today, &sources) {
+    let graph = match crate::cmd::common::build_graph(&scan) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("{e:#}");
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let mut matches = match select_tasks(&scan, &graph, &vault, today, &sources) {
         Ok(m) => m,
         Err(msg) => {
             eprintln!("{msg}");
@@ -336,6 +343,8 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     if let Some(limit) = args.limit {
         matches.truncate(limit);
     }
+
+    let contexts = ft_core::task::context::ContextIndex::new(&scan, &graph);
 
     let exit = if matches.is_empty() && !args.allow_empty {
         ExitCode::from(1)
@@ -369,13 +378,13 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
                 let opts = output::table::TableOpts { use_color };
                 println!("{}", output::table::render_tree(&rows, opts));
             }
-            Format::Json => output::json::render_tree(&rows)?,
+            Format::Json => output::json::render_tree(&rows, &contexts)?,
             Format::Ndjson => {
                 let via: Vec<Option<&Task>> = forest
                     .iter()
                     .map(|r| r.via.map(|v| &scan.tasks[v]))
                     .collect();
-                output::ndjson::render_tree(&rows, &via)?;
+                output::ndjson::render_tree(&rows, &via, &contexts)?;
             }
             Format::Markdown => print!("{}", output::markdown::render_tree(&rows)),
         }
@@ -397,8 +406,8 @@ fn run_list(args: ListArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
                 println!("{out}");
             }
         }
-        Format::Json => output::json::render(&matches)?,
-        Format::Ndjson => output::ndjson::render(&matches)?,
+        Format::Json => output::json::render(&matches, &contexts)?,
+        Format::Ndjson => output::ndjson::render(&matches, &contexts)?,
         Format::Markdown => print!("{}", output::markdown::render(&matches)),
     }
 
@@ -486,6 +495,7 @@ fn lower_flags_to_dsl(args: &ListArgs) -> Option<String> {
 /// for an invalid query.
 fn select_tasks<'a>(
     scan: &'a ft_core::scan::Scan,
+    graph: &ft_core::graph::Graph,
     vault: &Vault,
     today: NaiveDate,
     sources: &[Option<&str>],
@@ -500,9 +510,8 @@ fn select_tasks<'a>(
         graph_queries.push(q);
     }
 
-    // Build the graph once. The query evaluator runs against the graph and
-    // returns task NoteIds; we map those back to `&Task` for sort/render.
-    let graph = crate::cmd::common::build_graph(scan).map_err(|e| format!("{e:#}"))?;
+    // The query evaluator runs against the graph and returns task keys;
+    // we map those back to `&Task` for sort/render.
     let matched_task_keys: HashSet<TaskKey> = if graph_queries.is_empty() {
         // No predicates at all — every task in the scan is admissible.
         scan.tasks
@@ -511,7 +520,7 @@ fn select_tasks<'a>(
             .collect()
     } else {
         // AND-compose: a task must match every graph query.
-        resolve::by_queries(&graph, &graph_queries)
+        resolve::by_queries(graph, &graph_queries)
     };
 
     Ok(scan
@@ -2414,7 +2423,8 @@ fn run_assign_ids(args: AssignIdsArgs, vault_flag: Option<PathBuf>) -> Result<Ex
         args.query.as_deref(),
         flags.as_deref(),
     ];
-    let mut tasks = select_tasks(&scan, &vault, today, &sources).map_err(|m| anyhow!(m))?;
+    let graph = crate::cmd::common::build_graph(&scan)?;
+    let mut tasks = select_tasks(&scan, &graph, &vault, today, &sources).map_err(|m| anyhow!(m))?;
     exclude_paths(&mut tasks, &args.exclude_path);
 
     let taken: HashSet<String> = scan.tasks.iter().filter_map(|t| t.id.clone()).collect();
