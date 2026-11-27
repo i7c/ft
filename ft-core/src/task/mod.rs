@@ -4,6 +4,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 pub mod aging;
+pub mod context;
 pub mod emoji;
 pub mod format;
 pub mod hierarchy;

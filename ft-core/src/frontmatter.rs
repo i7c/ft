@@ -195,6 +195,13 @@ pub fn tags_in(fm: &str) -> Vec<String> {
     out
 }
 
+/// The top-level `date_created:` value as a date. A value with a time
+/// after the date (`2026-11-20 09:14`, `2026-11-20T09:14`) reads as its
+/// date.
+pub fn date_created_in(fm: &str) -> Option<chrono::NaiveDate> {
+    crate::dates::first_iso_date(&scalar_value(fm, "date_created")?)
+}
+
 /// A top-level string list. `split_scalar` splits a non-list inline
 /// value on commas and whitespace.
 fn root_list(fm: &str, key: &str, split_scalar: bool) -> Vec<String> {

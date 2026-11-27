@@ -793,6 +793,26 @@ impl Graph {
             .map(move |idx| (NoteId(idx), &self.g[idx]))
     }
 
+    /// The links task `id` mentions: every link edge out of the paragraph
+    /// that owns it (via `OwnsTask`), as `(target, link)` in document
+    /// order. This is what the query DSL's `mentions` means for a task;
+    /// `tasks list` prints the same set.
+    pub fn task_mention_links(&self, id: NoteId) -> Vec<(NoteId, &LinkEdge)> {
+        let mut out: Vec<(NoteId, &LinkEdge)> = self
+            .incoming(id)
+            .filter(|(owner, edge)| {
+                matches!(edge, EdgeKind::OwnsTask)
+                    && matches!(self.node(*owner), NodeKind::Paragraph(_))
+            })
+            .flat_map(|(owner, _)| {
+                self.outgoing(owner)
+                    .filter_map(|(target, edge)| edge.link().map(|l| (target, l)))
+            })
+            .collect();
+        out.sort_by_key(|(_, l)| l.byte_range.start);
+        out
+    }
+
     /// Edges where `id` is the source. Each yielded tuple is
     /// `(destination, edge)`. The destination may be a Note or a Ghost;
     /// callers check via [`Graph::node`].

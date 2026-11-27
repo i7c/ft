@@ -486,18 +486,8 @@ fn mentioned_targets(graph: &Graph, id: NoteId) -> HashSet<String> {
     let mut out = HashSet::new();
     match graph.node(id) {
         NodeKind::Task(_) => {
-            // Up to owning paragraph via incoming OwnsTask, then out via
-            // that paragraph's ParagraphLink edges. A task has exactly one
-            // owning paragraph (ownership is exclusive), so the loop runs
-            // at most once.
-            for (owner, edge) in graph.incoming(id) {
-                if !matches!(edge, EdgeKind::OwnsTask) {
-                    continue;
-                }
-                if !matches!(graph.node(owner), NodeKind::Paragraph(_)) {
-                    continue;
-                }
-                collect_link_targets(graph, owner, &mut out);
+            for (target, _) in graph.task_mention_links(id) {
+                insert_concept(graph, target, &mut out);
             }
         }
         NodeKind::Paragraph(_) | NodeKind::Heading(_) | NodeKind::Note(_) => {
@@ -519,18 +509,22 @@ fn collect_link_targets(graph: &Graph, id: NoteId, out: &mut HashSet<String>) {
         if edge.link().is_none() {
             continue;
         }
-        match graph.node(target) {
-            NodeKind::Note(n) => {
-                out.insert(n.title.clone());
-            }
-            NodeKind::Ghost(g) => {
-                out.insert(g.raw.clone());
-            }
-            NodeKind::Heading(h) => {
-                out.insert(h.text.clone());
-            }
-            _ => {}
+        insert_concept(graph, target, out);
+    }
+}
+
+fn insert_concept(graph: &Graph, target: NoteId, out: &mut HashSet<String>) {
+    match graph.node(target) {
+        NodeKind::Note(n) => {
+            out.insert(n.title.clone());
         }
+        NodeKind::Ghost(g) => {
+            out.insert(g.raw.clone());
+        }
+        NodeKind::Heading(h) => {
+            out.insert(h.text.clone());
+        }
+        _ => {}
     }
 }
 
