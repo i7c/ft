@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- feat(tasks): `ft tasks list --format json|ndjson` (and `--tree`) prints each task's heading path, its mentions (`mentions` for its paragraph, `line_mentions` for its own line, each with the resolved note path) and its note's tags, date and mtime (`note`); existing keys are unchanged, and write commands' rows don't carry them
+
 ### Removed
 
 - feat: remove the Pulse and Recent functionality — `ft notes pulse`, `ft notes

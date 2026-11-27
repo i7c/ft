@@ -153,8 +153,44 @@ pub fn parse_date_value(s: &str, today: NaiveDate) -> Option<NaiveDate> {
     parse_relative(trimmed, today)
 }
 
+/// The first `YYYY-MM-DD` in `s` that is a real date and is not part of a
+/// longer run of digits (`12026-11-20` is not a date; `call 2026-11-20` is).
+pub fn first_iso_date(s: &str) -> Option<NaiveDate> {
+    let b = s.as_bytes();
+    let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    (0..b.len().saturating_sub(9)).find_map(|i| {
+        let shape = (0..10).all(|k| {
+            if k == 4 || k == 7 {
+                b[i + k] == b'-'
+            } else {
+                digit(i + k)
+            }
+        });
+        let bounded = !i.checked_sub(1).is_some_and(digit) && !digit(i + 10);
+        (shape && bounded)
+            .then(|| NaiveDate::parse_from_str(&s[i..i + 10], "%Y-%m-%d").ok())
+            .flatten()
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn first_iso_date_finds_a_bounded_date() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd);
+        assert_eq!(first_iso_date("2026-11-20"), d(2026, 11, 20));
+        assert_eq!(first_iso_date("Call 2026-11-20 Priya"), d(2026, 11, 20));
+        assert_eq!(first_iso_date("2026-11-20T09:14:00"), d(2026, 11, 20));
+        assert_eq!(
+            first_iso_date("x 2026-13-01 then 2026-01-02"),
+            d(2026, 1, 2)
+        );
+        assert_eq!(first_iso_date("12026-11-20"), None);
+        assert_eq!(first_iso_date("2026-11-201"), None);
+        assert_eq!(first_iso_date("2026-W47"), None);
+        assert_eq!(first_iso_date(""), None);
+    }
+
     use super::*;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
